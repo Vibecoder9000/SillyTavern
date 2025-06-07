@@ -644,4 +644,48 @@ export function initBackgrounds() {
         setFittingClass(background_settings.fitting);
         saveSettingsDebounced();
     });
+
+    // START MutationObserver for #Backgrounds
+    const backgroundsElement = document.getElementById('Backgrounds');
+
+    if (backgroundsElement) {
+        const observer = new MutationObserver((mutationsList) => {
+            for (const mutation of mutationsList) {
+                if (mutation.type === 'attributes' && mutation.attributeName === 'class') {
+                    const isOpened = !backgroundsElement.classList.contains('closedDrawer');
+                    handleBackgroundMenuToggle(isOpened);
+                }
+            }
+        });
+
+        observer.observe(backgroundsElement, { attributes: true });
+    } else {
+        console.error('#Backgrounds element not found for MutationObserver');
+    }
+    // END MutationObserver for #Backgrounds
+}
+
+// New function to handle background menu toggle
+function handleBackgroundMenuToggle(isOpened) {
+    if (isOpened) {
+        console.log('Background menu opened. Repopulating background lists.');
+        getBackgrounds();
+        getChatBackgroundsList();
+    } else {
+        console.log('Background menu closed. Unloading unused images.');
+        const bgMenuContent = document.querySelectorAll('#bg_menu_content > div.bg_example');
+        const bgCustomContent = document.querySelectorAll('#bg_custom_content > div.bg_example');
+        const backgroundElements = [...bgMenuContent, ...bgCustomContent];
+
+        const currentMainBgUrl = background_settings.url;
+        const currentChatBgUrl = chat_metadata[BG_METADATA_KEY];
+
+        backgroundElements.forEach(element => {
+            const elementUrl = element.dataset.url;
+
+            if (elementUrl !== currentMainBgUrl && elementUrl !== currentChatBgUrl) {
+                element.style.backgroundImage = 'none';
+            }
+        });
+    }
 }
