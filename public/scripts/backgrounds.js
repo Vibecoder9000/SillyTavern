@@ -61,6 +61,9 @@ async function onChatChanged() {
 }
 
 function getChatBackgroundsList() {
+    if ($('#bg_custom_content').children('.bg_example').length > 0) {
+        return;
+    }
     const list = chat_metadata[LIST_METADATA_KEY];
     const listEmpty = !Array.isArray(list) || list.length === 0;
 
@@ -75,6 +78,7 @@ function getChatBackgroundsList() {
         const template = getBackgroundFromTemplate(bg, true);
         $('#bg_custom_content').append(template);
     }
+    activateLazyLoader();
 }
 
 function getBackgroundPath(fileUrl) {
@@ -369,6 +373,9 @@ async function autoBackgroundCommand() {
 }
 
 export async function getBackgrounds() {
+    if ($('#bg_menu_content').children('.bg_example').length > 0) {
+        return;
+    }
     const response = await fetch('/api/backgrounds/all', {
         method: 'POST',
         headers: getRequestHeaders(),
@@ -385,7 +392,29 @@ export async function getBackgrounds() {
             const template = getBackgroundFromTemplate(bg, false);
             $('#bg_menu_content').append(template);
         }
+        activateLazyLoader();
     }
+}
+
+function activateLazyLoader() {
+    const lazyLoadElements = document.querySelectorAll('.lazy-load-background');
+
+    const observer = new IntersectionObserver((entries, observer) => {
+        entries.forEach(entry => {
+            if (entry.isIntersecting) {
+                const imageUrl = entry.target.dataset.bgSrc;
+                if (imageUrl) {
+                    entry.target.style.backgroundImage = `url('${imageUrl}')`;
+                }
+                entry.target.classList.remove('lazy-load-background');
+                observer.unobserve(entry.target);
+            }
+        });
+    });
+
+    lazyLoadElements.forEach(element => {
+        observer.observe(element);
+    });
 }
 
 /**
@@ -417,7 +446,9 @@ function getBackgroundFromTemplate(bg, isCustom) {
     template.attr('bgfile', bg);
     template.attr('custom', String(isCustom));
     template.data('url', url);
-    template.css('background-image', `url('${thumbPath}')`);
+    template.attr('data-bg-src', thumbPath);
+    template.addClass('lazy-load-background');
+    template.css('background-image', 'none');
     template.find('.BGSampleTitle').text(friendlyTitle);
     return template;
 }
