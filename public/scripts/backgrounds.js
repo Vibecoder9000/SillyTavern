@@ -78,6 +78,7 @@ function getChatBackgroundsList() {
         const template = getBackgroundFromTemplate(bg, true);
         $('#bg_custom_content').append(template);
     }
+    console.log('Calling activateLazyLoader from getChatBackgroundsList');
     activateLazyLoader();
 }
 
@@ -392,19 +393,32 @@ export async function getBackgrounds() {
             const template = getBackgroundFromTemplate(bg, false);
             $('#bg_menu_content').append(template);
         }
+        console.log('Calling activateLazyLoader from getBackgrounds');
         activateLazyLoader();
     }
 }
 
 function activateLazyLoader() {
+    console.log('activateLazyLoader function started.');
     const lazyLoadElements = document.querySelectorAll('.lazy-load-background');
     console.log('activateLazyLoader called. Found elements:', lazyLoadElements.length);
 
+    const rootElement = document.getElementById('Backgrounds');
+    if (!rootElement) {
+        console.error('#Backgrounds element not found!');
+        // Fallback to viewport if #Backgrounds is not found, or handle error
+        // For now, we'll let it proceed and potentially fail in observer creation if null,
+        // or you could default to `root: null` to use the viewport.
+    } else {
+        console.log('#Backgrounds element found:', rootElement);
+    }
+
     const options = {
-      root: document.getElementById('Backgrounds'), // Assuming 'Backgrounds' is the ID of the scrollable container
+      root: rootElement, // This will be null if not found, defaulting to viewport
       rootMargin: '0px',
       threshold: 0.1 // Trigger when 10% of the item is visible
     };
+    console.log('IntersectionObserver options:', options);
 
     const observer = new IntersectionObserver((entries, observer) => {
         entries.forEach(entry => {
