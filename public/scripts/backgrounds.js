@@ -61,9 +61,6 @@ async function onChatChanged() {
 }
 
 function getChatBackgroundsList() {
-    if ($('#bg_custom_content').children('.bg_example').length > 0) {
-        return;
-    }
     const list = chat_metadata[LIST_METADATA_KEY];
     const listEmpty = !Array.isArray(list) || list.length === 0;
 
@@ -374,9 +371,6 @@ async function autoBackgroundCommand() {
 }
 
 export async function getBackgrounds() {
-    if ($('#bg_menu_content').children('.bg_example').length > 0) {
-        return;
-    }
     const response = await fetch('/api/backgrounds/all', {
         method: 'POST',
         headers: getRequestHeaders(),
