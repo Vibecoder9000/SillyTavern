@@ -1,5 +1,7 @@
 import { Fuse } from '../lib.js';
 
+const DEBUG_BACKGROUND_LOADING = false;
+
 import { chat_metadata, eventSource, event_types, generateQuietPrompt, getCurrentChatId, getRequestHeaders, getThumbnailUrl, saveSettingsDebounced } from '../script.js';
 import { openThirdPartyExtensionMenu, saveMetadataDebounced } from './extensions.js';
 import { SlashCommand } from './slash-commands/SlashCommand.js';
@@ -75,7 +77,7 @@ function getChatBackgroundsList() {
         const template = getBackgroundFromTemplate(bg, true);
         $('#bg_custom_content').append(template);
     }
-    console.log('Calling activateLazyLoader from getChatBackgroundsList');
+    if (DEBUG_BACKGROUND_LOADING) console.log('Calling activateLazyLoader from getChatBackgroundsList');
     activateLazyLoader();
 }
 
@@ -387,24 +389,24 @@ export async function getBackgrounds() {
             const template = getBackgroundFromTemplate(bg, false);
             $('#bg_menu_content').append(template);
         }
-        console.log('Calling activateLazyLoader from getBackgrounds');
+        if (DEBUG_BACKGROUND_LOADING) console.log('Calling activateLazyLoader from getBackgrounds');
         activateLazyLoader();
     }
 }
 
 function activateLazyLoader() {
-    console.log('activateLazyLoader function started.');
+    if (DEBUG_BACKGROUND_LOADING) console.log('activateLazyLoader function started.');
     const lazyLoadElements = document.querySelectorAll('.lazy-load-background');
-    console.log('activateLazyLoader called. Found elements:', lazyLoadElements.length);
+    if (DEBUG_BACKGROUND_LOADING) console.log('activateLazyLoader called. Found elements:', lazyLoadElements.length);
 
     const rootElement = document.getElementById('Backgrounds');
     if (!rootElement) {
-        console.error('#Backgrounds element not found!');
+        if (DEBUG_BACKGROUND_LOADING) console.error('#Backgrounds element not found!');
         // Fallback to viewport if #Backgrounds is not found, or handle error
         // For now, we'll let it proceed and potentially fail in observer creation if null,
         // or you could default to `root: null` to use the viewport.
     } else {
-        console.log('#Backgrounds element found:', rootElement);
+        if (DEBUG_BACKGROUND_LOADING) console.log('#Backgrounds element found:', rootElement);
     }
 
     const options = {
@@ -412,17 +414,17 @@ function activateLazyLoader() {
       rootMargin: '0px',
       threshold: 0.1 // Trigger when 10% of the item is visible
     };
-    console.log('IntersectionObserver options:', options);
+    if (DEBUG_BACKGROUND_LOADING) console.log('IntersectionObserver options:', options);
 
     const observer = new IntersectionObserver((entries, observer) => {
         entries.forEach(entry => {
-            console.log('IntersectionObserver callback triggered for:', entry.target, 'Is intersecting:', entry.isIntersecting);
+            if (DEBUG_BACKGROUND_LOADING) console.log('IntersectionObserver callback triggered for:', entry.target, 'Is intersecting:', entry.isIntersecting);
             if (entry.isIntersecting) {
                 const imageUrl = entry.target.dataset.bgSrc;
                 if (!imageUrl) {
-                    console.warn('No bgSrc found for', entry.target);
+                    if (DEBUG_BACKGROUND_LOADING) console.warn('No bgSrc found for', entry.target);
                 }
-                console.log('Loading image for:', entry.target, 'with URL:', imageUrl);
+                if (DEBUG_BACKGROUND_LOADING) console.log('Loading image for:', entry.target, 'with URL:', imageUrl);
                 if (imageUrl) {
                     entry.target.style.backgroundImage = `url('${imageUrl}')`;
                 }
@@ -660,7 +662,7 @@ export function initBackgrounds() {
 
         observer.observe(backgroundsElement, { attributes: true });
     } else {
-        console.error('#Backgrounds element not found for MutationObserver');
+        if (DEBUG_BACKGROUND_LOADING) console.error('#Backgrounds element not found for MutationObserver');
     }
     // END MutationObserver for #Backgrounds
 }
@@ -668,11 +670,11 @@ export function initBackgrounds() {
 // New function to handle background menu toggle
 function handleBackgroundMenuToggle(isOpened) {
     if (isOpened) {
-        console.log('Background menu opened. Repopulating background lists.');
+        if (DEBUG_BACKGROUND_LOADING) console.log('Background menu opened. Repopulating background lists.');
         getBackgrounds();
         getChatBackgroundsList();
     } else {
-        console.log('Background menu closed. Unloading unused images.');
+        if (DEBUG_BACKGROUND_LOADING) console.log('Background menu closed. Unloading unused images.');
         const bgMenuContent = document.querySelectorAll('#bg_menu_content > div.bg_example');
         const bgCustomContent = document.querySelectorAll('#bg_custom_content > div.bg_example');
         const backgroundElements = [...bgMenuContent, ...bgCustomContent];
