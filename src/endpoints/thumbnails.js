@@ -89,6 +89,14 @@ export function invalidateThumbnail(directories, type, file) {
  */
 async function generateThumbnail(directories, type, file, currentAspectRatios) {
     let buffer; // Ensure buffer is declared in the function scope
+
+    // Determine the effective pngFormat for this specific call
+    let localPngFormat = pngFormat; // Initialize with the global/module-level config
+    if (type === 'bg') {
+        console.log(`[Thumbnails] Forcing PNG format for type 'bg'. Original module configured format was: ${localPngFormat ? 'png' : 'jpg'}`);
+        localPngFormat = true; // Force PNG for background thumbnails
+    }
+
     let thumbnailFolder = getThumbnailFolder(directories, type);
     let originalFolder = getOriginalFolder(directories, type);
     if (thumbnailFolder === undefined || originalFolder === undefined) {
@@ -187,9 +195,9 @@ async function generateThumbnail(directories, type, file, currentAspectRatios) {
         }
 
         // Generate buffer only if image processing up to this point was successful
-        console.log(`[Thumbnails] Generating buffer for ${file} using image.getBuffer(). PNG format: ${pngFormat}`);
+        console.log(`[Thumbnails] Generating buffer for ${file} using image.getBuffer(). PNG format: ${localPngFormat}`);
         buffer = await new Promise((resolve, reject) => {
-            const actualMimeType = pngFormat ? 'image/png' : 'image/jpeg'; // Use direct MIME type strings
+            const actualMimeType = localPngFormat ? 'image/png' : 'image/jpeg'; // Use direct MIME type strings
             const cb = (err, buf) => {
                 if (err) {
                     console.error(`[Thumbnails] Error in getBuffer callback for ${file} (MIME: ${actualMimeType}):`, err);
@@ -199,7 +207,7 @@ async function generateThumbnail(directories, type, file, currentAspectRatios) {
                 resolve(buf);
             };
 
-            if (pngFormat) {
+            if (localPngFormat) {
                 console.log(`[Thumbnails] Getting buffer for PNG ${file} (MIME: ${actualMimeType})`);
                 image.getBuffer(actualMimeType, cb);
             } else {
