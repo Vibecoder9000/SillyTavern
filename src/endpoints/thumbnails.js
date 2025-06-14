@@ -198,10 +198,13 @@ async function generateThumbnail(directories, type, file, currentAspectRatios) {
                 resolve(buf);
             };
 
-            if (!pngFormat) {
-                image.quality(quality); // Set quality for JPEG
+            if (pngFormat) {
+                image.getBuffer(mimeType, cb);
+            } else {
+                // For JPEGs, pass quality directly as an option to getBuffer.
+                console.log(`[Thumbnails] Getting buffer for JPEG ${file} with quality: ${quality}`);
+                image.getBuffer(mimeType, { quality: quality }, cb);
             }
-            image.getBuffer(mimeType, cb);
         });
 
         // If buffer generation is successful, write it.
