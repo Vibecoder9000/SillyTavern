@@ -243,97 +243,95 @@ async function generateThumbnail(directories, type, file, currentAspectRatios) {
  * @returns {Promise<void>} Promise that resolves when the cache is validated
  */
 export async function ensureThumbnailCache(directoriesList) {
-    for (const directories of directoriesList) {
-        const cacheFiles = fs.readdirSync(directories.thumbnailsBg);
-
-        // files exist, all ok
-        if (cacheFiles.length) {
-            continue;
-        }
-
-        console.info('Generating thumbnails cache. Please wait...');
-
-        const bgFiles = fs.readdirSync(directories.backgrounds);
-        const imageFileNames = bgFiles.filter(fileName => {
-            try {
-                // Construct full path to check if it's a directory
-                const filePath = path.join(directories.backgrounds, fileName);
-                return fs.statSync(filePath).isFile();
-            } catch (statError) {
-                console.warn(`[Thumbnails Cache] Error stating file ${fileName}, skipping: ${statError.message}`);
-                return false;
-            }
-        });
-        console.log(`[Thumbnails Cache] Found ${imageFileNames.length} actual image files to process in ${directories.backgrounds} (out of ${bgFiles.length} total entries).`);
-        // const tasks = []; // Removed for sequential processing
-        // console.log(`[Thumbnails Cache] Found ${bgFiles.length} files to process for ${directories.backgrounds}`); // Original log, replaced by the one above
+    for (const directories of directoriesList) { // Loop for each user directory set
+        const bgDir = directories.backgrounds; // Cache for slightly cleaner logs
+        console.log(`[Thumbnails Cache] Starting cache validation for directory: ${bgDir}`);
 
         const aspectFilePath = path.join(directories.root, 'aspect_ratios.json');
         let allAspectRatios = {};
         try {
-            console.log(`[Thumbnails Cache] Reading ${aspectFilePath} before bulk processing for ${directories.backgrounds}.`);
+            console.log(`[Thumbnails Cache] Reading ${aspectFilePath} before bulk processing for ${bgDir}.`);
             const data = await fsPromises.readFile(aspectFilePath, 'utf8');
             allAspectRatios = JSON.parse(data);
-            console.log(`[Thumbnails Cache] Successfully read initial aspect ratios for ${directories.backgrounds}.`);
+            console.log(`[Thumbnails Cache] Successfully read initial aspect ratios for ${bgDir}. Keys: ${Object.keys(allAspectRatios).length}`);
         } catch (err) {
             if (err.code === 'ENOENT') {
-                console.log(`[Thumbnails Cache] ${aspectFilePath} not found for ${directories.backgrounds}. Starting with empty aspect ratios.`);
+                console.log(`[Thumbnails Cache] ${aspectFilePath} not found for ${bgDir}. Starting with empty aspect ratios.`);
             } else {
-                console.error(`[Thumbnails Cache] Error reading ${aspectFilePath} for ${directories.backgrounds}: ${err.message}. Starting with empty aspect ratios.`);
+                console.error(`[Thumbnails Cache] Error reading ${aspectFilePath} for ${bgDir}: ${err.message}. Starting with empty aspect ratios.`);
             }
+            allAspectRatios = {}; // Ensure it's an object if read fails
         }
 
+        let imageFileNames = [];
+        try {
+            const bgFiles = fs.readdirSync(bgDir); // Use bgDir here
+            imageFileNames = bgFiles.filter(fileName => {
+                try {
+                    const filePath = path.join(bgDir, fileName); // Use bgDir here
+                    return fs.statSync(filePath).isFile();
+                } catch (statError) {
+                    console.warn(`[Thumbnails Cache] Error stating file ${fileName} in ${bgDir}, skipping: ${statError.message}`);
+                    return false;
+                }
+            });
+            console.log(`[Thumbnails Cache] Found ${imageFileNames.length} actual image files to process in ${bgDir} (out of ${bgFiles.length} total entries).`);
+        } catch (readDirError) {
+            console.error(`[Thumbnails Cache] Error reading directory ${bgDir}: ${readDirError.message}. Skipping this directory.`);
+            continue; // Skip to the next directory in directoriesList
         }
 
-        console.log(`[Thumbnails Cache] About to process ${imageFileNames.length} tasks sequentially for directory ${directories.backgrounds}.`);
-        const results = []; // Array to store results, similar to Promise.all
-        let successfulThumbs = 0;
-        let failedThumbs = 0;
+        if (imageFileNames.length === 0) {
+            console.log(`[Thumbnails Cache] No image files to process in ${bgDir}.`);
+        } else {
+            console.log(`[Thumbnails Cache] About to process ${imageFileNames.length} image tasks sequentially for directory ${bgDir}.`);
+            const results = [];
+            let successfulThumbs = 0;
+            let failedThumbs = 0;
 
-        for (const file of imageFileNames) { // Iterate over filtered list
-            console.log(`[Thumbnails Cache] Processing thumbnail for: ${file} in ${directories.backgrounds}`);
-            try {
-                const result = await generateThumbnail(directories, 'bg', file, allAspectRatios);
-                results.push(result);
-                if (result !== null) {
-                    successfulThumbs++;
-                } else {
+            for (const file of imageFileNames) {
+                console.log(`[Thumbnails Cache] Processing thumbnail for: ${file} in ${bgDir}`);
+                try {
+                    const result = await generateThumbnail(directories, 'bg', file, allAspectRatios);
+                    results.push(result);
+                    if (result !== null) {
+                        successfulThumbs++;
+                    } else {
+                        failedThumbs++;
+                    }
+                    console.log(`[Thumbnails Cache] Finished processing for: ${file} in ${bgDir}. Result: ${result === null ? 'Failed (null)' : 'Success'}`);
+                } catch (error) {
+                    console.error(`[Thumbnails Cache] Unhandled error processing file ${file} sequentially in ${bgDir}:`, error);
+                    results.push(null);
                     failedThumbs++;
                 }
-                console.log(`[Thumbnails Cache] Finished processing for: ${file}. Result: ${result === null ? 'Failed (null)' : 'Success'}`);
-            } catch (error) {
-                // This catch is a safeguard; generateThumbnail should ideally not reject if its internal try/catches are working.
-                // It should resolve to null on failure.
-                console.error(`[Thumbnails Cache] Error processing file ${file} sequentially:`, error);
-                results.push(null); // Count as a failure
-                failedThumbs++;
-            }
-        }
+            } // End for loop
 
-        console.log(`[Thumbnails Cache] Sequential processing completed for ${directories.backgrounds}.`);
-        console.log(`[Thumbnails Cache] Breakdown for ${directories.backgrounds}: Successful thumbnails created: ${successfulThumbs}, Failed (null): ${failedThumbs}`);
+            console.log(`[Thumbnails Cache] Sequential processing completed for ${bgDir}.`);
+            console.log(`[Thumbnails Cache] Breakdown for ${bgDir}: Successful thumbnails created: ${successfulThumbs}, Failed (null): ${failedThumbs}`);
+        } // End else (imageFileNames.length > 0)
 
         let jsonStringToWrite;
         try {
-            console.log(`[Thumbnails Cache] Attempting to JSON.stringify allAspectRatios for ${directories.backgrounds}. Object keys: ${Object.keys(allAspectRatios).length}`);
+            console.log(`[Thumbnails Cache] Attempting to JSON.stringify allAspectRatios for ${bgDir}. Object keys: ${Object.keys(allAspectRatios).length}`);
             jsonStringToWrite = JSON.stringify(allAspectRatios, null, 2);
-            console.log(`[Thumbnails Cache] JSON.stringify successful for ${directories.backgrounds}. String length: ${jsonStringToWrite.length}`);
+            console.log(`[Thumbnails Cache] JSON.stringify successful for ${bgDir}. String length: ${jsonStringToWrite?.length ?? 0}`);
         } catch (stringifyError) {
-            console.error(`[Thumbnails Cache] Error during JSON.stringify for ${directories.backgrounds}:`, stringifyError);
-            // If stringify fails, we cannot write the JSON file.
-            // End processing for this directory or handle error appropriately.
-            return; // Or continue to the next directory in directoriesList if that's the outer loop structure
+            console.error(`[Thumbnails Cache] Error during JSON.stringify for ${bgDir}:`, stringifyError);
+            continue;
         }
 
         try {
-            console.log(`[Thumbnails Cache] Attempting to write all updated aspect ratios to ${aspectFilePath} for ${directories.backgrounds}`);
+            console.log(`[Thumbnails Cache] Attempting to write all updated aspect ratios to ${aspectFilePath} for ${bgDir}`);
             await fsPromises.writeFile(aspectFilePath, jsonStringToWrite, 'utf8');
-            console.log(`[Thumbnails Cache] Successfully wrote all aspect ratios to ${aspectFilePath} for ${directories.backgrounds}`);
+            console.log(`[Thumbnails Cache] Successfully wrote all aspect ratios to ${aspectFilePath} for ${bgDir}`);
         } catch (writeError) {
-            console.error(`[Thumbnails Cache] Error writing all aspect ratios to ${aspectFilePath} for ${directories.backgrounds}:`, writeError.message);
+            console.error(`[Thumbnails Cache] Error writing all aspect ratios to ${aspectFilePath} for ${bgDir}:`, writeError.message);
         }
-    }
-}
+
+        console.log(`[Thumbnails Cache] Finished cache validation for ${bgDir}.`);
+    } // End for...of directoriesList
+} // End ensureThumbnailCache
 
 export const router = express.Router();
 
