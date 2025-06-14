@@ -188,22 +188,22 @@ async function generateThumbnail(directories, type, file, currentAspectRatios) {
         // Generate buffer only if image processing up to this point was successful
         console.log(`[Thumbnails] Generating buffer for ${file} using image.getBuffer(). PNG format: ${pngFormat}`);
         buffer = await new Promise((resolve, reject) => {
-            const mimeType = pngFormat ? Jimp.MIME_PNG : Jimp.MIME_JPEG;
+            const actualMimeType = pngFormat ? 'image/png' : 'image/jpeg'; // Use direct MIME type strings
             const cb = (err, buf) => {
                 if (err) {
-                    console.error(`[Thumbnails] Error in getBuffer callback for ${file}:`, err);
+                    console.error(`[Thumbnails] Error in getBuffer callback for ${file} (MIME: ${actualMimeType}):`, err);
                     return reject(err);
                 }
-                console.log(`[Thumbnails] Successfully got buffer via callback for ${file}`);
+                console.log(`[Thumbnails] Successfully got buffer via callback for ${file} (MIME: ${actualMimeType})`);
                 resolve(buf);
             };
 
             if (pngFormat) {
-                image.getBuffer(mimeType, cb);
+                console.log(`[Thumbnails] Getting buffer for PNG ${file} (MIME: ${actualMimeType})`);
+                image.getBuffer(actualMimeType, cb);
             } else {
-                // For JPEGs, pass quality directly as an option to getBuffer.
-                console.log(`[Thumbnails] Getting buffer for JPEG ${file} with quality: ${quality}`);
-                image.getBuffer(mimeType, { quality: quality }, cb);
+                console.log(`[Thumbnails] Getting buffer for JPEG ${file} (MIME: ${actualMimeType}) with quality: ${quality}`);
+                image.getBuffer(actualMimeType, { quality: quality }, cb);
             }
         });
 
