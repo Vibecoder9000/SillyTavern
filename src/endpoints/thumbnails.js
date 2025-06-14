@@ -84,9 +84,10 @@ export function invalidateThumbnail(directories, type, file) {
  * @param {import('../users.js').UserDirectoryList} directories User directories
  * @param {'bg' | 'avatar'} type Type of the thumbnail
  * @param {string} file Name of the file
+ * @param {object} currentAspectRatios Passed-in object to update with new aspect ratios
  * @returns
  */
-async function generateThumbnail(directories, type, file) {
+async function generateThumbnail(directories, type, file, currentAspectRatios) {
     let buffer; // Ensure buffer is declared in the function scope
     let thumbnailFolder = getThumbnailFolder(directories, type);
     let originalFolder = getOriginalFolder(directories, type);
@@ -164,30 +165,11 @@ async function generateThumbnail(directories, type, file) {
                 console.log(`[Thumbnails] Applying image.scaleToFit({ w: ${newWidth}, h: ${newHeight}, mode: Jimp.RESIZE_BILINEAR }) for ${file}`);
                 image.scaleToFit({ w: newWidth, h: newHeight, mode: Jimp.RESIZE_BILINEAR });
 
-                console.log(`[Thumbnails] Attempting to save aspect ratio for ${file}`);
-                const aspectFilePath = path.join(directories.root, 'aspect_ratios.json');
-                let ratios = {};
-                try {
-                    console.log(`[Thumbnails] Reading ${aspectFilePath} for ${file}`);
-                    const data = await fsPromises.readFile(aspectFilePath, 'utf8');
-                    ratios = JSON.parse(data);
-                    console.log(`[Thumbnails] Successfully read and parsed ${aspectFilePath} for ${file}`);
-                } catch (err) {
-                    if (err.code === 'ENOENT') {
-                        console.log(`[Thumbnails] ${aspectFilePath} not found for ${file}, creating new one.`);
-                    } else {
-                        console.error(`[Thumbnails] Error reading ${aspectFilePath} for ${file}: ${err.message}. Starting with empty ratios.`);
-                    }
-                }
-                console.log(`[Thumbnails] Old ratios for ${file}:`, ratios);
-                ratios[file] = aspectRatio;
-                console.log(`[Thumbnails] New ratios for ${file}:`, ratios);
-                try {
-                    await fsPromises.writeFile(aspectFilePath, JSON.stringify(ratios, null, 2), 'utf8');
-                    console.log(`[Thumbnails] Successfully wrote aspect ratio for ${file} to ${aspectFilePath}`);
-                } catch (err) {
-                    console.error(`[Thumbnails] Error writing aspect ratio for ${file} to ${aspectFilePath}: ${err.message}`);
-                }
+                // Update in-memory aspect ratios object
+                console.log(`[Thumbnails] Updating in-memory aspect ratios for ${file} with AR: ${aspectRatio}`);
+                currentAspectRatios[file] = aspectRatio;
+                // Disk writing is handled by ensureThumbnailCache after all files are processed for bulk operations.
+                // For single API calls, this means aspect ratio isn't saved to disk in this simplified step.
             } else {
                 console.warn(`[Thumbnails] Using fallback 'cover' method for ${file}`);
                 const size = dimensions[type]; // e.g., [160, 90]
@@ -204,10 +186,23 @@ async function generateThumbnail(directories, type, file) {
         }
 
         // Generate buffer only if image processing up to this point was successful
-        console.log(`[Thumbnails] Generating buffer for ${file}. PNG format: ${pngFormat}`);
-        buffer = pngFormat
-            ? await image.getBufferAsync(Jimp.MIME_PNG) // Use Jimp.MIME_PNG
-            : await image.getBufferAsync(Jimp.MIME_JPEG, { quality: quality }); // Use Jimp.MIME_JPEG
+        console.log(`[Thumbnails] Generating buffer for ${file} using image.getBuffer(). PNG format: ${pngFormat}`);
+        buffer = await new Promise((resolve, reject) => {
+            const mimeType = pngFormat ? Jimp.MIME_PNG : Jimp.MIME_JPEG;
+            const cb = (err, buf) => {
+                if (err) {
+                    console.error(`[Thumbnails] Error in getBuffer callback for ${file}:`, err);
+                    return reject(err);
+                }
+                console.log(`[Thumbnails] Successfully got buffer via callback for ${file}`);
+                resolve(buf);
+            };
+
+            if (!pngFormat) {
+                image.quality(quality); // Set quality for JPEG
+            }
+            image.getBuffer(mimeType, cb);
+        });
 
         // If buffer generation is successful, write it.
         console.log(`[Thumbnails] Writing thumbnail to disk: ${pathToCachedFile}`);
@@ -251,12 +246,35 @@ export async function ensureThumbnailCache(directoriesList) {
         const bgFiles = fs.readdirSync(directories.backgrounds);
         const tasks = [];
 
+        const aspectFilePath = path.join(directories.root, 'aspect_ratios.json');
+        let allAspectRatios = {};
+        try {
+            console.log(`[Thumbnails Cache] Reading ${aspectFilePath} before bulk processing.`);
+            const data = await fsPromises.readFile(aspectFilePath, 'utf8');
+            allAspectRatios = JSON.parse(data);
+            console.log(`[Thumbnails Cache] Successfully read initial aspect ratios.`);
+        } catch (err) {
+            if (err.code === 'ENOENT') {
+                console.log(`[Thumbnails Cache] ${aspectFilePath} not found. Starting with empty aspect ratios.`);
+            } else {
+                console.error(`[Thumbnails Cache] Error reading ${aspectFilePath}: ${err.message}. Starting with empty aspect ratios.`);
+            }
+        }
+
         for (const file of bgFiles) {
-            tasks.push(generateThumbnail(directories, 'bg', file));
+            tasks.push(generateThumbnail(directories, 'bg', file, allAspectRatios));
         }
 
         await Promise.all(tasks);
-        console.info(`Done! Generated: ${bgFiles.length} preview images`);
+        console.info(`[Thumbnails Cache] Done generating ${bgFiles.length} preview images.`);
+
+        try {
+            console.log(`[Thumbnails Cache] Writing all updated aspect ratios to ${aspectFilePath}`);
+            await fsPromises.writeFile(aspectFilePath, JSON.stringify(allAspectRatios, null, 2), 'utf8');
+            console.log(`[Thumbnails Cache] Successfully wrote all aspect ratios to ${aspectFilePath}`);
+        } catch (err) {
+            console.error(`[Thumbnails Cache] Error writing all aspect ratios to ${aspectFilePath}: ${err.message}`);
+        }
     }
 }
 
@@ -302,7 +320,10 @@ router.get('/', async function (request, response) {
             return response.send(originalFile);
         }
 
-        const pathToCachedFile = await generateThumbnail(request.user.directories, type, file);
+        // For single GET, aspect ratio won't be saved to disk here to avoid complexity without locking.
+        // Bulk generation via ensureThumbnailCache is prioritized for aspect ratio saving.
+        const dummyAspectRatios = {};
+        const pathToCachedFile = await generateThumbnail(request.user.directories, type, file, dummyAspectRatios);
 
         if (!pathToCachedFile) {
             return response.sendStatus(404);
