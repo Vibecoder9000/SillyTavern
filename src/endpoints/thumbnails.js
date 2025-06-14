@@ -87,6 +87,7 @@ export function invalidateThumbnail(directories, type, file) {
  * @returns
  */
 async function generateThumbnail(directories, type, file) {
+    let buffer; // Ensure buffer is declared in the function scope
     let thumbnailFolder = getThumbnailFolder(directories, type);
     let originalFolder = getOriginalFolder(directories, type);
     if (thumbnailFolder === undefined || originalFolder === undefined) {
@@ -160,8 +161,8 @@ async function generateThumbnail(directories, type, file) {
             }
 
             if (aspectCalculationSuccess) {
-                console.log(`[Thumbnails] Applying new resize (${newWidth}x${newHeight}) for ${file}`);
-                image.resize(newWidth, newHeight);
+                console.log(`[Thumbnails] Applying image.scaleToFit(${newWidth}, ${newHeight}) for ${file}`);
+                image.scaleToFit(newWidth, newHeight, Jimp.RESIZE_BILINEAR);
 
                 console.log(`[Thumbnails] Attempting to save aspect ratio for ${file}`);
                 const aspectFilePath = path.join(directories.root, 'aspect_ratios.json');
@@ -202,29 +203,33 @@ async function generateThumbnail(directories, type, file) {
             image.cover({ w: width, h: height });
         }
 
-        // Generate buffer (common for all types after resizing)
+        // Generate buffer only if image processing up to this point was successful
         console.log(`[Thumbnails] Generating buffer for ${file}. PNG format: ${pngFormat}`);
         buffer = pngFormat
-            ? await image.getBufferAsync(JimpMime.png) // Use getBufferAsync
-            : await image.getBufferAsync(JimpMime.jpeg, { quality: quality }); // Use getBufferAsync, removed jpegColorSpace for broader Jimp compatibility
+            ? await image.getBufferAsync(JimpMime.png)
+            : await image.getBufferAsync(JimpMime.jpeg, { quality: quality });
 
+        // If buffer generation is successful, write it.
         console.log(`[Thumbnails] Writing thumbnail to disk: ${pathToCachedFile}`);
         writeFileAtomicSync(pathToCachedFile, buffer);
+        console.log(`[Thumbnails] Finished generating thumbnail for: ${file}. Path: ${pathToCachedFile}`);
+        return pathToCachedFile;
 
     } catch (processingError) {
         console.error(`[Thumbnails] Critical error processing image ${file} with Jimp: ${processingError.message}. Stack: ${processingError.stack}`);
-        // Fallback to original file if Jimp processing fails catastrophically
+        // Fallback to original file if Jimp processing fails
         try {
             console.warn(`[Thumbnails] Using original file as fallback for ${file} due to Jimp error.`);
-            buffer = await fsPromises.readFile(pathToOriginalFile); // read original
-            writeFileAtomicSync(pathToCachedFile, buffer); // save original as thumbnail
+            const originalFileBuffer = await fsPromises.readFile(pathToOriginalFile); // read original into a new variable
+            writeFileAtomicSync(pathToCachedFile, originalFileBuffer); // save original as thumbnail
+            console.log(`[Thumbnails] Successfully used original file as fallback thumbnail for ${file}.`);
+            return pathToCachedFile; // Return path to this "original as thumbnail"
         } catch (originalFileError) {
             console.error(`[Thumbnails] Failed to even use original file as fallback for ${file}: ${originalFileError.message}`);
             return null; // Cannot proceed
         }
     }
-    console.log(`[Thumbnails] Finished generating thumbnail for: ${file}. Path: ${pathToCachedFile}`);
-    return pathToCachedFile;
+    // Removed redundant return pathToCachedFile here as returns are handled in try/catch blocks
 }
 
 /**
