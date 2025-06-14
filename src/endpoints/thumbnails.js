@@ -208,8 +208,8 @@ async function generateThumbnail(directories, type, file, currentAspectRatios) {
             };
 
             if (localPngFormat) {
-                console.log(`[Thumbnails] Getting buffer for PNG ${file} (MIME: ${actualMimeType})`);
-                image.getBuffer(actualMimeType, cb);
+                console.log(`[Thumbnails] Getting buffer for PNG ${file} (MIME: ${actualMimeType}) with empty options`); // Log updated
+                image.getBuffer(actualMimeType, {}, cb);
             } else {
                 console.log(`[Thumbnails] Getting buffer for JPEG ${file} (MIME: ${actualMimeType}) with quality: ${quality} and colorSpace: 'ycbcr'`);
                 image.getBuffer(actualMimeType, { quality: quality, jpegColorSpace: 'ycbcr' }, cb);
