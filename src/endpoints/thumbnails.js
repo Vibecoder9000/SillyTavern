@@ -164,6 +164,7 @@ async function generateThumbnail(directories, type, file, currentAspectRatios) {
             if (aspectCalculationSuccess) {
                 console.log(`[Thumbnails] Applying image.scaleToFit({ w: ${newWidth}, h: ${newHeight}, mode: Jimp.RESIZE_BILINEAR }) for ${file}`);
                 image.scaleToFit({ w: newWidth, h: newHeight, mode: Jimp.RESIZE_BILINEAR });
+                console.log(`[Thumbnails] Dimensions *after* scaleToFit for ${file}: ${image.bitmap.width}x${image.bitmap.height}`); // New log
 
                 // Update in-memory aspect ratios object
                 console.log(`[Thumbnails] Updating in-memory aspect ratios for ${file} with AR: ${aspectRatio}`);
