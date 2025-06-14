@@ -270,20 +270,39 @@ export async function ensureThumbnailCache(directoriesList) {
             tasks.push(generateThumbnail(directories, 'bg', file, allAspectRatios));
         }
 
+        console.log(`[Thumbnails Cache] About to execute Promise.all for ${tasks.length} tasks for directory ${directories.backgrounds}.`);
         try {
             await Promise.all(tasks);
-            console.log(`[Thumbnails Cache] Promise.all completed for ${directories.backgrounds}. Processed ${tasks.length} files.`);
+            console.log(`[Thumbnails Cache] Promise.all successfully completed for ${directories.backgrounds}.`);
         } catch (error) {
+            // This will catch if any of the generateThumbnail promises reject and it's not caught internally,
+            // or if Promise.all itself has an issue.
             console.error(`[Thumbnails Cache] Error during Promise.all execution for ${directories.backgrounds}:`, error);
-            // Depending on desired behavior, you might want to skip writing aspect ratios if Promise.all failed
+            // Decide if we should attempt to write partial aspect_ratios.json or skip.
+            // For now, let's log and continue to attempt writing what we have,
+            // as some aspect ratios might have been successfully collected.
+            // Or, alternatively, return or throw to indicate failure for this directory.
+            // For robustness, we'll try to write what we have.
+        }
+
+        let jsonStringToWrite;
+        try {
+            console.log(`[Thumbnails Cache] Attempting to JSON.stringify allAspectRatios for ${directories.backgrounds}. Object keys: ${Object.keys(allAspectRatios).length}`);
+            jsonStringToWrite = JSON.stringify(allAspectRatios, null, 2);
+            console.log(`[Thumbnails Cache] JSON.stringify successful for ${directories.backgrounds}. String length: ${jsonStringToWrite.length}`);
+        } catch (stringifyError) {
+            console.error(`[Thumbnails Cache] Error during JSON.stringify for ${directories.backgrounds}:`, stringifyError);
+            // If stringify fails, we cannot write the JSON file.
+            // End processing for this directory or handle error appropriately.
+            return; // Or continue to the next directory in directoriesList if that's the outer loop structure
         }
 
         try {
-            console.log(`[Thumbnails Cache] Writing all updated aspect ratios to ${aspectFilePath} for ${directories.backgrounds}`);
-            await fsPromises.writeFile(aspectFilePath, JSON.stringify(allAspectRatios, null, 2), 'utf8');
+            console.log(`[Thumbnails Cache] Attempting to write all updated aspect ratios to ${aspectFilePath} for ${directories.backgrounds}`);
+            await fsPromises.writeFile(aspectFilePath, jsonStringToWrite, 'utf8');
             console.log(`[Thumbnails Cache] Successfully wrote all aspect ratios to ${aspectFilePath} for ${directories.backgrounds}`);
-        } catch (err) {
-            console.error(`[Thumbnails Cache] Error writing all aspect ratios to ${aspectFilePath} for ${directories.backgrounds}: ${err.message}`);
+        } catch (writeError) {
+            console.error(`[Thumbnails Cache] Error writing all aspect ratios to ${aspectFilePath} for ${directories.backgrounds}:`, writeError.message);
         }
     }
 }
