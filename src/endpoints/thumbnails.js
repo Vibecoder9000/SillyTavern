@@ -161,8 +161,8 @@ async function generateThumbnail(directories, type, file) {
             }
 
             if (aspectCalculationSuccess) {
-                console.log(`[Thumbnails] Applying image.scaleToFit(${newWidth}, ${newHeight}) for ${file}`);
-                image.scaleToFit(newWidth, newHeight, Jimp.RESIZE_BILINEAR);
+                console.log(`[Thumbnails] Applying image.scaleToFit({ w: ${newWidth}, h: ${newHeight}, mode: Jimp.RESIZE_BILINEAR }) for ${file}`);
+                image.scaleToFit({ w: newWidth, h: newHeight, mode: Jimp.RESIZE_BILINEAR });
 
                 console.log(`[Thumbnails] Attempting to save aspect ratio for ${file}`);
                 const aspectFilePath = path.join(directories.root, 'aspect_ratios.json');
