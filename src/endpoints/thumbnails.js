@@ -248,35 +248,42 @@ export async function ensureThumbnailCache(directoriesList) {
 
         const bgFiles = fs.readdirSync(directories.backgrounds);
         const tasks = [];
+        console.log(`[Thumbnails Cache] Found ${bgFiles.length} files to process for ${directories.backgrounds}`);
 
         const aspectFilePath = path.join(directories.root, 'aspect_ratios.json');
         let allAspectRatios = {};
         try {
-            console.log(`[Thumbnails Cache] Reading ${aspectFilePath} before bulk processing.`);
+            console.log(`[Thumbnails Cache] Reading ${aspectFilePath} before bulk processing for ${directories.backgrounds}.`);
             const data = await fsPromises.readFile(aspectFilePath, 'utf8');
             allAspectRatios = JSON.parse(data);
-            console.log(`[Thumbnails Cache] Successfully read initial aspect ratios.`);
+            console.log(`[Thumbnails Cache] Successfully read initial aspect ratios for ${directories.backgrounds}.`);
         } catch (err) {
             if (err.code === 'ENOENT') {
-                console.log(`[Thumbnails Cache] ${aspectFilePath} not found. Starting with empty aspect ratios.`);
+                console.log(`[Thumbnails Cache] ${aspectFilePath} not found for ${directories.backgrounds}. Starting with empty aspect ratios.`);
             } else {
-                console.error(`[Thumbnails Cache] Error reading ${aspectFilePath}: ${err.message}. Starting with empty aspect ratios.`);
+                console.error(`[Thumbnails Cache] Error reading ${aspectFilePath} for ${directories.backgrounds}: ${err.message}. Starting with empty aspect ratios.`);
             }
         }
 
         for (const file of bgFiles) {
+            console.log(`[Thumbnails Cache] Queuing thumbnail generation for: ${file} in ${directories.backgrounds}`);
             tasks.push(generateThumbnail(directories, 'bg', file, allAspectRatios));
         }
 
-        await Promise.all(tasks);
-        console.info(`[Thumbnails Cache] Done generating ${bgFiles.length} preview images.`);
+        try {
+            await Promise.all(tasks);
+            console.log(`[Thumbnails Cache] Promise.all completed for ${directories.backgrounds}. Processed ${tasks.length} files.`);
+        } catch (error) {
+            console.error(`[Thumbnails Cache] Error during Promise.all execution for ${directories.backgrounds}:`, error);
+            // Depending on desired behavior, you might want to skip writing aspect ratios if Promise.all failed
+        }
 
         try {
-            console.log(`[Thumbnails Cache] Writing all updated aspect ratios to ${aspectFilePath}`);
+            console.log(`[Thumbnails Cache] Writing all updated aspect ratios to ${aspectFilePath} for ${directories.backgrounds}`);
             await fsPromises.writeFile(aspectFilePath, JSON.stringify(allAspectRatios, null, 2), 'utf8');
-            console.log(`[Thumbnails Cache] Successfully wrote all aspect ratios to ${aspectFilePath}`);
+            console.log(`[Thumbnails Cache] Successfully wrote all aspect ratios to ${aspectFilePath} for ${directories.backgrounds}`);
         } catch (err) {
-            console.error(`[Thumbnails Cache] Error writing all aspect ratios to ${aspectFilePath}: ${err.message}`);
+            console.error(`[Thumbnails Cache] Error writing all aspect ratios to ${aspectFilePath} for ${directories.backgrounds}: ${err.message}`);
         }
     }
 }
