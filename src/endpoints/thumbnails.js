@@ -208,10 +208,17 @@ async function generateThumbnail(directories, type, file, currentAspectRatios) {
         });
 
         // If buffer generation is successful, write it.
-        console.log(`[Thumbnails] Writing thumbnail to disk: ${pathToCachedFile}`);
-        writeFileAtomicSync(pathToCachedFile, buffer);
-        console.log(`[Thumbnails] Finished generating thumbnail for: ${file}. Path: ${pathToCachedFile}`);
-        return pathToCachedFile;
+        try {
+            console.log(`[Thumbnails] Writing thumbnail buffer to disk: ${pathToCachedFile} for file ${file}. Buffer length: ${buffer?.length}`);
+            writeFileAtomicSync(pathToCachedFile, buffer);
+            console.log(`[Thumbnails] Successfully wrote thumbnail for: ${file}. Path: ${pathToCachedFile}`);
+            return pathToCachedFile; // Resolve with path if write is successful
+        } catch (writeError) {
+            console.error(`[Thumbnails] Failed to write thumbnail to disk for ${file} at ${pathToCachedFile}: ${writeError.message}. Stack: ${writeError.stack}`);
+            // Aspect ratio might have been calculated and added to in-memory object.
+            // Return null to indicate this specific thumbnail file generation failed.
+            return null;
+        }
 
     } catch (processingError) {
         console.error(`[Thumbnails] Critical error processing image ${file} with Jimp: ${processingError.message}. Stack: ${processingError.stack}`);
