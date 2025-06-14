@@ -72,6 +72,7 @@ import { ensureThumbnailCache } from './endpoints/thumbnails.js';
 
 // Routers
 import { router as usersPublicRouter } from './endpoints/users-public.js';
+import { router as userDataRouter } from './endpoints/user-data.js';
 import { init as statsInit, onExit as statsOnExit } from './endpoints/stats.js';
 import { checkForNewContent } from './endpoints/content-manager.js';
 import { init as settingsInit } from './endpoints/settings.js';
@@ -234,6 +235,7 @@ app.use('/api/users', usersPublicRouter);
 
 // Everything below this line requires authentication
 app.use(requireLoginMiddleware);
+app.use('/api/user-data', userDataRouter);
 app.post('/api/ping', (request, response) => {
     if (request.query.extend && request.session) {
         request.session.touch = Date.now();

@@ -472,7 +472,6 @@ input[type='checkbox']:focus-visible {
 .mes_reasoning_details:has(.reasoning_edit_textarea) .mes_reasoning,
 .mes_reasoning_details:has(.reasoning_edit_textarea) .mes_reasoning_header,
 .mes_reasoning_details:has(.reasoning_edit_textarea) .mes_reasoning_actions .mes_button:not(.edit_button),
-.mes_reasoning_details:not(:has(.reasoning_edit_textarea)) .mes_reasoning_actions .edit_button,
 .mes_block:has(.edit_textarea):has(.reasoning_edit_textarea) .mes_reasoning_actions,
 .mes.reasoning:not([data-reasoning-state="hidden"]) .mes_edit_add_reasoning,
 .mes:has(.mes_reasoning:empty) .mes_reasoning_arrow,
@@ -6224,3 +6223,69 @@ body:not(.movingUI) .drawer-content.maximized {
     border-color: var(--error-color, #e87f7f);
     background-color: rgba(241, 163, 163, 0.2);
 }
+
+/* Justified Gallery Styles */
+.gallery-row {
+  display: flex;
+  gap: 3px; /* Corresponds to GAP_SIZE in JS */
+  margin-bottom: 3px; /* Corresponds to GAP_SIZE in JS */
+  width: 100%;
+}
+
+.thumbnail {
+  position: relative;
+  overflow: hidden;
+  /* border-radius: 4px; */ /* Optional: The old .bg_example had rounded corners, match if desired */
+  cursor: pointer;
+  flex-shrink: 0; /* Should be set by JS, but good to have in CSS */
+  background-color: #222; /* Placeholder color for loading/empty */
+}
+
+.thumbnail img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover; /* Should be set by JS, but good to have in CSS */
+  display: block;
+}
+
+/* Action Button Menu Styles */
+.bg_example_menu {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  background-color: rgba(0, 0, 0, 0.75);
+  display: flex;
+  justify-content: space-evenly; /* Distribute buttons evenly */
+  align-items: center;
+  padding: 5px 0; /* Add some padding */
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 0.2s ease-in-out, visibility 0.2s ease-in-out;
+  z-index: 10; /* Ensure it's above the image */
+}
+
+.thumbnail:hover .bg_example_menu {
+  opacity: 1;
+  visibility: visible;
+}
+
+.bg_example_menu .bg_example_button {
+  color: white;
+  cursor: pointer;
+  padding: 3px 5px;
+  font-size: 1.1em; /* Slightly larger icons/text */
+  transition: color 0.15s ease-in-out;
+}
+
+.bg_example_menu .bg_example_button:hover {
+  color: #aaa; /* Example hover color for buttons */
+}
+
+/* Locked state indicator for thumbnail */
+.thumbnail.locked {
+  box-shadow: 0 0 0 3px #FFD700 inset; /* Gold border inset to indicate lock */
+}
+
+/* Ensure lock/unlock buttons inside a .locked thumbnail are correctly shown/hidden by JS */
+/* (JS already handles display:none for one of them in highlightLockedBackground) */

@@ -121,14 +121,60 @@ async function generateThumbnail(directories, type, file) {
         let buffer;
 
         try {
-            const size = dimensions[type];
             const image = await Jimp.read(pathToOriginalFile);
-            const width = !isNaN(size?.[0]) && size?.[0] > 0 ? size[0] : image.bitmap.width;
-            const height = !isNaN(size?.[1]) && size?.[1] > 0 ? size[1] : image.bitmap.height;
-            image.cover({ w: width, h: height });
+            let aspectRatio;
+
+            if (type === 'bg') {
+                const originalWidth = image.bitmap.width;
+                const originalHeight = image.bitmap.height;
+
+                if (originalHeight > 0) {
+                    aspectRatio = originalWidth / originalHeight;
+                    const targetPixelArea = 12500;
+                    let newWidth = Math.round(Math.sqrt(targetPixelArea * aspectRatio));
+                    let newHeight = Math.round(Math.sqrt(targetPixelArea / aspectRatio));
+
+                    newWidth = Math.max(1, newWidth);
+                    newHeight = Math.max(1, newHeight);
+
+                    image.resize(newWidth, newHeight);
+                } else {
+                    console.warn(`Invalid image height for aspect ratio calculation: ${pathToOriginalFile}. Using cover mechanism.`);
+                    const size = dimensions[type];
+                    const width = !isNaN(size?.[0]) && size?.[0] > 0 ? size[0] : image.bitmap.width;
+                    const height = !isNaN(size?.[1]) && size?.[1] > 0 ? size[1] : image.bitmap.height;
+                    image.cover({ w: width, h: height });
+                }
+            } else { // For 'avatar' or if 'bg' aspect ratio calculation failed and fell through
+                const size = dimensions[type];
+                const width = !isNaN(size?.[0]) && size?.[0] > 0 ? size[0] : image.bitmap.width;
+                const height = !isNaN(size?.[1]) && size?.[1] > 0 ? size[1] : image.bitmap.height;
+                image.cover({ w: width, h: height });
+            }
+
             buffer = pngFormat
                 ? await image.getBuffer(JimpMime.png)
                 : await image.getBuffer(JimpMime.jpeg, { quality: quality, jpegColorSpace: 'ycbcr' });
+
+            if (type === 'bg' && aspectRatio) {
+                const aspectFilePath = path.join(directories.root, 'aspect_ratios.json');
+                let ratios = {};
+                try {
+                    const data = await fsPromises.readFile(aspectFilePath, 'utf8');
+                    ratios = JSON.parse(data);
+                } catch (err) {
+                    if (err.code !== 'ENOENT') {
+                        console.error('Error reading aspect_ratios.json:', err);
+                    }
+                    // Start with empty ratios if file not found or parse error
+                }
+                ratios[file] = aspectRatio;
+                try {
+                    await fsPromises.writeFile(aspectFilePath, JSON.stringify(ratios, null, 2), 'utf8');
+                } catch (err) {
+                    console.error('Error writing aspect_ratios.json:', err);
+                }
+            }
         }
         catch (inner) {
             console.warn(`Thumbnailer can not process the image: ${pathToOriginalFile}. Using original size`, inner);

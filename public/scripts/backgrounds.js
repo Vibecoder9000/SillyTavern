@@ -9,6 +9,7 @@ import { Popup } from './popup.js';
 
 const BG_METADATA_KEY = 'custom_background';
 const LIST_METADATA_KEY = 'chat_backgrounds';
+const GAP_SIZE = 3;
 
 // A single transparent PNG pixel used as a placeholder for errored backgrounds
 const PNG_PIXEL = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=';
@@ -37,6 +38,184 @@ const THUMBNAIL_CONFIG = {
  * @type {IntersectionObserver|null}
  */
 let lazyLoadObserver = null;
+let justifiedGalleryInstance;
+
+class JustifiedGallery {
+    constructor(container, targetRowHeight = 200) {
+        this.container = container;
+        this.targetRowHeight = targetRowHeight; // You might want to make this configurable later
+        this.currentRow = [];
+        this.currentRowWidth = 0;
+        this.imagesData = []; // To store all image data for filtering
+    }
+
+    addImage(imageData) {
+        const scaledWidth = this.targetRowHeight * imageData.aspectRatio;
+        this.currentRow.push({
+            ...imageData,
+            scaledWidth: scaledWidth
+        });
+        this.currentRowWidth += scaledWidth;
+        const containerWidth = this.container.offsetWidth;
+
+        // Ensure containerWidth is positive to avoid issues
+        if (containerWidth <= 0) {
+            // If container not visible or has no width, defer completion or handle error
+            // For now, let's prevent completing rows if width is unknown
+            return;
+        }
+
+        const gapWidth = (this.currentRow.length - 1) * GAP_SIZE;
+        if (this.currentRowWidth + gapWidth >= containerWidth * 0.95) { // Trigger row completion slightly before exact width
+            this.completeRow();
+        }
+    }
+
+    completeRow() {
+        if (this.currentRow.length === 0) return;
+
+        const containerWidth = this.container.offsetWidth;
+        // Ensure containerWidth is positive
+        if (containerWidth <= 0) {
+            // Cannot complete row if container has no width, clear current row to prevent issues
+            console.warn('JustifiedGallery: Container width is 0 or not available. Clearing current row.');
+            this.currentRow = [];
+            this.currentRowWidth = 0;
+            return;
+        }
+
+        const gapWidth = (this.currentRow.length - 1) * GAP_SIZE;
+        const availableWidth = containerWidth - gapWidth;
+
+        const scaleFactor = availableWidth / this.currentRowWidth;
+        const finalHeight = this.targetRowHeight * scaleFactor;
+
+        this.renderRow(this.currentRow, scaleFactor, finalHeight);
+
+        this.currentRow = [];
+        this.currentRowWidth = 0;
+    }
+
+    renderRow(images, scaleFactor, finalHeight) {
+        const rowElement = document.createElement('div');
+        rowElement.className = 'gallery-row';
+        // Style is applied by CSS, but flex properties are essential for layout
+        rowElement.style.display = 'flex';
+        rowElement.style.gap = `${GAP_SIZE}px`;
+        rowElement.style.marginBottom = `${GAP_SIZE}px`; // Or use CSS
+
+        images.forEach(imgData => {
+            const width = imgData.scaledWidth * scaleFactor;
+
+            const thumbnail = document.createElement('div');
+            thumbnail.className = 'thumbnail'; // For CSS styling
+            thumbnail.style.width = `${width}px`;
+            thumbnail.style.height = `${finalHeight}px`;
+            thumbnail.style.flexShrink = '0'; // Prevent shrinking
+
+            // Store necessary data on the element for click handlers
+            thumbnail.dataset.bgfile = imgData.fullResUrl; // Assuming fullResUrl holds the original file identifier
+            thumbnail.dataset.url = imgData.url; // Thumbnail URL
+            thumbnail.dataset.isCustom = imgData.isCustom || 'false'; // Store if it's a custom background
+
+            const imgElement = document.createElement('img');
+            imgElement.src = imgData.url; // This should be the thumbnail URL
+            imgElement.alt = imgData.title || imgData.id; // Use a descriptive alt text
+            imgElement.style.width = '100%';
+            imgElement.style.height = '100%';
+            imgElement.style.objectFit = 'cover';
+            imgElement.loading = 'lazy'; // Native lazy loading
+
+            thumbnail.appendChild(imgElement);
+
+            const menuElement = document.createElement('div');
+            menuElement.className = 'bg_example_menu';
+
+            const lockButton = document.createElement('div');
+            lockButton.className = 'bg_example_button bg_example_lock';
+            lockButton.title = t('Lock background');
+            lockButton.innerHTML = '<i class="fa-solid fa-lock"></i>';
+            menuElement.appendChild(lockButton);
+
+            const unlockButton = document.createElement('div');
+            unlockButton.className = 'bg_example_button bg_example_unlock';
+            unlockButton.title = t('Unlock background');
+            unlockButton.innerHTML = '<i class="fa-solid fa-lock-open"></i>';
+            menuElement.appendChild(unlockButton);
+
+            const editButton = document.createElement('div');
+            editButton.className = 'bg_example_button bg_example_edit';
+            editButton.title = t('Rename background');
+            editButton.innerHTML = '<i class="fa-solid fa-pencil"></i>';
+            menuElement.appendChild(editButton);
+
+            // Copy button only for custom backgrounds, handled by CSS or further logic if needed.
+            // For now, render all and rely on existing logic in onCopyToSystemBackgroundClick if it checks isCustom.
+            // Or, it should only be added if imgData.isCustom is true.
+            // Let's assume for now it's always rendered and the handler will deal with it or it's a system->system copy.
+            // The original template didn't differentiate copy button visibility based on custom status in its structure.
+            if (imgData.isCustom === 'true' || imgData.isCustom === true) { // Ensure consistent boolean check
+                const copyButton = document.createElement('div');
+                copyButton.className = 'bg_example_button bg_example_copy';
+                copyButton.title = t('Copy to System Backgrounds');
+                copyButton.innerHTML = '<i class="fa-solid fa-copy"></i>';
+                menuElement.appendChild(copyButton);
+            }
+
+            const deleteButton = document.createElement('div');
+            deleteButton.className = 'bg_example_button bg_example_cross';
+            deleteButton.title = t('Delete background');
+            deleteButton.innerHTML = '<i class="fa-solid fa-trash-can"></i>';
+            menuElement.appendChild(deleteButton);
+
+            thumbnail.appendChild(menuElement);
+            rowElement.appendChild(thumbnail);
+        });
+
+        this.container.appendChild(rowElement);
+    }
+
+    finalize() {
+        // Complete any partial row.
+        // If the row is too short, you might want to scale it to targetRowHeight instead of container width.
+        // For now, this will stretch the last row to fit container width.
+        if (this.currentRow.length > 0) {
+             // Option 1: Stretch to fit (current completeRow behavior)
+            this.completeRow();
+
+            // Option 2: Render at target height without stretching (more complex, might leave gaps)
+            // This would involve a different rendering logic for the last row if it's not to be stretched.
+            // For simplicity, we'll use completeRow which stretches.
+        }
+    }
+
+    reset() {
+        if (this.container) {
+            this.container.innerHTML = '';
+        }
+        this.currentRow = [];
+        this.currentRowWidth = 0;
+        this.imagesData = []; // Clear stored image data as well
+    }
+
+    setImages(images) { // New method to load all images data
+        this.imagesData = images;
+        this.filterAndDisplayImages(''); // Display all images initially
+    }
+
+    filterAndDisplayImages(query) { // New method for filtering
+        this.reset(); // Clear existing gallery content
+        const normalizedQuery = query.toLowerCase();
+        const filteredImages = this.imagesData.filter(img => {
+            const title = img.title || img.id || '';
+            // Add more fields to search if needed, e.g., tags
+            return title.toLowerCase().includes(normalizedQuery);
+        });
+
+        filteredImages.forEach(img => this.addImage(img));
+        this.finalize();
+    }
+}
 
 export let background_settings = {
     name: '__transparent.png',
@@ -115,18 +294,22 @@ function getBackgroundPath(fileUrl) {
 }
 
 function highlightLockedBackground() {
-    $('.bg_example').removeClass('locked');
+    const lockedBgMetadata = chat_metadata[BG_METADATA_KEY];
+    $('.thumbnail').each(function () {
+        const $thumbnail = $(this);
+        const bgFile = $thumbnail.data('bgfile');
+        const isCustom = $thumbnail.data('is-custom') === true || $thumbnail.data('is-custom') === 'true';
+        const currentBgUrlForComparison = generateUrlParameter(bgFile, isCustom);
+        const isCurrentlyLocked = lockedBgMetadata === currentBgUrlForComparison;
 
-    const lockedBackground = chat_metadata[BG_METADATA_KEY];
-
-    if (!lockedBackground) {
-        return;
-    }
-
-    $('.bg_example').each(function () {
-        const url = $(this).data('url');
-        if (url === lockedBackground) {
-            $(this).addClass('locked');
+        if (isCurrentlyLocked) {
+            $thumbnail.addClass('locked');
+            $thumbnail.find('.bg_example_lock').hide();
+            $thumbnail.find('.bg_example_unlock').show();
+        } else {
+            $thumbnail.removeClass('locked');
+            $thumbnail.find('.bg_example_lock').show();
+            $thumbnail.find('.bg_example_unlock').hide();
         }
     });
 }
@@ -138,32 +321,35 @@ function highlightLockedBackground() {
  */
 function onLockBackgroundClick(e) {
     e?.stopPropagation();
+    const $thumbnail = $(this).closest('.thumbnail');
+    const bgFile = $thumbnail.data('bgfile');
+    const isCustom = $thumbnail.data('is-custom') === true || $thumbnail.data('is-custom') === 'true';
 
     const chatName = getCurrentChatId();
-
     if (!chatName) {
-        toastr.warning('Select a chat to lock the background for it');
+        toastr.warning(t('Select a chat to lock the background for it'));
         return '';
     }
 
-    const relativeBgImage = getUrlParameter(this) ?? background_settings.url;
+    const relativeBgImage = generateUrlParameter(bgFile, isCustom);
 
     saveBackgroundMetadata(relativeBgImage);
-    setCustomBackground();
-    highlightLockedBackground();
+    setCustomBackground(); // Applies the one from metadata
+    highlightLockedBackground(); // Updates all button states
     return '';
 }
 
 /**
- * Locks the background for the current chat
+ * Unlocks the background for the current chat
  * @param {Event} e Click event
  * @returns {string} Empty string
  */
 function onUnlockBackgroundClick(e) {
     e?.stopPropagation();
+    // const $thumbnail = $(this).closest('.thumbnail'); // Not strictly needed for this op
     removeBackgroundMetadata();
     unsetCustomBackground();
-    highlightLockedBackground();
+    highlightLockedBackground(); // Updates all button states
     return '';
 }
 
@@ -197,17 +383,40 @@ function unsetCustomBackground() {
 }
 
 function onSelectBackgroundClick() {
-    const isCustom = $(this).attr('custom') === 'true';
-    const relativeBgImage = getUrlParameter(this);
+    const $this = $(this);
+    const bgFile = $this.data('bgfile');
+    const isCustom = $this.data('is-custom') === true || $this.data('is-custom') === 'true';
+    // The 'url' data attribute on .thumbnail stores the direct thumbnail URL.
+    // For setting background, we often need the full-resolution path or a specially formatted URL string.
+    // Let's reconstruct 'relativeBgImage' similar to how getBackgroundFromTemplate used to create it,
+    // or how the new JustifiedGallery's renderRow stores it.
+    // The JustifiedGallery stores the direct thumbnail URL in `data-url`.
+    // For `setBackground` and `saveBackgroundMetadata`, we need the `url()` formatted string or the original reference.
+    // `data-bgfile` (aka fullResUrl) is the original filename.
 
-    // if clicked on upload button
-    if (!relativeBgImage) {
+    let relativeBgImage;
+    if (isCustom) {
+        // For custom images, data-url might be a blob or data URL, which is fine for direct use by CSS
+        // However, metadata and setBackground might expect the original reference if it was a file path.
+        // For now, let's assume data-url is suitable for metadata if it's custom.
+        // This part might need refinement based on exactly what `saveBackgroundMetadata` expects for custom BGs.
+        // Let's assume `data-bgfile` is the persistent identifier for custom backgrounds if they are file-based.
+        // If `data-url` is a blob URL, it's not persistent for metadata.
+        // The original `getUrlParameter` returned the `url(...)` formatted string.
+        // The `generateUrlParameter` function creates this.
+        relativeBgImage = generateUrlParameter(bgFile, isCustom); // bgFile is the original identifier
+    } else {
+        relativeBgImage = generateUrlParameter(bgFile, false); // bgFile is filename for system BGs
+    }
+
+    // if clicked on upload button (this condition might be obsolete if upload button isn't a .thumbnail)
+    if (!bgFile) { // Check bgFile as it's the core identifier
         return;
     }
 
     // Automatically lock the background if it's custom or other background is locked
     if (hasCustomBackground() || isCustom) {
-        saveBackgroundMetadata(relativeBgImage);
+        saveBackgroundMetadata(relativeBgImage); // save the url() formatted string
         setCustomBackground();
         highlightLockedBackground();
     }
@@ -220,11 +429,12 @@ function onSelectBackgroundClick() {
         return;
     }
 
-    const bgFile = $(this).attr('bgfile');
-    const backgroundUrl = getBackgroundPath(bgFile);
+    // bgFile is already available from $this.data('bgfile')
+    const backgroundUrl = getBackgroundPath(bgFile); // This is for fetching the full res image
 
     // Fetching to browser memory to reduce flicker
     fetch(backgroundUrl).then(() => {
+        // setBackground expects the original filename (bgFile) and the url() formatted string (relativeBgImage)
         setBackground(bgFile, relativeBgImage);
     }).catch(() => {
         console.log('Background could not be set: ' + backgroundUrl);
@@ -233,7 +443,9 @@ function onSelectBackgroundClick() {
 
 async function onCopyToSystemBackgroundClick(e) {
     e.stopPropagation();
-    const bgNames = await getNewBackgroundName(this);
+    const $thumbnail = $(this).closest('.thumbnail');
+    // Pass the .thumbnail element to getNewBackgroundName, so it can derive data from it
+    const bgNames = await getNewBackgroundName($thumbnail);
 
     if (!bgNames) {
         return;
@@ -307,13 +519,14 @@ async function getThumbnailFromStorage(bg) {
  * @param {Element} referenceElement
  * @returns {Promise<{oldBg: string, newBg: string}>}
  * */
-async function getNewBackgroundName(referenceElement) {
-    const exampleBlock = $(referenceElement).closest('.bg_example');
-    const isCustom = exampleBlock.attr('custom') === 'true';
-    const oldBg = exampleBlock.attr('bgfile');
+async function getNewBackgroundName(referenceElementOrThumbnail) {
+    // referenceElementOrThumbnail can be the button clicked or the thumbnail itself
+    const $thumbnail = $(referenceElementOrThumbnail).closest('.thumbnail');
+    const isCustom = $thumbnail.data('is-custom') === true || $thumbnail.data('is-custom') === 'true';
+    const oldBg = $thumbnail.data('bgfile');
 
     if (!oldBg) {
-        console.debug('no bgfile');
+        console.debug('no bgfile from thumbnail data');
         return;
     }
 
@@ -339,8 +552,9 @@ async function getNewBackgroundName(referenceElement) {
 
 async function onRenameBackgroundClick(e) {
     e.stopPropagation();
-
-    const bgNames = await getNewBackgroundName(this);
+    const $thumbnail = $(this).closest('.thumbnail');
+    // Pass the .thumbnail element
+    const bgNames = await getNewBackgroundName($thumbnail);
 
     if (!bgNames) {
         return;
@@ -364,47 +578,45 @@ async function onRenameBackgroundClick(e) {
 
 async function onDeleteBackgroundClick(e) {
     e.stopPropagation();
-    const bgToDelete = $(this).closest('.bg_example');
-    const url = bgToDelete.data('url');
-    const isCustom = bgToDelete.attr('custom') === 'true';
+    const $thumbnail = $(this).closest('.thumbnail');
+    const bgFile = $thumbnail.data('bgfile');
+    const isCustom = $thumbnail.data('is-custom') === true || $thumbnail.data('is-custom') === 'true';
+    const url = generateUrlParameter(bgFile, isCustom); // Reconstruct for comparison with metadata
+
     const confirm = await Popup.show.confirm(t`Delete the background?`, null);
-    const bg = bgToDelete.attr('bgfile');
 
     if (confirm) {
-        // If it's not custom, it's a built-in background. Delete it from the server
         if (!isCustom) {
-            delBackground(bg);
+            await delBackground(bgFile); // Make sure delBackground is async if it wasn't
         } else {
             const list = chat_metadata[LIST_METADATA_KEY] || [];
-            const index = list.indexOf(bg);
-            list.splice(index, 1);
+            const index = list.indexOf(bgFile); // bgFile should be the identifier for custom BGs
+            if (index > -1) {
+                list.splice(index, 1);
+                chat_metadata[LIST_METADATA_KEY] = list;
+                // No saveMetadataDebounced() here, let getChatBackgroundsList handle it if it's called
+            }
         }
 
-        const siblingSelector = '.bg_example:not(#form_bg_download)';
-        const nextBg = bgToDelete.next(siblingSelector);
-        const prevBg = bgToDelete.prev(siblingSelector);
-        const anyBg = $(siblingSelector);
-
-        if (nextBg.length > 0) {
-            nextBg.trigger('click');
-        } else if (prevBg.length > 0) {
-            prevBg.trigger('click');
-        } else {
-            $(anyBg[Math.floor(Math.random() * anyBg.length)]).trigger('click');
-        }
-
-        bgToDelete.remove();
-
+        // If the deleted background was the active one, unset it
         if (url === chat_metadata[BG_METADATA_KEY]) {
             removeBackgroundMetadata();
             unsetCustomBackground();
-            highlightLockedBackground();
+            // highlightLockedBackground will be called by getBackgrounds or getChatBackgroundsList
         }
 
-        if (isCustom) {
+        // Refresh the gallery to remove the item
+        // This assumes custom backgrounds are not in this gallery. If they were, a more complex refresh is needed.
+        if (!isCustom) {
+            await getBackgrounds(); // This will re-render and also call highlightLockedBackground
+        } else {
+            // If custom backgrounds are managed separately, refresh their list
             await getChatBackgroundsList();
-            saveMetadataDebounced();
+            // And ensure the main gallery's lock states are still correct
+            highlightLockedBackground();
         }
+        // Note: The old logic of clicking a sibling is removed as gallery re-renders.
+        // $thumbnail.remove(); // Let the gallery re-render handle removal
     }
 }
 
@@ -444,20 +656,45 @@ async function autoBackgroundCommand() {
 }
 
 export async function getBackgrounds() {
+    const aspectRatiosResponse = await fetch('/api/user-data/aspect_ratios', { headers: getRequestHeaders() });
+    const aspectRatiosData = aspectRatiosResponse.ok ? await aspectRatiosResponse.json() : {};
+
     const response = await fetch('/api/backgrounds/all', {
         method: 'POST',
         headers: getRequestHeaders(),
         body: JSON.stringify({}),
     });
+
     if (response.ok) {
         const { images, config } = await response.json();
-        Object.assign(THUMBNAIL_CONFIG, config);
-        $('#bg_menu_content').children('div').remove();
+        Object.assign(THUMBNAIL_CONFIG, config); // Keep this for THUMBNAIL_CONFIG updates
+
+        const allImagesData = [];
         for (const bg of images) {
-            const template = await getBackgroundFromTemplate(bg, false);
-            $('#bg_menu_content').append(template);
+            // Assuming 'bg' is the filename, e.g., "image.jpg"
+            const aspectRatio = aspectRatiosData[bg] || 1.0; // Default to 1.0 (square) if not found
+            const isCustom = false; // System backgrounds from this endpoint are not custom
+
+            // Use the modified resolveImageUrl to get a raw URL
+            const thumbnailUrl = await resolveImageUrl(bg, isCustom);
+            const title = bg.slice(0, bg.lastIndexOf('.'));
+
+            const imageData = {
+                id: bg, // Use filename as ID
+                url: thumbnailUrl, // This is now the direct URL
+                aspectRatio: parseFloat(aspectRatio),
+                title: title,
+                fullResUrl: bg, // Original filename for selection
+                isCustom: String(isCustom) // For click handler
+            };
+            allImagesData.push(imageData);
         }
-        activateLazyLoader();
+
+        if (justifiedGalleryInstance) {
+            justifiedGalleryInstance.setImages(allImagesData);
+            highlightLockedBackground(); // Call after images are set
+        }
+        // activateLazyLoader(); // Consider removing or commenting out, native lazy loading in gallery.
     }
 }
 
@@ -468,6 +705,8 @@ function activateLazyLoader() {
         lazyLoadObserver = null;
     }
 
+    // This function might be obsolete if JustifiedGallery handles its own lazy loading or elements.
+    // For now, keeping its structure but it might not be called by getBackgrounds anymore.
     const lazyLoadElements = document.querySelectorAll('.lazy-load-background');
 
     const options = {
@@ -501,9 +740,9 @@ function activateLazyLoader() {
  * @param {Element} block
  * @returns {string} URL of the background
  */
-function getUrlParameter(block) {
-    return $(block).closest('.bg_example').data('url');
-}
+// function getUrlParameter(block) { // This function seems obsolete with .thumbnail structure
+//     return $(block).closest('.thumbnail').data('url'); // If ever needed, this would be the adaptation
+// }
 
 function generateUrlParameter(bg, isCustom) {
     return isCustom ? `url("${encodeURI(bg)}")` : `url("${getBackgroundPath(bg)}")`;
@@ -518,13 +757,12 @@ function generateUrlParameter(bg, isCustom) {
 async function resolveImageUrl(bg, isCustom) {
     const fileExtension = bg.split('.').pop().toLowerCase();
     const isAnimated = ['mp4', 'webp'].includes(fileExtension);
-    const thumbnailUrl = isAnimated && !background_settings.animation
+    // Return raw URL directly
+    return isAnimated && !background_settings.animation
         ? await getThumbnailFromStorage(bg)
         : isCustom
-            ? bg
+            ? bg // Custom backgrounds are already URLs/base64
             : getThumbnailUrl('bg', bg);
-
-    return `url('${thumbnailUrl}')`;
 }
 
 /**
@@ -663,10 +901,22 @@ async function uploadBackground(formData) {
  * @param {string} bg
  */
 function highlightNewBackground(bg) {
-    const newBg = $(`.bg_example[bgfile="${bg}"]`);
-    const scrollOffset = newBg.offset().top - newBg.parent().offset().top;
-    $('#Backgrounds').scrollTop(scrollOffset);
-    flashHighlight(newBg);
+    // Ensure that bg is just the filename, not a path or URL
+    const bgFilename = bg.includes('/') ? bg.substring(bg.lastIndexOf('/') + 1) : bg;
+    const newBgThumbnail = $(`.thumbnail[data-bgfile="${bgFilename}"]`);
+    if (newBgThumbnail.length > 0) {
+        // Scrolling to an element within a flexbox layout can be tricky.
+        // This might need adjustment depending on the actual scroll container for #bg_menu_content.
+        // For now, let's assume direct parent scrolling or that #Backgrounds is the scrollable container.
+        const scrollContainer = $('#Backgrounds'); // Or $('#bg_menu_content').parent() if that's the scroller
+        if (newBgThumbnail.offset() && scrollContainer.offset()) {
+            const scrollOffset = newBgThumbnail.offset().top - scrollContainer.offset().top + scrollContainer.scrollTop();
+            scrollContainer.animate({ scrollTop: scrollOffset }, 300);
+        }
+        flashHighlight(newBgThumbnail);
+    } else {
+        console.warn(`highlightNewBackground: Could not find thumbnail for bgfile="${bgFilename}"`);
+    }
 }
 
 /**
@@ -683,20 +933,20 @@ function setFittingClass(fitting) {
 
 function onBackgroundFilterInput() {
     const filterValue = String($(this).val()).toLowerCase();
-    $('#bg_menu_content > div').each(function () {
-        const $bgContent = $(this);
-        if ($bgContent.attr('title').toLowerCase().includes(filterValue)) {
-            $bgContent.show();
-        } else {
-            $bgContent.hide();
-        }
-    });
+    if (justifiedGalleryInstance) {
+        justifiedGalleryInstance.filterAndDisplayImages(filterValue);
+    }
 }
 
 export function initBackgrounds() {
+    const galleryContainer = document.getElementById('bg_menu_content');
+    if (galleryContainer) {
+        justifiedGalleryInstance = new JustifiedGallery(galleryContainer, 120); // Target row height e.g. 120px
+    }
+
     eventSource.on(event_types.CHAT_CHANGED, onChatChanged);
     eventSource.on(event_types.FORCE_SET_BACKGROUND, forceSetBackground);
-    $(document).on('click', '.bg_example', onSelectBackgroundClick);
+    $(document).on('click', '.thumbnail', onSelectBackgroundClick); // Changed from .bg_example
     $(document).on('click', '.bg_example_lock', onLockBackgroundClick);
     $(document).on('click', '.bg_example_unlock', onUnlockBackgroundClick);
     $(document).on('click', '.bg_example_edit', onRenameBackgroundClick);
