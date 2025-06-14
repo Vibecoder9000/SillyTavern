@@ -254,8 +254,19 @@ export async function ensureThumbnailCache(directoriesList) {
         console.info('Generating thumbnails cache. Please wait...');
 
         const bgFiles = fs.readdirSync(directories.backgrounds);
+        const imageFileNames = bgFiles.filter(fileName => {
+            try {
+                // Construct full path to check if it's a directory
+                const filePath = path.join(directories.backgrounds, fileName);
+                return fs.statSync(filePath).isFile();
+            } catch (statError) {
+                console.warn(`[Thumbnails Cache] Error stating file ${fileName}, skipping: ${statError.message}`);
+                return false;
+            }
+        });
+        console.log(`[Thumbnails Cache] Found ${imageFileNames.length} actual image files to process in ${directories.backgrounds} (out of ${bgFiles.length} total entries).`);
         const tasks = [];
-        console.log(`[Thumbnails Cache] Found ${bgFiles.length} files to process for ${directories.backgrounds}`);
+        // console.log(`[Thumbnails Cache] Found ${bgFiles.length} files to process for ${directories.backgrounds}`); // Original log, replaced by the one above
 
         const aspectFilePath = path.join(directories.root, 'aspect_ratios.json');
         let allAspectRatios = {};
@@ -272,15 +283,20 @@ export async function ensureThumbnailCache(directoriesList) {
             }
         }
 
-        for (const file of bgFiles) {
+        for (const file of imageFileNames) { // Iterate over filtered list
             console.log(`[Thumbnails Cache] Queuing thumbnail generation for: ${file} in ${directories.backgrounds}`);
             tasks.push(generateThumbnail(directories, 'bg', file, allAspectRatios));
         }
 
-        console.log(`[Thumbnails Cache] About to execute Promise.all for ${tasks.length} tasks for directory ${directories.backgrounds}.`);
+        console.log(`[Thumbnails Cache] About to execute Promise.all for ${imageFileNames.length} tasks for directory ${directories.backgrounds}.`);
         try {
-            await Promise.all(tasks);
-            console.log(`[Thumbnails Cache] Promise.all successfully completed for ${directories.backgrounds}.`);
+            const results = await Promise.all(tasks); // Store results
+            console.log(`[Thumbnails Cache] Promise.all successfully completed for ${directories.backgrounds}. Results count: ${results?.length}`);
+            // Further log to see how many succeeded vs failed (returned null)
+            if (results) {
+                const successfulThumbs = results.filter(r => r !== null).length;
+                console.log(`[Thumbnails Cache] Breakdown for ${directories.backgrounds}: Successful thumbnails created: ${successfulThumbs}, Failed (null): ${results.length - successfulThumbs}`);
+            }
         } catch (error) {
             // This will catch if any of the generateThumbnail promises reject and it's not caught internally,
             // or if Promise.all itself has an issue.
