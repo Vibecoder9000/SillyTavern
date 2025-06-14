@@ -206,8 +206,8 @@ async function generateThumbnail(directories, type, file) {
         // Generate buffer only if image processing up to this point was successful
         console.log(`[Thumbnails] Generating buffer for ${file}. PNG format: ${pngFormat}`);
         buffer = pngFormat
-            ? await image.getBufferAsync(JimpMime.png)
-            : await image.getBufferAsync(JimpMime.jpeg, { quality: quality });
+            ? await image.getBufferAsync(Jimp.MIME_PNG) // Use Jimp.MIME_PNG
+            : await image.getBufferAsync(Jimp.MIME_JPEG, { quality: quality }); // Use Jimp.MIME_JPEG
 
         // If buffer generation is successful, write it.
         console.log(`[Thumbnails] Writing thumbnail to disk: ${pathToCachedFile}`);
