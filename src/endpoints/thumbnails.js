@@ -265,7 +265,7 @@ export async function ensureThumbnailCache(directoriesList) {
             }
         });
         console.log(`[Thumbnails Cache] Found ${imageFileNames.length} actual image files to process in ${directories.backgrounds} (out of ${bgFiles.length} total entries).`);
-        const tasks = [];
+        // const tasks = []; // Removed for sequential processing
         // console.log(`[Thumbnails Cache] Found ${bgFiles.length} files to process for ${directories.backgrounds}`); // Original log, replaced by the one above
 
         const aspectFilePath = path.join(directories.root, 'aspect_ratios.json');
@@ -283,30 +283,35 @@ export async function ensureThumbnailCache(directoriesList) {
             }
         }
 
-        for (const file of imageFileNames) { // Iterate over filtered list
-            console.log(`[Thumbnails Cache] Queuing thumbnail generation for: ${file} in ${directories.backgrounds}`);
-            tasks.push(generateThumbnail(directories, 'bg', file, allAspectRatios));
         }
 
-        console.log(`[Thumbnails Cache] About to execute Promise.all for ${imageFileNames.length} tasks for directory ${directories.backgrounds}.`);
-        try {
-            const results = await Promise.all(tasks); // Store results
-            console.log(`[Thumbnails Cache] Promise.all successfully completed for ${directories.backgrounds}. Results count: ${results?.length}`);
-            // Further log to see how many succeeded vs failed (returned null)
-            if (results) {
-                const successfulThumbs = results.filter(r => r !== null).length;
-                console.log(`[Thumbnails Cache] Breakdown for ${directories.backgrounds}: Successful thumbnails created: ${successfulThumbs}, Failed (null): ${results.length - successfulThumbs}`);
+        console.log(`[Thumbnails Cache] About to process ${imageFileNames.length} tasks sequentially for directory ${directories.backgrounds}.`);
+        const results = []; // Array to store results, similar to Promise.all
+        let successfulThumbs = 0;
+        let failedThumbs = 0;
+
+        for (const file of imageFileNames) { // Iterate over filtered list
+            console.log(`[Thumbnails Cache] Processing thumbnail for: ${file} in ${directories.backgrounds}`);
+            try {
+                const result = await generateThumbnail(directories, 'bg', file, allAspectRatios);
+                results.push(result);
+                if (result !== null) {
+                    successfulThumbs++;
+                } else {
+                    failedThumbs++;
+                }
+                console.log(`[Thumbnails Cache] Finished processing for: ${file}. Result: ${result === null ? 'Failed (null)' : 'Success'}`);
+            } catch (error) {
+                // This catch is a safeguard; generateThumbnail should ideally not reject if its internal try/catches are working.
+                // It should resolve to null on failure.
+                console.error(`[Thumbnails Cache] Error processing file ${file} sequentially:`, error);
+                results.push(null); // Count as a failure
+                failedThumbs++;
             }
-        } catch (error) {
-            // This will catch if any of the generateThumbnail promises reject and it's not caught internally,
-            // or if Promise.all itself has an issue.
-            console.error(`[Thumbnails Cache] Error during Promise.all execution for ${directories.backgrounds}:`, error);
-            // Decide if we should attempt to write partial aspect_ratios.json or skip.
-            // For now, let's log and continue to attempt writing what we have,
-            // as some aspect ratios might have been successfully collected.
-            // Or, alternatively, return or throw to indicate failure for this directory.
-            // For robustness, we'll try to write what we have.
         }
+
+        console.log(`[Thumbnails Cache] Sequential processing completed for ${directories.backgrounds}.`);
+        console.log(`[Thumbnails Cache] Breakdown for ${directories.backgrounds}: Successful thumbnails created: ${successfulThumbs}, Failed (null): ${failedThumbs}`);
 
         let jsonStringToWrite;
         try {
