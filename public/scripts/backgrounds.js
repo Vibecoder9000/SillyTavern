@@ -42,6 +42,7 @@ let justifiedGalleryInstance;
 
 class JustifiedGallery {
     constructor(container, targetRowHeight = 200) {
+        console.log('JustifiedGallery constructor called with container:', container, 'targetRowHeight:', targetRowHeight);
         this.container = container;
         this.targetRowHeight = targetRowHeight; // You might want to make this configurable later
         this.currentRow = [];
@@ -50,35 +51,39 @@ class JustifiedGallery {
     }
 
     addImage(imageData) {
+        console.log('JustifiedGallery.addImage called with imageData:', imageData);
         const scaledWidth = this.targetRowHeight * imageData.aspectRatio;
         this.currentRow.push({
             ...imageData,
             scaledWidth: scaledWidth
         });
         this.currentRowWidth += scaledWidth;
+        console.log('Calculated scaledWidth:', scaledWidth, 'Current row:', this.currentRow, 'Current row width:', this.currentRowWidth);
         const containerWidth = this.container.offsetWidth;
 
         // Ensure containerWidth is positive to avoid issues
         if (containerWidth <= 0) {
+            console.warn('JustifiedGallery.addImage: containerWidth is 0 or less. Skipping row completion check.');
             // If container not visible or has no width, defer completion or handle error
             // For now, let's prevent completing rows if width is unknown
             return;
         }
 
         const gapWidth = (this.currentRow.length - 1) * GAP_SIZE;
+        console.log('JustifiedGallery.addImage: containerWidth:', containerWidth, 'gapWidth:', gapWidth);
         if (this.currentRowWidth + gapWidth >= containerWidth * 0.95) { // Trigger row completion slightly before exact width
             this.completeRow();
         }
     }
 
     completeRow() {
+        console.log('JustifiedGallery.completeRow called. Current row length:', this.currentRow.length);
         if (this.currentRow.length === 0) return;
 
         const containerWidth = this.container.offsetWidth;
         // Ensure containerWidth is positive
         if (containerWidth <= 0) {
-            // Cannot complete row if container has no width, clear current row to prevent issues
-            console.warn('JustifiedGallery: Container width is 0 or not available. Clearing current row.');
+            console.warn('JustifiedGallery.completeRow: Container width is 0 or not available. Clearing current row.');
             this.currentRow = [];
             this.currentRowWidth = 0;
             return;
@@ -89,6 +94,7 @@ class JustifiedGallery {
 
         const scaleFactor = availableWidth / this.currentRowWidth;
         const finalHeight = this.targetRowHeight * scaleFactor;
+        console.log('JustifiedGallery.completeRow: containerWidth:', containerWidth, 'gapWidth:', gapWidth, 'availableWidth:', availableWidth, 'scaleFactor:', scaleFactor, 'finalHeight:', finalHeight);
 
         this.renderRow(this.currentRow, scaleFactor, finalHeight);
 
@@ -97,6 +103,7 @@ class JustifiedGallery {
     }
 
     renderRow(images, scaleFactor, finalHeight) {
+        console.log('JustifiedGallery.renderRow called with images:', images, 'scaleFactor:', scaleFactor, 'finalHeight:', finalHeight);
         const rowElement = document.createElement('div');
         rowElement.className = 'gallery-row';
         // Style is applied by CSS, but flex properties are essential for layout
@@ -126,6 +133,8 @@ class JustifiedGallery {
             imgElement.style.objectFit = 'cover';
             imgElement.loading = 'lazy'; // Native lazy loading
 
+            console.log('RenderRow: Creating thumbnail for imgData:', imgData, 'Calculated width:', width);
+            console.log('RenderRow: Image source being set:', imgElement.src);
             thumbnail.appendChild(imgElement);
 
             const menuElement = document.createElement('div');
@@ -173,6 +182,7 @@ class JustifiedGallery {
         });
 
         this.container.appendChild(rowElement);
+        console.log('RenderRow: Appended rowElement to container. Container innerHTML length:', this.container.innerHTML.length);
     }
 
     finalize() {
@@ -190,6 +200,7 @@ class JustifiedGallery {
     }
 
     reset() {
+        console.log('JustifiedGallery.reset called.');
         if (this.container) {
             this.container.innerHTML = '';
         }
@@ -199,6 +210,10 @@ class JustifiedGallery {
     }
 
     setImages(images) { // New method to load all images data
+        console.log('JustifiedGallery.setImages called with images:', images);
+        if (!images || images.length === 0) {
+            console.log('JustifiedGallery.setImages: images array is empty or undefined.');
+        }
         this.imagesData = images;
         this.filterAndDisplayImages(''); // Display all images initially
     }
@@ -658,6 +673,7 @@ async function autoBackgroundCommand() {
 export async function getBackgrounds() {
     const aspectRatiosResponse = await fetch('/api/user-data/aspect_ratios', { headers: getRequestHeaders() });
     const aspectRatiosData = aspectRatiosResponse.ok ? await aspectRatiosResponse.json() : {};
+    console.log('Fetched aspectRatiosData:', aspectRatiosData);
 
     const response = await fetch('/api/backgrounds/all', {
         method: 'POST',
@@ -667,6 +683,7 @@ export async function getBackgrounds() {
 
     if (response.ok) {
         const { images, config } = await response.json();
+        console.log('Fetched images from /api/backgrounds/all:', images);
         Object.assign(THUMBNAIL_CONFIG, config); // Keep this for THUMBNAIL_CONFIG updates
 
         const allImagesData = [];
@@ -677,6 +694,7 @@ export async function getBackgrounds() {
 
             // Use the modified resolveImageUrl to get a raw URL
             const thumbnailUrl = await resolveImageUrl(bg, isCustom);
+            console.log('Processing bg:', bg, 'Resolved thumbnailUrl:', thumbnailUrl, 'Calculated aspectRatio:', aspectRatio);
             const title = bg.slice(0, bg.lastIndexOf('.'));
 
             const imageData = {
@@ -687,9 +705,11 @@ export async function getBackgrounds() {
                 fullResUrl: bg, // Original filename for selection
                 isCustom: String(isCustom) // For click handler
             };
+            console.log('Constructed imageData:', imageData);
             allImagesData.push(imageData);
         }
 
+        console.log('Calling justifiedGalleryInstance.setImages with allImagesData:', allImagesData);
         if (justifiedGalleryInstance) {
             justifiedGalleryInstance.setImages(allImagesData);
             highlightLockedBackground(); // Call after images are set
@@ -755,14 +775,17 @@ function generateUrlParameter(bg, isCustom) {
  * @returns {Promise<string>} CSS URL of the background
  */
 async function resolveImageUrl(bg, isCustom) {
+    console.log('resolveImageUrl called with bg:', bg, 'isCustom:', isCustom);
     const fileExtension = bg.split('.').pop().toLowerCase();
     const isAnimated = ['mp4', 'webp'].includes(fileExtension);
     // Return raw URL directly
-    return isAnimated && !background_settings.animation
+    const thumbnailUrl = isAnimated && !background_settings.animation
         ? await getThumbnailFromStorage(bg)
         : isCustom
             ? bg // Custom backgrounds are already URLs/base64
             : getThumbnailUrl('bg', bg);
+    console.log('resolveImageUrl returning thumbnailUrl:', thumbnailUrl);
+    return thumbnailUrl;
 }
 
 /**
