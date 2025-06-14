@@ -122,62 +122,86 @@ async function generateThumbnail(directories, type, file) {
 
         try {
             const image = await Jimp.read(pathToOriginalFile);
-            let aspectRatio;
 
             if (type === 'bg') {
-                const originalWidth = image.bitmap.width;
-                const originalHeight = image.bitmap.height;
+                let aspectRatio;
+                let newWidth;
+                let newHeight;
+                let aspectCalculationSuccess = false;
 
-                if (originalHeight > 0) {
-                    aspectRatio = originalWidth / originalHeight;
-                    const targetPixelArea = 12500;
-                    let newWidth = Math.round(Math.sqrt(targetPixelArea * aspectRatio));
-                    let newHeight = Math.round(Math.sqrt(targetPixelArea / aspectRatio));
+                try {
+                    const originalWidth = image.bitmap.width;
+                    const originalHeight = image.bitmap.height;
 
-                    newWidth = Math.max(1, newWidth);
-                    newHeight = Math.max(1, newHeight);
+                    if (originalHeight > 0 && originalWidth > 0) {
+                        aspectRatio = originalWidth / originalHeight;
+                        const targetPixelArea = 12500;
 
-                    image.resize(newWidth, newHeight);
-                } else {
-                    console.warn(`Invalid image height for aspect ratio calculation: ${pathToOriginalFile}. Using cover mechanism.`);
-                    const size = dimensions[type];
-                    const width = !isNaN(size?.[0]) && size?.[0] > 0 ? size[0] : image.bitmap.width;
-                    const height = !isNaN(size?.[1]) && size?.[1] > 0 ? size[1] : image.bitmap.height;
-                    image.cover({ w: width, h: height });
+                        // Corrected calculation:
+                        newHeight = Math.round(Math.sqrt(targetPixelArea / aspectRatio));
+                        newWidth = Math.round(newHeight * aspectRatio);
+
+                        newWidth = Math.max(1, newWidth); // Ensure dimensions are at least 1
+                        newHeight = Math.max(1, newHeight);
+
+                        if (newWidth > 0 && newHeight > 0) {
+                            aspectCalculationSuccess = true;
+                        } else {
+                            console.warn(`Invalid new dimensions calculated for ${file}: ${newWidth}x${newHeight}. Falling back.`);
+                        }
+                    } else {
+                        console.warn(`Invalid original dimensions for ${file}: ${originalWidth}x${originalHeight}. Falling back.`);
+                    }
+                } catch (e) {
+                    console.warn(`Error calculating aspect ratio or new dimensions for ${file}:`, e);
+                    // aspectCalculationSuccess remains false
                 }
-            } else { // For 'avatar' or if 'bg' aspect ratio calculation failed and fell through
+
+                if (aspectCalculationSuccess) {
+                    image.resize(newWidth, newHeight); // Apply new resize
+                    console.log(`Resized ${file} to ${newWidth}x${newHeight} using aspect ratio ${aspectRatio}`);
+                    // Save aspect ratio to JSON
+                    try {
+                        const aspectFilePath = path.join(directories.root, 'aspect_ratios.json');
+                        let ratios = {};
+                        try {
+                            const data = await fsPromises.readFile(aspectFilePath, 'utf8');
+                            ratios = JSON.parse(data);
+                        } catch (err) {
+                            if (err.code !== 'ENOENT') {
+                                console.error('Error reading aspect_ratios.json:', err);
+                            } else {
+                                console.log('aspect_ratios.json not found, creating new one for user:', directories.root);
+                            }
+                        }
+                        ratios[file] = aspectRatio;
+                        await fsPromises.writeFile(aspectFilePath, JSON.stringify(ratios, null, 2), 'utf8');
+                        console.log(`Saved aspect ratio for ${file}: ${aspectRatio} to ${aspectFilePath}`);
+                    } catch (err) {
+                        console.error('Error writing aspect_ratios.json:', err);
+                    }
+                } else {
+                    // Fallback to old cover method for 'bg' if new method failed
+                    const size = dimensions[type]; // [160, 90]
+                    const fallbackWidth = !isNaN(size?.[0]) && size?.[0] > 0 ? size[0] : image.bitmap.width;
+                    const fallbackHeight = !isNaN(size?.[1]) && size?.[1] > 0 ? size[1] : image.bitmap.height;
+                    image.cover({ w: fallbackWidth, h: fallbackHeight });
+                    console.log(`Used fallback cover method for ${file} to ${fallbackWidth}x${fallbackHeight}`);
+                }
+            } else if (type === 'avatar') { // Existing avatar logic
                 const size = dimensions[type];
                 const width = !isNaN(size?.[0]) && size?.[0] > 0 ? size[0] : image.bitmap.width;
                 const height = !isNaN(size?.[1]) && size?.[1] > 0 ? size[1] : image.bitmap.height;
                 image.cover({ w: width, h: height });
+                console.log(`Processed avatar ${file} with cover method to ${width}x${height}`);
             }
 
             buffer = pngFormat
                 ? await image.getBuffer(JimpMime.png)
                 : await image.getBuffer(JimpMime.jpeg, { quality: quality, jpegColorSpace: 'ycbcr' });
-
-            if (type === 'bg' && aspectRatio) {
-                const aspectFilePath = path.join(directories.root, 'aspect_ratios.json');
-                let ratios = {};
-                try {
-                    const data = await fsPromises.readFile(aspectFilePath, 'utf8');
-                    ratios = JSON.parse(data);
-                } catch (err) {
-                    if (err.code !== 'ENOENT') {
-                        console.error('Error reading aspect_ratios.json:', err);
-                    }
-                    // Start with empty ratios if file not found or parse error
-                }
-                ratios[file] = aspectRatio;
-                try {
-                    await fsPromises.writeFile(aspectFilePath, JSON.stringify(ratios, null, 2), 'utf8');
-                } catch (err) {
-                    console.error('Error writing aspect_ratios.json:', err);
-                }
-            }
         }
-        catch (inner) {
-            console.warn(`Thumbnailer can not process the image: ${pathToOriginalFile}. Using original size`, inner);
+        catch (inner) { // This is the catch for Jimp.read or image processing issues
+            console.warn(`Thumbnailer cannot process the image: ${pathToOriginalFile}. Using original size`, inner);
             buffer = fs.readFileSync(pathToOriginalFile);
         }
 
