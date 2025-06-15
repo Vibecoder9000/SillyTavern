@@ -491,8 +491,8 @@ async function onDeleteBackgroundClick(e) {
     if (isCustom) { await getChatBackgroundsList(); saveMetadataDebounced(); }
 }
 
-const autoBgPrompt = 'Ignore previous instructions and choose a location ONLY from the provided list that is the most suitable for the current scene. Do not output any other text:
-{0}';
+const autoBgPrompt = `Ignore previous instructions and choose a location ONLY from the provided list that is the most suitable for the current scene. Do not output any other text:
+{0}`;
 async function autoBackgroundCommand() {
     const bgTitles = Array.from(document.querySelectorAll('#bg_menu_content .BGSampleTitle'));
     const options = bgTitles.map(x => ({ element: $(x).closest('.thumbnail, .bg_example')[0], text: x.innerText.trim() })).filter(x => x.text.length > 0);
