@@ -232,9 +232,27 @@ export async function generateThumbnail(directories, type, file) {
         }
         console.log(`[generateThumbnail] Resized ${file}. Getting buffer...`);
 
-        buffer = pngFormat
-            ? await thumbImage.getBufferAsync(JimpMime.png)
-            : await thumbImage.getBufferAsync(JimpMime.jpeg, { quality: quality });
+        if (pngFormat) {
+            buffer = await new Promise((resolve, reject) => {
+                thumbImage.getBuffer('image/png', {}, (err, buf) => { // Using string 'image/png' and {} options
+                    if (err) {
+                        console.error('[generateThumbnail] Error getting PNG buffer with getBuffer:', err.stack || err);
+                        return reject(err);
+                    }
+                    resolve(buf);
+                });
+            });
+        } else {
+            buffer = await new Promise((resolve, reject) => {
+                thumbImage.getBuffer('image/jpeg', { quality: quality, jpegColorSpace: 'ycbcr' }, (err, buf) => { // Using string 'image/jpeg' and specific options
+                    if (err) {
+                        console.error('[generateThumbnail] Error getting JPEG buffer with getBuffer:', err.stack || err);
+                        return reject(err);
+                    }
+                    resolve(buf);
+                });
+            });
+        }
 
         console.log(`[generateThumbnail] Got buffer for ${file}. Length: ${buffer?.length}. Writing to: ${pathToCachedFile}`);
         writeFileAtomicSyncDirect(pathToCachedFile, buffer);
