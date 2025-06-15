@@ -90,12 +90,8 @@ export function invalidateThumbnail(directories, type, file) {
 async function generateThumbnail(directories, type, file, currentAspectRatios) {
     let buffer; // Ensure buffer is declared in the function scope
 
-    // Determine the effective pngFormat for this specific call
-    let localPngFormat = pngFormat; // Initialize with the global/module-level config
-    if (type === 'bg') {
-        console.log(`[Thumbnails] Forcing PNG format for type 'bg'. Original module configured format was: ${localPngFormat ? 'png' : 'jpg'}`);
-        localPngFormat = true; // Force PNG for background thumbnails
-    }
+    // pngFormat (module-scoped const) will be used directly now.
+    // The localPngFormat override has been removed.
 
     let thumbnailFolder = getThumbnailFolder(directories, type);
     let originalFolder = getOriginalFolder(directories, type);
@@ -170,10 +166,9 @@ async function generateThumbnail(directories, type, file, currentAspectRatios) {
             }
 
             if (aspectCalculationSuccess) {
-                // console.log(`[Thumbnails] Applying image.scaleToFit({ w: ${newWidth}, h: ${newHeight}, mode: Jimp.RESIZE_BILINEAR }) for ${file}`);
-                // image.scaleToFit({ w: newWidth, h: newHeight, mode: Jimp.RESIZE_BILINEAR });
-                // console.log(`[Thumbnails] Dimensions *after* scaleToFit for ${file}: ${image.bitmap.width}x${image.bitmap.height}`);
-                console.log(`[Thumbnails] SKIPPING scaleToFit for diagnostic purposes for ${file}. Using original dimensions: ${image.bitmap.width}x${image.bitmap.height}`);
+                console.log(`[Thumbnails] Applying image.scaleToFit({ w: ${newWidth}, h: ${newHeight}, mode: Jimp.RESIZE_BILINEAR }) for ${file}`);
+                image.scaleToFit({ w: newWidth, h: newHeight, mode: Jimp.RESIZE_BILINEAR });
+                console.log(`[Thumbnails] Dimensions *after* scaleToFit for ${file}: ${image.bitmap.width}x${image.bitmap.height}`);
 
                 // Update in-memory aspect ratios object
                 console.log(`[Thumbnails] Updating in-memory aspect ratios for ${file} with AR: ${aspectRatio}`);
@@ -196,9 +191,9 @@ async function generateThumbnail(directories, type, file, currentAspectRatios) {
         }
 
         // Generate buffer only if image processing up to this point was successful
-        console.log(`[Thumbnails] Generating buffer for ${file} using image.getBuffer(). PNG format: ${localPngFormat}`);
+        console.log(`[Thumbnails] Generating buffer for ${file} using image.getBuffer(). PNG format: ${pngFormat}`);
         buffer = await new Promise((resolve, reject) => {
-            const actualMimeType = localPngFormat ? 'image/png' : 'image/jpeg'; // Use direct MIME type strings
+            const actualMimeType = pngFormat ? 'image/png' : 'image/jpeg'; // Use direct MIME type strings
             const cb = (err, buf) => {
                 if (err) {
                     console.error(`[Thumbnails] Error in getBuffer callback for ${file} (MIME: ${actualMimeType}):`, err);
@@ -208,7 +203,7 @@ async function generateThumbnail(directories, type, file, currentAspectRatios) {
                 resolve(buf);
             };
 
-            if (localPngFormat) {
+            if (pngFormat) {
                 console.log(`[Thumbnails] Getting buffer for PNG ${file} (MIME: ${actualMimeType}) with empty options`); // Log updated
                 image.getBuffer(actualMimeType, {}, cb);
             } else {
