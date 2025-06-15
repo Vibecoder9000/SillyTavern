@@ -69,13 +69,48 @@ function getOriginalFolder(directories, type) {
  * @param {string} file Name of the file
  */
 export function invalidateThumbnail(directories, type, file) {
+    console.log(`[Thumbnails] Invalidating thumbnail for file: ${file}, Type: ${type}`);
     const folder = getThumbnailFolder(directories, type);
-    if (folder === undefined) throw new Error('Invalid thumbnail type');
+    if (folder === undefined) {
+        console.error(`[Thumbnails Invalidate] Invalid thumbnail type: ${type} for file: ${file}`);
+        throw new Error('Invalid thumbnail type');
+    }
 
     const pathToThumbnail = path.join(folder, file);
 
     if (fs.existsSync(pathToThumbnail)) {
-        fs.unlinkSync(pathToThumbnail);
+        try {
+            fs.unlinkSync(pathToThumbnail);
+            console.log(`[Thumbnails Invalidate] Deleted thumbnail file: ${pathToThumbnail}`);
+        } catch (unlinkErr) {
+            console.error(`[Thumbnails Invalidate] Error deleting thumbnail file ${pathToThumbnail}:`, unlinkErr);
+        }
+    } else {
+        console.log(`[Thumbnails Invalidate] Thumbnail file not found, no need to delete: ${pathToThumbnail}`);
+    }
+
+    // Additionally, remove the aspect ratio entry if it's a background image
+    if (type === 'bg') {
+        const aspectFilePath = path.join(directories.root, 'aspect_ratios.json');
+        try {
+            if (fs.existsSync(aspectFilePath)) {
+                console.log(`[Thumbnails Invalidate] Reading ${aspectFilePath} to remove entry for ${file}`);
+                let ratios = {};
+                const data = fs.readFileSync(aspectFilePath, 'utf8'); // Use sync version for simplicity here or convert to async
+                ratios = JSON.parse(data);
+                if (ratios.hasOwnProperty(file)) {
+                    delete ratios[file];
+                    fs.writeFileSync(aspectFilePath, JSON.stringify(ratios, null, 2), 'utf8'); // Use sync version
+                    console.log(`[Thumbnails Invalidate] Removed aspect ratio for ${file} from ${aspectFilePath}`);
+                } else {
+                    console.log(`[Thumbnails Invalidate] Aspect ratio for ${file} not found in ${aspectFilePath}. No change needed.`);
+                }
+            } else {
+                console.log(`[Thumbnails Invalidate] ${aspectFilePath} not found. No aspect ratio to remove for ${file}.`);
+            }
+        } catch (err) {
+            console.error(`[Thumbnails Invalidate] Error processing aspect ratio file ${aspectFilePath} for ${file}:`, err);
+        }
     }
 }
 
@@ -89,6 +124,7 @@ export function invalidateThumbnail(directories, type, file) {
  */
 async function generateThumbnail(directories, type, file, currentAspectRatios) {
     let buffer; // Ensure buffer is declared in the function scope
+    let preciseAspectRatio = null; // Initialize for the return value
 
     // pngFormat (module-scoped const) will be used directly now.
     // The localPngFormat override has been removed.
@@ -119,7 +155,9 @@ async function generateThumbnail(directories, type, file, currentAspectRatios) {
 
     if (cachedFileExists && !shouldRegenerate) {
         console.log(`[Thumbnails] Using cached thumbnail for: ${file}`);
-        return pathToCachedFile;
+        // If currentAspectRatios is provided (e.g., by ensureThumbnailCache), use it. Otherwise, null.
+        const knownAspectRatio = currentAspectRatios ? currentAspectRatios[file] || null : null;
+        return { path: pathToCachedFile, aspectRatio: knownAspectRatio };
     }
 
     if (!originalFileExists) {
@@ -127,13 +165,15 @@ async function generateThumbnail(directories, type, file, currentAspectRatios) {
         return null;
     }
 
+    // preciseAspectRatio is already initialized above the try block
+
     try {
-        let buffer;
+        // let buffer; // buffer is already declared in the outer scope of the function
         const image = await Jimp.read(pathToOriginalFile);
         console.log(`[Thumbnails] Successfully read original file: ${file} with Jimp.`);
 
         if (type === 'bg') {
-            let aspectRatio;
+            // preciseAspectRatio will be used for calculations
             let newWidth;
             let newHeight;
             let aspectCalculationSuccess = false;
@@ -146,23 +186,26 @@ async function generateThumbnail(directories, type, file, currentAspectRatios) {
                 console.log(`[Thumbnails] Original dimensions for ${file}: ${originalWidth}x${originalHeight}`);
 
                 if (originalHeight > 0 && originalWidth > 0) {
-                    aspectRatio = originalWidth / originalHeight;
+                    preciseAspectRatio = originalWidth / originalHeight; // Assign to the function-scoped variable
                     const targetPixelArea = 12500;
-                    newHeight = Math.round(Math.sqrt(targetPixelArea / aspectRatio));
-                    newWidth = Math.round(newHeight * aspectRatio);
-                    console.log(`[Thumbnails] Calculated for ${file}: AR=${aspectRatio}, NewDims=${newWidth}x${newHeight}`);
+                    newHeight = Math.round(Math.sqrt(targetPixelArea / preciseAspectRatio));
+                    newWidth = Math.round(newHeight * preciseAspectRatio);
+                    console.log(`[Thumbnails] Calculated for ${file}: AR=${preciseAspectRatio}, NewDims=${newWidth}x${newHeight}`);
 
                     if (newWidth > 0 && newHeight > 0) {
                         aspectCalculationSuccess = true;
                         console.log(`[Thumbnails] Aspect calculation SUCCESS for ${file}`);
                     } else {
                         console.warn(`[Thumbnails] Invalid new dimensions calculated for ${file}: ${newWidth}x${newHeight}. Will use fallback.`);
+                        preciseAspectRatio = null; // Reset if calculation failed
                     }
                 } else {
                     console.warn(`[Thumbnails] Invalid original dimensions for ${file}: ${originalWidth}x${originalHeight}. Will use fallback.`);
+                    preciseAspectRatio = null; // Reset if original dims are invalid
                 }
             } catch (e) {
                 console.warn(`[Thumbnails] Error calculating aspect ratio or new dimensions for ${file}: ${e.message}. Will use fallback.`);
+                preciseAspectRatio = null; // Reset on error
             }
 
             if (aspectCalculationSuccess) {
@@ -170,24 +213,36 @@ async function generateThumbnail(directories, type, file, currentAspectRatios) {
                 image.scaleToFit({ w: newWidth, h: newHeight, mode: Jimp.RESIZE_BILINEAR });
                 console.log(`[Thumbnails] Dimensions *after* scaleToFit for ${file}: ${image.bitmap.width}x${image.bitmap.height}`);
 
-                // Update in-memory aspect ratios object
-                console.log(`[Thumbnails] Updating in-memory aspect ratios for ${file} with AR: ${aspectRatio}`);
-                currentAspectRatios[file] = aspectRatio;
-                // Disk writing is handled by ensureThumbnailCache after all files are processed for bulk operations.
-                // For single API calls, this means aspect ratio isn't saved to disk in this simplified step.
-            } else {
+                if (currentAspectRatios && preciseAspectRatio !== null) {
+                    console.log(`[Thumbnails] Updating in-memory aspect ratios for ${file} with AR: ${preciseAspectRatio}`);
+                    currentAspectRatios[file] = preciseAspectRatio;
+                }
+            } else { // Fallback for 'bg' if aspect calculation failed
                 console.warn(`[Thumbnails] Using fallback 'cover' method for ${file}`);
-                const size = dimensions[type]; // e.g., [160, 90]
+                // Attempt to use original aspect ratio if it was calculated before failure, otherwise it's null
+                if (currentAspectRatios && image.bitmap.height > 0 && image.bitmap.width > 0 && preciseAspectRatio === null) {
+                    // This case means original dimensions were fine, but new dim calculation failed.
+                    // So, we capture original AR here if not already set.
+                    preciseAspectRatio = image.bitmap.width / image.bitmap.height;
+                     console.log(`[Thumbnails] Capturing original AR for fallback for ${file}: ${preciseAspectRatio}`);
+                }
+
+                if (currentAspectRatios && preciseAspectRatio !== null) {
+                     console.log(`[Thumbnails] Updating in-memory aspect ratios for ${file} with original AR: ${preciseAspectRatio} during fallback.`);
+                    currentAspectRatios[file] = preciseAspectRatio;
+                }
+                const size = dimensions[type];
                 const fallbackWidth = !isNaN(size?.[0]) && size?.[0] > 0 ? size[0] : image.bitmap.width;
                 const fallbackHeight = !isNaN(size?.[1]) && size?.[1] > 0 ? size[1] : image.bitmap.height;
                 image.cover({ w: fallbackWidth, h: fallbackHeight });
             }
-        } else if (type === 'avatar') {
+        } else if (type === 'avatar') { // Avatars don't get 'preciseAspectRatio' saved in this manner currently
             console.log(`[Thumbnails] Processing type 'avatar' for ${file}`);
             const size = dimensions[type];
             const width = !isNaN(size?.[0]) && size?.[0] > 0 ? size[0] : image.bitmap.width;
             const height = !isNaN(size?.[1]) && size?.[1] > 0 ? size[1] : image.bitmap.height;
             image.cover({ w: width, h: height });
+            preciseAspectRatio = null; // Ensure it's null for avatars for the return object
         }
 
         // Generate buffer only if image processing up to this point was successful
@@ -225,7 +280,7 @@ async function generateThumbnail(directories, type, file, currentAspectRatios) {
             console.log(`[Thumbnails] Writing thumbnail buffer to disk: ${pathToCachedFile} for file ${file}. Buffer length: ${buffer?.length}`);
             writeFileAtomicSync(pathToCachedFile, buffer);
             console.log(`[Thumbnails] Successfully wrote thumbnail for: ${file}. Path: ${pathToCachedFile}`);
-            return pathToCachedFile; // Resolve with path if write is successful
+            return { path: pathToCachedFile, aspectRatio: preciseAspectRatio }; // Return object
         } catch (writeError) {
             console.error(`[Thumbnails] Failed to write thumbnail to disk for ${file} at ${pathToCachedFile}: ${writeError.message}. Stack: ${writeError.stack}`);
             // Aspect ratio might have been calculated and added to in-memory object.
@@ -241,7 +296,10 @@ async function generateThumbnail(directories, type, file, currentAspectRatios) {
             const originalFileBuffer = await fsPromises.readFile(pathToOriginalFile); // read original into a new variable
             writeFileAtomicSync(pathToCachedFile, originalFileBuffer); // save original as thumbnail
             console.log(`[Thumbnails] Successfully used original file as fallback thumbnail for ${file}.`);
-            return pathToCachedFile; // Return path to this "original as thumbnail"
+            // For fallback, we don't have a newly calculated AR.
+            // It might be best to try and get original AR here if not already done, or return null for AR.
+            // For now, returning null for AR in this specific fallback path.
+            return { path: pathToCachedFile, aspectRatio: null };
         } catch (originalFileError) {
             console.error(`[Thumbnails] Failed to even use original file as fallback for ${file}: ${originalFileError.message}`);
             return null; // Cannot proceed
@@ -305,17 +363,24 @@ export async function ensureThumbnailCache(directoriesList) {
             for (const file of imageFileNames) {
                 console.log(`[Thumbnails Cache] Processing thumbnail for: ${file} in ${bgDir}`);
                 try {
-                    const result = await generateThumbnail(directories, 'bg', file, allAspectRatios);
-                    results.push(result);
-                    if (result !== null) {
+                    // generateThumbnail now modifies allAspectRatios directly if successful for 'bg' type
+                    // and returns an object { path: string|null, aspectRatio: number|null } or null for total failure
+                    const thumbnailResult = await generateThumbnail(directories, 'bg', file, allAspectRatios);
+                    results.push(thumbnailResult); // Store the actual result object or null
+
+                    if (thumbnailResult && thumbnailResult.path) { // A path indicates the thumbnail file (or fallback) was written
                         successfulThumbs++;
+                        // allAspectRatios is already updated by generateThumbnail for new/scaled images.
+                        // For cached images, generateThumbnail now tries to return the known AR if currentAspectRatios is passed.
+                        // If ensureThumbnailCache's allAspectRatios was the one passed, it's already up-to-date for cached.
+                        console.log(`[Thumbnails Cache] Finished processing for: ${file} in ${bgDir}. Path: ${thumbnailResult.path}, AR: ${thumbnailResult.aspectRatio}`);
                     } else {
                         failedThumbs++;
+                        console.log(`[Thumbnails Cache] Finished processing for: ${file} in ${bgDir}. Result: Failed (null or no path)`);
                     }
-                    console.log(`[Thumbnails Cache] Finished processing for: ${file} in ${bgDir}. Result: ${result === null ? 'Failed (null)' : 'Success'}`);
                 } catch (error) {
                     console.error(`[Thumbnails Cache] Unhandled error processing file ${file} sequentially in ${bgDir}:`, error);
-                    results.push(null);
+                    results.push(null); // Still count as a failure in results array
                     failedThumbs++;
                 }
             } // End for loop
@@ -388,25 +453,59 @@ router.get('/', async function (request, response) {
             return response.send(originalFile);
         }
 
-        // For single GET, aspect ratio won't be saved to disk here to avoid complexity without locking.
-        // Bulk generation via ensureThumbnailCache is prioritized for aspect ratio saving.
-        const dummyAspectRatios = {};
-        const pathToCachedFile = await generateThumbnail(request.user.directories, type, file, dummyAspectRatios);
+        // For single GET, we need to read/write the aspect_ratios.json file here.
+        let currentAspectRatios = {}; // This will be passed to generateThumbnail
+        const aspectFilePath = path.join(request.user.directories.root, 'aspect_ratios.json');
+        let initialAspectRatiosSnapshot = {}; // To compare if currentAspectRatios changed
 
-        if (!pathToCachedFile) {
+        if (type === 'bg') { // Only load/save for 'bg' type for this endpoint
+            try {
+                const data = await fsPromises.readFile(aspectFilePath, 'utf8');
+                currentAspectRatios = JSON.parse(data);
+                initialAspectRatiosSnapshot = JSON.parse(JSON.stringify(currentAspectRatios)); // Deep clone for comparison
+            } catch (err) {
+                if (err.code !== 'ENOENT') {
+                    console.error(`[Thumbnails API] Error reading ${aspectFilePath} for ${file}: ${err.message}`);
+                } else {
+                    console.log(`[Thumbnails API] ${aspectFilePath} not found for ${file}, will create if new AR is generated.`);
+                }
+                // currentAspectRatios remains {}
+            }
+        }
+
+        const thumbnailResult = await generateThumbnail(request.user.directories, type, file, currentAspectRatios);
+
+        if (type === 'bg' && thumbnailResult && thumbnailResult.aspectRatio !== null) {
+            // Check if currentAspectRatios was actually modified for this file by generateThumbnail
+            // This means a new aspect ratio was calculated and stored in the in-memory object.
+            if (currentAspectRatios[file] === thumbnailResult.aspectRatio &&
+                initialAspectRatiosSnapshot[file] !== thumbnailResult.aspectRatio) {
+                try {
+                    console.log(`[Thumbnails API] Attempting to write updated aspect ratios to ${aspectFilePath} for file ${file}`);
+                    await fsPromises.writeFile(aspectFilePath, JSON.stringify(currentAspectRatios, null, 2), 'utf8');
+                    console.log(`[Thumbnails API] Updated ${aspectFilePath} for ${file} with AR: ${thumbnailResult.aspectRatio}`);
+                } catch (err) {
+                    console.error(`[Thumbnails API] Error writing updated ${aspectFilePath} for ${file}: ${err.message}`);
+                }
+            } else if (currentAspectRatios[file] === thumbnailResult.aspectRatio) {
+                 console.log(`[Thumbnails API] Aspect ratio for ${file} (${thumbnailResult.aspectRatio}) was already up-to-date or unchanged. No write needed.`);
+            }
+        }
+
+        if (!thumbnailResult || !thumbnailResult.path) {
             return response.sendStatus(404);
         }
 
-        if (!fs.existsSync(pathToCachedFile)) {
+        if (!fs.existsSync(thumbnailResult.path)) {
             return response.sendStatus(404);
         }
 
-        const contentType = mime.lookup(pathToCachedFile) || 'image/jpeg';
-        const cachedFile = await fsPromises.readFile(pathToCachedFile);
+        const contentType = mime.lookup(thumbnailResult.path) || 'image/jpeg';
+        const cachedFile = await fsPromises.readFile(thumbnailResult.path);
         response.setHeader('Content-Type', contentType);
         return response.send(cachedFile);
     } catch (error) {
-        console.error('Failed getting thumbnail', error);
+        console.error('[Thumbnails API] Failed getting thumbnail:', error);
         return response.sendStatus(500);
     }
 });
