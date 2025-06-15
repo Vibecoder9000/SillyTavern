@@ -139,7 +139,7 @@ async function generateThumbnail(directories, type, file, currentAspectRatiosObj
                 if (newWidth === 0 || newHeight === 0) {
                     throw new Error('Calculated new dimensions are zero.');
                 }
-                image.scaleToFit(newWidth, newHeight, Jimp.RESIZE_BILINEAR);
+                image.scaleToFit({ w: newWidth, h: newHeight, mode: Jimp.RESIZE_BILINEAR });
             } else {
                 const size = dimensions[type];
                 const width = !isNaN(size?.[0]) && size?.[0] > 0 ? size[0] : image.bitmap.width;
@@ -173,11 +173,11 @@ async function generateThumbnail(directories, type, file, currentAspectRatiosObj
  */
 export async function ensureThumbnailCache(directoriesList) {
     for (const directories of directoriesList) {
-        if (!directories.userData) {
-            console.warn('User data directory not defined. Skipping aspect ratio processing for this directory set.');
+        if (!directories.root) {
+            console.warn('User root directory not defined. Skipping aspect ratio processing for this directory set.'); /* This case should ideally not happen if directories are constructed correctly */
             // Continue to generate thumbnails but without aspect ratio saving for this iteration
         }
-        const aspectFilePath = directories.userData ? path.join(directories.userData, 'aspect_ratios.json') : null;
+        const aspectFilePath = directories.root ? path.join(directories.root, 'aspect_ratios.json') : null;
         let aspectRatios = {};
 
         if (aspectFilePath) {
@@ -187,7 +187,7 @@ export async function ensureThumbnailCache(directoriesList) {
                     aspectRatios = JSON.parse(fileContent);
                 }
             } catch (err) {
-                console.warn(`Error reading or parsing aspect_ratios.json for directory: ${directories.userData}. Starting with an empty object.`, err);
+                console.warn(`Error reading or parsing aspect_ratios.json for directory: ${directories.root}. Starting with an empty object.`, err);
                 aspectRatios = {};
             }
         }
@@ -214,6 +214,11 @@ export async function ensureThumbnailCache(directoriesList) {
         let generatedCount = 0;
 
         for (const file of bgFiles) {
+            const filePath = path.join(directories.backgrounds, file);
+            if (!fs.statSync(filePath).isFile()) {
+                console.warn(`Skipping thumbnail generation for ${filePath} as it is a directory.`);
+                continue; // Skip to the next item
+            }
             try {
                 const thumbnailPath = await generateThumbnail(directories, 'bg', file, aspectRatios);
                 if (thumbnailPath) generatedCount++;
@@ -226,7 +231,7 @@ export async function ensureThumbnailCache(directoriesList) {
             try {
                 writeFileAtomicSync(aspectFilePath, JSON.stringify(aspectRatios, null, 2));
             } catch (err) {
-                console.error(`Error writing aspect_ratios.json for directory: ${directories.userData}.`, err);
+                console.error(`Error writing aspect_ratios.json for directory: ${directories.root}.`, err);
             }
         }
         console.info(`Done! Processed: ${bgFiles.length} files, Generated/Updated: ${generatedCount} preview images for ${directories.thumbnailsBg}`);

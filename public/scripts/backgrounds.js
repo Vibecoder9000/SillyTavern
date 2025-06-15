@@ -38,6 +38,222 @@ const THUMBNAIL_BLOBS = new Map();
  */
 // let lazyLoadObserver = null; // Potentially remove if native lazy load is enough
 
+// Constants for JustifiedGallery moved to module scope
+const GAP_SIZE = 3; // pixels
+const TARGET_ROW_HEIGHT = 120; // pixels
+
+class JustifiedGallery {
+    constructor(container, targetRowHeight = 120) {
+        this.container = container;
+        this.targetRowHeight = targetRowHeight;
+        this.currentRow = [];
+        this.currentRowAspectRatio = 0;
+        if (this.container) { // Guard against null container
+            this.container.innerHTML = ''; // Clear container on init
+        } else {
+            console.error('JustifiedGallery: Container element is null. Cannot initialize.');
+        }
+    }
+
+    addRow(item) {
+        if (!this.container) return; // Do nothing if container is not valid
+        this.currentRow.push(item);
+        this.currentRowAspectRatio += item.aspectRatio;
+        // Check if current row is full enough
+        if (this.container && this.currentRowAspectRatio * this.targetRowHeight >= this.container.offsetWidth - (this.currentRow.length * GAP_SIZE)) {
+            this.completeRow();
+        }
+    }
+
+    completeRow(force = false) {
+        if (!this.container || this.currentRow.length === 0) return; // Do nothing if container is not valid or row is empty
+
+        const isLastRow = force;
+        let rowHeight = this.targetRowHeight;
+
+        if (!isLastRow) {
+            // Ensure container is valid before accessing offsetWidth
+            if (!this.container) {
+                 console.error("JustifiedGallery: Container is null, cannot calculate row height.");
+                 return; // Or handle error appropriately
+            }
+            rowHeight = (this.container.offsetWidth - (this.currentRow.length -1) * GAP_SIZE) / this.currentRowAspectRatio;
+        }
+
+        this.renderRow(this.currentRow, rowHeight, isLastRow);
+        this.currentRow = [];
+        this.currentRowAspectRatio = 0;
+    }
+
+    renderRow(items, rowHeight, isLastRow) {
+        const rowDiv = document.createElement('div');
+        rowDiv.className = 'gallery-row';
+        rowDiv.style.height = `${rowHeight}px`;
+
+        items.forEach(imgData => {
+            const thumbnail = document.createElement('div');
+            thumbnail.className = 'thumbnail';
+            // Calculate width based on aspect ratio and row height
+            const width = imgData.aspectRatio * rowHeight;
+            thumbnail.style.width = `${width}px`;
+            thumbnail.style.height = `${rowHeight}px`; // flex-shrink will handle if it overflows a bit due to rounding
+
+            thumbnail.dataset.id = imgData.id; // filename
+            thumbnail.dataset.bgfile = imgData.filename; // for compatibility
+            thumbnail.dataset.url = imgData.fullResUrl; // for onSelectBackgroundClick
+            thumbnail.title = imgData.filename;
+            // Set custom attribute if needed, though API doesn't provide this for /all endpoint
+            // thumbnail.setAttribute('custom', 'false'); // Assuming these are not custom from /all
+
+            const img = document.createElement('img');
+            img.src = imgData.url; // Thumbnail URL from getThumbnailUrl
+            img.alt = imgData.filename;
+            img.loading = 'lazy';
+            thumbnail.appendChild(img);
+
+            // Add action buttons - structure adapted from #background_template
+            const menu = document.createElement('div');
+            menu.className = 'bg_example_menu';
+
+            // Lock button (conditionally shown based on whether it's the locked background)
+            // This logic might need adjustment as highlightLockedBackground updates classes externally
+            const lockButton = document.createElement('div');
+            lockButton.className = 'bg_example_lock menu_button fa-solid fa-lock fa-fw pointer';
+            lockButton.title = t('Lock Background');
+            menu.appendChild(lockButton);
+
+            const unlockButton = document.createElement('div');
+            unlockButton.className = 'bg_example_unlock menu_button fa-solid fa-unlock fa-fw pointer';
+            unlockButton.title = t('Unlock Background');
+            menu.appendChild(unlockButton);
+
+
+            // Edit button (Rename)
+            const editButton = document.createElement('div');
+            editButton.className = 'bg_example_edit menu_button fa-solid fa-pen-to-square fa-fw pointer';
+            editButton.title = t('Rename Background');
+            menu.appendChild(editButton);
+
+            // Delete button
+            const deleteButton = document.createElement('div');
+            deleteButton.className = 'bg_example_cross menu_button fa-solid fa-trash-can fa-fw pointer';
+            deleteButton.title = t('Delete Background');
+            menu.appendChild(deleteButton);
+
+            // Copy Link button (this was not in the original template but is good to have)
+            // const copyLinkButton = document.createElement('div');
+            // copyLinkButton.className = 'bg_example_copylink menu_button fa-solid fa-link fa-fw pointer';
+            // copyLinkButton.title = t('Copy Background Link');
+            // menu.appendChild(copyLinkButton);
+
+
+            thumbnail.appendChild(menu);
+
+            // Add title display
+            const titleDiv = document.createElement('div');
+            titleDiv.className = 'BGSampleTitle';
+            titleDiv.textContent = imgData.filename.substring(0, imgData.filename.lastIndexOf('.')) || imgData.filename;
+            thumbnail.appendChild(titleDiv);
+
+
+            rowDiv.appendChild(thumbnail);
+        });
+        if (this.container) { // Guard against null container
+            this.container.appendChild(rowDiv);
+        }
+    }
+}
+
+class BackgroundSelector {
+    constructor(containerId, targetRowHeight = TARGET_ROW_HEIGHT) {
+        if (!containerId || typeof containerId !== 'string') {
+            console.error('BackgroundSelector: Invalid or empty containerId provided.');
+            this.galleryContainer = null;
+        } else {
+            this.galleryContainer = document.getElementById(containerId);
+        }
+
+        if (!this.galleryContainer) {
+            console.error(`BackgroundSelector: Container element with ID '${containerId}' not found.`);
+            // this.gallery will receive null and JustifiedGallery constructor should handle it.
+        }
+        this.gallery = new JustifiedGallery(this.galleryContainer, targetRowHeight);
+        this.images = []; // Full dataset {filename, aspectRatio, url, id, tags, fullResUrl}
+        this.filteredImages = [];
+        this.currentIndex = 0;
+        this.batchSize = 30; // Number of images to load at a time
+        this.scrollHandler = this.loadBatch.bind(this); // Bound scroll handler
+    }
+
+    setImages(imageDataList) {
+        this.images = imageDataList;
+        this.filteredImages = this.images; // Initially, all images are shown
+        this.reset();
+        this.loadBatch(); // Load initial batch
+    }
+
+    search(query) {
+        const lowerQuery = query.toLowerCase().trim();
+        if (!lowerQuery) {
+            this.filteredImages = this.images;
+        } else {
+            this.filteredImages = this.images.filter(img =>
+                img.tags.some(tag => tag.toLowerCase().includes(lowerQuery)) ||
+                img.filename.toLowerCase().includes(lowerQuery)
+            );
+        }
+        this.reset();
+        this.loadBatch();
+    }
+
+    reset() {
+        if (this.gallery && this.gallery.container) { // Ensure gallery and its container exist
+            this.gallery.container.innerHTML = ''; // Clear the gallery display
+        }
+        if (this.gallery) {
+            this.gallery.currentRow = []; // Reset gallery's current row
+            this.gallery.currentRowAspectRatio = 0;
+        }
+        this.currentIndex = 0; // Reset batch loading index
+    }
+
+    loadBatch() {
+        if (!this.gallery) return; // Do nothing if gallery isn't initialized
+        const batch = this.filteredImages.slice(this.currentIndex, this.currentIndex + this.batchSize);
+        batch.forEach(imgData => this.gallery.addRow(imgData));
+        this.currentIndex += this.batchSize;
+
+        if (this.currentIndex >= this.filteredImages.length) {
+            // All images loaded for current filter
+            this.finalizeGallery();
+            // Optionally remove scroll listener if no more images
+            // this.galleryContainer.removeEventListener('scroll', this.scrollHandler); // Or parent scroller
+        }
+    }
+
+    finalizeGallery() {
+        if (this.gallery) { // Ensure gallery exists
+            this.gallery.completeRow(true); // Force completion of the last row
+        }
+    }
+
+    setupInfiniteScroll() {
+        // Assuming Backgrounds popup is the scroller. Adjust if it's bg_menu_content itself.
+        const scroller = document.getElementById('Backgrounds');
+        if(scroller){
+            scroller.removeEventListener('scroll', this.scrollHandler); // Remove previous if any
+            scroller.addEventListener('scroll', () => {
+                // Check if scrolled to near bottom
+                if (scroller.scrollTop + scroller.clientHeight >= scroller.scrollHeight - 300) { // 300px threshold
+                    if (this.currentIndex < this.filteredImages.length) {
+                        this.loadBatch();
+                    }
+                }
+            });
+        }
+    }
+}
+
 export let background_settings = {
     name: '__transparent.png',
     url: generateUrlParameter('__transparent.png', false),
@@ -446,195 +662,6 @@ async function autoBackgroundCommand() {
     bestMatch[0].item.element.click();
     return '';
 }
-
-export async function getBackgrounds() {
-// Constants for JustifiedGallery
-const GAP_SIZE = 3; // pixels
-const TARGET_ROW_HEIGHT = 120; // pixels
-
-class JustifiedGallery {
-    constructor(container, targetRowHeight = 120) {
-        this.container = container;
-        this.targetRowHeight = targetRowHeight;
-        this.currentRow = [];
-        this.currentRowAspectRatio = 0;
-        this.container.innerHTML = ''; // Clear container on init
-    }
-
-    addRow(item) {
-        this.currentRow.push(item);
-        this.currentRowAspectRatio += item.aspectRatio;
-        // Check if current row is full enough
-        if (this.currentRowAspectRatio * this.targetRowHeight >= this.container.offsetWidth - (this.currentRow.length * GAP_SIZE)) {
-            this.completeRow();
-        }
-    }
-
-    completeRow(force = false) {
-        if (this.currentRow.length === 0) return;
-
-        const isLastRow = force;
-        let rowHeight = this.targetRowHeight;
-
-        if (!isLastRow) {
-            rowHeight = (this.container.offsetWidth - (this.currentRow.length -1) * GAP_SIZE) / this.currentRowAspectRatio;
-        }
-
-        this.renderRow(this.currentRow, rowHeight, isLastRow);
-        this.currentRow = [];
-        this.currentRowAspectRatio = 0;
-    }
-
-    renderRow(items, rowHeight, isLastRow) {
-        const rowDiv = document.createElement('div');
-        rowDiv.className = 'gallery-row';
-        rowDiv.style.height = `${rowHeight}px`;
-
-        items.forEach(imgData => {
-            const thumbnail = document.createElement('div');
-            thumbnail.className = 'thumbnail';
-            // Calculate width based on aspect ratio and row height
-            const width = imgData.aspectRatio * rowHeight;
-            thumbnail.style.width = `${width}px`;
-            thumbnail.style.height = `${rowHeight}px`; // flex-shrink will handle if it overflows a bit due to rounding
-
-            thumbnail.dataset.id = imgData.id; // filename
-            thumbnail.dataset.bgfile = imgData.filename; // for compatibility
-            thumbnail.dataset.url = imgData.fullResUrl; // for onSelectBackgroundClick
-            thumbnail.title = imgData.filename;
-            // Set custom attribute if needed, though API doesn't provide this for /all endpoint
-            // thumbnail.setAttribute('custom', 'false'); // Assuming these are not custom from /all
-
-            const img = document.createElement('img');
-            img.src = imgData.url; // Thumbnail URL from getThumbnailUrl
-            img.alt = imgData.filename;
-            img.loading = 'lazy';
-            thumbnail.appendChild(img);
-
-            // Add action buttons - structure adapted from #background_template
-            const menu = document.createElement('div');
-            menu.className = 'bg_example_menu';
-
-            // Lock button (conditionally shown based on whether it's the locked background)
-            // This logic might need adjustment as highlightLockedBackground updates classes externally
-            const lockButton = document.createElement('div');
-            lockButton.className = 'bg_example_lock menu_button fa-solid fa-lock fa-fw pointer';
-            lockButton.title = t('Lock Background');
-            menu.appendChild(lockButton);
-
-            const unlockButton = document.createElement('div');
-            unlockButton.className = 'bg_example_unlock menu_button fa-solid fa-unlock fa-fw pointer';
-            unlockButton.title = t('Unlock Background');
-            menu.appendChild(unlockButton);
-
-
-            // Edit button (Rename)
-            const editButton = document.createElement('div');
-            editButton.className = 'bg_example_edit menu_button fa-solid fa-pen-to-square fa-fw pointer';
-            editButton.title = t('Rename Background');
-            menu.appendChild(editButton);
-
-            // Delete button
-            const deleteButton = document.createElement('div');
-            deleteButton.className = 'bg_example_cross menu_button fa-solid fa-trash-can fa-fw pointer';
-            deleteButton.title = t('Delete Background');
-            menu.appendChild(deleteButton);
-
-            // Copy Link button (this was not in the original template but is good to have)
-            // const copyLinkButton = document.createElement('div');
-            // copyLinkButton.className = 'bg_example_copylink menu_button fa-solid fa-link fa-fw pointer';
-            // copyLinkButton.title = t('Copy Background Link');
-            // menu.appendChild(copyLinkButton);
-
-
-            thumbnail.appendChild(menu);
-
-            // Add title display
-            const titleDiv = document.createElement('div');
-            titleDiv.className = 'BGSampleTitle';
-            titleDiv.textContent = imgData.filename.substring(0, imgData.filename.lastIndexOf('.')) || imgData.filename;
-            thumbnail.appendChild(titleDiv);
-
-
-            rowDiv.appendChild(thumbnail);
-        });
-        this.container.appendChild(rowDiv);
-    }
-}
-
-class BackgroundSelector {
-    constructor(containerId, targetRowHeight = TARGET_ROW_HEIGHT) {
-        this.galleryContainer = document.getElementById(containerId);
-        this.gallery = new JustifiedGallery(this.galleryContainer, targetRowHeight);
-        this.images = []; // Full dataset {filename, aspectRatio, url, id, tags, fullResUrl}
-        this.filteredImages = [];
-        this.currentIndex = 0;
-        this.batchSize = 30; // Number of images to load at a time
-        this.scrollHandler = this.loadBatch.bind(this); // Bound scroll handler
-    }
-
-    setImages(imageDataList) {
-        this.images = imageDataList;
-        this.filteredImages = this.images; // Initially, all images are shown
-        this.reset();
-        this.loadBatch(); // Load initial batch
-    }
-
-    search(query) {
-        const lowerQuery = query.toLowerCase().trim();
-        if (!lowerQuery) {
-            this.filteredImages = this.images;
-        } else {
-            this.filteredImages = this.images.filter(img =>
-                img.tags.some(tag => tag.toLowerCase().includes(lowerQuery)) ||
-                img.filename.toLowerCase().includes(lowerQuery)
-            );
-        }
-        this.reset();
-        this.loadBatch();
-    }
-
-    reset() {
-        this.gallery.container.innerHTML = ''; // Clear the gallery display
-        this.gallery.currentRow = []; // Reset gallery's current row
-        this.gallery.currentRowAspectRatio = 0;
-        this.currentIndex = 0; // Reset batch loading index
-    }
-
-    loadBatch() {
-        const batch = this.filteredImages.slice(this.currentIndex, this.currentIndex + this.batchSize);
-        batch.forEach(imgData => this.gallery.addRow(imgData));
-        this.currentIndex += this.batchSize;
-
-        if (this.currentIndex >= this.filteredImages.length) {
-            // All images loaded for current filter
-            this.finalizeGallery();
-            // Optionally remove scroll listener if no more images
-            // this.galleryContainer.removeEventListener('scroll', this.scrollHandler); // Or parent scroller
-        }
-    }
-
-    finalizeGallery() {
-        this.gallery.completeRow(true); // Force completion of the last row
-    }
-
-    setupInfiniteScroll() {
-        // Assuming Backgrounds popup is the scroller. Adjust if it's bg_menu_content itself.
-        const scroller = document.getElementById('Backgrounds');
-        if(scroller){
-            scroller.removeEventListener('scroll', this.scrollHandler); // Remove previous if any
-            scroller.addEventListener('scroll', () => {
-                // Check if scrolled to near bottom
-                if (scroller.scrollTop + scroller.clientHeight >= scroller.scrollHeight - 300) { // 300px threshold
-                    if (this.currentIndex < this.filteredImages.length) {
-                        this.loadBatch();
-                    }
-                }
-            });
-        }
-    }
-}
-
 
 export async function getBackgrounds() {
     const response = await fetch('/api/backgrounds/all', {
