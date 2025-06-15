@@ -147,9 +147,27 @@ async function generateThumbnail(directories, type, file, currentAspectRatiosObj
                 image.cover({ w: width, h: height });
             }
 
-            buffer = pngFormat
-                ? await image.getBufferAsync('image/png', {})
-                : await image.getBufferAsync('image/jpeg', { quality: quality, jpegColorSpace: 'ycbcr' });
+            if (pngFormat) {
+                buffer = await new Promise((resolve, reject) => {
+                    image.getBuffer('image/png', {}, (err, buf) => {
+                        if (err) {
+                            console.error('Error getting PNG buffer:', err);
+                            return reject(err);
+                        }
+                        resolve(buf);
+                    });
+                });
+            } else {
+                buffer = await new Promise((resolve, reject) => {
+                    image.getBuffer('image/jpeg', { quality: quality, jpegColorSpace: 'ycbcr' }, (err, buf) => {
+                        if (err) {
+                            console.error('Error getting JPEG buffer:', err);
+                            return reject(err);
+                        }
+                        resolve(buf);
+                    });
+                });
+            }
         }
         catch (inner) {
             console.warn(`Thumbnailer cannot process the image: ${pathToOriginalFile}. Error: ${inner.message}`, inner);

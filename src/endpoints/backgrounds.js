@@ -12,11 +12,11 @@ import { getFileNameValidationFunction } from '../middleware/validateFileName.js
 export const router = express.Router();
 
 router.post('/all', async function (request, response) {
-    if (!request.user.directories.userData) {
-        console.error('User data directory not defined. Cannot load aspect ratios.');
-        return response.status(500).json({ error: 'User data directory not configured.' });
+    if (!request.user.directories.root) { // Check for .root instead of .userData
+        console.error('User root directory not defined. Cannot load aspect ratios.');
+        return response.status(500).json({ error: 'User root directory not configured.' });
     }
-    const aspectFilePath = path.join(request.user.directories.userData, 'aspect_ratios.json');
+    const aspectFilePath = path.join(request.user.directories.root, 'aspect_ratios.json'); // Use .root
     let aspectRatiosMap = {};
 
     try {
