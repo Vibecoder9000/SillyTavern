@@ -9,8 +9,8 @@ import {
     invalidateThumbnail,
     generateThumbnail,
     currentMetadataVersion as sharedMetadataVersion,
-    writeFileAtomicSync as sharedWriteFileAtomicSync,
 } from './thumbnails.js';
+import { sync as sharedWriteFileAtomicSync } from 'write-file-atomic';
 import { getImages } from '../util.js';
 import { getFileNameValidationFunction } from '../middleware/validateFileName.js';
 
@@ -129,8 +129,7 @@ router.post('/upload', function (request, response) {
                             try {
                                 let aspectRatiosData = JSON.parse(fs.readFileSync(aspectRatiosJsonPath, 'utf-8'));
                                 delete aspectRatiosData._metadata_version;
-                                // LINT FIX: Use Object.prototype.hasOwnProperty.call()
-                                if (Object.prototype.hasOwnProperty.call(aspectRatiosData, filename)) {
+                                if (Object.hasOwn(aspectRatiosData, filename)) {
                                     delete aspectRatiosData[filename];
                                     aspectRatiosData._metadata_version = sharedMetadataVersion;
                                     sharedWriteFileAtomicSync(aspectRatiosJsonPath, JSON.stringify(aspectRatiosData, null, 2));

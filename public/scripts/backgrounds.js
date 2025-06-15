@@ -312,6 +312,11 @@ function highlightLockedBackground() {
     });
 }
 
+/**
+ * Locks the background for the current chat
+ * @param {Event} e Click event
+ * @returns {string} Empty string
+ */
 function onLockBackgroundClick(e) {
     e?.stopPropagation();
 
@@ -330,6 +335,11 @@ function onLockBackgroundClick(e) {
     return '';
 }
 
+/**
+ * Locks the background for the current chat
+ * @param {Event} e Click event
+ * @returns {string} Empty string
+ */
 function onUnlockBackgroundClick(e) {
     e?.stopPropagation();
     removeBackgroundMetadata();
@@ -354,7 +364,12 @@ function removeBackgroundMetadata() {
 
 function setCustomBackground() {
     const file = chat_metadata[BG_METADATA_KEY];
-    if (document.getElementById('bg_custom').style.backgroundImage === file) return;
+
+    // bg already set
+    if (document.getElementById('bg_custom').style.backgroundImage == file) {
+        return;
+    }
+
     $('#bg_custom').css('background-image', file);
 }
 
@@ -372,6 +387,7 @@ function onSelectBackgroundClick() {
 
     const backgroundCssUrl = `url("${fullResUrl}")`;
 
+    // Automatically lock the background if it's custom or other background is locked
     if (hasCustomBackground() || isCustom) {
         saveBackgroundMetadata(backgroundCssUrl);
         setCustomBackground();
@@ -387,12 +403,18 @@ function onSelectBackgroundClick() {
 async function onCopyToSystemBackgroundClick(e) {
     e.stopPropagation();
     const bgNames = await getNewBackgroundName(this);
-    if (!bgNames) return;
+
+    if (!bgNames) {
+        return;
+    }
+
     const bgFile = await fetch(bgNames.oldBg);
+
     if (!bgFile.ok) {
         toastr.warning('Failed to copy background');
         return;
     }
+
     const blob = await bgFile.blob();
     const file = new File([blob], bgNames.newBg);
     const formData = new FormData();
@@ -410,8 +432,12 @@ async function onCopyToSystemBackgroundClick(e) {
 async function getNewBackgroundName(referenceElement) {
     const exampleBlock = $(referenceElement).closest('.thumbnail');
     const isCustom = exampleBlock.attr('custom') === 'true';
-    const oldBg = exampleBlock.data('bgfile');
-    if (!oldBg) return;
+    const oldBg = exampleBlock.attr('bgfile');
+
+    if (!oldBg) {
+        console.debug('no bgfile');
+        return;
+    }
 
     const fileExtension = oldBg.split('.').pop();
     const fileNameBase = isCustom ? oldBg.split('/').pop() : oldBg;
@@ -427,7 +453,10 @@ async function onRenameBackgroundClick(e) {
     e.stopPropagation();
 
     const bgNames = await getNewBackgroundName(this);
-    if (!bgNames) return;
+
+    if (!bgNames) {
+		return;
+    }
 
     const data = { old_bg: bgNames.oldBg, new_bg: bgNames.newBg };
     const response = await fetch('/api/backgrounds/rename', {
@@ -466,7 +495,7 @@ async function onDeleteBackgroundClick(e) {
     const allThumbnails = $('#bg_menu_content').find('.thumbnail');
     const currentIndex = allThumbnails.index(bgToDelete);
 
-    bgToDelete.remove();
+        bgToDelete.remove();
 
     const nextBg = allThumbnails.eq(currentIndex);
 
@@ -493,10 +522,11 @@ async function onDeleteBackgroundClick(e) {
 const autoBgPrompt = 'Ignore previous instructions and choose a location ONLY from the provided list that is the most suitable for the current scene. Do not output any other text:\n{0}';
 
 async function autoBackgroundCommand() {
+    /** @type {HTMLElement[]} */
     const bgTitles = Array.from(document.querySelectorAll('#bg_menu_content .BGSampleTitle'));
     const options = bgTitles.map(x => ({ element: $(x).closest('.thumbnail')[0], text: x.innerText.trim() })).filter(x => x.text.length > 0);
     if (options.length === 0) {
-        toastr.warning('No backgrounds to choose from.');
+        toastr.warning('No backgrounds to choose from. Please upload some images to the "Backgrounds" folder.');
         return '';
     }
     const list = options.map(option => `- ${option.text}`).join('\n');
@@ -508,6 +538,9 @@ async function autoBackgroundCommand() {
         toastr.warning('No match found.');
         return '';
     }
+
+    // Use jQuery's .trigger('click') to ensure all bound event handlers
+    // (like onSelectBackgroundClick) are correctly executed.
     $(bestMatch[0].item.element).trigger('click');
     return '';
 }
@@ -591,9 +624,17 @@ async function onBackgroundUploadSelected() {
     form.reset();
 }
 
+/**
+ * Converts a video file to an animated webp format if the file is a video.
+ * @param {FormData} formData
+ * @returns {Promise<void>}
+ */
 async function convertFileIfVideo(formData) {
     const file = formData.get('avatar');
-    if (!(file instanceof File) || !file.type.startsWith('video/')) {
+    if (!(file instanceof File)) {
+        return;
+    }
+    if (!file.type.startsWith('video/')) {
         return;
     }
     if (typeof globalThis.convertVideoToAnimatedWebp !== 'function') {
@@ -613,23 +654,29 @@ async function convertFileIfVideo(formData) {
         const convertedFileName = file.name.replace(/\.[^/.]+$/, '.webp');
         const convertedFile = new File([convertedBuffer], convertedFileName, { type: 'image/webp' });
         formData.set('avatar', convertedFile);
+        toastMessage.remove();
     } catch (error) {
+        formData.delete('avatar');
+        toastMessage.remove();
         console.error('Error converting video to animated webp:', error);
         toastr.error(t`Error converting video to animated webp`);
-    } finally {
-        toastMessage.remove();
     }
 }
 
+/**
+ * Uploads a background to the server
+ * @param {FormData} formData
+ */
 async function uploadBackground(formData) {
-    if (!formData.has('avatar')) {
-        console.log('No file for upload.');
-        return;
-    }
-    const headers = getRequestHeaders();
-    delete headers['Content-Type'];
-
     try {
+        if (!formData.has('avatar')) {
+            console.log('No file provided. Background upload cancelled.');
+            return;
+        }
+
+        const headers = getRequestHeaders();
+        delete headers['Content-Type'];
+
         const response = await fetch('/api/backgrounds/upload', {
             method: 'POST',
             headers: headers,
@@ -644,12 +691,14 @@ async function uploadBackground(formData) {
         const bg = await response.text();
         await getBackgrounds();
         highlightNewBackground(bg);
-
     } catch (error) {
         console.error('Error uploading background:', error);
     }
 }
 
+/**
+ * @param {string} bg
+ */
 function highlightNewBackground(bg) {
     const newBg = $(`.thumbnail[data-bgfile="${bg}"]`);
     if (newBg.length) {
@@ -660,6 +709,10 @@ function highlightNewBackground(bg) {
     }
 }
 
+/**
+ * Sets the fitting class for the background element
+ * @param {string} fitting Fitting type
+ */
 function setFittingClass(fitting) {
     const backgrounds = $('#bg1, #bg_custom');
     for (const option of ['cover', 'contain', 'stretch', 'center']) {
@@ -676,6 +729,7 @@ function onBackgroundFilterInput() {
 }
 
 export function initBackgrounds() {
+    // load-once trigger and gallery initialization
     let hasLoaded = false;
     $('#site_logo').on('click', () => {
         if (!hasLoaded) {
@@ -687,39 +741,25 @@ export function initBackgrounds() {
     window.backgroundSelector = new BackgroundSelector('bg_menu_content');
     window.backgroundSelector.setupInfiniteScroll();
 
+    // Event listeners
     eventSource.on(event_types.CHAT_CHANGED, onChatChanged);
     eventSource.on(event_types.FORCE_SET_BACKGROUND, forceSetBackground);
 
-    $(document).on('click', '.jg-button', function(e) {
-        const action = $(this).data('action');
-        const thumbnailContext = $(this).closest('.thumbnail').get(0);
-
-        e.stopPropagation();
-
-        switch (action) {
-            case 'lock':
-                onLockBackgroundClick.call(thumbnailContext, e);
-                break;
-            case 'unlock':
-                onUnlockBackgroundClick.call(thumbnailContext, e);
-                break;
-            case 'edit':
-                onRenameBackgroundClick.call(thumbnailContext, e);
-                break;
-            case 'delete':
-                onDeleteBackgroundClick.call(thumbnailContext, e);
-                break;
-            case 'copy':
-                onCopyToSystemBackgroundClick.call(thumbnailContext, e);
-                break;
-        }
-    });
-
     $(document).on('click', '.thumbnail', onSelectBackgroundClick);
-
+    $(document).on('click', '.bg_example_lock', onLockBackgroundClick);
+    $(document).on('click', '.bg_example_unlock', onUnlockBackgroundClick);
+    $(document).on('click', '.bg_example_edit', onRenameBackgroundClick);
+    $(document).on('click', '.bg_example_cross', onDeleteBackgroundClick);
+    $(document).on('click', '.bg_example_copy', onCopyToSystemBackgroundClick);
+    
     $('#auto_background').on('click', autoBackgroundCommand);
-    $(document).on('change', '#add_bg_button', onBackgroundUploadSelected);
+    $('#add_bg_button').on('change', onBackgroundUploadSelected);
     $('#bg-filter').on('input', onBackgroundFilterInput);
+    
+    // This click handler for the top bar button remains, as it triggers the static hidden input.
+    $('#add_background_button_top').on('click', () => {
+        $('#add_bg_button').click();
+    });
 
     $('#background_fitting').on('input', function () {
         background_settings.fitting = String($(this).val());
@@ -732,16 +772,6 @@ export function initBackgrounds() {
         saveSettingsDebounced();
         await getBackgrounds();
         await onChatChanged();
-    });
-
-    const uploadFormHtml = `
-        <form id="form_bg_download" style="display: none;" action="javascript:void(null);" method="post" enctype="multipart/form-data">
-            <input type="file" id="add_bg_button" name="avatar" accept="image/*, video/*">
-        </form>
-    `;
-    $('body').append(uploadFormHtml);
-    $(document).on('click', '#add_background_button_top', () => {
-        $('#add_bg_button').click();
     });
 
     SlashCommandParser.addCommandObject(SlashCommand.fromProps({

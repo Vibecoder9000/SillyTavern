@@ -6,8 +6,7 @@ import mime from 'mime-types';
 import express from 'express';
 import sanitize from 'sanitize-filename';
 import { Jimp, JimpMime } from '../jimp.js';
-export { sync as writeFileAtomicSync } from 'write-file-atomic';
-import { sync as writeFileAtomicSyncDirect } from 'write-file-atomic';
+import { sync as writeFileAtomicSync } from 'write-file-atomic';
 
 import { getConfigValue } from '../util.js';
 
@@ -25,26 +24,54 @@ export const dimensions = {
     avatar: getConfigValue('thumbnails.dimensions.avatar', [96, 144]),
 };
 
+/**
+ * Gets a path to thumbnail folder based on the type.
+ * @param {import('../users.js').UserDirectoryList} directories User directories
+ * @param {'bg' | 'avatar'} type Thumbnail type
+ * @returns {string} Path to the thumbnails folder
+ */
 export function getThumbnailFolder(directories, type) {
-    let thumbnailFolder;
+
     switch (type) {
-        case 'bg': thumbnailFolder = directories.thumbnailsBg; break;
-        case 'avatar': thumbnailFolder = directories.thumbnailsAvatar; break;
+        case 'bg':
+            return directories.thumbnailsBg;
+        case 'avatar':
+            return directories.thumbnailsAvatar;
     }
-    return thumbnailFolder;
+
+    return undefined;
 }
 
+/**
+ * Gets a path to the original images folder based on the type.
+ * @param {import('../users.js').UserDirectoryList} directories User directories
+ * @param {'bg' | 'avatar'} type Thumbnail type
+ * @returns {string} Path to the original images folder
+ */
 function getOriginalFolder(directories, type) {
     let originalFolder;
+
     switch (type) {
-        case 'bg': originalFolder = directories.backgrounds; break;
-        case 'avatar': originalFolder = directories.characters; break;
+        case 'bg':
+            originalFolder = directories.backgrounds;
+            break;
+        case 'avatar':
+            originalFolder = directories.characters;
+            break;
     }
+
     return originalFolder;
 }
 
+/**
+ * Removes the generated thumbnail from the disk.
+ * @param {import('../users.js').UserDirectoryList} directories User directories
+ * @param {'bg' | 'avatar'} type Type of the thumbnail
+ * @param {string} file Name of the file
+ */
 export function invalidateThumbnail(directories, type, file) {
     const folder = getThumbnailFolder(directories, type);
+
     if (folder === undefined) throw new Error('Invalid thumbnail type');
 
     const pathToThumbnail = path.join(folder, file);
@@ -64,7 +91,7 @@ export function invalidateThumbnail(directories, type, file) {
                 if (Object.prototype.hasOwnProperty.call(aspectRatios, file)) {
                     delete aspectRatios[file];
                     aspectRatios._metadata_version = currentMetadataVersion;
-                    writeFileAtomicSyncDirect(aspectRatiosJsonPath, JSON.stringify(aspectRatios, null, 2));
+                    writeFileAtomicSync(aspectRatiosJsonPath, JSON.stringify(aspectRatios, null, 2));
                 }
             }
         } catch (e) {
@@ -73,6 +100,14 @@ export function invalidateThumbnail(directories, type, file) {
     }
 }
 
+/**
+ * Generates a thumbnail for a given file, or returns an existing one if it's up-to-date.
+ * @param {import('../users.js').UserDirectoryList} directories - The user's directory paths.
+ * @param {'bg' | 'avatar'} type - The type of thumbnail to generate.
+ * @param {string} file - The name of the original image file.
+ * @param {number | null} [knownAspectRatio=null] - An optional, pre-calculated aspect ratio to optimize performance by avoiding a file read.
+ * @returns {Promise<{path: string, aspectRatio: number} | null>} A Promise that resolves to an object with the thumbnail path and its aspect ratio, or null if generation is skipped or fails.
+ */
 export async function generateThumbnail(directories, type, file, knownAspectRatio = null) {
     if (SKIPPED_EXTENSIONS_FOR_JIMP.includes(path.extname(file).toLowerCase())) {
         return null;
@@ -132,14 +167,11 @@ export async function generateThumbnail(directories, type, file, knownAspectRati
             thumbImage.cover({ w: w || 96, h: h || 144 });
         }
 
-        let buffer;
-        if (pngFormat) {
-            buffer = await thumbImage.getBuffer(JimpMime.png);
-        } else {
-            buffer = await thumbImage.getBuffer(JimpMime.jpeg, { quality: quality, jpegColorSpace: 'ycbcr' });
-        }
+        const buffer = pngFormat
+        ? await thumbImage.getBuffer(JimpMime.png)
+        : await thumbImage.getBuffer(JimpMime.jpeg, { quality: quality, jpegColorSpace: 'ycbcr' });
 
-        writeFileAtomicSyncDirect(pathToCachedFile, buffer);
+        writeFileAtomicSync(pathToCachedFile, buffer);
         return { path: pathToCachedFile, aspectRatio: numericalAspectRatio };
 
     } catch (error) {
@@ -148,6 +180,11 @@ export async function generateThumbnail(directories, type, file, knownAspectRati
     }
 }
 
+/**
+ * Scans background directories, generating or updating thumbnails and aspect ratio metadata as needed.
+ * @param {import('../users.js').UserDirectoryList[]} directoriesList - An array of user directory objects to process.
+ * @returns {Promise<void>} A Promise that resolves when all directories have been processed.
+ */
 export async function ensureThumbnailCache(directoriesList) {
     for (const directories of directoriesList) {
         if (!directories.backgrounds || !directories.thumbnailsBg || !directories.root) {
@@ -253,7 +290,7 @@ export async function ensureThumbnailCache(directoriesList) {
         if (madeChangesToJSON) {
             try {
                 currentAspectRatios._metadata_version = currentMetadataVersion;
-                writeFileAtomicSyncDirect(aspectRatiosJsonPath, JSON.stringify(currentAspectRatios, null, 2));
+                writeFileAtomicSync(aspectRatiosJsonPath, JSON.stringify(currentAspectRatios, null, 2));
             } catch (e) {
                 console.error(`[ensureThumbnailCache] Failed to write aspect_ratios.json: ${e.message}`);
             }
@@ -263,6 +300,7 @@ export async function ensureThumbnailCache(directoriesList) {
 
 export const router = express.Router();
 
+// Important: This route must be mounted as '/thumbnail'. It is used in the client code and saved to chat files.
 router.get('/', async function (request, response) {
     try {
         const { file: rawFile, type } = request.query;
