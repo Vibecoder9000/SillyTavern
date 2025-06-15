@@ -8,6 +8,10 @@ import { createThumbnail, flashHighlight, getBase64Async, stringFormat } from '.
 import { t } from './i18n.js';
 import { Popup } from './popup.js';
 
+function getBackgroundPath(fileUrl) {
+    return `backgrounds/${encodeURIComponent(fileUrl)}`;
+}
+
 const BG_METADATA_KEY = 'custom_background';
 const LIST_METADATA_KEY = 'chat_backgrounds';
 
@@ -302,9 +306,7 @@ async function getChatBackgroundsList() {
     // Old lazy loader was here, not needed for this part if it uses templates not images directly
 }
 
-function getBackgroundPath(fileUrl) {
-    return `backgrounds/${encodeURIComponent(fileUrl)}`;
-}
+// getBackgroundPath has been moved to the top of the file.
 
 function highlightLockedBackground() {
     // Adapt to new .thumbnail structure if a general background is locked
