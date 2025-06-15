@@ -497,8 +497,7 @@ async function autoBackgroundCommand() {
     const bgTitles = Array.from(document.querySelectorAll('#bg_menu_content .BGSampleTitle'));
     const options = bgTitles.map(x => ({ element: $(x).closest('.thumbnail, .bg_example')[0], text: x.innerText.trim() })).filter(x => x.text.length > 0);
     if (options.length == 0) { toastr.warning('No backgrounds to choose from.'); return ''; }
-    const list = options.map(option => `- ${option.text}`).join('
-');
+    const list = options.map(option => `- ${option.text}`).join('\n');
     const prompt = stringFormat(autoBgPrompt, list);
     const reply = await generateQuietPrompt(prompt, false, false);
     const fuse = new Fuse(options, { keys: ['text'], threshold: 0.4 }); // Adjusted threshold

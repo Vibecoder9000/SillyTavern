@@ -7,6 +7,7 @@ import express from 'express';
 import sanitize from 'sanitize-filename';
 import { Jimp, JimpMime } from '../jimp.js';
 export { sync as writeFileAtomicSync } from 'write-file-atomic'; // Re-exporting
+import { sync as writeFileAtomicSyncDirect } from 'write-file-atomic';
 
 import { getConfigValue } from '../util.js';
 
@@ -106,7 +107,7 @@ export function invalidateThumbnail(directories, type, file) {
                 if (aspectRatios.hasOwnProperty(file)) {
                     delete aspectRatios[file];
                     // Use the exported writeFileAtomicSync from this module
-                    writeFileAtomicSync(aspectRatiosJsonPath, JSON.stringify(aspectRatios, null, 2));
+                    writeFileAtomicSyncDirect(aspectRatiosJsonPath, JSON.stringify(aspectRatios, null, 2));
                     console.info(`[invalidateThumbnail] Removed entry for "${file}" from aspect_ratios.json.`);
 
                     // Update version file
@@ -417,7 +418,7 @@ export async function ensureThumbnailCache(directoriesList) {
 
         if (madeChangesToJSON) {
             try {
-                writeFileAtomicSync(aspectRatiosJsonPath, JSON.stringify(currentAspectRatios, null, 2));
+                writeFileAtomicSyncDirect(aspectRatiosJsonPath, JSON.stringify(currentAspectRatios, null, 2));
                 fs.writeFileSync(versionFilePath, currentMetadataVersion); // Update version if JSON is written
                 console.info(`[ensureThumbnailCache] Aspect ratio data updated for ${directories.thumbnailsBg}. Processed ${tasks.length} files that needed updates/generation.`);
             } catch (e) {
