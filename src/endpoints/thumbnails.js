@@ -191,24 +191,33 @@ async function generateThumbnail(directories, type, file, currentAspectRatios) {
         }
 
         // Generate buffer only if image processing up to this point was successful
-        console.log(`[Thumbnails] Generating buffer for ${file} using image.getBufferAsync(). PNG format: ${pngFormat}`);
+        console.log(`[Thumbnails] Generating buffer for ${file} using Promise-wrapped image.getBuffer(). PNG format: ${pngFormat}`);
         try {
-            if (pngFormat) {
-                const actualMimeType = 'image/png';
-                console.log(`[Thumbnails] Getting async buffer for PNG ${file} (MIME: ${actualMimeType}) with empty options`);
-                buffer = await image.getBufferAsync(actualMimeType, {}); // Pass empty options for PNG
-            } else {
-                const actualMimeType = 'image/jpeg';
-                console.log(`[Thumbnails] Getting async buffer for JPEG ${file} (MIME: ${actualMimeType}) with quality: ${quality} and colorSpace: 'ycbcr'`);
-                buffer = await image.getBufferAsync(actualMimeType, { quality: quality, jpegColorSpace: 'ycbcr' });
-            }
-            console.log(`[Thumbnails] Successfully got async buffer for ${file}. Length: ${buffer?.length}`);
+            buffer = await new Promise((resolve, reject) => {
+                const actualMimeType = pngFormat ? 'image/png' : 'image/jpeg';
+                const cb = (err, buf) => {
+                    if (err) {
+                        console.error(`[Thumbnails] Error in getBuffer callback for ${file} (MIME: ${actualMimeType}):`, err);
+                        return reject(err); // Reject the promise on error
+                    }
+                    console.log(`[Thumbnails] Successfully got buffer via callback for ${file} (MIME: ${actualMimeType}). Length: ${buf?.length}`);
+                    resolve(buf); // Resolve with the buffer
+                };
+
+                if (pngFormat) {
+                    console.log(`[Thumbnails] Getting buffer for PNG ${file} (MIME: ${actualMimeType}) with empty options`);
+                    image.getBuffer(actualMimeType, {}, cb);
+                } else {
+                    console.log(`[Thumbnails] Getting buffer for JPEG ${file} (MIME: ${actualMimeType}) with quality: ${quality} and colorSpace: 'ycbcr'`);
+                    image.getBuffer(actualMimeType, { quality: quality, jpegColorSpace: 'ycbcr' }, cb);
+                }
+            });
+            console.log(`[Thumbnails] Promise for getBuffer resolved for ${file}. Buffer length: ${buffer?.length}`);
         } catch (getBufferError) {
-            console.error(`[Thumbnails] Error during image.getBufferAsync for ${file}:`, getBufferError);
+            console.error(`[Thumbnails] Error during Promise-wrapped getBuffer for ${file}:`, getBufferError);
             // This error will be caught by the main catch (processingError) block of generateThumbnail,
             // which will then attempt the fallback to original image and return null.
-            // So, we just need to re-throw it to be caught by that main handler.
-            throw getBufferError;
+            throw getBufferError; // Re-throw to be caught by the outer try-catch
         }
 
         // If buffer generation is successful, write it.
