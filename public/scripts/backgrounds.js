@@ -18,7 +18,16 @@ function generateUrlParameter(bg, isCustom) {
 const BG_METADATA_KEY = 'custom_background';
 const LIST_METADATA_KEY = 'chat_backgrounds';
 
+/**
+ * Storage for frontend-generated background thumbnails.
+ * This is used to store thumbnails for backgrounds that cannot be generated on the server.
+ */
 const THUMBNAIL_STORAGE = localforage.createInstance({ name: 'SillyTavern_Thumbnails' });
+
+/**
+ * Cache for thumbnail blob URLs.
+ * @type {Map<string, string>}
+ */
 const THUMBNAIL_BLOBS = new Map();
 
 function getUrlParameter(element) {
@@ -254,6 +263,10 @@ export function loadBackgroundSettings(settings) {
     $('#background_thumbnails_animation').prop('checked', background_settings.animation);
 }
 
+/**
+ * Sets the background for the current chat and adds it to the list of custom backgrounds.
+ * @param {{url: string, path:string}} backgroundInfo
+ */
 async function forceSetBackground(backgroundInfo) {
     saveBackgroundMetadata(backgroundInfo.url);
     setCustomBackground();
@@ -529,6 +542,7 @@ async function autoBackgroundCommand() {
         toastr.warning('No backgrounds to choose from. Please upload some images to the "Backgrounds" folder.');
         return '';
     }
+
     const list = options.map(option => `- ${option.text}`).join('\n');
     const prompt = stringFormat(autoBgPrompt, list);
     const reply = await generateQuietPrompt(prompt, false, false);
@@ -744,7 +758,6 @@ export function initBackgrounds() {
     // Event listeners
     eventSource.on(event_types.CHAT_CHANGED, onChatChanged);
     eventSource.on(event_types.FORCE_SET_BACKGROUND, forceSetBackground);
-
     $(document).on('click', '.thumbnail', onSelectBackgroundClick);
     $(document).on('click', '.bg_example_lock', onLockBackgroundClick);
     $(document).on('click', '.bg_example_unlock', onUnlockBackgroundClick);

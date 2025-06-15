@@ -71,10 +71,10 @@ function getOriginalFolder(directories, type) {
  */
 export function invalidateThumbnail(directories, type, file) {
     const folder = getThumbnailFolder(directories, type);
-
     if (folder === undefined) throw new Error('Invalid thumbnail type');
 
     const pathToThumbnail = path.join(folder, file);
+
     if (fs.existsSync(pathToThumbnail)) {
         try {
             fs.unlinkSync(pathToThumbnail);
