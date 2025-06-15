@@ -12,6 +12,10 @@ function getBackgroundPath(fileUrl) {
     return `backgrounds/${encodeURIComponent(fileUrl)}`;
 }
 
+function generateUrlParameter(bg, isCustom) {
+    return isCustom ? `url("${encodeURI(bg)}")` : `url("${getBackgroundPath(bg)}")`;
+}
+
 const BG_METADATA_KEY = 'custom_background';
 const LIST_METADATA_KEY = 'chat_backgrounds';
 
