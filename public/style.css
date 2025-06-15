@@ -6229,15 +6229,18 @@ body:not(.movingUI) .drawer-content.maximized {
   width: 100%;
   box-sizing: border-box;
 }
+
 #bg_menu_content {
   overflow-x: hidden;
   overflow-y: auto;
 }
+
 .gallery-row {
   display: flex;
   margin-bottom: 3px;
   gap: 3px;
 }
+
 .thumbnail {
   position: relative;
   overflow: hidden;
@@ -6246,6 +6249,7 @@ body:not(.movingUI) .drawer-content.maximized {
   background-color: #3e3e3e;
   flex-shrink: 1;
 }
+
 .thumbnail img {
   width: 100%;
   height: 100%;
@@ -6256,6 +6260,7 @@ body:not(.movingUI) .drawer-content.maximized {
 .thumbnail:hover .jg-menu {
   display: flex;
 }
+
 .jg-menu {
   position: absolute;
   top: 2px;
@@ -6268,6 +6273,7 @@ body:not(.movingUI) .drawer-content.maximized {
   border-radius: 3px;
   width: auto;
 }
+
 .jg-button {
   display: flex;
   align-items: center;
@@ -6282,15 +6288,19 @@ body:not(.movingUI) .drawer-content.maximized {
 .thumbnail .jg-copy {
   display: none;
 }
+
 .thumbnail.locked .jg-lock {
   display: none;
 }
+
 .thumbnail.locked .jg-unlock {
   display: flex;
 }
+
 .thumbnail[custom="true"] .jg-copy {
   display: flex;
 }
+
 .thumbnail[custom="true"] .jg-lock,
 .thumbnail[custom="true"] .jg-unlock,
 .thumbnail[custom="true"] .jg-edit {

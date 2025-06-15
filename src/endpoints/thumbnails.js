@@ -73,8 +73,13 @@ export function invalidateThumbnail(directories, type, file) {
     }
 }
 
-// In src/endpoints/thumbnails.js
-
+/**
+ * Generates a thumbnail for the given file.
+ * @param {import('../users.js').UserDirectoryList} directories User directories
+ * @param {'bg' | 'avatar'} type Type of the thumbnail
+ * @param {string} file Name of the file
+ * @returns
+ */
 export async function generateThumbnail(directories, type, file) {
     const fileExtension = path.extname(file).toLowerCase();
     if (SKIPPED_EXTENSIONS_FOR_JIMP.includes(fileExtension)) {
@@ -305,6 +310,7 @@ export async function ensureThumbnailCache(directoriesList) {
 
 export const router = express.Router();
 
+// Important: This route must be mounted as '/thumbnail'. It is used in the client code and saved to chat files.
 router.get('/', async function (request, response) {
     try {
         const { file: rawFile, type } = request.query;
