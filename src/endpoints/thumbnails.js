@@ -6,9 +6,14 @@ import mime from 'mime-types';
 import express from 'express';
 import sanitize from 'sanitize-filename';
 import { Jimp, JimpMime } from '../jimp.js';
-import { sync as writeFileAtomicSync } from 'write-file-atomic';
+export { sync as writeFileAtomicSync } from 'write-file-atomic';
+import { sync as writeFileAtomicSyncDirect } from 'write-file-atomic';
 
 import { getConfigValue } from '../util.js';
+
+export const currentMetadataVersion = "1.0.0";
+
+const SKIPPED_EXTENSIONS_FOR_JIMP = ['.apng', '.mp4', '.webm', '.avi', '.mkv', '.flv', '.webp'];
 
 const thumbnailsEnabled = !!getConfigValue('thumbnails.enabled', true, 'boolean');
 const quality = Math.min(100, Math.max(1, parseInt(getConfigValue('thumbnails.quality', 95, 'number'))));
@@ -20,214 +25,330 @@ export const dimensions = {
     'avatar': getConfigValue('thumbnails.dimensions.avatar', [96, 144]),
 };
 
-/**
- * Gets a path to thumbnail folder based on the type.
- * @param {import('../users.js').UserDirectoryList} directories User directories
- * @param {'bg' | 'avatar'} type Thumbnail type
- * @returns {string} Path to the thumbnails folder
- */
-function getThumbnailFolder(directories, type) {
+export function getThumbnailFolder(directories, type) {
     let thumbnailFolder;
-
     switch (type) {
-        case 'bg':
-            thumbnailFolder = directories.thumbnailsBg;
-            break;
-        case 'avatar':
-            thumbnailFolder = directories.thumbnailsAvatar;
-            break;
+        case 'bg': thumbnailFolder = directories.thumbnailsBg; break;
+        case 'avatar': thumbnailFolder = directories.thumbnailsAvatar; break;
     }
-
     return thumbnailFolder;
 }
 
-/**
- * Gets a path to the original images folder based on the type.
- * @param {import('../users.js').UserDirectoryList} directories User directories
- * @param {'bg' | 'avatar'} type Thumbnail type
- * @returns {string} Path to the original images folder
- */
 function getOriginalFolder(directories, type) {
     let originalFolder;
-
     switch (type) {
-        case 'bg':
-            originalFolder = directories.backgrounds;
-            break;
-        case 'avatar':
-            originalFolder = directories.characters;
-            break;
+        case 'bg': originalFolder = directories.backgrounds; break;
+        case 'avatar': originalFolder = directories.characters; break;
     }
-
     return originalFolder;
 }
 
-/**
- * Removes the generated thumbnail from the disk.
- * @param {import('../users.js').UserDirectoryList} directories User directories
- * @param {'bg' | 'avatar'} type Type of the thumbnail
- * @param {string} file Name of the file
- */
 export function invalidateThumbnail(directories, type, file) {
     const folder = getThumbnailFolder(directories, type);
     if (folder === undefined) throw new Error('Invalid thumbnail type');
 
     const pathToThumbnail = path.join(folder, file);
-
     if (fs.existsSync(pathToThumbnail)) {
-        fs.unlinkSync(pathToThumbnail);
+        try {
+            fs.unlinkSync(pathToThumbnail);
+        } catch (e) {
+            console.error(`[invalidateThumbnail] Failed to delete thumbnail file ${pathToThumbnail}:`, e);
+        }
+    }
+
+    if (type === 'bg' && directories.root) {
+        const aspectRatiosJsonPath = path.join(directories.root, 'aspect_ratios.json');
+        try {
+            if (fs.existsSync(aspectRatiosJsonPath)) {
+                let aspectRatios = JSON.parse(fs.readFileSync(aspectRatiosJsonPath, 'utf-8'));
+                if (aspectRatios.hasOwnProperty(file)) {
+                    delete aspectRatios[file];
+                    aspectRatios._metadata_version = currentMetadataVersion;
+                    writeFileAtomicSyncDirect(aspectRatiosJsonPath, JSON.stringify(aspectRatios, null, 2));
+                }
+            }
+        } catch (e) {
+            console.error(`[invalidateThumbnail] Failed to update aspect_ratios.json for deleted file ${file}:`, e);
+        }
     }
 }
 
-/**
- * Generates a thumbnail for the given file.
- * @param {import('../users.js').UserDirectoryList} directories User directories
- * @param {'bg' | 'avatar'} type Type of the thumbnail
- * @param {string} file Name of the file
- * @returns
- */
-async function generateThumbnail(directories, type, file) {
+// In src/endpoints/thumbnails.js
+
+export async function generateThumbnail(directories, type, file) {
+    const fileExtension = path.extname(file).toLowerCase();
+    if (SKIPPED_EXTENSIONS_FOR_JIMP.includes(fileExtension)) {
+        return null;
+    }
+
     let thumbnailFolder = getThumbnailFolder(directories, type);
     let originalFolder = getOriginalFolder(directories, type);
-    if (thumbnailFolder === undefined || originalFolder === undefined) throw new Error('Invalid thumbnail type');
+    if (thumbnailFolder === undefined || originalFolder === undefined) {
+        throw new Error('Invalid thumbnail type');
+    }
+
     const pathToCachedFile = path.join(thumbnailFolder, file);
     const pathToOriginalFile = path.join(originalFolder, file);
 
     const cachedFileExists = fs.existsSync(pathToCachedFile);
     const originalFileExists = fs.existsSync(pathToOriginalFile);
-
-    // to handle cases when original image was updated after thumb creation
     let shouldRegenerate = false;
 
-    if (cachedFileExists && originalFileExists) {
+    if (!originalFileExists) {
+        if (cachedFileExists) {
+            try {
+                fs.unlinkSync(pathToCachedFile);
+                console.warn(`[Thumbnails] Removed stale thumbnail for deleted original: ${file}`);
+            } catch (e) {
+                console.error(`[Thumbnails] Error removing stale thumbnail ${pathToCachedFile}: ${e.message}`);
+            }
+        }
+        return null;
+    }
+
+    if (cachedFileExists) {
         const originalStat = fs.statSync(pathToOriginalFile);
         const cachedStat = fs.statSync(pathToCachedFile);
-
-        if (originalStat.mtimeMs > cachedStat.ctimeMs) {
-            //console.warn('Original file changed. Regenerating thumbnail...');
+        if (originalStat.mtimeMs > cachedStat.mtimeMs) {
             shouldRegenerate = true;
         }
     }
 
-    if (cachedFileExists && !shouldRegenerate) {
-        return pathToCachedFile;
-    }
-
-    if (!originalFileExists) {
-        return null;
-    }
-
     try {
-        let buffer;
+        if (cachedFileExists && !shouldRegenerate) {
+            let numericalAspectRatio = 1.0;
+            try {
+                const imageForAspectRatio = await Jimp.read(pathToOriginalFile);
+                if (imageForAspectRatio.bitmap.height === 0) {
+                    console.warn(`[Thumbnails] Image ${file} has zero height (cached case). Defaulting AR to 1.0.`);
+                    numericalAspectRatio = 1.0;
+                } else {
+                    numericalAspectRatio = imageForAspectRatio.bitmap.width / imageForAspectRatio.bitmap.height;
+                }
+            } catch (e) {
+                console.warn(`[Thumbnails] Jimp could not read ${file} for AR (cached case): ${e.message}. Defaulting AR to 1.0.`);
+            }
+            return { path: pathToCachedFile, aspectRatio: numericalAspectRatio };
+        }
 
-        try {
+        const image = await Jimp.read(pathToOriginalFile);
+
+        let numericalAspectRatio = 1.0;
+        if (image.bitmap.height === 0) {
+            console.warn(`[Thumbnails] Image ${file} has zero height (main process). Defaulting AR to 1.0.`);
+        } else {
+            numericalAspectRatio = image.bitmap.width / image.bitmap.height;
+        }
+
+        let buffer;
+        const thumbImage = image.clone();
+
+        if (type === 'bg') {
+            const targetPixelArea = 12500;
+            let newHeight = Math.round(Math.sqrt(targetPixelArea / (numericalAspectRatio === 0 ? 1 : numericalAspectRatio)));
+            let newWidth = Math.round(newHeight * numericalAspectRatio);
+
+            if (newWidth === 0 || newHeight === 0) {
+                console.warn(`[Thumbnails] Calculated new dimensions for ${file} are zero. Using fallback cover.`);
+                const fallbackSize = dimensions[type];
+                newWidth = !isNaN(fallbackSize?.[0]) && fallbackSize?.[0] > 0 ? fallbackSize[0] : image.bitmap.width;
+                newHeight = !isNaN(fallbackSize?.[1]) && fallbackSize?.[1] > 0 ? fallbackSize[1] : image.bitmap.height;
+                if (newWidth === 0) newWidth = 160;
+                if (newHeight === 0) newHeight = 90;
+                thumbImage.cover({ w: newWidth, h: newHeight });
+            } else {
+                thumbImage.scaleToFit({ w: newWidth, h: newHeight, mode: Jimp.RESIZE_BILINEAR });
+            }
+        } else {
             const size = dimensions[type];
-            const image = await Jimp.read(pathToOriginalFile);
             const width = !isNaN(size?.[0]) && size?.[0] > 0 ? size[0] : image.bitmap.width;
             const height = !isNaN(size?.[1]) && size?.[1] > 0 ? size[1] : image.bitmap.height;
-            image.cover({ w: width, h: height });
-            buffer = pngFormat
-                ? await image.getBuffer(JimpMime.png)
-                : await image.getBuffer(JimpMime.jpeg, { quality: quality, jpegColorSpace: 'ycbcr' });
+            thumbImage.cover({ w: width, h: height });
         }
-        catch (inner) {
-            console.warn(`Thumbnailer can not process the image: ${pathToOriginalFile}. Using original size`, inner);
-            buffer = fs.readFileSync(pathToOriginalFile);
+        
+        if (pngFormat) {
+            buffer = await thumbImage.getBuffer(JimpMime.png);
+        } else {
+            buffer = await thumbImage.getBuffer(JimpMime.jpeg, { quality: quality, jpegColorSpace: 'ycbcr' });
         }
+        
+        writeFileAtomicSyncDirect(pathToCachedFile, buffer);
+        return { path: pathToCachedFile, aspectRatio: numericalAspectRatio };
 
-        writeFileAtomicSync(pathToCachedFile, buffer);
+    } catch (error) {
+        console.error(`[Thumbnails] CRITICAL ERROR processing ${file}:`, error);
+        if (shouldRegenerate && cachedFileExists) {
+            try {
+                fs.unlinkSync(pathToCachedFile);
+                console.warn(`[Thumbnails] Removed potentially outdated/corrupt thumbnail for ${file} due to regeneration failure.`);
+            } catch (e) {
+                console.error(`[Thumbnails] Error removing thumbnail for ${file} after regeneration failure: ${e.message}`);
+            }
+        }
+        return null; 
     }
-    catch (outer) {
-        return null;
-    }
-
-    return pathToCachedFile;
 }
 
-/**
- * Ensures that the thumbnail cache for backgrounds is valid.
- * @param {import('../users.js').UserDirectoryList[]} directoriesList User directories
- * @returns {Promise<void>} Promise that resolves when the cache is validated
- */
 export async function ensureThumbnailCache(directoriesList) {
     for (const directories of directoriesList) {
-        const cacheFiles = fs.readdirSync(directories.thumbnailsBg);
-
-        // files exist, all ok
-        if (cacheFiles.length) {
+        if (!directories.backgrounds || !directories.thumbnailsBg || !directories.root) {
             continue;
         }
+        if (!fs.existsSync(directories.backgrounds)) {
+            continue;
+        }
+        if (!fs.existsSync(directories.thumbnailsBg)) {
+            fs.mkdirSync(directories.thumbnailsBg, { recursive: true });
+        }
 
-        console.info('Generating thumbnails cache. Please wait...');
+        const aspectRatiosJsonPath = path.join(directories.root, 'aspect_ratios.json');
+        let existingAspectRatios = {};
+        let needsFullRegeneration = false;
 
-        const bgFiles = fs.readdirSync(directories.backgrounds);
+        if (fs.existsSync(aspectRatiosJsonPath)) {
+            try {
+                const jsonData = JSON.parse(fs.readFileSync(aspectRatiosJsonPath, 'utf-8'));
+                if (jsonData._metadata_version !== currentMetadataVersion) {
+                    needsFullRegeneration = true;
+                } else {
+                    delete jsonData._metadata_version;
+                    existingAspectRatios = jsonData;
+                }
+            } catch (e) {
+                console.warn(`[ensureThumbnailCache] Could not parse aspect_ratios.json, triggering full regeneration.`);
+                needsFullRegeneration = true;
+            }
+        } else {
+            needsFullRegeneration = true;
+        }
+        
+        if (needsFullRegeneration) {
+            existingAspectRatios = {};
+            if (fs.existsSync(aspectRatiosJsonPath)) fs.unlinkSync(aspectRatiosJsonPath);
+            fs.readdirSync(directories.thumbnailsBg).forEach(file => {
+                if (path.extname(file)) fs.unlinkSync(path.join(directories.thumbnailsBg, file));
+            });
+        }
+
+        const PLAUSIBLE_IMAGE_EXTENSIONS = ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.apng', '.tiff'];
+        const bgFiles = fs.readdirSync(directories.backgrounds).filter(file => {
+            try {
+                return fs.statSync(path.join(directories.backgrounds, file)).isFile() &&
+                       PLAUSIBLE_IMAGE_EXTENSIONS.includes(path.extname(file).toLowerCase());
+            } catch {
+                return false;
+            }
+        });
+
+        const bgFileSet = new Set(bgFiles);
+        let currentAspectRatios = { ...existingAspectRatios };
+        let madeChangesToJSON = needsFullRegeneration;
         const tasks = [];
 
         for (const file of bgFiles) {
-            tasks.push(generateThumbnail(directories, 'bg', file));
+            const pathToOriginalFile = path.join(directories.backgrounds, file);
+            const pathToCachedFile = path.join(directories.thumbnailsBg, file);
+            let fileNeedsProcessing = false;
+
+            if (!existingAspectRatios.hasOwnProperty(file) || !fs.existsSync(pathToCachedFile)) {
+                fileNeedsProcessing = true;
+            } else {
+                const originalStat = fs.statSync(pathToOriginalFile);
+                const cachedStat = fs.statSync(pathToCachedFile);
+                if (originalStat.mtimeMs > cachedStat.mtimeMs) {
+                    fileNeedsProcessing = true;
+                }
+            }
+
+            if (fileNeedsProcessing) {
+                // Pass the known aspect ratio if we have it, to optimize generation
+                const knownAR = existingAspectRatios[file] || null;
+                tasks.push(
+                    generateThumbnail(directories, 'bg', file, knownAR).then(result => {
+                        if (result?.aspectRatio !== undefined) {
+                            if (currentAspectRatios[file] !== result.aspectRatio) {
+                                madeChangesToJSON = true;
+                            }
+                            currentAspectRatios[file] = result.aspectRatio;
+                        } else if (currentAspectRatios.hasOwnProperty(file)) {
+                            delete currentAspectRatios[file];
+                            madeChangesToJSON = true;
+                        }
+                    })
+                );
+            }
         }
 
         await Promise.all(tasks);
-        console.info(`Done! Generated: ${bgFiles.length} preview images`);
+
+        for (const existingFile in currentAspectRatios) {
+            if (!bgFileSet.has(existingFile)) {
+                delete currentAspectRatios[existingFile];
+                madeChangesToJSON = true;
+                const pathToStaleThumbnail = path.join(directories.thumbnailsBg, existingFile);
+                if (fs.existsSync(pathToStaleThumbnail)) {
+                    try { fs.unlinkSync(pathToStaleThumbnail); } catch (e) { console.warn(`Could not delete stale thumbnail ${pathToStaleThumbnail}: ${e.message}`); }
+                }
+            }
+        }
+
+        if (madeChangesToJSON) {
+            try {
+                currentAspectRatios._metadata_version = currentMetadataVersion;
+                writeFileAtomicSyncDirect(aspectRatiosJsonPath, JSON.stringify(currentAspectRatios, null, 2));
+            } catch (e) {
+                console.error(`[ensureThumbnailCache] Failed to write aspect_ratios.json: ${e.message}`);
+            }
+        }
     }
 }
 
 export const router = express.Router();
 
-// Important: This route must be mounted as '/thumbnail'. It is used in the client code and saved to chat files.
 router.get('/', async function (request, response) {
-    try{
-        if (typeof request.query.file !== 'string' || typeof request.query.type !== 'string') {
+    try {
+        const { file: rawFile, type } = request.query;
+        if (typeof rawFile !== 'string' || typeof type !== 'string') {
             return response.sendStatus(400);
         }
 
-        const type = request.query.type;
-        const file = sanitize(request.query.file);
-
-        if (!type || !file) {
-            return response.sendStatus(400);
-        }
-
-        if (!(type == 'bg' || type == 'avatar')) {
-            return response.sendStatus(400);
-        }
-
-        if (sanitize(file) !== file) {
+        const file = sanitize(rawFile);
+        if (file !== rawFile) {
             console.error('Malicious filename prevented');
             return response.sendStatus(403);
         }
 
-        if (!thumbnailsEnabled) {
+        if (type !== 'bg' && type !== 'avatar') {
+            return response.sendStatus(400);
+        }
+
+        const serveOriginal = async () => {
             const folder = getOriginalFolder(request.user.directories, type);
-
-            if (folder === undefined) {
-                return response.sendStatus(400);
-            }
-
+            if (!folder) return response.sendStatus(400);
             const pathToOriginalFile = path.join(folder, file);
-            if (!fs.existsSync(pathToOriginalFile)) {
-                return response.sendStatus(404);
-            }
+            if (!fs.existsSync(pathToOriginalFile)) return response.sendStatus(404);
             const contentType = mime.lookup(pathToOriginalFile) || 'image/png';
             const originalFile = await fsPromises.readFile(pathToOriginalFile);
             response.setHeader('Content-Type', contentType);
             return response.send(originalFile);
+        };
+
+        if (!thumbnailsEnabled) {
+            return await serveOriginal();
         }
 
-        const pathToCachedFile = await generateThumbnail(request.user.directories, type, file);
-
-        if (!pathToCachedFile) {
-            return response.sendStatus(404);
+        const thumbnailResult = await generateThumbnail(request.user.directories, type, file);
+        if (!thumbnailResult?.path || !fs.existsSync(thumbnailResult.path)) {
+            // Fallback to original if thumbnail generation fails or file not found
+            console.warn(`Thumbnail for ${file} not found or failed, serving original.`);
+            return await serveOriginal();
         }
 
-        if (!fs.existsSync(pathToCachedFile)) {
-            return response.sendStatus(404);
-        }
-
-        const contentType = mime.lookup(pathToCachedFile) || 'image/jpeg';
-        const cachedFile = await fsPromises.readFile(pathToCachedFile);
+        const contentType = mime.lookup(thumbnailResult.path) || 'image/jpeg';
+        const cachedFile = await fsPromises.readFile(thumbnailResult.path);
         response.setHeader('Content-Type', contentType);
         return response.send(cachedFile);
+
     } catch (error) {
         console.error('Failed getting thumbnail', error);
         return response.sendStatus(500);
