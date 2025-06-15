@@ -168,8 +168,8 @@ export async function generateThumbnail(directories, type, file, knownAspectRati
         }
 
         const buffer = pngFormat
-        ? await thumbImage.getBuffer(JimpMime.png)
-        : await thumbImage.getBuffer(JimpMime.jpeg, { quality: quality, jpegColorSpace: 'ycbcr' });
+            ? await thumbImage.getBuffer(JimpMime.png)
+            : await thumbImage.getBuffer(JimpMime.jpeg, { quality: quality, jpegColorSpace: 'ycbcr' });
 
         writeFileAtomicSync(pathToCachedFile, buffer);
         return { path: pathToCachedFile, aspectRatio: numericalAspectRatio };

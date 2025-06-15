@@ -468,7 +468,7 @@ async function onRenameBackgroundClick(e) {
     const bgNames = await getNewBackgroundName(this);
 
     if (!bgNames) {
-		return;
+        return;
     }
 
     const data = { old_bg: bgNames.oldBg, new_bg: bgNames.newBg };
@@ -508,7 +508,7 @@ async function onDeleteBackgroundClick(e) {
     const allThumbnails = $('#bg_menu_content').find('.thumbnail');
     const currentIndex = allThumbnails.index(bgToDelete);
 
-        bgToDelete.remove();
+    bgToDelete.remove();
 
     const nextBg = allThumbnails.eq(currentIndex);
 
@@ -764,12 +764,12 @@ export function initBackgrounds() {
     $(document).on('click', '.bg_example_edit', onRenameBackgroundClick);
     $(document).on('click', '.bg_example_cross', onDeleteBackgroundClick);
     $(document).on('click', '.bg_example_copy', onCopyToSystemBackgroundClick);
-    
+
     $('#auto_background').on('click', autoBackgroundCommand);
     $('#add_bg_button').on('change', onBackgroundUploadSelected);
     $('#bg-filter').on('input', onBackgroundFilterInput);
-    
-    // This click handler for the top bar button remains, as it triggers the static hidden input.
+
+    // This click handler triggers the static hidden input.
     $('#add_background_button_top').on('click', () => {
         $('#add_bg_button').click();
     });
