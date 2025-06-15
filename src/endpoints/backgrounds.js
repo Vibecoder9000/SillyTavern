@@ -8,9 +8,8 @@ import {
     dimensions,
     invalidateThumbnail,
     generateThumbnail,
-    getThumbnailFolder,
     currentMetadataVersion as sharedMetadataVersion,
-    writeFileAtomicSync as sharedWriteFileAtomicSync
+    writeFileAtomicSync as sharedWriteFileAtomicSync,
 } from './thumbnails.js';
 import { getImages } from '../util.js';
 import { getFileNameValidationFunction } from '../middleware/validateFileName.js';
@@ -33,7 +32,7 @@ router.post('/all', function (request, response) {
         }
     } catch (e) {
         console.error('Failed to read or parse aspect_ratios.json:', e);
-        aspects = {}; // Ensure aspects is an empty object on error
+        aspects = {};
     }
 
     response.json({ images, config, aspects });
@@ -85,14 +84,13 @@ router.post('/upload', function (request, response) {
     if (!request.body || !request.file) return response.sendStatus(400);
 
     const img_path = path.join(request.file.destination, request.file.filename);
-    // Ensure filename is from originalname, as sanitize might have been applied to request.file.filename
     const { originalname: filename } = request.file;
 
     try {
         fs.copyFileSync(img_path, path.join(request.user.directories.backgrounds, filename));
         fs.unlinkSync(img_path);
 
-        (async () => { // IIFE to use async/await
+        (async () => {
             try {
                 const thumbnailResult = await generateThumbnail(request.user.directories, 'bg', filename);
 
@@ -103,53 +101,39 @@ router.post('/upload', function (request, response) {
                     const aspectRatiosJsonPath = path.join(userRootPath, 'aspect_ratios.json');
 
                     if (thumbnailResult && thumbnailResult.aspectRatio !== undefined) {
-                        let aspectRatiosData = {}; // This will hold all data including metadata key
+                        let aspectRatiosData = {};
                         if (fs.existsSync(aspectRatiosJsonPath)) {
                             try {
                                 const jsonDataString = fs.readFileSync(aspectRatiosJsonPath, 'utf-8');
                                 aspectRatiosData = JSON.parse(jsonDataString);
                             } catch (e) {
                                 console.error(`[Upload] Failed to parse aspect_ratios.json: ${e.message}. Initializing new object.`);
-                                aspectRatiosData = {}; // Initialize if parse fails
+                                aspectRatiosData = {};
                             }
                         }
 
-                        // Separate metadata from actual aspect ratios for comparison/update
                         const currentVersionInFile = aspectRatiosData._metadata_version;
-                        delete aspectRatiosData._metadata_version; // Work with clean aspect ratios
+                        delete aspectRatiosData._metadata_version;
 
-                        if (aspectRatiosData[filename] !== thumbnailResult.aspectRatio) {
+                        if (aspectRatiosData[filename] !== thumbnailResult.aspectRatio || currentVersionInFile !== sharedMetadataVersion) {
                             aspectRatiosData[filename] = thumbnailResult.aspectRatio;
-                            aspectRatiosData._metadata_version = sharedMetadataVersion; // Add/update version before writing
+                            aspectRatiosData._metadata_version = sharedMetadataVersion;
                             try {
                                 sharedWriteFileAtomicSync(aspectRatiosJsonPath, JSON.stringify(aspectRatiosData, null, 2));
-                                console.info(`[Upload] Updated aspect_ratios.json in ${userRootPath} for: ${filename} -> ${thumbnailResult.aspectRatio}. Version: ${sharedMetadataVersion}`);
-                                // fs.writeFileSync(versionFilePath, sharedMetadataVersion); // REMOVED
                             } catch (e) {
-                                 console.error(`[Upload] Failed to write aspect_ratios.json in ${userRootPath}: ${e.message}`);
-                            }
-                        } else if (currentVersionInFile !== sharedMetadataVersion) {
-                            // Aspect ratio is the same, but if version was different (e.g. old file format), update version
-                            aspectRatiosData._metadata_version = sharedMetadataVersion;
-                             try {
-                                sharedWriteFileAtomicSync(aspectRatiosJsonPath, JSON.stringify(aspectRatiosData, null, 2));
-                                console.info(`[Upload] Updated version in aspect_ratios.json in ${userRootPath} for: ${filename}. Version: ${sharedMetadataVersion}`);
-                            } catch (e) {
-                                 console.error(`[Upload] Failed to write aspect_ratios.json (version update) in ${userRootPath}: ${e.message}`);
+                                console.error(`[Upload] Failed to write aspect_ratios.json in ${userRootPath}: ${e.message}`);
                             }
                         }
-
-                    } else if (thumbnailResult === null) { // If thumbnail generation failed or was skipped
+                    } else if (thumbnailResult === null) {
                         if (fs.existsSync(aspectRatiosJsonPath)) {
                             try {
                                 let aspectRatiosData = JSON.parse(fs.readFileSync(aspectRatiosJsonPath, 'utf-8'));
                                 delete aspectRatiosData._metadata_version;
-
-                                if (aspectRatiosData.hasOwnProperty(filename)) {
+                                // LINT FIX: Use Object.prototype.hasOwnProperty.call()
+                                if (Object.prototype.hasOwnProperty.call(aspectRatiosData, filename)) {
                                     delete aspectRatiosData[filename];
-                                    aspectRatiosData._metadata_version = sharedMetadataVersion; // Add/update version before writing
+                                    aspectRatiosData._metadata_version = sharedMetadataVersion;
                                     sharedWriteFileAtomicSync(aspectRatiosJsonPath, JSON.stringify(aspectRatiosData, null, 2));
-                                    console.info(`[Upload] Removed entry for ${filename} from aspect_ratios.json in ${userRootPath}. Updated version to ${sharedMetadataVersion}.`);
                                 }
                             } catch (e) {
                                 console.error(`[Upload] Error processing aspect_ratios.json (for removal) in ${userRootPath} for ${filename}: ${e.message}`);

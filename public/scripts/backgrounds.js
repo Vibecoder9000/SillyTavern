@@ -18,12 +18,6 @@ function generateUrlParameter(bg, isCustom) {
 const BG_METADATA_KEY = 'custom_background';
 const LIST_METADATA_KEY = 'chat_backgrounds';
 
-// A single transparent PNG pixel used as a placeholder for errored backgrounds
-const PNG_PIXEL = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=';
-const PNG_PIXEL_BLOB = new Blob([Uint8Array.from(atob(PNG_PIXEL), c => c.charCodeAt(0))], { type: 'image/png' });
-const PLACEHOLDER_IMAGE = `url('data:image/png;base64,${PNG_PIXEL}')`;
-
-
 const THUMBNAIL_STORAGE = localforage.createInstance({ name: 'SillyTavern_Thumbnails' });
 const THUMBNAIL_BLOBS = new Map();
 
@@ -52,7 +46,7 @@ class JustifiedGallery {
         this.currentRowWidth = 0;
 
         if (!this.container) {
-            console.error("JustifiedGallery: Container element is null.");
+            console.error('JustifiedGallery: Container element is null.');
         }
     }
 
@@ -100,8 +94,8 @@ class JustifiedGallery {
             menu.innerHTML = `
                 <div data-action="lock" class="jg-button jg-lock fa-solid fa-lock fa-fw pointer" title="${translate('Lock Background')}"></div>
                 <div data-action="unlock" class="jg-button jg-unlock fa-solid fa-unlock fa-fw pointer" title="${translate('Unlock Background')}"></div>
-                <div data-action="edit" class="jg-button fa-solid fa-pen-to-square fa-fw pointer" title="${translate('Rename Background')}"></div>
-                <div data-action="delete" class="jg-button fa-solid fa-trash-can fa-fw pointer" title="${translate('Delete Background')}"></div>
+                <div data-action="edit" class="jg-button jg-edit fa-solid fa-pen-to-square fa-fw pointer" title="${translate('Rename Background')}"></div>
+                <div data-action="delete" class="jg-button jg-delete fa-solid fa-trash-can fa-fw pointer" title="${translate('Delete Background')}"></div>
                 <div data-action="copy" class="jg-button jg-copy fa-solid fa-copy fa-fw pointer" title="${translate('Copy to System')}"></div>
             `;
 
@@ -124,7 +118,7 @@ class JustifiedGallery {
 
         this.currentRow.push({
             ...imageData,
-            scaledWidth: scaledWidth
+            scaledWidth: scaledWidth,
         });
         this.currentRowWidth += scaledWidth;
 
@@ -166,7 +160,7 @@ class BackgroundSelector {
         this.currentIndex = 0;
         this.batchSize = 90;
         this.scrollerElement = document.getElementById('Backgrounds');
-        this.isLoading = false; // Add a flag to prevent multiple loads at once
+        this.isLoading = false;
     }
 
     setImages(imageDataList) {
@@ -180,7 +174,7 @@ class BackgroundSelector {
             ? this.images
             : this.images.filter(img =>
                 (img.tags && img.tags.some(tag => tag.toLowerCase().includes(lowerQuery))) ||
-                img.filename.toLowerCase().includes(lowerQuery)
+                img.filename.toLowerCase().includes(lowerQuery),
             );
         this.resetAndLoad();
     }
@@ -197,12 +191,10 @@ class BackgroundSelector {
 
         this.loadBatch();
 
-        // After loading a batch, check if we need to load more
         const hasMoreImages = this.currentIndex < this.filteredImages.length;
         const isScrollable = this.scrollerElement.scrollHeight > this.scrollerElement.clientHeight;
 
         if (hasMoreImages && !isScrollable) {
-            // Use a timeout to allow the DOM to render before the next check
             setTimeout(() => {
                 this.isLoading = false;
                 this.loadUntilScrollable();
@@ -217,9 +209,9 @@ class BackgroundSelector {
 
         const batch = this.filteredImages.slice(
             this.currentIndex,
-            this.currentIndex + this.batchSize
+            this.currentIndex + this.batchSize,
         );
-        
+
         batch.forEach(img => this.gallery.addImage(img));
         this.currentIndex += this.batchSize;
 
@@ -232,15 +224,15 @@ class BackgroundSelector {
         if (!this.scrollerElement) return;
 
         const debouncedScrollHandler = () => {
-            if (this.isLoading) return; // Don't load if already loading
-            
+            if (this.isLoading) return;
+
             if (this.scrollerElement.scrollTop + this.scrollerElement.clientHeight >= this.scrollerElement.scrollHeight - 500) {
                 if (this.currentIndex < this.filteredImages.length) {
-                    this.loadUntilScrollable(); // Use the smart loader here too
+                    this.loadUntilScrollable();
                 }
             }
         };
-        
+
         this.scrollerElement.addEventListener('scroll', debouncedScrollHandler);
     }
 }
@@ -262,10 +254,6 @@ export function loadBackgroundSettings(settings) {
     $('#background_thumbnails_animation').prop('checked', background_settings.animation);
 }
 
-/**
- * Sets the background for the current chat and adds it to the list of custom backgrounds.
- * @param {{url: string, path:string}} backgroundInfo
- */
 async function forceSetBackground(backgroundInfo) {
     saveBackgroundMetadata(backgroundInfo.url);
     setCustomBackground();
@@ -293,47 +281,37 @@ async function onChatChanged() {
 
 async function getChatBackgroundsList() {
     $('#bg_chat_hint').hide();
-    
+
     if (!window.backgroundSelector || !window.backgroundSelector.images) {
-        return; // Guard against running before the gallery is initialized
+        return;
     }
 
     const list = chat_metadata[LIST_METADATA_KEY] || [];
     const customBgSet = new Set(list);
 
-    window.backgroundSelector.images.forEach(img => img.isCustom = false);
-
     window.backgroundSelector.images.forEach(img => {
-        if (customBgSet.has(img.filename)) {
-            img.isCustom = true;
-        }
+        img.isCustom = customBgSet.has(img.filename);
     });
 
     const currentFilter = $('#bg-filter').val();
     window.backgroundSelector.search(currentFilter);
-
 }
 
 function highlightLockedBackground() {
-    const allItems = $('.thumbnail, .bg_example');
-    allItems.removeClass('locked');
+    $('.thumbnail').removeClass('locked');
 
     const lockedBackground = chat_metadata[BG_METADATA_KEY];
     if (!lockedBackground) return;
 
-    allItems.each(function () {
+    $('.thumbnail').each(function () {
         const url = $(this).data('url');
-        if (url === lockedBackground) {
+        const cssUrl = `url("${url}")`;
+        if (cssUrl === lockedBackground) {
             $(this).addClass('locked');
         }
     });
 }
 
-/**
- * Locks the background for the current chat
- * @param {Event} e Click event
- * @returns {string} Empty string
- */
 function onLockBackgroundClick(e) {
     e?.stopPropagation();
 
@@ -352,11 +330,6 @@ function onLockBackgroundClick(e) {
     return '';
 }
 
-/**
- * Locks the background for the current chat
- * @param {Event} e Click event
- * @returns {string} Empty string
- */
 function onUnlockBackgroundClick(e) {
     e?.stopPropagation();
     removeBackgroundMetadata();
@@ -381,11 +354,13 @@ function removeBackgroundMetadata() {
 
 function setCustomBackground() {
     const file = chat_metadata[BG_METADATA_KEY];
-    if (document.getElementById('bg_custom').style.backgroundImage == file) return;
+    if (document.getElementById('bg_custom').style.backgroundImage === file) return;
     $('#bg_custom').css('background-image', file);
 }
 
-function unsetCustomBackground() { $('#bg_custom').css('background-image', 'none'); }
+function unsetCustomBackground() {
+    $('#bg_custom').css('background-image', 'none');
+}
 
 function onSelectBackgroundClick() {
     const $this = $(this);
@@ -393,19 +368,16 @@ function onSelectBackgroundClick() {
     const fullResUrl = $this.data('url');
     const isCustom = $this.attr('custom') === 'true';
 
-    // If any of the essential data is missing, do nothing.
     if (!bgFile || !fullResUrl) return;
 
     const backgroundCssUrl = `url("${fullResUrl}")`;
 
-    // Logic for chat-specific (locked) backgrounds
     if (hasCustomBackground() || isCustom) {
         saveBackgroundMetadata(backgroundCssUrl);
         setCustomBackground();
     }
     highlightLockedBackground();
 
-    // Logic for setting the main, global background
     const customBg = window.getComputedStyle(document.getElementById('bg_custom')).backgroundImage;
     if (customBg === 'none' || isCustom) {
         setBackground(bgFile, backgroundCssUrl);
@@ -417,7 +389,10 @@ async function onCopyToSystemBackgroundClick(e) {
     const bgNames = await getNewBackgroundName(this);
     if (!bgNames) return;
     const bgFile = await fetch(bgNames.oldBg);
-    if (!bgFile.ok) { toastr.warning('Failed to copy background'); return; }
+    if (!bgFile.ok) {
+        toastr.warning('Failed to copy background');
+        return;
+    }
     const blob = await bgFile.blob();
     const file = new File([blob], bgNames.newBg);
     const formData = new FormData();
@@ -432,80 +407,27 @@ async function onCopyToSystemBackgroundClick(e) {
     await getChatBackgroundsList();
 }
 
-/**
- * Gets a thumbnail for the background from storage or fetches it if not available.
- * It caches the thumbnail in local storage and returns a blob URL for the thumbnail.
- * If the thumbnail cannot be fetched, it returns a transparent PNG pixel as a fallback.
- * @param {string} bg Background URL
- * @returns {Promise<string>} Blob URL of the thumbnail
- */
-async function getThumbnailFromStorage(bg) {
-    const cachedBlobUrl = THUMBNAIL_BLOBS.get(bg);
-    if (cachedBlobUrl) return cachedBlobUrl;
-    const savedBlob = await THUMBNAIL_STORAGE.getItem(bg);
-    if (savedBlob) {
-        const savedBlobUrl = URL.createObjectURL(savedBlob);
-        THUMBNAIL_BLOBS.set(bg, savedBlobUrl);
-        return savedBlobUrl;
-    }
-
-    try {
-        const response = await fetch(getBackgroundPath(bg), { cache: 'force-cache' });
-        if (!response.ok) throw new Error('Fetch failed: ' + response.status);
-        const imageBlob = await response.blob();
-        const imageBase64 = await getBase64Async(imageBlob);
-        const thumbnailBase64 = await createThumbnail(imageBase64, 160, 90);
-        const thumbnailBlob = await fetch(thumbnailBase64).then(res => res.blob());
-        await THUMBNAIL_STORAGE.setItem(bg, thumbnailBlob);
-        const blobUrl = URL.createObjectURL(thumbnailBlob);
-        THUMBNAIL_BLOBS.set(bg, blobUrl);
-        return blobUrl;
-    } catch (error) {
-        console.error(`[getThumbnailFromStorage] Error for bg="${bg}" (path: "${getBackgroundPath(bg)}"). Fallback will be used. Error details:`, error);
-        const fallbackBlobUrl = URL.createObjectURL(PNG_PIXEL_BLOB);
-        THUMBNAIL_BLOBS.set(bg, fallbackBlobUrl);
-        return fallbackBlobUrl;
-    }
-}
-
-/**
- * Gets the new background name from the user.
- * @param {Element} referenceElement
- * @returns {Promise<{oldBg: string, newBg: string}>}
- * */
 async function getNewBackgroundName(referenceElement) {
-    const exampleBlock = $(referenceElement).closest('.thumbnail, .bg_example');
+    const exampleBlock = $(referenceElement).closest('.thumbnail');
     const isCustom = exampleBlock.attr('custom') === 'true';
-    const oldBg = exampleBlock.data('bgfile') || exampleBlock.attr('bgfile');
+    const oldBg = exampleBlock.data('bgfile');
     if (!oldBg) return;
+
     const fileExtension = oldBg.split('.').pop();
     const fileNameBase = isCustom ? oldBg.split('/').pop() : oldBg;
     const oldBgExtensionless = fileNameBase.replace(`.${fileExtension}`, '');
     const newBgExtensionless = await Popup.show.input(t`Enter new background name:`, null, oldBgExtensionless);
 
-    if (!newBgExtensionless) {
-        console.debug('no new_bg_extensionless');
-        return;
-    }
+    if (!newBgExtensionless || oldBgExtensionless === newBgExtensionless) return;
 
-    const newBg = `${newBgExtensionless}.${fileExtension}`;
-
-    if (oldBgExtensionless === newBgExtensionless) {
-        console.debug('new_bg === old_bg');
-        return;
-    }
-
-    return { oldBg, newBg };
+    return { oldBg, newBg: `${newBgExtensionless}.${fileExtension}` };
 }
 
 async function onRenameBackgroundClick(e) {
     e.stopPropagation();
 
     const bgNames = await getNewBackgroundName(this);
-
-    if (!bgNames) {
-        return;
-    }
+    if (!bgNames) return;
 
     const data = { old_bg: bgNames.oldBg, new_bg: bgNames.newBg };
     const response = await fetch('/api/backgrounds/rename', {
@@ -525,11 +447,11 @@ async function onRenameBackgroundClick(e) {
 
 async function onDeleteBackgroundClick(e) {
     e.stopPropagation();
-    const bgToDelete = $(this).closest('.thumbnail, .bg_example');
+    const bgToDelete = $(this).closest('.thumbnail');
     const url = bgToDelete.data('url');
     const isCustom = bgToDelete.attr('custom') === 'true';
     const confirm = await Popup.show.confirm(t`Delete the background?`, null);
-    const bg = bgToDelete.data('bgfile') || bgToDelete.attr('bgfile');
+    const bg = bgToDelete.data('bgfile');
 
     if (!confirm) return;
 
@@ -541,20 +463,23 @@ async function onDeleteBackgroundClick(e) {
         if (index > -1) list.splice(index, 1);
     }
 
-    const nextBg = bgToDelete.next();
-    const prevBg = bgToDelete.prev();
+    const allThumbnails = $('#bg_menu_content').find('.thumbnail');
+    const currentIndex = allThumbnails.index(bgToDelete);
 
-        bgToDelete.remove();
+    bgToDelete.remove();
+
+    const nextBg = allThumbnails.eq(currentIndex);
 
     if (nextBg.length) {
         nextBg.trigger('click');
-    } else if (prevBg.length) {
-        prevBg.trigger('click');
+    } else if (allThumbnails.length > 1) {
+        allThumbnails.eq(currentIndex - 1).trigger('click');
     } else {
         $(`.thumbnail[data-bgfile="__transparent.png"]`).trigger('click');
     }
 
-    if (url === chat_metadata[BG_METADATA_KEY]) {
+
+    if (`url("${url}")` === chat_metadata[BG_METADATA_KEY]) {
         removeBackgroundMetadata();
         unsetCustomBackground();
     }
@@ -569,20 +494,19 @@ const autoBgPrompt = 'Ignore previous instructions and choose a location ONLY fr
 
 async function autoBackgroundCommand() {
     const bgTitles = Array.from(document.querySelectorAll('#bg_menu_content .BGSampleTitle'));
-    const options = bgTitles.map(x => ({ element: $(x).closest('.thumbnail, .bg_example')[0], text: x.innerText.trim() })).filter(x => x.text.length > 0);
-    if (options.length == 0) { toastr.warning('No backgrounds to choose from.'); return ''; }
+    const options = bgTitles.map(x => ({ element: $(x).closest('.thumbnail')[0], text: x.innerText.trim() })).filter(x => x.text.length > 0);
+    if (options.length === 0) {
+        toastr.warning('No backgrounds to choose from.');
+        return '';
+    }
     const list = options.map(option => `- ${option.text}`).join('\n');
     const prompt = stringFormat(autoBgPrompt, list);
     const reply = await generateQuietPrompt(prompt, false, false);
     const fuse = new Fuse(options, { keys: ['text'], threshold: 0.4 });
     const bestMatch = fuse.search(reply, { limit: 1 });
-    if (bestMatch.length == 0) {
-        for (const option of options) {
-            if (String(reply).toLowerCase().includes(option.text.toLowerCase())) {
-                $(option.element).trigger('click'); return '';
-            }
-        }
-        toastr.warning('No match found.'); return '';
+    if (bestMatch.length === 0) {
+        toastr.warning('No match found.');
+        return '';
     }
     $(bestMatch[0].item.element).trigger('click');
     return '';
@@ -597,8 +521,7 @@ export async function getBackgrounds() {
         });
 
         if (!response.ok) {
-            console.error("Failed to fetch backgrounds:", response.status, await response.text());
-            // Clear the container but preserve the upload form
+            console.error(`Failed to fetch backgrounds: ${response.status}`, await response.text());
             if (window.backgroundSelector) window.backgroundSelector.gallery.clearGallery();
             return;
         }
@@ -607,15 +530,14 @@ export async function getBackgrounds() {
         const filenames = data.images || [];
         const aspectsMap = data.aspects || {};
 
-        // Transform the API response into the data structure our gallery needs
         const imageDataList = filenames.map(filename => {
             const numericalAR = Number(aspectsMap[filename]);
             return {
                 id: filename,
                 filename: filename,
-                aspectRatio: (numericalAR && numericalAR > 0) ? numericalAR : 1, // Default to 1 if video
-                url: getThumbnailUrl('bg', filename), // Thumbnail for display
-                fullResUrl: getBackgroundPath(filename), // Full-res for applying
+                aspectRatio: (numericalAR && numericalAR > 0) ? numericalAR : 1,
+                url: getThumbnailUrl('bg', filename),
+                fullResUrl: getBackgroundPath(filename),
                 tags: filename.replace(/_/g, ' ').split('.').slice(0, -1).join('.').split(' '),
             };
         });
@@ -627,11 +549,10 @@ export async function getBackgrounds() {
         highlightLockedBackground();
 
     } catch (error) {
-        console.error("Error in getBackgrounds:", error);
+        console.error('Error in getBackgrounds:', error);
         if (window.backgroundSelector) window.backgroundSelector.gallery.clearGallery();
     }
 }
-
 
 async function setBackground(bg, url) {
     $('#bg1').css('background-image', url);
@@ -670,16 +591,11 @@ async function onBackgroundUploadSelected() {
     form.reset();
 }
 
-/**
- * Converts a video file to an animated webp format if the file is a video.
- * @param {FormData} formData
- * @returns {Promise<void>}
- */
 async function convertFileIfVideo(formData) {
     const file = formData.get('avatar');
     if (!(file instanceof File) || !file.type.startsWith('video/')) {
-		return;
-	}
+        return;
+    }
     if (typeof globalThis.convertVideoToAnimatedWebp !== 'function') {
         toastr.warning(t`Click here to install the Video Background Loader extension`, t`Video background uploads require a downloadable add-on`, {
             timeOut: 0,
@@ -697,26 +613,23 @@ async function convertFileIfVideo(formData) {
         const convertedFileName = file.name.replace(/\.[^/.]+$/, '.webp');
         const convertedFile = new File([convertedBuffer], convertedFileName, { type: 'image/webp' });
         formData.set('avatar', convertedFile);
-        toastMessage.remove();
     } catch (error) {
-        formData.delete('avatar');
-    } finally {
-        toastMessage.remove();
         console.error('Error converting video to animated webp:', error);
         toastr.error(t`Error converting video to animated webp`);
+    } finally {
+        toastMessage.remove();
     }
 }
 
 async function uploadBackground(formData) {
+    if (!formData.has('avatar')) {
+        console.log('No file for upload.');
+        return;
+    }
+    const headers = getRequestHeaders();
+    delete headers['Content-Type'];
+
     try {
-        if (!formData.has('avatar')) {
-            console.log('No file provided. Background upload cancelled.');
-            return;
-        }
-
-        const headers = getRequestHeaders();
-        delete headers['Content-Type'];
-
         const response = await fetch('/api/backgrounds/upload', {
             method: 'POST',
             headers: headers,
@@ -725,32 +638,28 @@ async function uploadBackground(formData) {
         });
 
         if (!response.ok) {
-            throw new Error('Failed to upload background');
+            throw new Error(`Upload failed: ${response.status}`);
         }
 
         const bg = await response.text();
-        setBackground(bg, generateUrlParameter(bg, false));
         await getBackgrounds();
         highlightNewBackground(bg);
+
     } catch (error) {
         console.error('Error uploading background:', error);
     }
 }
 
 function highlightNewBackground(bg) {
-    const newBg = $(`.thumbnail[data-bgfile="${bg}"], .bg_example[bgfile="${bg}"]`);
-
+    const newBg = $(`.thumbnail[data-bgfile="${bg}"]`);
     if (newBg.length) {
-        const scrollOffset = newBg.offset().top - newBg.parent().offset().top;
-        $('#Backgrounds').scrollTop(scrollOffset);
+        const scroller = $('#Backgrounds');
+        const offsetTop = newBg.offset().top - scroller.offset().top + scroller.scrollTop();
+        scroller.animate({ scrollTop: offsetTop - 50 }, 300);
         flashHighlight(newBg);
     }
 }
 
-/**
- * Sets the fitting class for the background element
- * @param {string} fitting Fitting type
- */
 function setFittingClass(fitting) {
     const backgrounds = $('#bg1, #bg_custom');
     for (const option of ['cover', 'contain', 'stretch', 'center']) {
@@ -765,6 +674,7 @@ function onBackgroundFilterInput() {
         window.backgroundSelector.search(filterValue);
     }
 }
+
 export function initBackgrounds() {
     let hasLoaded = false;
     $('#site_logo').on('click', () => {
@@ -804,13 +714,13 @@ export function initBackgrounds() {
                 break;
         }
     });
-    
+
     $(document).on('click', '.thumbnail', onSelectBackgroundClick);
 
     $('#auto_background').on('click', autoBackgroundCommand);
     $(document).on('change', '#add_bg_button', onBackgroundUploadSelected);
     $('#bg-filter').on('input', onBackgroundFilterInput);
-    
+
     $('#background_fitting').on('input', function () {
         background_settings.fitting = String($(this).val());
         setFittingClass(background_settings.fitting);
@@ -820,8 +730,6 @@ export function initBackgrounds() {
     $('#background_thumbnails_animation').on('input', async function () {
         background_settings.animation = !!$(this).prop('checked');
         saveSettingsDebounced();
-
-        // Refresh background thumbnails
         await getBackgrounds();
         await onChatChanged();
     });
@@ -837,12 +745,21 @@ export function initBackgrounds() {
     });
 
     SlashCommandParser.addCommandObject(SlashCommand.fromProps({
-        name: 'lockbg', callback: () => onLockBackgroundClick(new CustomEvent('click')), aliases: ['bglock'], helpString: 'Locks a background for the currently selected chat',
+        name: 'lockbg',
+        callback: () => onLockBackgroundClick(new CustomEvent('click')),
+        aliases: ['bglock'],
+        helpString: 'Locks a background for the currently selected chat',
     }));
     SlashCommandParser.addCommandObject(SlashCommand.fromProps({
-        name: 'unlockbg', callback: () => onUnlockBackgroundClick(new CustomEvent('click')), aliases: ['bgunlock'], helpString: 'Unlocks a background for the currently selected chat',
+        name: 'unlockbg',
+        callback: () => onUnlockBackgroundClick(new CustomEvent('click')),
+        aliases: ['bgunlock'],
+        helpString: 'Unlocks a background for the currently selected chat',
     }));
     SlashCommandParser.addCommandObject(SlashCommand.fromProps({
-        name: 'autobg', callback: autoBackgroundCommand, aliases: ['bgauto'], helpString: 'Automatically changes the background based on the chat context using the AI request prompt',
+        name: 'autobg',
+        callback: autoBackgroundCommand,
+        aliases: ['bgauto'],
+        helpString: 'Automatically changes the background based on the chat context using the AI request prompt',
     }));
 }
