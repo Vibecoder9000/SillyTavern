@@ -3,7 +3,7 @@ import { chat_metadata, eventSource, event_types, generateQuietPrompt, getCurren
 import { openThirdPartyExtensionMenu, saveMetadataDebounced } from './extensions.js';
 import { SlashCommand } from './slash-commands/SlashCommand.js';
 import { SlashCommandParser } from './slash-commands/SlashCommandParser.js';
-import { createThumbnail, flashHighlight, getBase64Async, stringFormat } from './utils.js';
+import { flashHighlight, stringFormat } from './utils.js';
 import { t, translate } from './i18n.js';
 import { Popup } from './popup.js';
 
@@ -475,7 +475,7 @@ async function onDeleteBackgroundClick(e) {
     } else if (allThumbnails.length > 1) {
         allThumbnails.eq(currentIndex - 1).trigger('click');
     } else {
-        $(`.thumbnail[data-bgfile="__transparent.png"]`).trigger('click');
+        $('.thumbnail[data-bgfile="__transparent.png"]').trigger('click');
     }
 
 
