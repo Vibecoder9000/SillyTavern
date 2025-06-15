@@ -206,23 +206,12 @@ export async function generateThumbnail(directories, type, file) {
         const thumbImage = image.clone();
 
         if (type === 'bg') {
-            const targetPixelArea = 12500;
-            let newHeight = Math.round(Math.sqrt(targetPixelArea / (numericalAspectRatio === 0 ? 1 : numericalAspectRatio)));
-            let newWidth = Math.round(newHeight * numericalAspectRatio);
-            console.log(`[generateThumbnail] Target dimensions for ${file}: ${newWidth}x${newHeight}`);
-
-            if (newWidth === 0 || newHeight === 0) {
-                console.warn(`[generateThumbnail] Calculated new dimensions for ${file} are zero. Using fallback cover.`);
-                const fallbackSize = dimensions[type];
-                newWidth = !isNaN(fallbackSize?.[0]) && fallbackSize?.[0] > 0 ? fallbackSize[0] : image.bitmap.width;
-                newHeight = !isNaN(fallbackSize?.[1]) && fallbackSize?.[1] > 0 ? fallbackSize[1] : image.bitmap.height;
-                if (newWidth === 0) newWidth = 160;
-                if (newHeight === 0) newHeight = 90;
-                console.log(`[generateThumbnail] Fallback dimensions for ${file}: ${newWidth}x${newHeight}`);
-                thumbImage.cover({ w: newWidth, h: newHeight });
-            } else {
-                thumbImage.scaleToFit({ w: newWidth, h: newHeight, mode: Jimp.RESIZE_BILINEAR });
-            }
+            // [DIAGNOSTIC STEP] Using user's original COVER logic
+            const size = dimensions[type]; // dimensions.bg is typically [160, 90]
+            const width = !isNaN(size?.[0]) && size?.[0] > 0 ? size[0] : thumbImage.bitmap.width;
+            const height = !isNaN(size?.[1]) && size?.[1] > 0 ? size[1] : thumbImage.bitmap.height;
+            console.log(`[generateThumbnail] [DIAGNOSTIC STEP] Using user's original COVER logic for ${file}. Target fixed dimensions: ${width}x${height}`);
+            thumbImage.cover({ w: width, h: height });
         } else {
             const size = dimensions[type];
             const width = !isNaN(size?.[0]) && size?.[0] > 0 ? size[0] : image.bitmap.width;
@@ -232,27 +221,9 @@ export async function generateThumbnail(directories, type, file) {
         }
         console.log(`[generateThumbnail] Resized ${file}. Getting buffer...`);
 
-        if (pngFormat) {
-            buffer = await new Promise((resolve, reject) => {
-                thumbImage.getBuffer('image/png', {}, (err, buf) => { // Using string 'image/png' and {} options
-                    if (err) {
-                        console.error('[generateThumbnail] Error getting PNG buffer with getBuffer:', err.stack || err);
-                        return reject(err);
-                    }
-                    resolve(buf);
-                });
-            });
-        } else {
-            buffer = await new Promise((resolve, reject) => {
-                thumbImage.getBuffer('image/jpeg', { quality: quality, jpegColorSpace: 'ycbcr' }, (err, buf) => { // Using string 'image/jpeg' and specific options
-                    if (err) {
-                        console.error('[generateThumbnail] Error getting JPEG buffer with getBuffer:', err.stack || err);
-                        return reject(err);
-                    }
-                    resolve(buf);
-                });
-            });
-        }
+        buffer = pngFormat
+            ? await thumbImage.getBufferAsync(JimpMime.png)
+            : await thumbImage.getBufferAsync(JimpMime.jpeg, { quality: quality });
 
         console.log(`[generateThumbnail] Got buffer for ${file}. Length: ${buffer?.length}. Writing to: ${pathToCachedFile}`);
         writeFileAtomicSyncDirect(pathToCachedFile, buffer);
