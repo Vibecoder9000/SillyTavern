@@ -21,7 +21,12 @@ export const router = express.Router();
 router.post('/all', function (request, response) {
     const images = getImages(request.user.directories.backgrounds);
     const config = { width: dimensions.bg[0], height: dimensions.bg[1] };
-    const aspectRatiosJsonPath = path.join(request.user.directories.thumbnailsBg, 'aspect_ratios.json');
+    if (!request.user.directories.root) {
+        console.error('User root directory not defined. Cannot load aspect ratios for /all endpoint.');
+        // Send empty aspects or handle error as appropriate for your frontend
+        return response.json({ images, config, aspects: {} });
+    }
+    const aspectRatiosJsonPath = path.join(request.user.directories.root, 'aspect_ratios.json');
     let aspects = {};
 
     try {
@@ -95,57 +100,66 @@ router.post('/upload', function (request, response) {
             try {
                 const thumbnailResult = await generateThumbnail(request.user.directories, 'bg', filename);
 
-                if (thumbnailResult && thumbnailResult.aspectRatio !== undefined) { // Check for aspectRatio property
-                    const thumbnailBaseDir = getThumbnailFolder(request.user.directories, 'bg');
+                if (!request.user.directories.root) {
+                    console.error('[Upload] User root directory not defined. Cannot update aspect ratios.');
+                } else {
+                    const userRootPath = request.user.directories.root;
+                    const aspectRatiosJsonPath = path.join(userRootPath, 'aspect_ratios.json');
+                    // const versionFilePath = path.join(userRootPath, 'aspect_metadata_version.txt'); // REMOVED
 
-                    if (thumbnailBaseDir) {
-                        const aspectRatiosJsonPath = path.join(thumbnailBaseDir, 'aspect_ratios.json');
-                        let aspectRatios = {};
-
+                    if (thumbnailResult && thumbnailResult.aspectRatio !== undefined) {
+                        let aspectRatiosData = {}; // This will hold all data including metadata key
                         if (fs.existsSync(aspectRatiosJsonPath)) {
                             try {
-                                const jsonData = fs.readFileSync(aspectRatiosJsonPath, 'utf-8');
-                                aspectRatios = JSON.parse(jsonData);
+                                const jsonDataString = fs.readFileSync(aspectRatiosJsonPath, 'utf-8');
+                                aspectRatiosData = JSON.parse(jsonDataString);
                             } catch (e) {
                                 console.error(`[Upload] Failed to parse aspect_ratios.json: ${e.message}. Initializing new object.`);
-                                aspectRatios = {};
+                                aspectRatiosData = {}; // Initialize if parse fails
                             }
                         }
 
-                        if (aspectRatios[filename] !== thumbnailResult.aspectRatio) { // Compare numerical ratios
-                            aspectRatios[filename] = thumbnailResult.aspectRatio; // Store numerical ratio
+                        // Separate metadata from actual aspect ratios for comparison/update
+                        const currentVersionInFile = aspectRatiosData._metadata_version;
+                        delete aspectRatiosData._metadata_version; // Work with clean aspect ratios
+
+                        if (aspectRatiosData[filename] !== thumbnailResult.aspectRatio) {
+                            aspectRatiosData[filename] = thumbnailResult.aspectRatio;
+                            aspectRatiosData._metadata_version = sharedMetadataVersion; // Add/update version before writing
                             try {
-                                sharedWriteFileAtomicSync(aspectRatiosJsonPath, JSON.stringify(aspectRatios, null, 2));
-                                console.info(`[Upload] Updated aspect_ratios.json for: ${filename} -> ${thumbnailResult.aspectRatio}`);
-
-                                const versionFilePath = path.join(thumbnailBaseDir, 'aspect_metadata_version.txt');
-                                fs.writeFileSync(versionFilePath, sharedMetadataVersion);
-                                console.info(`[Upload] Updated aspect_metadata_version.txt to ${sharedMetadataVersion}`);
-
+                                sharedWriteFileAtomicSync(aspectRatiosJsonPath, JSON.stringify(aspectRatiosData, null, 2));
+                                console.info(`[Upload] Updated aspect_ratios.json in ${userRootPath} for: ${filename} -> ${thumbnailResult.aspectRatio}. Version: ${sharedMetadataVersion}`);
+                                // fs.writeFileSync(versionFilePath, sharedMetadataVersion); // REMOVED
                             } catch (e) {
-                                console.error(`[Upload] Failed to write aspect_ratios.json or version file: ${e.message}`);
+                                 console.error(`[Upload] Failed to write aspect_ratios.json in ${userRootPath}: ${e.message}`);
+                            }
+                        } else if (currentVersionInFile !== sharedMetadataVersion) {
+                            // Aspect ratio is the same, but if version was different (e.g. old file format), update version
+                            aspectRatiosData._metadata_version = sharedMetadataVersion;
+                             try {
+                                sharedWriteFileAtomicSync(aspectRatiosJsonPath, JSON.stringify(aspectRatiosData, null, 2));
+                                console.info(`[Upload] Updated version in aspect_ratios.json in ${userRootPath} for: ${filename}. Version: ${sharedMetadataVersion}`);
+                            } catch (e) {
+                                 console.error(`[Upload] Failed to write aspect_ratios.json (version update) in ${userRootPath}: ${e.message}`);
                             }
                         }
-                    } else {
-                        console.error('[Upload] Could not get thumbnail folder path.');
-                    }
-                } else if (thumbnailResult === null) { // This part handles deletion if thumbnailResult is null, remains largely the same
-                    const thumbnailBaseDir = getThumbnailFolder(request.user.directories, 'bg');
-                    if (thumbnailBaseDir) {
-                        const aspectRatiosJsonPath = path.join(thumbnailBaseDir, 'aspect_ratios.json');
+
+                    } else if (thumbnailResult === null) { // If thumbnail generation failed or was skipped
                         if (fs.existsSync(aspectRatiosJsonPath)) {
                             try {
-                                let aspectRatios = JSON.parse(fs.readFileSync(aspectRatiosJsonPath, 'utf-8'));
-                                if (aspectRatios.hasOwnProperty(filename)) {
-                                    delete aspectRatios[filename];
-                                    sharedWriteFileAtomicSync(aspectRatiosJsonPath, JSON.stringify(aspectRatios, null, 2));
-                                    console.info(`[Upload] Removed entry for unprocessable file ${filename} from aspect_ratios.json.`);
-                                    const versionFilePath = path.join(thumbnailBaseDir, 'aspect_metadata_version.txt');
-                                    fs.writeFileSync(versionFilePath, sharedMetadataVersion);
-                                    console.info(`[Upload] Updated aspect_metadata_version.txt to ${sharedMetadataVersion} after removing entry.`);
+                                let aspectRatiosData = JSON.parse(fs.readFileSync(aspectRatiosJsonPath, 'utf-8'));
+                                // const currentVersionInFile = aspectRatiosData._metadata_version; // Not strictly needed for delete
+                                delete aspectRatiosData._metadata_version;
+
+                                if (aspectRatiosData.hasOwnProperty(filename)) {
+                                    delete aspectRatiosData[filename];
+                                    aspectRatiosData._metadata_version = sharedMetadataVersion; // Add/update version before writing
+                                    sharedWriteFileAtomicSync(aspectRatiosJsonPath, JSON.stringify(aspectRatiosData, null, 2));
+                                    console.info(`[Upload] Removed entry for ${filename} from aspect_ratios.json in ${userRootPath}. Updated version to ${sharedMetadataVersion}.`);
+                                    // fs.writeFileSync(versionFilePath, sharedMetadataVersion); // REMOVED
                                 }
                             } catch (e) {
-                                console.error(`[Upload] Error processing aspect_ratios.json for unprocessable file ${filename}: ${e.message}`);
+                                console.error(`[Upload] Error processing aspect_ratios.json (for removal) in ${userRootPath} for ${filename}: ${e.message}`);
                             }
                         }
                     }

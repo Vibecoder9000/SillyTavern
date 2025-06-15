@@ -5,7 +5,7 @@ import { openThirdPartyExtensionMenu, saveMetadataDebounced } from './extensions
 import { SlashCommand } from './slash-commands/SlashCommand.js';
 import { SlashCommandParser } from './slash-commands/SlashCommandParser.js';
 import { createThumbnail, flashHighlight, getBase64Async, stringFormat } from './utils.js';
-import { t } from './i18n.js';
+import { t, translate } from './i18n.js';
 import { Popup } from './popup.js';
 
 function getBackgroundPath(fileUrl) {
@@ -126,22 +126,22 @@ class JustifiedGallery {
 
             const lockButton = document.createElement('div');
             lockButton.className = 'bg_example_lock menu_button fa-solid fa-lock fa-fw pointer';
-            lockButton.title = t('Lock Background');
+            lockButton.title = translate('Lock Background');
             menu.appendChild(lockButton);
 
             const unlockButton = document.createElement('div');
             unlockButton.className = 'bg_example_unlock menu_button fa-solid fa-unlock fa-fw pointer';
-            unlockButton.title = t('Unlock Background');
+            unlockButton.title = translate('Unlock Background');
             menu.appendChild(unlockButton);
 
             const editButton = document.createElement('div');
             editButton.className = 'bg_example_edit menu_button fa-solid fa-pen-to-square fa-fw pointer';
-            editButton.title = t('Rename Background');
+            editButton.title = translate('Rename Background');
             menu.appendChild(editButton);
 
             const deleteButton = document.createElement('div');
             deleteButton.className = 'bg_example_cross menu_button fa-solid fa-trash-can fa-fw pointer';
-            deleteButton.title = t('Delete Background');
+            deleteButton.title = translate('Delete Background');
             menu.appendChild(deleteButton);
 
             thumbnail.appendChild(menu);
