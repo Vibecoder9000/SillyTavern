@@ -1,4 +1,3 @@
-// public/scripts/backgrounds.js (with JustifiedGallery)
 import { Fuse, localforage } from '../lib.js';
 import { chat_metadata, eventSource, event_types, generateQuietPrompt, getCurrentChatId, getRequestHeaders, getThumbnailUrl, saveSettingsDebounced } from '../script.js';
 import { openThirdPartyExtensionMenu, saveMetadataDebounced } from './extensions.js';
@@ -270,7 +269,7 @@ export function loadBackgroundSettings(settings) {
 async function forceSetBackground(backgroundInfo) {
     saveBackgroundMetadata(backgroundInfo.url);
     setCustomBackground();
-	
+
     const list = chat_metadata[LIST_METADATA_KEY] || [];
     const bg = backgroundInfo.path;
     list.push(bg);
@@ -287,6 +286,7 @@ async function onChatChanged() {
     } else {
         unsetCustomBackground();
     }
+
     await getChatBackgroundsList();
     highlightLockedBackground();
 }
@@ -482,15 +482,31 @@ async function getNewBackgroundName(referenceElement) {
     const fileNameBase = isCustom ? oldBg.split('/').pop() : oldBg;
     const oldBgExtensionless = fileNameBase.replace(`.${fileExtension}`, '');
     const newBgExtensionless = await Popup.show.input(t`Enter new background name:`, null, oldBgExtensionless);
-    if (!newBgExtensionless || oldBgExtensionless === newBgExtensionless) return;
-    return { oldBg, newBg: `${newBgExtensionless}.${fileExtension}` };
+
+    if (!newBgExtensionless) {
+        console.debug('no new_bg_extensionless');
+        return;
+    }
+
+    const newBg = `${newBgExtensionless}.${fileExtension}`;
+
+    if (oldBgExtensionless === newBgExtensionless) {
+        console.debug('new_bg === old_bg');
+        return;
+    }
+
+    return { oldBg, newBg };
 }
 
 async function onRenameBackgroundClick(e) {
     e.stopPropagation();
 
     const bgNames = await getNewBackgroundName(this);
-    if (!bgNames) return;
+
+    if (!bgNames) {
+        return;
+    }
+
     const data = { old_bg: bgNames.oldBg, new_bg: bgNames.newBg };
     const response = await fetch('/api/backgrounds/rename', {
         method: 'POST',
@@ -509,7 +525,6 @@ async function onRenameBackgroundClick(e) {
 
 async function onDeleteBackgroundClick(e) {
     e.stopPropagation();
-
     const bgToDelete = $(this).closest('.thumbnail, .bg_example');
     const url = bgToDelete.data('url');
     const isCustom = bgToDelete.attr('custom') === 'true';
@@ -529,7 +544,7 @@ async function onDeleteBackgroundClick(e) {
     const nextBg = bgToDelete.next();
     const prevBg = bgToDelete.prev();
 
-    bgToDelete.remove();	
+        bgToDelete.remove();
 
     if (nextBg.length) {
         nextBg.trigger('click');
@@ -551,6 +566,7 @@ async function onDeleteBackgroundClick(e) {
 }
 
 const autoBgPrompt = 'Ignore previous instructions and choose a location ONLY from the provided list that is the most suitable for the current scene. Do not output any other text:\n{0}';
+
 async function autoBackgroundCommand() {
     const bgTitles = Array.from(document.querySelectorAll('#bg_menu_content .BGSampleTitle'));
     const options = bgTitles.map(x => ({ element: $(x).closest('.thumbnail, .bg_example')[0], text: x.innerText.trim() })).filter(x => x.text.length > 0);
@@ -716,7 +732,6 @@ async function uploadBackground(formData) {
         setBackground(bg, generateUrlParameter(bg, false));
         await getBackgrounds();
         highlightNewBackground(bg);
-
     } catch (error) {
         console.error('Error uploading background:', error);
     }
@@ -805,6 +820,8 @@ export function initBackgrounds() {
     $('#background_thumbnails_animation').on('input', async function () {
         background_settings.animation = !!$(this).prop('checked');
         saveSettingsDebounced();
+
+        // Refresh background thumbnails
         await getBackgrounds();
         await onChatChanged();
     });

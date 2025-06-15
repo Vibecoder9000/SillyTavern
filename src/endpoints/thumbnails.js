@@ -354,7 +354,6 @@ router.get('/', async function (request, response) {
         const cachedFile = await fsPromises.readFile(thumbnailResult.path);
         response.setHeader('Content-Type', contentType);
         return response.send(cachedFile);
-
     } catch (error) {
         console.error('Failed getting thumbnail', error);
         return response.sendStatus(500);
