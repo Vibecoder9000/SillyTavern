@@ -1,19 +1,42 @@
 import fs from 'node:fs';
+import { promises as fsPromises } from 'node:fs';
 import path from 'node:path';
 
 import express from 'express';
 import sanitize from 'sanitize-filename';
 
-import { dimensions, invalidateThumbnail } from './thumbnails.js';
+import { invalidateThumbnail } from './thumbnails.js';
 import { getImages } from '../util.js';
 import { getFileNameValidationFunction } from '../middleware/validateFileName.js';
 
 export const router = express.Router();
 
-router.post('/all', function (request, response) {
-    const images = getImages(request.user.directories.backgrounds);
-    const config = { width: dimensions.bg[0], height: dimensions.bg[1] };
-    response.json({ images, config });
+router.post('/all', async function (request, response) {
+    if (!request.user.directories.userData) {
+        console.error('User data directory not defined. Cannot load aspect ratios.');
+        return response.status(500).json({ error: 'User data directory not configured.' });
+    }
+    const aspectFilePath = path.join(request.user.directories.userData, 'aspect_ratios.json');
+    let aspectRatiosMap = {};
+
+    try {
+        if (fs.existsSync(aspectFilePath)) {
+            const fileContent = await fsPromises.readFile(aspectFilePath, 'utf8');
+            aspectRatiosMap = JSON.parse(fileContent);
+        }
+    } catch (err) {
+        console.warn(`Error reading or parsing aspect_ratios.json: ${err.message}. Proceeding without aspect ratios for some items.`);
+        aspectRatiosMap = {}; // Default to empty map on error
+    }
+
+    const imageFilenames = getImages(request.user.directories.backgrounds);
+    const imagesWithData = imageFilenames.map(filename => {
+        return {
+            filename: filename,
+            aspectRatio: aspectRatiosMap[filename] || null
+        };
+    });
+    response.json({ images: imagesWithData });
 });
 
 router.post('/delete', getFileNameValidationFunction('bg'), function (request, response) {

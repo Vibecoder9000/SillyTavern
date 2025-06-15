@@ -27,16 +27,16 @@ const THUMBNAIL_STORAGE = localforage.createInstance({ name: 'SillyTavern_Thumbn
  */
 const THUMBNAIL_BLOBS = new Map();
 
-const THUMBNAIL_CONFIG = {
-    width: 160,
-    height: 90,
-};
+// const THUMBNAIL_CONFIG = { // No longer needed, aspect ratio comes from server
+// width: 160,
+// height: 90,
+// };
 
 /**
- * Global IntersectionObserver instance for lazy loading backgrounds
+ * Global IntersectionObserver instance for lazy loading backgrounds - will be removed if native lazy loading is sufficient.
  * @type {IntersectionObserver|null}
  */
-let lazyLoadObserver = null;
+// let lazyLoadObserver = null; // Potentially remove if native lazy load is enough
 
 export let background_settings = {
     name: '__transparent.png',
@@ -104,10 +104,14 @@ async function getChatBackgroundsList() {
     }
 
     for (const bg of list) {
-        const template = await getBackgroundFromTemplate(bg, true);
+        // This part still uses the old template system for custom backgrounds.
+        // It might need its own JustifiedGallery instance or a different display method
+        // if we want custom backgrounds in the justified layout as well.
+        // For now, let's assume this list is separate or will be handled later.
+        const template = await getBackgroundFromTemplate(bg, true); // Keep old for custom for now
         $('#bg_custom_content').append(template);
     }
-    activateLazyLoader();
+    // activateLazyLoader(); // Lazy loading handled by JustifiedGallery for main list
 }
 
 function getBackgroundPath(fileUrl) {
@@ -444,57 +448,258 @@ async function autoBackgroundCommand() {
 }
 
 export async function getBackgrounds() {
+// Constants for JustifiedGallery
+const GAP_SIZE = 3; // pixels
+const TARGET_ROW_HEIGHT = 120; // pixels
+
+class JustifiedGallery {
+    constructor(container, targetRowHeight = 120) {
+        this.container = container;
+        this.targetRowHeight = targetRowHeight;
+        this.currentRow = [];
+        this.currentRowAspectRatio = 0;
+        this.container.innerHTML = ''; // Clear container on init
+    }
+
+    addRow(item) {
+        this.currentRow.push(item);
+        this.currentRowAspectRatio += item.aspectRatio;
+        // Check if current row is full enough
+        if (this.currentRowAspectRatio * this.targetRowHeight >= this.container.offsetWidth - (this.currentRow.length * GAP_SIZE)) {
+            this.completeRow();
+        }
+    }
+
+    completeRow(force = false) {
+        if (this.currentRow.length === 0) return;
+
+        const isLastRow = force;
+        let rowHeight = this.targetRowHeight;
+
+        if (!isLastRow) {
+            rowHeight = (this.container.offsetWidth - (this.currentRow.length -1) * GAP_SIZE) / this.currentRowAspectRatio;
+        }
+
+        this.renderRow(this.currentRow, rowHeight, isLastRow);
+        this.currentRow = [];
+        this.currentRowAspectRatio = 0;
+    }
+
+    renderRow(items, rowHeight, isLastRow) {
+        const rowDiv = document.createElement('div');
+        rowDiv.className = 'gallery-row';
+        rowDiv.style.height = `${rowHeight}px`;
+
+        items.forEach(imgData => {
+            const thumbnail = document.createElement('div');
+            thumbnail.className = 'thumbnail';
+            // Calculate width based on aspect ratio and row height
+            const width = imgData.aspectRatio * rowHeight;
+            thumbnail.style.width = `${width}px`;
+            thumbnail.style.height = `${rowHeight}px`; // flex-shrink will handle if it overflows a bit due to rounding
+
+            thumbnail.dataset.id = imgData.id; // filename
+            thumbnail.dataset.bgfile = imgData.filename; // for compatibility
+            thumbnail.dataset.url = imgData.fullResUrl; // for onSelectBackgroundClick
+            thumbnail.title = imgData.filename;
+            // Set custom attribute if needed, though API doesn't provide this for /all endpoint
+            // thumbnail.setAttribute('custom', 'false'); // Assuming these are not custom from /all
+
+            const img = document.createElement('img');
+            img.src = imgData.url; // Thumbnail URL from getThumbnailUrl
+            img.alt = imgData.filename;
+            img.loading = 'lazy';
+            thumbnail.appendChild(img);
+
+            // Add action buttons - structure adapted from #background_template
+            const menu = document.createElement('div');
+            menu.className = 'bg_example_menu';
+
+            // Lock button (conditionally shown based on whether it's the locked background)
+            // This logic might need adjustment as highlightLockedBackground updates classes externally
+            const lockButton = document.createElement('div');
+            lockButton.className = 'bg_example_lock menu_button fa-solid fa-lock fa-fw pointer';
+            lockButton.title = t('Lock Background');
+            menu.appendChild(lockButton);
+
+            const unlockButton = document.createElement('div');
+            unlockButton.className = 'bg_example_unlock menu_button fa-solid fa-unlock fa-fw pointer';
+            unlockButton.title = t('Unlock Background');
+            menu.appendChild(unlockButton);
+
+
+            // Edit button (Rename)
+            const editButton = document.createElement('div');
+            editButton.className = 'bg_example_edit menu_button fa-solid fa-pen-to-square fa-fw pointer';
+            editButton.title = t('Rename Background');
+            menu.appendChild(editButton);
+
+            // Delete button
+            const deleteButton = document.createElement('div');
+            deleteButton.className = 'bg_example_cross menu_button fa-solid fa-trash-can fa-fw pointer';
+            deleteButton.title = t('Delete Background');
+            menu.appendChild(deleteButton);
+
+            // Copy Link button (this was not in the original template but is good to have)
+            // const copyLinkButton = document.createElement('div');
+            // copyLinkButton.className = 'bg_example_copylink menu_button fa-solid fa-link fa-fw pointer';
+            // copyLinkButton.title = t('Copy Background Link');
+            // menu.appendChild(copyLinkButton);
+
+
+            thumbnail.appendChild(menu);
+
+            // Add title display
+            const titleDiv = document.createElement('div');
+            titleDiv.className = 'BGSampleTitle';
+            titleDiv.textContent = imgData.filename.substring(0, imgData.filename.lastIndexOf('.')) || imgData.filename;
+            thumbnail.appendChild(titleDiv);
+
+
+            rowDiv.appendChild(thumbnail);
+        });
+        this.container.appendChild(rowDiv);
+    }
+}
+
+class BackgroundSelector {
+    constructor(containerId, targetRowHeight = TARGET_ROW_HEIGHT) {
+        this.galleryContainer = document.getElementById(containerId);
+        this.gallery = new JustifiedGallery(this.galleryContainer, targetRowHeight);
+        this.images = []; // Full dataset {filename, aspectRatio, url, id, tags, fullResUrl}
+        this.filteredImages = [];
+        this.currentIndex = 0;
+        this.batchSize = 30; // Number of images to load at a time
+        this.scrollHandler = this.loadBatch.bind(this); // Bound scroll handler
+    }
+
+    setImages(imageDataList) {
+        this.images = imageDataList;
+        this.filteredImages = this.images; // Initially, all images are shown
+        this.reset();
+        this.loadBatch(); // Load initial batch
+    }
+
+    search(query) {
+        const lowerQuery = query.toLowerCase().trim();
+        if (!lowerQuery) {
+            this.filteredImages = this.images;
+        } else {
+            this.filteredImages = this.images.filter(img =>
+                img.tags.some(tag => tag.toLowerCase().includes(lowerQuery)) ||
+                img.filename.toLowerCase().includes(lowerQuery)
+            );
+        }
+        this.reset();
+        this.loadBatch();
+    }
+
+    reset() {
+        this.gallery.container.innerHTML = ''; // Clear the gallery display
+        this.gallery.currentRow = []; // Reset gallery's current row
+        this.gallery.currentRowAspectRatio = 0;
+        this.currentIndex = 0; // Reset batch loading index
+    }
+
+    loadBatch() {
+        const batch = this.filteredImages.slice(this.currentIndex, this.currentIndex + this.batchSize);
+        batch.forEach(imgData => this.gallery.addRow(imgData));
+        this.currentIndex += this.batchSize;
+
+        if (this.currentIndex >= this.filteredImages.length) {
+            // All images loaded for current filter
+            this.finalizeGallery();
+            // Optionally remove scroll listener if no more images
+            // this.galleryContainer.removeEventListener('scroll', this.scrollHandler); // Or parent scroller
+        }
+    }
+
+    finalizeGallery() {
+        this.gallery.completeRow(true); // Force completion of the last row
+    }
+
+    setupInfiniteScroll() {
+        // Assuming Backgrounds popup is the scroller. Adjust if it's bg_menu_content itself.
+        const scroller = document.getElementById('Backgrounds');
+        if(scroller){
+            scroller.removeEventListener('scroll', this.scrollHandler); // Remove previous if any
+            scroller.addEventListener('scroll', () => {
+                // Check if scrolled to near bottom
+                if (scroller.scrollTop + scroller.clientHeight >= scroller.scrollHeight - 300) { // 300px threshold
+                    if (this.currentIndex < this.filteredImages.length) {
+                        this.loadBatch();
+                    }
+                }
+            });
+        }
+    }
+}
+
+
+export async function getBackgrounds() {
     const response = await fetch('/api/backgrounds/all', {
         method: 'POST',
         headers: getRequestHeaders(),
-        body: JSON.stringify({}),
+        body: JSON.stringify({}), // Empty body, but POST
     });
     if (response.ok) {
-        const { images, config } = await response.json();
-        Object.assign(THUMBNAIL_CONFIG, config);
-        $('#bg_menu_content').children('div').remove();
-        for (const bg of images) {
-            const template = await getBackgroundFromTemplate(bg, false);
-            $('#bg_menu_content').append(template);
+        const { images } = await response.json(); // New API: [{filename, aspectRatio}]
+
+        const imageDataList = images.map(img => ({
+            filename: img.filename,
+            aspectRatio: Number(img.aspectRatio) || 1.0, // Ensure aspectRatio is a number, default to 1.0
+            url: getThumbnailUrl('bg', img.filename), // Path to the actual thumbnail
+            id: img.filename,
+            tags: img.filename.replace(/_/g, ' ').split('.').slice(0, -1).join('.').split(' '), // Basic tags from filename
+            fullResUrl: getBackgroundPath(img.filename) // Path to full resolution image
+        }));
+
+        if (!window.backgroundSelector) {
+            window.backgroundSelector = new BackgroundSelector('bg_menu_content');
         }
-        activateLazyLoader();
+        window.backgroundSelector.setImages(imageDataList);
+        window.backgroundSelector.setupInfiniteScroll();
+        highlightLockedBackground(); // Re-apply locked status after new items are rendered.
+    } else {
+        console.error("Failed to fetch backgrounds:", response.status);
+        $('#bg_menu_content').html('<p>Error loading backgrounds.</p>');
     }
 }
 
-function activateLazyLoader() {
-    // Disconnect previous observer to prevent memory leaks
-    if (lazyLoadObserver) {
-        lazyLoadObserver.disconnect();
-        lazyLoadObserver = null;
-    }
-
-    const lazyLoadElements = document.querySelectorAll('.lazy-load-background');
-
-    const options = {
-        root: null,
-        rootMargin: '200px',
-        threshold: 0.01,
-    };
-
-    lazyLoadObserver = new IntersectionObserver((entries, observer) => {
-        entries.forEach(entry => {
-            if (entry.target instanceof HTMLElement && entry.isIntersecting) {
-                const target = entry.target;
-                const bg = target.getAttribute('bgfile');
-                const isCustom = target.getAttribute('custom') === 'true';
-                resolveImageUrl(bg, isCustom)
-                    .then(url => { target.style.backgroundImage = url; })
-                    .catch(() => { target.style.backgroundImage = PLACEHOLDER_IMAGE; });
-                target.classList.remove('lazy-load-background');
-                observer.unobserve(target);
-            }
-        });
-    }, options);
-
-    lazyLoadElements.forEach(element => {
-        lazyLoadObserver.observe(element);
-    });
-}
+// function activateLazyLoader() { // Replaced by native lazy loading or JustifiedGallery logic
+// // Disconnect previous observer to prevent memory leaks
+// if (lazyLoadObserver) {
+// lazyLoadObserver.disconnect();
+// lazyLoadObserver = null;
+// }
+//
+// const lazyLoadElements = document.querySelectorAll('.lazy-load-background');
+//
+// const options = {
+// root: null,
+// rootMargin: '200px',
+// threshold: 0.01,
+// };
+//
+// lazyLoadObserver = new IntersectionObserver((entries, observer) => {
+// entries.forEach(entry => {
+// if (entry.target instanceof HTMLElement && entry.isIntersecting) {
+// const target = entry.target;
+// const bg = target.getAttribute('bgfile');
+// const isCustom = target.getAttribute('custom') === 'true';
+// resolveImageUrl(bg, isCustom)
+// .then(url => { target.style.backgroundImage = url; })
+// .catch(() => { target.style.backgroundImage = PLACEHOLDER_IMAGE; });
+// target.classList.remove('lazy-load-background');
+// observer.unobserve(target);
+// }
+// });
+// }, options);
+//
+// lazyLoadElements.forEach(element => {
+// lazyLoadObserver.observe(element);
+// });
+// }
 
 /**
  * Gets the CSS URL of the background
@@ -502,7 +707,9 @@ function activateLazyLoader() {
  * @returns {string} URL of the background
  */
 function getUrlParameter(block) {
-    return $(block).closest('.bg_example').data('url');
+    // Ensure it works with new .thumbnail structure or if .bg_example is still used for custom
+    const closestSelectable = $(block).closest('.thumbnail, .bg_example');
+    return closestSelectable.data('url');
 }
 
 function generateUrlParameter(bg, isCustom) {
@@ -543,8 +750,8 @@ async function getBackgroundFromTemplate(bg, isCustom) {
     template.attr('bgfile', bg);
     template.attr('custom', String(isCustom));
     template.data('url', url);
-    template.addClass('lazy-load-background');
-    template.css('background-image', PLACEHOLDER_IMAGE);
+    // template.addClass('lazy-load-background'); // Not needed if JustifiedGallery handles its own images
+    template.css('background-image', PLACEHOLDER_IMAGE); // Still useful as a placeholder before JS loads for custom list
     template.find('.BGSampleTitle').text(friendlyTitle);
     return template;
 }
@@ -682,21 +889,17 @@ function setFittingClass(fitting) {
 }
 
 function onBackgroundFilterInput() {
-    const filterValue = String($(this).val()).toLowerCase();
-    $('#bg_menu_content > div').each(function () {
-        const $bgContent = $(this);
-        if ($bgContent.attr('title').toLowerCase().includes(filterValue)) {
-            $bgContent.show();
-        } else {
-            $bgContent.hide();
-        }
-    });
+    const filterValue = String($(this).val()); // Search logic handled by BackgroundSelector
+    if (window.backgroundSelector) {
+        window.backgroundSelector.search(filterValue);
+    }
 }
 
 export function initBackgrounds() {
     eventSource.on(event_types.CHAT_CHANGED, onChatChanged);
     eventSource.on(event_types.FORCE_SET_BACKGROUND, forceSetBackground);
-    $(document).on('click', '.bg_example', onSelectBackgroundClick);
+    // Updated selector for Justified Gallery items
+    $(document).on('click', '.thumbnail, .bg_example', onSelectBackgroundClick); // bg_example for custom ones
     $(document).on('click', '.bg_example_lock', onLockBackgroundClick);
     $(document).on('click', '.bg_example_unlock', onUnlockBackgroundClick);
     $(document).on('click', '.bg_example_edit', onRenameBackgroundClick);

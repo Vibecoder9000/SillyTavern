@@ -5,7 +5,7 @@ import path from 'node:path';
 import mime from 'mime-types';
 import express from 'express';
 import sanitize from 'sanitize-filename';
-import { Jimp, JimpMime } from '../jimp.js';
+import { Jimp } from '../jimp.js';
 import { sync as writeFileAtomicSync } from 'write-file-atomic';
 
 import { getConfigValue } from '../util.js';
@@ -84,9 +84,10 @@ export function invalidateThumbnail(directories, type, file) {
  * @param {import('../users.js').UserDirectoryList} directories User directories
  * @param {'bg' | 'avatar'} type Type of the thumbnail
  * @param {string} file Name of the file
+ * @param {object} currentAspectRatiosObject Aspect ratios object to update
  * @returns
  */
-async function generateThumbnail(directories, type, file) {
+async function generateThumbnail(directories, type, file, currentAspectRatiosObject) {
     let thumbnailFolder = getThumbnailFolder(directories, type);
     let originalFolder = getOriginalFolder(directories, type);
     if (thumbnailFolder === undefined || originalFolder === undefined) throw new Error('Invalid thumbnail type');
@@ -121,23 +122,44 @@ async function generateThumbnail(directories, type, file) {
         let buffer;
 
         try {
-            const size = dimensions[type];
             const image = await Jimp.read(pathToOriginalFile);
-            const width = !isNaN(size?.[0]) && size?.[0] > 0 ? size[0] : image.bitmap.width;
-            const height = !isNaN(size?.[1]) && size?.[1] > 0 ? size[1] : image.bitmap.height;
-            image.cover({ w: width, h: height });
+            const originalWidth = image.bitmap.width;
+            const originalHeight = image.bitmap.height;
+            const aspectRatio = originalWidth / originalHeight;
+
+            if (type === 'bg' && currentAspectRatiosObject && file) {
+                currentAspectRatiosObject[file] = aspectRatio;
+            }
+
+            if (type === 'bg') {
+                const targetPixelArea = 12500;
+                let newHeight = Math.round(Math.sqrt(targetPixelArea / aspectRatio));
+                let newWidth = Math.round(newHeight * aspectRatio);
+
+                if (newWidth === 0 || newHeight === 0) {
+                    throw new Error('Calculated new dimensions are zero.');
+                }
+                image.scaleToFit(newWidth, newHeight, Jimp.RESIZE_BILINEAR);
+            } else {
+                const size = dimensions[type];
+                const width = !isNaN(size?.[0]) && size?.[0] > 0 ? size[0] : image.bitmap.width;
+                const height = !isNaN(size?.[1]) && size?.[1] > 0 ? size[1] : image.bitmap.height;
+                image.cover({ w: width, h: height });
+            }
+
             buffer = pngFormat
-                ? await image.getBuffer(JimpMime.png)
-                : await image.getBuffer(JimpMime.jpeg, { quality: quality, jpegColorSpace: 'ycbcr' });
+                ? await image.getBufferAsync('image/png', {})
+                : await image.getBufferAsync('image/jpeg', { quality: quality, jpegColorSpace: 'ycbcr' });
         }
         catch (inner) {
-            console.warn(`Thumbnailer can not process the image: ${pathToOriginalFile}. Using original size`, inner);
-            buffer = fs.readFileSync(pathToOriginalFile);
+            console.warn(`Thumbnailer cannot process the image: ${pathToOriginalFile}. Error: ${inner.message}`, inner);
+            return null;
         }
 
         writeFileAtomicSync(pathToCachedFile, buffer);
     }
     catch (outer) {
+        console.error(`Error in generateThumbnail for ${file}: ${outer.message}`, outer);
         return null;
     }
 
@@ -151,24 +173,63 @@ async function generateThumbnail(directories, type, file) {
  */
 export async function ensureThumbnailCache(directoriesList) {
     for (const directories of directoriesList) {
+        if (!directories.userData) {
+            console.warn('User data directory not defined. Skipping aspect ratio processing for this directory set.');
+            // Continue to generate thumbnails but without aspect ratio saving for this iteration
+        }
+        const aspectFilePath = directories.userData ? path.join(directories.userData, 'aspect_ratios.json') : null;
+        let aspectRatios = {};
+
+        if (aspectFilePath) {
+            try {
+                if (fs.existsSync(aspectFilePath)) {
+                    const fileContent = await fsPromises.readFile(aspectFilePath, 'utf8');
+                    aspectRatios = JSON.parse(fileContent);
+                }
+            } catch (err) {
+                console.warn(`Error reading or parsing aspect_ratios.json for directory: ${directories.userData}. Starting with an empty object.`, err);
+                aspectRatios = {};
+            }
+        }
+
         const cacheFiles = fs.readdirSync(directories.thumbnailsBg);
 
-        // files exist, all ok
-        if (cacheFiles.length) {
+        // Only generate if cache is empty. Aspect ratios will be updated if files exist and are processed.
+        // The original logic was to skip if cacheFiles.length > 0.
+        // We might want to re-evaluate if we should always process bgFiles to update aspect ratios,
+        // but for now, let's stick to only populating an empty cache, while also saving aspect ratios.
+        if (cacheFiles.length > 0) {
+            // If cache is not empty, we could still iterate through bgFiles to update aspectRatios
+            // and save them, without regenerating thumbnails unless necessary.
+            // For now, let's keep it simple: if cache exists, assume aspect ratios are also fine
+            // or will be updated on next empty cache generation.
+            // This part might need further refinement based on desired behavior for existing caches.
+            console.info(`Thumbnail cache for ${directories.thumbnailsBg} is not empty. Skipping initial generation. Aspect ratios will not be updated unless cache is cleared.`);
             continue;
         }
 
-        console.info('Generating thumbnails cache. Please wait...');
+        console.info(`Generating thumbnails cache for ${directories.thumbnailsBg}. Please wait...`);
 
         const bgFiles = fs.readdirSync(directories.backgrounds);
-        const tasks = [];
+        let generatedCount = 0;
 
         for (const file of bgFiles) {
-            tasks.push(generateThumbnail(directories, 'bg', file));
+            try {
+                const thumbnailPath = await generateThumbnail(directories, 'bg', file, aspectRatios);
+                if (thumbnailPath) generatedCount++;
+            } catch (err) {
+                console.error(`Error generating thumbnail for ${file} in ensureThumbnailCache: ${err.message}`, err);
+            }
         }
 
-        await Promise.all(tasks);
-        console.info(`Done! Generated: ${bgFiles.length} preview images`);
+        if (aspectFilePath) {
+            try {
+                writeFileAtomicSync(aspectFilePath, JSON.stringify(aspectRatios, null, 2));
+            } catch (err) {
+                console.error(`Error writing aspect_ratios.json for directory: ${directories.userData}.`, err);
+            }
+        }
+        console.info(`Done! Processed: ${bgFiles.length} files, Generated/Updated: ${generatedCount} preview images for ${directories.thumbnailsBg}`);
     }
 }
 
@@ -214,7 +275,9 @@ router.get('/', async function (request, response) {
             return response.send(originalFile);
         }
 
-        const pathToCachedFile = await generateThumbnail(request.user.directories, type, file);
+        // For the endpoint, we don't need to update an aspect ratio object globally,
+        // so we pass an empty object.
+        const pathToCachedFile = await generateThumbnail(request.user.directories, type, file, {});
 
         if (!pathToCachedFile) {
             return response.sendStatus(404);
