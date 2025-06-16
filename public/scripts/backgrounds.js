@@ -18,20 +18,15 @@ function generateUrlParameter(bg, isCustom) {
 const BG_METADATA_KEY = 'custom_background';
 const LIST_METADATA_KEY = 'chat_backgrounds';
 
-/**
- * A single transparent PNG pixel used as a placeholder for errored backgrounds
- */
+// A single transparent PNG pixel used as a placeholder for errored backgrounds
 const PNG_PIXEL = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=';
-const PNG_PIXEL_BLOB = new Blob([Uint8Array.from(atob(PNG_PIXEL), c => c.charCodeAt(0))], { type: 'image/png' });
-const PNG_PIXEL_BLOB_URL = URL.createObjectURL(PNG_PIXEL_BLOB);
+const PLACEHOLDER_IMAGE = `url('data:image/png;base64,${PNG_PIXEL}')`;
 
 /**
  * In-memory cache for generated static thumbnail blob URLs.
  * @type {Map<string, string>}
  */
-const STATIC_THUMBNAIL_BLOBS = new Map();
-
-let galleryObserver = null;
+const THUMBNAIL_BLOBS = new Map();
 
 /**
  * Generates a static thumbnail from an animated WebP by drawing its first
@@ -42,7 +37,7 @@ let galleryObserver = null;
 async function getStaticThumbnailFromAnimatedSource(bgFilename) {
     // Return from cache if we've already generated it this session.
     if (STATIC_THUMBNAIL_BLOBS.has(bgFilename)) {
-        return STATIC_THUMBNAIL_BLOBS.get(bgFilename);
+        return THUMBNAIL_BLOBS.get(bgFilename);
     }
 
     const imageUrl = getBackgroundPath(bgFilename);
@@ -75,8 +70,8 @@ async function getStaticThumbnailFromAnimatedSource(bgFilename) {
         };
 
         image.onerror = () => {
-            // If the image fails to load, resolve with the placeholder.
-            resolve(PNG_PIXEL_BLOB_URL);
+            // If the image fails to load, resolve with the placeholder DATA URL string
+            resolve(`data:image/png;base64,${PNG_PIXEL}`);
         };
 
         image.src = imageUrl;
