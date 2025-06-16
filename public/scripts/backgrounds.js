@@ -3,7 +3,7 @@ import { chat_metadata, eventSource, event_types, generateQuietPrompt, getCurren
 import { openThirdPartyExtensionMenu, saveMetadataDebounced } from './extensions.js';
 import { SlashCommand } from './slash-commands/SlashCommand.js';
 import { SlashCommandParser } from './slash-commands/SlashCommandParser.js';
-import { flashHighlight, stringFormat } from './utils.js';
+import { createThumbnail, flashHighlight, getBase64Async, stringFormat } from './utils.js';
 import { t, translate } from './i18n.js';
 import { Popup } from './popup.js';
 
@@ -20,15 +20,75 @@ const LIST_METADATA_KEY = 'chat_backgrounds';
 
 /**
  * Storage for frontend-generated background thumbnails.
- * This is used to store thumbnails for backgrounds that cannot be generated on the server.
  */
 const THUMBNAIL_STORAGE = localforage.createInstance({ name: 'SillyTavern_Thumbnails' });
 
 /**
- * Cache for thumbnail blob URLs.
+ * In-memory cache for thumbnail blob URLs to avoid re-creating them.
  * @type {Map<string, string>}
  */
 const THUMBNAIL_BLOBS = new Map();
+
+/**
+ * A single transparent PNG pixel used as a placeholder for errored backgrounds
+ */
+const PNG_PIXEL = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=';
+const PNG_PIXEL_BLOB = new Blob([Uint8Array.from(atob(PNG_PIXEL), c => c.charCodeAt(0))], { type: 'image/png' });
+
+/**
+ * Creates a static base64 thumbnail from an image source.
+ * This is a restoration of the original helper logic.
+ * @param {string} imageBase64 The base64 representation of the source image.
+ * @returns {Promise<string>} A promise that resolves with the base64 string of the thumbnail.
+ */
+async function createClientSideThumbnail(imageBase64) {
+    // This assumes a fixed thumbnail size, which was likely the original implementation's approach.
+    const thumbWidth = 160;
+    const thumbHeight = 90;
+    return createThumbnail(imageBase64, thumbWidth, thumbHeight);
+}
+
+/**
+ * Gets a thumbnail for the background from storage or fetches it if not available.
+ * This is the restored client-side thumbnailer for animated files.
+ * @param {string} bg Background filename
+ * @returns {Promise<string>} Blob URL of the static thumbnail.
+ */
+async function getThumbnailFromStorage(bg) {
+    const THUMBNAIL_CONFIG = { width: 160, height: 90 };
+
+    const cachedBlobUrl = THUMBNAIL_BLOBS.get(bg);
+    if (cachedBlobUrl) {
+        return cachedBlobUrl;
+    }
+
+    const savedBlob = await THUMBNAIL_STORAGE.getItem(bg);
+    if (savedBlob) {
+        const savedBlobUrl = URL.createObjectURL(savedBlob);
+        THUMBNAIL_BLOBS.set(bg, savedBlobUrl);
+        return savedBlobUrl;
+    }
+
+    try {
+        const response = await fetch(getBackgroundPath(bg));
+        if (!response.ok) {
+            throw new Error('Fetch failed with status: ' + response.status);
+        }
+        const imageBlob = await response.blob();
+        const imageBase64 = await getBase64Async(imageBlob);
+        const thumbnailBase64 = await createThumbnail(imageBase64, THUMBNAIL_CONFIG.width, THUMBNAIL_CONFIG.height);
+        const thumbnailBlob = await fetch(thumbnailBase64).then(res => res.blob());
+        await THUMBNAIL_STORAGE.setItem(bg, thumbnailBlob);
+        const blobUrl = URL.createObjectURL(thumbnailBlob);
+        THUMBNAIL_BLOBS.set(bg, blobUrl);
+        return blobUrl;
+    } catch (error) {
+        console.error(`Error fetching or creating thumbnail for ${bg}, fallback image will be used:`, error);
+        const fallbackBlobUrl = URL.createObjectURL(PNG_PIXEL_BLOB);
+        THUMBNAIL_BLOBS.set(bg, fallbackBlobUrl);
+        return fallbackBlobUrl;
+    }
+}
 
 function getUrlParameter(element) {
     const $this = $(element);
@@ -59,19 +119,57 @@ class JustifiedGallery {
         }
     }
 
-    clearGallery() {
+    reset() {
         if (!this.container) return;
         this.container.innerHTML = '';
         this.currentRow = [];
         this.currentRowWidth = 0;
     }
 
-    renderRow(images, scaleFactor, finalHeight) {
+    addImage(imageData) {
+        if (!this.container) return;
+
+        const scaledWidth = this.targetRowHeight * imageData.aspectRatio;
+        this.currentRow.push({ ...imageData, scaledWidth });
+        this.currentRowWidth += scaledWidth;
+
+        // We check against the container width when deciding to complete a row.
+        const containerWidth = this.container.offsetWidth;
+        if (containerWidth > 0 && this.currentRowWidth >= containerWidth) {
+            this.completeRow();
+        }
+    }
+
+    completeRow(isLastRow = false) {
+        if (this.currentRow.length === 0) return;
+
+        const containerWidth = this.container.offsetWidth;
+        if (containerWidth === 0) {
+            // If the container is hidden, we don't lose the images. They stay in currentRow,
+            // waiting for the next addImage call to trigger a valid completeRow.
+            return;
+        }
+
+        let finalHeight = this.targetRowHeight;
+        if (!isLastRow) {
+            const totalAspectRatio = this.currentRow.reduce((sum, img) => sum + img.aspectRatio, 0);
+            const gapWidth = (this.currentRow.length - 1) * GAP_SIZE;
+            finalHeight = (containerWidth - gapWidth) / totalAspectRatio;
+        }
+
+        this.renderRow(this.currentRow, finalHeight);
+
+        // Clear the row only after a successful render.
+        this.currentRow = [];
+        this.currentRowWidth = 0;
+    }
+
+    renderRow(imagesInRow, finalHeight) {
         const rowElement = document.createElement('div');
         rowElement.className = 'gallery-row';
 
-        images.forEach(imgData => {
-            const width = imgData.scaledWidth * scaleFactor;
+        imagesInRow.forEach(imgData => {
+            const width = finalHeight * imgData.aspectRatio;
 
             const thumbnail = document.createElement('div');
             thumbnail.className = 'thumbnail';
@@ -120,44 +218,6 @@ class JustifiedGallery {
 
         this.container.appendChild(rowElement);
     }
-
-    addImage(imageData) {
-        if (!this.container) return;
-        const scaledWidth = this.targetRowHeight * imageData.aspectRatio;
-
-        this.currentRow.push({
-            ...imageData,
-            scaledWidth: scaledWidth,
-        });
-        this.currentRowWidth += scaledWidth;
-
-        const containerWidth = this.container.offsetWidth;
-        const gapWidth = (this.currentRow.length - 1) * GAP_SIZE;
-
-        if (this.currentRowWidth + gapWidth >= containerWidth * 0.90) {
-            this.completeRow();
-        }
-    }
-
-    completeRow(isLastRow = false) {
-        if (this.currentRow.length === 0) return;
-
-        const containerWidth = this.container.offsetWidth;
-        let finalHeight = this.targetRowHeight;
-        let scaleFactor = 1.0;
-
-        if (!isLastRow && containerWidth > 0) {
-            const gapWidth = (this.currentRow.length - 1) * GAP_SIZE;
-            const availableWidth = containerWidth - gapWidth;
-            scaleFactor = availableWidth / this.currentRowWidth;
-            finalHeight = this.targetRowHeight * scaleFactor;
-        }
-
-        this.renderRow(this.currentRow, scaleFactor, finalHeight);
-
-        this.currentRow = [];
-        this.currentRowWidth = 0;
-    }
 }
 
 class BackgroundSelector {
@@ -189,9 +249,11 @@ class BackgroundSelector {
     }
 
     resetAndLoad() {
-        this.gallery.clearGallery();
+        this.gallery.reset();
         this.currentIndex = 0;
-        this.loadUntilScrollable();
+        setTimeout(() => {
+            this.loadUntilScrollable();
+        }, 0);
     }
 
     loadUntilScrollable() {
@@ -201,13 +263,13 @@ class BackgroundSelector {
         this.loadBatch();
 
         const hasMoreImages = this.currentIndex < this.filteredImages.length;
+        // Check the container width directly here.
+        const isContainerVisible = this.gallery.container.offsetWidth > 0;
         const isScrollable = this.scrollerElement.scrollHeight > this.scrollerElement.clientHeight;
 
-        if (hasMoreImages && !isScrollable) {
-            setTimeout(() => {
-                this.isLoading = false;
-                this.loadUntilScrollable();
-            }, 100);
+        if (hasMoreImages && isContainerVisible && !isScrollable) {
+            this.isLoading = false; // Allow the next batch to load
+            this.loadUntilScrollable();
         } else {
             this.isLoading = false;
         }
@@ -232,7 +294,7 @@ class BackgroundSelector {
     setupInfiniteScroll() {
         if (!this.scrollerElement) return;
 
-        const debouncedScrollHandler = () => {
+        this.scrollerElement.addEventListener('scroll', () => {
             if (this.isLoading) return;
 
             if (this.scrollerElement.scrollTop + this.scrollerElement.clientHeight >= this.scrollerElement.scrollHeight - 500) {
@@ -240,9 +302,7 @@ class BackgroundSelector {
                     this.loadUntilScrollable();
                 }
             }
-        };
-
-        this.scrollerElement.addEventListener('scroll', debouncedScrollHandler);
+        });
     }
 }
 
@@ -445,19 +505,23 @@ async function onCopyToSystemBackgroundClick(e) {
 async function getNewBackgroundName(referenceElement) {
     const exampleBlock = $(referenceElement).closest('.thumbnail');
     const isCustom = exampleBlock.attr('custom') === 'true';
-    const oldBg = exampleBlock.attr('bgfile');
+    
+    const oldBg = exampleBlock.data('bgfile') || exampleBlock.attr('bgfile');
 
     if (!oldBg) {
-        console.debug('no bgfile');
+        console.debug('Could not find bgfile for rename operation.');
         return;
     }
 
     const fileExtension = oldBg.split('.').pop();
     const fileNameBase = isCustom ? oldBg.split('/').pop() : oldBg;
     const oldBgExtensionless = fileNameBase.replace(`.${fileExtension}`, '');
+    
     const newBgExtensionless = await Popup.show.input(t`Enter new background name:`, null, oldBgExtensionless);
 
-    if (!newBgExtensionless || oldBgExtensionless === newBgExtensionless) return;
+    if (!newBgExtensionless || oldBgExtensionless === newBgExtensionless) {
+        return;
+    }
 
     return { oldBg, newBg: `${newBgExtensionless}.${fileExtension}` };
 }
@@ -569,7 +633,10 @@ export async function getBackgrounds() {
 
         if (!response.ok) {
             console.error(`Failed to fetch backgrounds: ${response.status}`, await response.text());
-            if (window.backgroundSelector) window.backgroundSelector.gallery.clearGallery();
+            if (window.backgroundSelector) {
+                // Tell the gallery to render with an empty list, which will clear it.
+                window.backgroundSelector.setImages([]);
+            }
             return;
         }
 
@@ -577,29 +644,51 @@ export async function getBackgrounds() {
         const filenames = data.images || [];
         const aspectsMap = data.aspects || {};
 
-        const imageDataList = filenames.map(filename => {
+        // Use Promise.all to correctly handle the asynchronous client-side thumbnail generation.
+        const imageDataListPromises = filenames.map(async (filename) => {
             const numericalAR = Number(aspectsMap[filename]);
+            const isAnimated = filename.toLowerCase().endsWith('.webp');
+
+            let thumbnailUrl;
+            // If it's an animated webp AND the user has animations turned OFF,
+            // generate a static thumbnail on the client-side.
+            if (isAnimated && !background_settings.animation) {
+                thumbnailUrl = await getThumbnailFromStorage(filename);
+            } else {
+                // For all other cases, use the standard server-side thumbnail URL.
+                thumbnailUrl = getThumbnailUrl('bg', filename);
+            }
+
             return {
                 id: filename,
                 filename: filename,
                 aspectRatio: (numericalAR && numericalAR > 0) ? numericalAR : 1,
-                url: getThumbnailUrl('bg', filename),
+                url: thumbnailUrl,
                 fullResUrl: getBackgroundPath(filename),
                 tags: filename.replace(/_/g, ' ').split('.').slice(0, -1).join('.').split(' '),
             };
         });
 
+        // Wait for all thumbnail URLs (including client-side generated ones) to be resolved.
+        const imageDataList = await Promise.all(imageDataListPromises);
+
+        // This is the single point of interaction. We hand the complete, final data to the selector.
+        // The gallery's internal ResizeObserver will handle rendering it at the correct time.
         if (window.backgroundSelector) {
             window.backgroundSelector.setImages(imageDataList);
         }
 
+        // The highlight function can be called after setting the images.
+        // It will find the elements once they are rendered.
         highlightLockedBackground();
 
     } catch (error) {
         console.error('Error in getBackgrounds:', error);
-        if (window.backgroundSelector) window.backgroundSelector.gallery.clearGallery();
+        if (window.backgroundSelector) {
+            window.backgroundSelector.setImages([]);
+        }
     }
-}
+}	
 
 async function setBackground(bg, url) {
     $('#bg1').css('background-image', url);
@@ -743,33 +832,63 @@ function onBackgroundFilterInput() {
 }
 
 export function initBackgrounds() {
-    // load-once trigger and gallery initialization
+    // State flags to manage when a refresh is needed.
     let hasLoaded = false;
-    $('#site_logo').on('click', () => {
-        if (!hasLoaded) {
-            getBackgrounds();
-            hasLoaded = true;
-        }
-    });
+    let backgroundsNeedRefresh = false;
 
     window.backgroundSelector = new BackgroundSelector('bg_menu_content');
     window.backgroundSelector.setupInfiniteScroll();
 
+    const galleryContainer = document.getElementById('bg_menu_content');
+    if (galleryContainer) {
+        const observer = new IntersectionObserver((entries) => {
+            // This callback fires whenever the element's visibility changes.
+            // We only care about the single element we are observing.
+            const entry = entries[0];
+
+            // We only act when the element becomes visible on screen.
+            if (entry.isIntersecting) {
+                if (!hasLoaded || backgroundsNeedRefresh) {
+                    getBackgrounds();
+                    hasLoaded = true;
+                    backgroundsNeedRefresh = false;
+                }
+            }
+        }, {
+            root: null, // Check visibility against the browser viewport
+            threshold: 0.01, // Fire if even a tiny part of the element is visible
+        });
+
+        // Start observing the gallery container.
+        observer.observe(galleryContainer);
+
+    } else {
+        console.error('Critical: Background gallery container #bg_menu_content not found.');
+    }
+
     // Event listeners
     eventSource.on(event_types.CHAT_CHANGED, onChatChanged);
     eventSource.on(event_types.FORCE_SET_BACKGROUND, forceSetBackground);
+
+    $(document).on('click', '.jg-button', function(e) {
+        e.stopPropagation();
+        const action = $(this).data('action');
+        const thumbnailContext = $(this).closest('.thumbnail').get(0);
+        switch (action) {
+            case 'lock': onLockBackgroundClick.call(thumbnailContext, e); break;
+            case 'unlock': onUnlockBackgroundClick.call(thumbnailContext, e); break;
+            case 'edit': onRenameBackgroundClick.call(thumbnailContext, e); break;
+            case 'delete': onDeleteBackgroundClick.call(thumbnailContext, e); break;
+            case 'copy': onCopyToSystemBackgroundClick.call(thumbnailContext, e); break;
+        }
+    });
+
     $(document).on('click', '.thumbnail', onSelectBackgroundClick);
-    $(document).on('click', '.bg_example_lock', onLockBackgroundClick);
-    $(document).on('click', '.bg_example_unlock', onUnlockBackgroundClick);
-    $(document).on('click', '.bg_example_edit', onRenameBackgroundClick);
-    $(document).on('click', '.bg_example_cross', onDeleteBackgroundClick);
-    $(document).on('click', '.bg_example_copy', onCopyToSystemBackgroundClick);
 
     $('#auto_background').on('click', autoBackgroundCommand);
     $('#add_bg_button').on('change', onBackgroundUploadSelected);
     $('#bg-filter').on('input', onBackgroundFilterInput);
 
-    // This click handler triggers the static hidden input.
     $('#add_background_button_top').on('click', () => {
         $('#add_bg_button').click();
     });
@@ -783,8 +902,7 @@ export function initBackgrounds() {
     $('#background_thumbnails_animation').on('input', async function () {
         background_settings.animation = !!$(this).prop('checked');
         saveSettingsDebounced();
-        await getBackgrounds();
-        await onChatChanged();
+        backgroundsNeedRefresh = true;
     });
 
     SlashCommandParser.addCommandObject(SlashCommand.fromProps({

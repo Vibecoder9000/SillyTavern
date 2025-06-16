@@ -18,6 +18,9 @@ export const router = express.Router();
 
 router.post('/all', function (request, response) {
     const images = getImages(request.user.directories.backgrounds);
+
+    images.sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' }));
+
     const config = { width: dimensions.bg[0], height: dimensions.bg[1] };
     if (!request.user.directories.root) {
         console.error('User root directory not defined. Cannot load aspect ratios for /all endpoint.');
