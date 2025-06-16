@@ -37,19 +37,6 @@ const PNG_PIXEL = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkY
 const PNG_PIXEL_BLOB = new Blob([Uint8Array.from(atob(PNG_PIXEL), c => c.charCodeAt(0))], { type: 'image/png' });
 
 /**
- * Creates a static base64 thumbnail from an image source.
- * This is a restoration of the original helper logic.
- * @param {string} imageBase64 The base64 representation of the source image.
- * @returns {Promise<string>} A promise that resolves with the base64 string of the thumbnail.
- */
-async function createClientSideThumbnail(imageBase64) {
-    // This assumes a fixed thumbnail size, which was likely the original implementation's approach.
-    const thumbWidth = 160;
-    const thumbHeight = 90;
-    return createThumbnail(imageBase64, thumbWidth, thumbHeight);
-}
-
-/**
  * Gets a thumbnail for the background from storage or fetches it if not available.
  * This is the restored client-side thumbnailer for animated files.
  * @param {string} bg Background filename
@@ -345,8 +332,7 @@ async function forceSetBackground(backgroundInfo) {
 async function onChatChanged() {
     if (hasCustomBackground()) {
         setCustomBackground();
-    }
-    else {
+    } else {
         unsetCustomBackground();
     }
 
@@ -507,7 +493,7 @@ async function onCopyToSystemBackgroundClick(e) {
 async function getNewBackgroundName(referenceElement) {
     const exampleBlock = $(referenceElement).closest('.thumbnail');
     const isCustom = exampleBlock.attr('custom') === 'true';
-    
+
     const oldBg = exampleBlock.data('bgfile') || exampleBlock.attr('bgfile');
 
     if (!oldBg) {
@@ -573,7 +559,7 @@ async function onDeleteBackgroundClick(e) {
     const allThumbnails = $('#bg_menu_content').find('.thumbnail');
     const currentIndex = allThumbnails.index(bgToDelete);
 
-        bgToDelete.remove();
+    bgToDelete.remove();
 
     const nextBg = allThumbnails.eq(currentIndex);
 
@@ -689,7 +675,7 @@ export async function getBackgrounds() {
             window.backgroundSelector.setImages([]);
         }
     }
-}	
+}
 
 async function setBackground(bg, url) {
     $('#bg1').css('background-image', url);
