@@ -20,11 +20,12 @@ const LIST_METADATA_KEY = 'chat_backgrounds';
 
 /**
  * Storage for frontend-generated background thumbnails.
+ * This is used to store thumbnails for backgrounds that cannot be generated on the server.
  */
 const THUMBNAIL_STORAGE = localforage.createInstance({ name: 'SillyTavern_Thumbnails' });
 
 /**
- * In-memory cache for thumbnail blob URLs to avoid re-creating them.
+ * Cache for thumbnail blob URLs.
  * @type {Map<string, string>}
  */
 const THUMBNAIL_BLOBS = new Map();
@@ -344,7 +345,8 @@ async function forceSetBackground(backgroundInfo) {
 async function onChatChanged() {
     if (hasCustomBackground()) {
         setCustomBackground();
-    } else {
+    }
+    else {
         unsetCustomBackground();
     }
 
@@ -516,7 +518,6 @@ async function getNewBackgroundName(referenceElement) {
     const fileExtension = oldBg.split('.').pop();
     const fileNameBase = isCustom ? oldBg.split('/').pop() : oldBg;
     const oldBgExtensionless = fileNameBase.replace(`.${fileExtension}`, '');
-    
     const newBgExtensionless = await Popup.show.input(t`Enter new background name:`, null, oldBgExtensionless);
 
     if (!newBgExtensionless || oldBgExtensionless === newBgExtensionless) {
@@ -572,7 +573,7 @@ async function onDeleteBackgroundClick(e) {
     const allThumbnails = $('#bg_menu_content').find('.thumbnail');
     const currentIndex = allThumbnails.index(bgToDelete);
 
-    bgToDelete.remove();
+        bgToDelete.remove();
 
     const nextBg = allThumbnails.eq(currentIndex);
 
