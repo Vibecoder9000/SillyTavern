@@ -19,27 +19,58 @@ const thumbnailsEnabled = !!getConfigValue('thumbnails.enabled', true, 'boolean'
 const quality = Math.min(100, Math.max(1, parseInt(getConfigValue('thumbnails.quality', 95, 'number'))));
 const pngFormat = String(getConfigValue('thumbnails.format', 'jpg')).toLowerCase().trim() === 'png';
 
+/** @type {Record<string, number[]>} */
 export const dimensions = {
     bg: getConfigValue('thumbnails.dimensions.bg', [160, 90]),
     avatar: getConfigValue('thumbnails.dimensions.avatar', [96, 144]),
 };
 
-export function getThumbnailFolder(directories, type) {
+/**
+ * Gets a path to thumbnail folder based on the type.
+ * @param {import('../users.js').UserDirectoryList} directories User directories
+ * @param {'bg' | 'avatar'} type Thumbnail type
+ * @returns {string} Path to the thumbnails folder
+ */
+function getThumbnailFolder(directories, type) {
+    let thumbnailFolder;
     switch (type) {
-        case 'bg': return directories.thumbnailsBg;
-        case 'avatar': return directories.thumbnailsAvatar;
+        case 'bg':
+            thumbnailFolder = directories.thumbnailsBg;
+            break;
+        case 'avatar':
+            thumbnailFolder = directories.thumbnailsAvatar;
+            break;
     }
-    return undefined;
+    return thumbnailFolder;
 }
 
+/**
+ * Gets a path to the original images folder based on the type.
+ * @param {import('../users.js').UserDirectoryList} directories User directories
+ * @param {'bg' | 'avatar'} type Thumbnail type
+ * @returns {string} Path to the original images folder
+ */
 function getOriginalFolder(directories, type) {
+    let originalFolder;
+
     switch (type) {
-        case 'bg': return directories.backgrounds;
-        case 'avatar': return directories.characters;
+        case 'bg':
+            originalFolder = directories.backgrounds;
+            break;
+        case 'avatar':
+            originalFolder = directories.characters;
+            break;
     }
-    return undefined;
+
+    return originalFolder;
 }
 
+/**
+ * Removes the generated thumbnail from the disk.
+ * @param {import('../users.js').UserDirectoryList} directories User directories
+ * @param {'bg' | 'avatar'} type Type of the thumbnail
+ * @param {string} file Name of the file
+ */
 export function invalidateThumbnail(directories, type, file) {
     const folder = getThumbnailFolder(directories, type);
     if (folder === undefined) throw new Error('Invalid thumbnail type');

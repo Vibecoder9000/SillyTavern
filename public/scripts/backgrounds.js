@@ -367,7 +367,6 @@ async function forceSetBackground(backgroundInfo) {
     highlightLockedBackground();
 }
 
-
 async function onChatChanged() {
     if (hasCustomBackground()) {
         setCustomBackground();
@@ -415,6 +414,11 @@ function highlightLockedBackground() {
     });
 }
 
+/**
+ * Locks the background for the current chat
+ * @param {Event} e Click event
+ * @returns {string} Empty string
+ */
 function onLockBackgroundClick(e) {
     e?.stopPropagation();
 
@@ -433,6 +437,11 @@ function onLockBackgroundClick(e) {
     return '';
 }
 
+/**
+ * Locks the background for the current chat
+ * @param {Event} e Click event
+ * @returns {string} Empty string
+ */
 function onUnlockBackgroundClick(e) {
     e?.stopPropagation();
     removeBackgroundMetadata();
@@ -458,6 +467,7 @@ function removeBackgroundMetadata() {
 function setCustomBackground() {
     const file = chat_metadata[BG_METADATA_KEY];
 
+    // bg already set
     if (document.getElementById('bg_custom').style.backgroundImage == file) {
         return;
     }
@@ -479,6 +489,7 @@ function onSelectBackgroundClick() {
 
     const backgroundCssUrl = `url("${fullResUrl}")`;
 
+    // Automatically lock the background if it's custom or other background is locked
     if (hasCustomBackground() || isCustom) {
         saveBackgroundMetadata(backgroundCssUrl);
         setCustomBackground();
@@ -486,6 +497,8 @@ function onSelectBackgroundClick() {
     highlightLockedBackground();
 
     const customBg = window.getComputedStyle(document.getElementById('bg_custom')).backgroundImage;
+
+    // Custom background is set. Do not override the layer below
     if (customBg === 'none' || isCustom) {
         setBackground(bgFile, backgroundCssUrl);
     }
@@ -589,7 +602,7 @@ async function onDeleteBackgroundClick(e) {
     const allThumbnails = $('#bg_menu_content').find('.thumbnail');
     const currentIndex = allThumbnails.index(bgToDelete);
 
-    bgToDelete.remove();
+        bgToDelete.remove();
 
     const nextBg = allThumbnails.eq(currentIndex);
 
@@ -619,7 +632,7 @@ async function autoBackgroundCommand() {
     const bgTitles = Array.from(document.querySelectorAll('#bg_menu_content .BGSampleTitle'));
     const options = bgTitles.map(x => ({ element: $(x).closest('.thumbnail')[0], text: x.innerText.trim() })).filter(x => x.text.length > 0);
     if (options.length === 0) {
-        toastr.warning('No backgrounds to choose from. Please upload some images to the "Backgrounds" folder.');
+        toastr.warning('No backgrounds to choose from. Please upload some images to the "backgrounds" folder.');
         return '';
     }
 
@@ -729,6 +742,11 @@ async function onBackgroundUploadSelected() {
     form.reset();
 }
 
+/**
+ * Converts a video file to an animated webp format if the file is a video.
+ * @param {FormData} formData
+ * @returns {Promise<void>}
+ */
 async function convertFileIfVideo(formData) {
     const file = formData.get('avatar');
     if (!(file instanceof File)) {
@@ -763,6 +781,10 @@ async function convertFileIfVideo(formData) {
     }
 }
 
+/**
+ * Uploads a background to the server
+ * @param {FormData} formData
+ */
 async function uploadBackground(formData) {
     try {
         if (!formData.has('avatar')) {
@@ -792,6 +814,9 @@ async function uploadBackground(formData) {
     }
 }
 
+/**
+ * @param {string} bg
+ */
 function highlightNewBackground(bg) {
     const newBg = $(`.thumbnail[data-bgfile="${bg}"]`);
     if (newBg.length) {
@@ -802,6 +827,10 @@ function highlightNewBackground(bg) {
     }
 }
 
+/**
+ * Sets the fitting class for the background element
+ * @param {string} fitting Fitting type
+ */	
 function setFittingClass(fitting) {
     const backgrounds = $('#bg1, #bg_custom');
     for (const option of ['cover', 'contain', 'stretch', 'center']) {
