@@ -353,6 +353,10 @@ export function loadBackgroundSettings(settings) {
     $('#background_thumbnails_animation').prop('checked', background_settings.animation);
 }
 
+/**
+ * Sets the background for the current chat and adds it to the list of custom backgrounds.
+ * @param {{url: string, path:string}} backgroundInfo
+ */
 async function forceSetBackground(backgroundInfo) {
     saveBackgroundMetadata(backgroundInfo.url);
     setCustomBackground();
@@ -830,7 +834,7 @@ function highlightNewBackground(bg) {
 /**
  * Sets the fitting class for the background element
  * @param {string} fitting Fitting type
- */	
+ */
 function setFittingClass(fitting) {
     const backgrounds = $('#bg1, #bg_custom');
     for (const option of ['cover', 'contain', 'stretch', 'center']) {

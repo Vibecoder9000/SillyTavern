@@ -33,6 +33,7 @@ export const dimensions = {
  */
 function getThumbnailFolder(directories, type) {
     let thumbnailFolder;
+
     switch (type) {
         case 'bg':
             thumbnailFolder = directories.thumbnailsBg;
@@ -41,6 +42,7 @@ function getThumbnailFolder(directories, type) {
             thumbnailFolder = directories.thumbnailsAvatar;
             break;
     }
+
     return thumbnailFolder;
 }
 
@@ -76,6 +78,7 @@ export function invalidateThumbnail(directories, type, file) {
     if (folder === undefined) throw new Error('Invalid thumbnail type');
 
     const pathToThumbnail = path.join(folder, file);
+
     if (fs.existsSync(pathToThumbnail)) {
         try { fs.unlinkSync(pathToThumbnail); } catch (e) { console.error(`[invalidateThumbnail] Failed to delete thumbnail file ${pathToThumbnail}:`, e); }
     }
