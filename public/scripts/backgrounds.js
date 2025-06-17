@@ -15,6 +15,8 @@ function generateUrlParameter(bg, isCustom) {
     return isCustom ? `url("${encodeURI(bg)}")` : `url("${getBackgroundPath(bg)}")`;
 }
 
+let galleryObserver = null;
+
 const BG_METADATA_KEY = 'custom_background';
 const LIST_METADATA_KEY = 'chat_backgrounds';
 
@@ -36,7 +38,7 @@ const THUMBNAIL_BLOBS = new Map();
  */
 async function getStaticThumbnailFromAnimatedSource(bgFilename) {
     // Return from cache if we've already generated it this session.
-    if (STATIC_THUMBNAIL_BLOBS.has(bgFilename)) {
+    if (THUMBNAIL_BLOBS.has(bgFilename)) {
         return THUMBNAIL_BLOBS.get(bgFilename);
     }
 
@@ -59,21 +61,20 @@ async function getStaticThumbnailFromAnimatedSource(bgFilename) {
 
             canvas.toBlob((blob) => {
                 if (!blob) {
-                    // If canvas fails, resolve with the placeholder.
-                    resolve(PNG_PIXEL_BLOB_URL);
+                    resolve(`data:image/png;base64,${PNG_PIXEL}`);
                     return;
                 }
                 const blobUrl = URL.createObjectURL(blob);
-                STATIC_THUMBNAIL_BLOBS.set(bgFilename, blobUrl); // Cache the result
+                THUMBNAIL_BLOBS.set(bgFilename, blobUrl); // Cache the result
                 resolve(blobUrl);
-            }, 'image/jpeg', 0.85); // Output as a reasonably high-quality JPEG
+            }, 'image/jpeg', 0.85);
         };
 
         image.onerror = () => {
-            // If the image fails to load, resolve with the placeholder DATA URL string
             resolve(`data:image/png;base64,${PNG_PIXEL}`);
         };
 
+        // If the image fails to load, resolve with the placeholder DATA URL string
         image.src = imageUrl;
     });
 }

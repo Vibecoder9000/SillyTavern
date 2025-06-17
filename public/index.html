@@ -5196,6 +5196,10 @@
                             <i class="fa-solid fa-wand-magic"></i>
                             <span data-i18n="Auto-select">Auto-select</span>
                         </div>
+                        <div id="add_background_button_top" class="menu_button menu_button_icon" data-i18n="[title]Add a new background" title="Add a new background">
+                            <i class="fa-solid fa-plus"></i>
+                            <span data-i18n="Add Background">Add Background</span>
+                        </div>
                     </div>
                     <h3 data-i18n="System Backgrounds" class="wide100p textAlignCenter">
                         System Backgrounds
@@ -5216,6 +5220,9 @@
                     </div>
                     <div id="bg_custom_content" class="bg_list">
                     </div>
+                    <form id="form_bg_download" style="display: none;" action="javascript:void(null);" method="post" enctype="multipart/form-data">
+                       <input type="file" id="add_bg_button" name="avatar" accept="image/*, video/*">
+                    </form>
                 </div>
             </div>
         </div>
