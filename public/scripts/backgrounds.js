@@ -1,9 +1,9 @@
-import { Fuse, localforage } from '../lib.js';
-import { chat_metadata, eventSource, event_types, generateQuietPrompt, getCurrentChatId, getRequestHeaders, getThumbnailUrl, saveSettingsDebounced } from '../script.js';
+import { Fuse } from '../lib.js';
+import { chat_metadata, eventSource, event_types, generateQuietPrompt, getCurrentChatId, getRequestHeaders, saveSettingsDebounced } from '../script.js';
 import { openThirdPartyExtensionMenu, saveMetadataDebounced } from './extensions.js';
 import { SlashCommand } from './slash-commands/SlashCommand.js';
 import { SlashCommandParser } from './slash-commands/SlashCommandParser.js';
-import { flashHighlight, getBase64Async, stringFormat } from './utils.js';
+import { flashHighlight, stringFormat } from './utils.js';
 import { t, translate } from './i18n.js';
 import { Popup } from './popup.js';
 
@@ -22,7 +22,6 @@ const LIST_METADATA_KEY = 'chat_backgrounds';
 
 // A single transparent PNG pixel used as a placeholder for errored backgrounds
 const PNG_PIXEL = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=';
-const PLACEHOLDER_IMAGE = `url('data:image/png;base64,${PNG_PIXEL}')`;
 
 /**
  * In-memory cache for generated static thumbnail blob URLs.
@@ -46,7 +45,7 @@ async function getStaticThumbnailFromAnimatedSource(bgFilename) {
 
     return new Promise((resolve) => {
         const image = new Image();
-        image.crossOrigin = "Anonymous";
+        image.crossOrigin = 'Anonymous';
 
         image.onload = () => {
             const canvas = document.createElement('canvas');
@@ -55,7 +54,7 @@ async function getStaticThumbnailFromAnimatedSource(bgFilename) {
             const thumbHeight = (image.height / image.width) * thumbWidth;
             canvas.width = thumbWidth;
             canvas.height = thumbHeight;
-            
+
             const ctx = canvas.getContext('2d');
             ctx.drawImage(image, 0, 0, thumbWidth, thumbHeight);
 
@@ -120,7 +119,7 @@ class JustifiedGallery {
 
         const scaledWidth = this.targetRowHeight * imageData.aspectRatio;
         this.currentRow.push({ ...imageData,
-            scaledWidth
+            scaledWidth,
         });
         this.currentRowWidth += scaledWidth;
 
@@ -607,7 +606,7 @@ async function onDeleteBackgroundClick(e) {
     const allThumbnails = $('#bg_menu_content').find('.thumbnail');
     const currentIndex = allThumbnails.index(bgToDelete);
 
-        bgToDelete.remove();
+    bgToDelete.remove();
 
     const nextBg = allThumbnails.eq(currentIndex);
 

@@ -1,15 +1,12 @@
 import fs from 'node:fs';
-import { promises as fsPromises } from 'node:fs';
 import path from 'node:path';
 
-import mime from 'mime-types';
 import express from 'express';
 import sanitize from 'sanitize-filename';
 import { Jimp, JimpMime } from '../jimp.js';
 import { sync as writeFileAtomicSync } from 'write-file-atomic';
 
 import { getConfigValue } from '../util.js';
-import { getFileNameValidationFunction } from '../middleware/validateFileName.js';
 
 export const currentMetadataVersion = '1.0.5';
 
