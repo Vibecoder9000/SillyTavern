@@ -3,7 +3,7 @@ import { chat_metadata, eventSource, event_types, generateQuietPrompt, getCurren
 import { openThirdPartyExtensionMenu, saveMetadataDebounced } from './extensions.js';
 import { SlashCommand } from './slash-commands/SlashCommand.js';
 import { SlashCommandParser } from './slash-commands/SlashCommandParser.js';
-import { flashHighlight, stringFormat, createThumbnail } from './utils.js';
+import { flashHighlight, stringFormat } from './utils.js';
 import { t, translate } from './i18n.js';
 import { Popup } from './popup.js';
 
