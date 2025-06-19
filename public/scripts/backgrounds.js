@@ -3,7 +3,7 @@ import { chat_metadata, eventSource, event_types, generateQuietPrompt, getCurren
 import { openThirdPartyExtensionMenu, saveMetadataDebounced } from './extensions.js';
 import { SlashCommand } from './slash-commands/SlashCommand.js';
 import { SlashCommandParser } from './slash-commands/SlashCommandParser.js';
-import { flashHighlight, stringFormat } from './utils.js';
+import { flashHighlight, stringFormat, createThumbnail } from './utils.js';
 import { t, translate } from './i18n.js';
 import { Popup } from './popup.js';
 
@@ -49,7 +49,8 @@ async function getStaticThumbnailFromAnimatedSource(bgFilename) {
         const image = new Image();
         image.crossOrigin = 'Anonymous';
 
-        image.onload = () => {
+        // Make the onload handler async to use await inside
+        image.onload = async () => {
             let aspectRatio;
             if (image.width > 0 && image.height > 0) {
                 aspectRatio = image.width / image.height;
@@ -58,21 +59,15 @@ async function getStaticThumbnailFromAnimatedSource(bgFilename) {
                 aspectRatio = 1.0; // Default to square
             }
 
-            const thumbWidth = 160;
-            const thumbHeight = Math.round(thumbWidth / aspectRatio);
+            try {
+                // Use the shared utility to create the thumbnail as a data URL
+                const thumbnailDataUrl = await createThumbnail(imageUrl, 160, null, 'image/jpeg');
 
-            const canvas = document.createElement('canvas');
-            canvas.width = thumbWidth;
-            canvas.height = thumbHeight;
+                // Convert the resulting data URL to a Blob for uploading and for creating a blob URL
+                const blob = await (await fetch(thumbnailDataUrl)).blob();
 
-            const ctx = canvas.getContext('2d');
-            ctx.drawImage(image, 0, 0, thumbWidth, thumbHeight);
-
-            canvas.toBlob((blob) => {
                 if (!blob) {
-                    const errorResult = { blobUrl: `data:image/png;base64,${PNG_PIXEL}`, aspectRatio: 1.0 };
-                    resolve(errorResult);
-                    return;
+                    throw new Error('Failed to create blob from thumbnail data URL');
                 }
 
                 const blobUrl = URL.createObjectURL(blob);
@@ -94,7 +89,11 @@ async function getStaticThumbnailFromAnimatedSource(bgFilename) {
 
                 // Resolve the promise with the complete result object.
                 resolve(result);
-            });
+            } catch (error) {
+                console.error(`Error during thumbnail creation for ${bgFilename}:`, error);
+                const errorResult = { blobUrl: `data:image/png;base64,${PNG_PIXEL}`, aspectRatio: 1.0 };
+                resolve(errorResult);
+            }
         };
 
         image.onerror = () => {
