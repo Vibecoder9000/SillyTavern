@@ -31,7 +31,6 @@ const PNG_PIXEL = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkY
  */
 const THUMBNAIL_BLOBS = new Map();
 
-
 /**
  * Generates a static thumbnail from an animated WebP and returns its blob URL and aspect ratio.
  * @param {string} bgFilename The filename of the animated background.
