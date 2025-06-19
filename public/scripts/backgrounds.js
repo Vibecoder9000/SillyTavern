@@ -106,6 +106,7 @@ async function getStaticThumbnailFromAnimatedSource(bgFilename) {
         image.src = imageUrl;
     });
 }
+
 function getUrlParameter(element) {
     const $this = $(element);
     const isCustom = $this.attr('custom') === 'true';
