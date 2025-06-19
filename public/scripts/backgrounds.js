@@ -16,6 +16,7 @@ function generateUrlParameter(bg, isCustom) {
 }
 
 let galleryObserver = null;
+let backgroundSelector = null;
 
 const BG_METADATA_KEY = 'custom_background';
 const LIST_METADATA_KEY = 'chat_backgrounds';
@@ -25,13 +26,14 @@ const PNG_PIXEL = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkY
 
 /**
  * In-memory cache for generated static thumbnail blob URLs.
- * @type {Map<string, string>}
+ * This function now caches the entire result object (URL and aspect ratio) in memory for the session.
+ * @type {Map<string, {blobUrl: string, aspectRatio: number}>}
  */
 const THUMBNAIL_BLOBS = new Map();
 
+
 /**
  * Generates a static thumbnail from an animated WebP and returns its blob URL and aspect ratio.
- * This function now caches the entire result object (URL and aspect ratio) in memory for the session.
  * @param {string} bgFilename The filename of the animated background.
  * @returns {Promise<{blobUrl: string, aspectRatio: number}>} A promise that resolves with the blob URL and the calculated aspect ratio.
  */
@@ -75,7 +77,7 @@ async function getStaticThumbnailFromAnimatedSource(bgFilename) {
                 }
 
                 const blobUrl = URL.createObjectURL(blob);
-                
+
                 // Create the result object that contains both pieces of data.
                 const result = { blobUrl, aspectRatio };
 
@@ -415,19 +417,19 @@ async function onChatChanged() {
 async function getChatBackgroundsList() {
     $('#bg_chat_hint').hide();
 
-    if (!window.backgroundSelector || !window.backgroundSelector.images) {
+    if (!backgroundSelector || !backgroundSelector.images) {
         return;
     }
 
     const list = chat_metadata[LIST_METADATA_KEY] || [];
     const customBgSet = new Set(list);
 
-    window.backgroundSelector.images.forEach(img => {
+    backgroundSelector.images.forEach(img => {
         img.isCustom = customBgSet.has(img.filename);
     });
 
     const currentFilter = $('#bg-filter').val();
-    window.backgroundSelector.search(currentFilter);
+    backgroundSelector.search(currentFilter);
 }
 
 function highlightLockedBackground() {
@@ -691,8 +693,8 @@ export async function getBackgrounds() {
 
         if (!response.ok) {
             console.error(`Failed to fetch backgrounds: ${response.status}`, await response.text());
-            if (window.backgroundSelector) {
-                window.backgroundSelector.setImages([]);
+            if (backgroundSelector) {
+                backgroundSelector.setImages([]);
             }
             return;
         }
@@ -706,7 +708,7 @@ export async function getBackgrounds() {
             const numericalAR = Number(aspectsMap[filename]);
             const isAnimated = filename.toLowerCase().endsWith('.webp');
             let thumbnailUrl;
-            let clientSideAR = null; // Variable to hold our new client-side aspect ratio
+            let clientSideAR = null;
 
             if (isAnimated && !background_settings.animation) {
                 // Animations OFF: Call our new client-side function to generate a static blob URL.
@@ -732,16 +734,16 @@ export async function getBackgrounds() {
 
         const imageDataList = await Promise.all(imageDataListPromises);
 
-        if (window.backgroundSelector) {
-            window.backgroundSelector.setImages(imageDataList);
+        if (backgroundSelector) {
+            backgroundSelector.setImages(imageDataList);
         }
 
         highlightLockedBackground();
 
     } catch (error) {
         console.error('Error in getBackgrounds:', error);
-        if (window.backgroundSelector) {
-            window.backgroundSelector.setImages([]);
+        if (backgroundSelector) {
+            backgroundSelector.setImages([]);
         }
     }
 }
@@ -876,14 +878,14 @@ function setFittingClass(fitting) {
 
 function onBackgroundFilterInput() {
     const filterValue = String($(this).val());
-    if (window.backgroundSelector) {
-        window.backgroundSelector.search(filterValue);
+    if (backgroundSelector) {
+        backgroundSelector.search(filterValue);
     }
 }
 
 export function initBackgrounds() {
-    window.backgroundSelector = new BackgroundSelector('bg_menu_content');
-    window.backgroundSelector.setupInfiniteScroll();
+    backgroundSelector = new BackgroundSelector('bg_menu_content'); // Initialize the module-scoped variable
+    backgroundSelector.setupInfiniteScroll();
 
     // Call the setup function on initial load
     setupGalleryObserver();
