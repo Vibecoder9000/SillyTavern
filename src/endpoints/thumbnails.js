@@ -192,7 +192,7 @@ export async function ensureThumbnailCache(directoriesList) {
 
 export const router = express.Router();
 
-router.post('/upload-generated', function(request, response) {
+router.post('/upload-generated', async function(request, response) {
     // The global multer instance has already processed the file and put it in request.file.
     // The multerMonkeyPatch has already fixed the filename.
     if (!request.file || !request.body?.originalFilename) {
@@ -201,6 +201,7 @@ router.post('/upload-generated', function(request, response) {
     }
 
     const sanitizedFilename = sanitize(request.body.originalFilename);
+    const tempPath = request.file.path; // Store temp path before rename
 
     try {
         const thumbnailFolder = getThumbnailFolder(request.user.directories, 'bg');
@@ -211,15 +212,38 @@ router.post('/upload-generated', function(request, response) {
         const destinationPath = path.join(thumbnailFolder, sanitizedFilename);
 
         // Move the temporary file from the generic 'uploads' folder to the permanent thumbnail cache.
-        fs.renameSync(request.file.path, destinationPath);
+        fs.renameSync(tempPath, destinationPath);
+
+        // After saving the file, calculate its aspect ratio and update server records.
+        try {
+            if (request.user.directories.root) {
+                const image = await Jimp.read(destinationPath);
+                const aspectRatio = (image.bitmap.height > 0) ? (image.bitmap.width / image.bitmap.height) : 1.0;
+
+                const aspectRatiosJsonPath = path.join(request.user.directories.root, ASPECT_RATIOS_FILENAME);
+                let aspectRatiosData = {};
+
+                if (fs.existsSync(aspectRatiosJsonPath)) {
+                    aspectRatiosData = JSON.parse(fs.readFileSync(aspectRatiosJsonPath, 'utf-8'));
+                }
+
+                aspectRatiosData[sanitizedFilename] = aspectRatio;
+                aspectRatiosData._metadata_version = currentMetadataVersion; // Use variable from file scope
+
+                sharedWriteFileAtomicSync(aspectRatiosJsonPath, JSON.stringify(aspectRatiosData, null, 2));
+            }
+        } catch (err) {
+            // Log the error, but don't fail the entire request, as the thumbnail was still saved.
+            console.error(`[thumbnails/upload-generated] Failed to update aspect ratio for ${sanitizedFilename}:`, err);
+        }
 
         // Send a "No Content" response to indicate success without needing a body.
         return response.sendStatus(204);
     } catch (error) {
         console.error(`[thumbnails/upload-generated] Failed to save generated thumbnail for ${sanitizedFilename}:`, error);
         // If an error occurs, ensure the temporary file is cleaned up.
-        if (fs.existsSync(request.file.path)) {
-            fs.unlinkSync(request.file.path);
+        if (fs.existsSync(tempPath)) {
+            fs.unlinkSync(tempPath);
         }
         return response.sendStatus(500);
     }

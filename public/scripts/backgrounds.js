@@ -703,29 +703,35 @@ export async function getBackgrounds() {
         const filenames = data.images || [];
         const aspectsMap = data.aspects || {};
 
-        // Use Promise.all to wait for all thumbnail URLs to be resolved.
         const imageDataListPromises = filenames.map(async (filename) => {
-            const numericalAR = Number(aspectsMap[filename]);
             const isAnimated = filename.toLowerCase().endsWith('.webp');
+            const hasServerThumb = aspectsMap[filename] !== undefined;
             let thumbnailUrl;
-            let clientSideAR = null;
+            let finalAspectRatio;
 
-            if (isAnimated && !background_settings.animation) {
-                // Animations OFF: Call our new client-side function to generate a static blob URL.
+            // Case 1: User wants animations ON. Use the full, original file for the thumbnail.
+            if (isAnimated && background_settings.animation) {
+                thumbnailUrl = getBackgroundPath(filename);
+                finalAspectRatio = Number(aspectsMap[filename]) || 1.777;
+            }
+            // Case 2: User wants animations OFF, but the server has no pre-generated thumbnail.
+            // This is the one-time generation path.
+            else if (isAnimated && !hasServerThumb) {
                 const result = await getStaticThumbnailFromAnimatedSource(filename);
                 thumbnailUrl = result.blobUrl;
-                clientSideAR = result.aspectRatio; // Capture the client-side AR
-            } else {
-                // Animations ON (or not an animated file): Get the original file path.
-                // The browser will handle rendering the first frame as a static background-image.
-                thumbnailUrl = getBackgroundPath(filename);
+                finalAspectRatio = result.aspectRatio;
+            }
+            // Case 3: All other scenarios (standard images, or animated images when animations are OFF
+            // and a server thumbnail already exists).
+            else {
+                thumbnailUrl = `/thumbnail?file=${encodeURIComponent(filename)}&type=bg`;
+                finalAspectRatio = Number(aspectsMap[filename]) || 1.777;
             }
 
             return {
                 id: filename,
                 filename: filename,
-                // Prioritize the newly-generated client-side AR, then the server's AR, then fallback.
-                aspectRatio: (clientSideAR > 0) ? clientSideAR : ((numericalAR > 0) ? numericalAR : 1.777),
+                aspectRatio: (finalAspectRatio > 0) ? finalAspectRatio : 1.777,
                 url: thumbnailUrl,
                 fullResUrl: getBackgroundPath(filename),
                 tags: filename.replace(/_/g, ' ').split('.').slice(0, -1).join('.').split(' '),
