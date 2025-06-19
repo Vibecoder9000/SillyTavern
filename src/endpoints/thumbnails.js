@@ -9,7 +9,7 @@ import { ASPECT_RATIOS_FILENAME } from '../constants.js';
 
 import { getConfigValue } from '../util.js';
 
-export const currentMetadataVersion = '1.0.5';
+export const currentMetadataVersion = '1.0.0';
 
 const SKIPPED_EXTENSIONS_FOR_JIMP = ['.apng', '.mp4', '.webm', '.avi', '.mkv', '.flv', 'webp'];
 
@@ -157,7 +157,7 @@ export async function generateThumbnail(directories, type, file, knownAspectRati
         return { path: pathToCachedFile, aspectRatio: numericalAspectRatio };
 
     } catch (error) {
-        console.error(`[Thumbnails] CRITICAL ERROR processing ${file}:`, error);
+        console.error(`[Thumbnails] Error processing ${file}:`, error);
         return null;
     }
 }
