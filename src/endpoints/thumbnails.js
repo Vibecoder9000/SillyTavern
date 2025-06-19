@@ -230,7 +230,7 @@ router.post('/upload-generated', async function(request, response) {
                 aspectRatiosData[sanitizedFilename] = aspectRatio;
                 aspectRatiosData._metadata_version = currentMetadataVersion; // Use variable from file scope
 
-                sharedWriteFileAtomicSync(aspectRatiosJsonPath, JSON.stringify(aspectRatiosData, null, 2));
+                writeFileAtomicSync(aspectRatiosJsonPath, JSON.stringify(aspectRatiosData, null, 2));
             }
         } catch (err) {
             // Log the error, but don't fail the entire request, as the thumbnail was still saved.
