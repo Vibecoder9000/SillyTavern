@@ -5,6 +5,7 @@ import express from 'express';
 import sanitize from 'sanitize-filename';
 import { Jimp, JimpMime } from '../jimp.js';
 import { sync as writeFileAtomicSync } from 'write-file-atomic';
+import { ASPECT_RATIOS_FILENAME } from '../constants.js';
 
 import { getConfigValue } from '../util.js';
 
@@ -81,7 +82,7 @@ export function invalidateThumbnail(directories, type, file) {
     }
 
     if (type === 'bg' && directories.root) {
-        const aspectRatiosJsonPath = path.join(directories.root, 'aspect_ratios.json');
+        const aspectRatiosJsonPath = path.join(directories.root, ASPECT_RATIOS_FILENAME);
         try {
             if (fs.existsSync(aspectRatiosJsonPath)) {
                 const aspectRatios = JSON.parse(fs.readFileSync(aspectRatiosJsonPath, 'utf-8'));

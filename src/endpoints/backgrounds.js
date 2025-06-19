@@ -12,6 +12,7 @@ import {
 import { sync as sharedWriteFileAtomicSync } from 'write-file-atomic';
 import { getImages } from '../util.js';
 import { getFileNameValidationFunction } from '../middleware/validateFileName.js';
+import { ASPECT_RATIOS_FILENAME } from '../constants.js';
 
 export const router = express.Router();
 
@@ -25,7 +26,7 @@ router.post('/all', function (request, response) {
         console.error('User root directory not defined. Cannot load aspect ratios for /all endpoint.');
         return response.json({ images, config, aspects: {} });
     }
-    const aspectRatiosJsonPath = path.join(request.user.directories.root, 'aspect_ratios.json');
+    const aspectRatiosJsonPath = path.join(request.user.directories.root, ASPECT_RATIOS_FILENAME);
     let aspects = {};
 
     try {
@@ -33,7 +34,7 @@ router.post('/all', function (request, response) {
             aspects = JSON.parse(fs.readFileSync(aspectRatiosJsonPath, 'utf-8'));
         }
     } catch (e) {
-        console.error('Failed to read or parse aspect_ratios.json:', e);
+        console.error(`Failed to read or parse aspect_ratios.json: ${e.message}`, e);
         aspects = {};
     }
 
@@ -103,7 +104,7 @@ router.post('/upload', function (request, response) {
                 }
 
                 const userRootPath = request.user.directories.root;
-                const aspectRatiosJsonPath = path.join(userRootPath, 'aspect_ratios.json');
+                const aspectRatiosJsonPath = path.join(userRootPath, ASPECT_RATIOS_FILENAME);
 
                 if (thumbnailResult && thumbnailResult.aspectRatio !== undefined) {
                     let aspectRatiosData = {};

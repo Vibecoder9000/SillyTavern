@@ -9,6 +9,11 @@ export const PUBLIC_DIRECTORIES = {
 export const SETTINGS_FILE = 'settings.json';
 
 /**
+ * The filename for the JSON file that caches background image aspect ratios.
+ */
+export const ASPECT_RATIOS_FILENAME = 'aspect_ratios.json';
+
+/**
  * @type {import('./users.js').UserDirectoryList}
  * @readonly
  * @enum {string}
