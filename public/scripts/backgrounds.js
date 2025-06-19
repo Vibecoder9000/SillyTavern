@@ -851,6 +851,7 @@ async function uploadBackground(formData) {
 }
 
 /**
+ * Scrolls to, highlights, and selects a newly added background.
  * @param {string} bg
  */
 function highlightNewBackground(bg) {
@@ -858,8 +859,10 @@ function highlightNewBackground(bg) {
     if (newBg.length) {
         const scroller = $('#Backgrounds');
         const offsetTop = newBg.offset().top - scroller.offset().top + scroller.scrollTop();
-        scroller.animate({ scrollTop: offsetTop - 50 }, 300);
-        flashHighlight(newBg);
+        scroller.animate({ scrollTop: offsetTop - 50 }, 300, function() {
+            flashHighlight(newBg);
+            newBg.trigger('click');
+        });
     }
 }
 
