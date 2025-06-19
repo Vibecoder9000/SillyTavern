@@ -191,6 +191,39 @@ export async function ensureThumbnailCache(directoriesList) {
 
 export const router = express.Router();
 
+router.post('/upload-generated', function(request, response) {
+    // The global multer instance has already processed the file and put it in request.file.
+    // The multerMonkeyPatch has already fixed the filename.
+    if (!request.file || !request.body?.originalFilename) {
+        console.error('[thumbnails/upload-generated] Request is missing file or originalFilename.');
+        return response.sendStatus(400);
+    }
+
+    const sanitizedFilename = sanitize(request.body.originalFilename);
+
+    try {
+        const thumbnailFolder = getThumbnailFolder(request.user.directories, 'bg');
+        if (!thumbnailFolder) {
+            throw new Error('Background thumbnail directory not found for user.');
+        }
+
+        const destinationPath = path.join(thumbnailFolder, sanitizedFilename);
+
+        // Move the temporary file from the generic 'uploads' folder to the permanent thumbnail cache.
+        fs.renameSync(request.file.path, destinationPath);
+
+        // Send a "No Content" response to indicate success without needing a body.
+        return response.sendStatus(204);
+    } catch (error) {
+        console.error(`[thumbnails/upload-generated] Failed to save generated thumbnail for ${sanitizedFilename}:`, error);
+        // If an error occurs, ensure the temporary file is cleaned up.
+        if (fs.existsSync(request.file.path)) {
+            fs.unlinkSync(request.file.path);
+        }
+        return response.sendStatus(500);
+    }
+});
+
 // Important: This route must be mounted as '/thumbnail'. It is used in the client code and saved to chat files.
 router.get('/', async function (request, response) {
     try {

@@ -30,14 +30,15 @@ const PNG_PIXEL = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkY
 const THUMBNAIL_BLOBS = new Map();
 
 /**
- * Generates a static thumbnail from an animated WebP by drawing its first
- * frame to a canvas. Caches the result in memory for the session.
+ * Generates a static thumbnail from an animated WebP and returns its blob URL and aspect ratio.
+ * This function now caches the entire result object (URL and aspect ratio) in memory for the session.
  * @param {string} bgFilename The filename of the animated background.
- * @returns {Promise<string>} A promise that resolves with a blob URL for the static thumbnail.
+ * @returns {Promise<{blobUrl: string, aspectRatio: number}>} A promise that resolves with the blob URL and the calculated aspect ratio.
  */
 async function getStaticThumbnailFromAnimatedSource(bgFilename) {
-    // Return from cache if we've already generated it this session.
+    // The cache now stores the entire result object.
     if (THUMBNAIL_BLOBS.has(bgFilename)) {
+        // If we have a cache hit, return the complete cached object.
         return THUMBNAIL_BLOBS.get(bgFilename);
     }
 
@@ -48,10 +49,18 @@ async function getStaticThumbnailFromAnimatedSource(bgFilename) {
         image.crossOrigin = 'Anonymous';
 
         image.onload = () => {
-            const canvas = document.createElement('canvas');
-            // Use a fixed, reasonable size for the canvas to keep it fast.
+            let aspectRatio;
+            if (image.width > 0 && image.height > 0) {
+                aspectRatio = image.width / image.height;
+            } else {
+                console.warn(`Invalid dimensions for ${bgFilename}. Using fallback 1:1 aspect ratio.`);
+                aspectRatio = 1.0; // Default to square
+            }
+
             const thumbWidth = 160;
-            const thumbHeight = (image.height / image.width) * thumbWidth;
+            const thumbHeight = Math.round(thumbWidth / aspectRatio);
+
+            const canvas = document.createElement('canvas');
             canvas.width = thumbWidth;
             canvas.height = thumbHeight;
 
@@ -60,20 +69,38 @@ async function getStaticThumbnailFromAnimatedSource(bgFilename) {
 
             canvas.toBlob((blob) => {
                 if (!blob) {
-                    resolve(`data:image/png;base64,${PNG_PIXEL}`);
+                    const errorResult = { blobUrl: `data:image/png;base64,${PNG_PIXEL}`, aspectRatio: 1.0 };
+                    resolve(errorResult);
                     return;
                 }
+
                 const blobUrl = URL.createObjectURL(blob);
-                THUMBNAIL_BLOBS.set(bgFilename, blobUrl); // Cache the result
-                resolve(blobUrl);
-            }, 'image/jpeg', 0.85);
+                
+                // Create the result object that contains both pieces of data.
+                const result = { blobUrl, aspectRatio };
+
+                // Store the entire result object in the cache.
+                THUMBNAIL_BLOBS.set(bgFilename, result);
+
+                // Fire-and-forget the upload
+                const formData = new FormData();
+                formData.append('avatar', blob, `${bgFilename}.jpeg`);
+                formData.append('originalFilename', bgFilename);
+                const headers = getRequestHeaders();
+                delete headers['Content-Type'];
+                fetch('/api/thumbnails/upload-generated', { method: 'POST', headers, body: formData })
+                    .catch(err => console.error(`Failed to upload generated thumbnail for ${bgFilename}:`, err));
+
+                // Resolve the promise with the complete result object.
+                resolve(result);
+            });
         };
 
         image.onerror = () => {
-            resolve(`data:image/png;base64,${PNG_PIXEL}`);
+            const errorResult = { blobUrl: `data:image/png;base64,${PNG_PIXEL}`, aspectRatio: 1.0 };
+            resolve(errorResult);
         };
 
-        // If the image fails to load, resolve with the placeholder DATA URL string
         image.src = imageUrl;
     });
 }
@@ -679,10 +706,13 @@ export async function getBackgrounds() {
             const numericalAR = Number(aspectsMap[filename]);
             const isAnimated = filename.toLowerCase().endsWith('.webp');
             let thumbnailUrl;
+            let clientSideAR = null; // Variable to hold our new client-side aspect ratio
 
             if (isAnimated && !background_settings.animation) {
                 // Animations OFF: Call our new client-side function to generate a static blob URL.
-                thumbnailUrl = await getStaticThumbnailFromAnimatedSource(filename);
+                const result = await getStaticThumbnailFromAnimatedSource(filename);
+                thumbnailUrl = result.blobUrl;
+                clientSideAR = result.aspectRatio; // Capture the client-side AR
             } else {
                 // Animations ON (or not an animated file): Get the original file path.
                 // The browser will handle rendering the first frame as a static background-image.
@@ -692,7 +722,8 @@ export async function getBackgrounds() {
             return {
                 id: filename,
                 filename: filename,
-                aspectRatio: (numericalAR && numericalAR > 0) ? numericalAR : 1.777,
+                // Prioritize the newly-generated client-side AR, then the server's AR, then fallback.
+                aspectRatio: (clientSideAR > 0) ? clientSideAR : ((numericalAR > 0) ? numericalAR : 1.777),
                 url: thumbnailUrl,
                 fullResUrl: getBackgroundPath(filename),
                 tags: filename.replace(/_/g, ' ').split('.').slice(0, -1).join('.').split(' '),
