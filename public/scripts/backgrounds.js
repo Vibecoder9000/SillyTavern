@@ -21,9 +21,6 @@ let backgroundSelector = null;
 const BG_METADATA_KEY = 'custom_background';
 const LIST_METADATA_KEY = 'chat_backgrounds';
 
-// A single transparent PNG pixel used as a placeholder for errored backgrounds
-const PNG_PIXEL = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=';
-
 function getUrlParameter(element) {
     const $this = $(element);
     const isCustom = $this.attr('custom') === 'true';
