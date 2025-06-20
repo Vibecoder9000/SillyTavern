@@ -465,9 +465,9 @@ function onSelectBackgroundClick() {
         saveBackgroundMetadata(backgroundCssUrl);
         setCustomBackground();
     }
-    
+
     highlightSelectedBackground(this);
-    
+
     highlightLockedBackground();
 
     const customBg = window.getComputedStyle(document.getElementById('bg_custom')).backgroundImage;
@@ -607,26 +607,34 @@ export async function getBackgrounds() {
             headers: getRequestHeaders(),
             body: JSON.stringify({}),
         });
-        if (!response.ok) throw new Error(`Failed to fetch backgrounds: ${response.status}`);
+
+        if (!response.ok) {
+            console.error(`Failed to fetch backgrounds: ${response.status}`, await response.text());
+            if (backgroundSelector) {
+                backgroundSelector.setImages([]);
+            }
+            return;
+        }
 
         const data = await response.json();
         const filenames = data.images || [];
-
         const imageDataList = filenames.map(filename => {
             const isAnimated = filename.toLowerCase().endsWith('.webp');
             let thumbnailUrl;
 
-            // If animations are ON, use the full animated file. Otherwise, use the static thumbnail endpoint.
+            // If the animation toggle is ON and the file is a WebP, use the full animated file as the thumbnail.
             if (isAnimated && background_settings.animation) {
                 thumbnailUrl = getBackgroundPath(filename);
-            } else {
+            }
+            // Otherwise, use the fast, static server-side thumbnail endpoint.
+            else {
                 thumbnailUrl = `/thumbnail?file=${encodeURIComponent(filename)}&type=bg`;
             }
 
             return {
                 id: filename,
                 filename: filename,
-                thumbnailUrl: thumbnailUrl, // Pass the URL to be loaded
+                thumbnailUrl: thumbnailUrl,
                 fullResUrl: getBackgroundPath(filename),
             };
         });
@@ -634,7 +642,10 @@ export async function getBackgrounds() {
         if (backgroundSelector) {
             backgroundSelector.setImages(imageDataList);
         }
+
         highlightLockedBackground();
+        // Also highlight the currently selected background on load.
+        highlightSelectedBackground(document.querySelector('.thumbnail.locked'));
 
     } catch (error) {
         console.error('Error in getBackgrounds:', error);
