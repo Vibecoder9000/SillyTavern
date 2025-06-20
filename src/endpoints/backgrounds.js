@@ -83,7 +83,7 @@ router.post('/rename', function (request, response) {
     return response.send('ok');
 });
 
-router.post('/upload', function (request, response) {
+router.post('/upload', async function (request, response) {
     if (!request.body || !request.file) return response.sendStatus(400);
 
     const img_path = path.join(request.file.destination, request.file.filename);
@@ -93,49 +93,46 @@ router.post('/upload', function (request, response) {
         fs.copyFileSync(img_path, path.join(request.user.directories.backgrounds, filename));
         fs.unlinkSync(img_path);
 
-        // Proactively generate thumbnail and aspect ratio for the new upload.
-        (async () => {
-            try {
-                const thumbnailResult = await generateThumbnail(request.user.directories, 'bg', filename);
+        // Await the thumbnail generation process
+        try {
+            const thumbnailResult = await generateThumbnail(request.user.directories, 'bg', filename);
 
-                if (!request.user.directories.root) {
-                    console.error('[Upload] User root directory not defined. Cannot update aspect ratios.');
-                    return;
-                }
-
+            if (!request.user.directories.root) {
+                console.error('[Upload] User root directory not defined. Cannot update aspect ratios.');
+            } else if (thumbnailResult && thumbnailResult.aspectRatio !== undefined) {
                 const userRootPath = request.user.directories.root;
                 const aspectRatiosJsonPath = path.join(userRootPath, ASPECT_RATIOS_FILENAME);
+                let aspectRatiosData = {};
 
-                if (thumbnailResult && thumbnailResult.aspectRatio !== undefined) {
-                    let aspectRatiosData = {};
-                    if (fs.existsSync(aspectRatiosJsonPath)) {
-                        try {
-                            const jsonDataString = fs.readFileSync(aspectRatiosJsonPath, 'utf-8');
-                            aspectRatiosData = JSON.parse(jsonDataString);
-                        } catch (e) {
-                            console.error(`[Upload] Failed to parse aspect_ratios.json: ${e.message}. Initializing new object.`);
-                            aspectRatiosData = {};
-                        }
-                    }
-
-                    const currentVersionInFile = aspectRatiosData._metadata_version;
-                    delete aspectRatiosData._metadata_version;
-
-                    if (aspectRatiosData[filename] !== thumbnailResult.aspectRatio || currentVersionInFile !== currentMetadataVersion) {
-                        aspectRatiosData[filename] = thumbnailResult.aspectRatio;
-                        aspectRatiosData._metadata_version = currentMetadataVersion;
-                        try {
-                            sharedWriteFileAtomicSync(aspectRatiosJsonPath, JSON.stringify(aspectRatiosData, null, 2));
-                        } catch (e) {
-                            console.error(`[Upload] Failed to write aspect_ratios.json in ${userRootPath}: ${e.message}`);
-                        }
+                if (fs.existsSync(aspectRatiosJsonPath)) {
+                    try {
+                        const jsonDataString = fs.readFileSync(aspectRatiosJsonPath, 'utf-8');
+                        aspectRatiosData = JSON.parse(jsonDataString);
+                    } catch (e) {
+                        console.error(`[Upload] Failed to parse aspect_ratios.json: ${e.message}. Initializing new object.`);
+                        aspectRatiosData = {};
                     }
                 }
-            } catch (e) {
-                console.error(`[Upload] Error during thumbnail generation or aspect ratio update for ${filename}: ${e.message}`);
-            }
-        })();
 
+                const currentVersionInFile = aspectRatiosData._metadata_version;
+                delete aspectRatiosData._metadata_version;
+
+                if (aspectRatiosData[filename] !== thumbnailResult.aspectRatio || currentVersionInFile !== currentMetadataVersion) {
+                    aspectRatiosData[filename] = thumbnailResult.aspectRatio;
+                    aspectRatiosData._metadata_version = currentMetadataVersion;
+                    try {
+                        writeFileAtomicSync(aspectRatiosJsonPath, JSON.stringify(aspectRatiosData, null, 2));
+                    } catch (e) {
+                        console.error(`[Upload] Failed to write aspect_ratios.json in ${userRootPath}: ${e.message}`);
+                    }
+                }
+            }
+        } catch (e) {
+            // Log the error, but don't fail the main upload response.
+            console.error(`[Upload] Error during thumbnail generation or aspect ratio update for ${filename}: ${e.message}`);
+        }
+
+        // The response is sent only after all processing is complete
         response.send(filename);
     } catch (err) {
         console.error(err);
