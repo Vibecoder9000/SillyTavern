@@ -6,6 +6,7 @@ import sanitize from 'sanitize-filename';
 import { Jimp, JimpMime } from '../jimp.js';
 import { sync as writeFileAtomicSync } from 'write-file-atomic';
 import { ASPECT_RATIOS_FILENAME } from '../constants.js';
+import { getFileNameValidationFunction } from '../middleware/validateFileName.js';
 
 import { getConfigValue } from '../util.js';
 
@@ -200,8 +201,8 @@ router.post('/upload-generated', async function(request, response) {
         return response.sendStatus(400);
     }
 
-    const sanitizedFilename = sanitize(request.body.originalFilename);
-    const tempPath = request.file.path; // Store temp path before rename
+    const sanitizedFilename = request.body.originalFilename;
+    const tempPath = request.file.path;	// Store temp path before rename
 
     try {
         const thumbnailFolder = getThumbnailFolder(request.user.directories, 'bg');
@@ -247,7 +248,7 @@ router.post('/upload-generated', async function(request, response) {
         }
         return response.sendStatus(500);
     }
-});
+});	
 
 // Important: This route must be mounted as '/thumbnail'. It is used in the client code and saved to chat files.
 router.get('/', async function (request, response) {
