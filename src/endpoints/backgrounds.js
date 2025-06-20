@@ -9,7 +9,7 @@ import {
     generateThumbnail,
     currentMetadataVersion,
 } from './thumbnails.js';
-import { sync as sharedWriteFileAtomicSync } from 'write-file-atomic';
+import { sync as writeFileAtomicSync } from 'write-file-atomic';
 import { getImages } from '../util.js';
 import { getFileNameValidationFunction } from '../middleware/validateFileName.js';
 import { ASPECT_RATIOS_FILENAME } from '../constants.js';
