@@ -193,7 +193,7 @@ export async function ensureThumbnailCache(directoriesList) {
 
 export const router = express.Router();
 
-router.post('/upload-generated', async function(request, response) {
+router.post('/upload-generated', getFileNameValidationFunction('originalFilename'), async function(request, response) {
     // The global multer instance has already processed the file and put it in request.file.
     // The multerMonkeyPatch has already fixed the filename.
     if (!request.file || !request.body?.originalFilename) {
@@ -248,7 +248,7 @@ router.post('/upload-generated', async function(request, response) {
         }
         return response.sendStatus(500);
     }
-});	
+});
 
 // Important: This route must be mounted as '/thumbnail'. It is used in the client code and saved to chat files.
 router.get('/', async function (request, response) {
