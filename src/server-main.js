@@ -72,7 +72,6 @@ import { ensureThumbnailCache } from './endpoints/thumbnails.js';
 
 // Routers
 import { router as usersPublicRouter } from './endpoints/users-public.js';
-import { router as thumbnailsRouter } from './endpoints/thumbnails.js';
 import { init as statsInit, onExit as statsOnExit } from './endpoints/stats.js';
 import { checkForNewContent } from './endpoints/content-manager.js';
 import { init as settingsInit } from './endpoints/settings.js';
@@ -247,9 +246,6 @@ app.post('/api/ping', (request, response) => {
 const uploadsPath = path.join(cliArgs.dataRoot, UPLOADS_DIRECTORY);
 app.use(multer({ dest: uploadsPath, limits: { fieldSize: 10 * 1024 * 1024 } }).single('avatar'));
 app.use(multerMonkeyPatch);
-
-// for client-side generated uploads
-app.use('/api/thumbnails', thumbnailsRouter);
 
 app.get('/version', async function (_, response) {
     const data = await getVersion();

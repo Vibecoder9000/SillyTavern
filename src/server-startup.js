@@ -31,6 +31,7 @@ import { router as statsRouter } from './endpoints/stats.js';
 import { router as contentManagerRouter } from './endpoints/content-manager.js';
 import { router as settingsRouter } from './endpoints/settings.js';
 import { router as backgroundsRouter } from './endpoints/backgrounds.js';
+import { router as thumbnailsRouter } from './endpoints/thumbnails.js';
 import { router as spritesRouter } from './endpoints/sprites.js';
 import { router as stableDiffusionRouter } from './endpoints/stable-diffusion.js';
 import { router as hordeRouter } from './endpoints/horde.js';
@@ -157,6 +158,7 @@ export function setupPrivateEndpoints(app) {
     app.use('/api/worldinfo', worldInfoRouter);
     app.use('/api/stats', statsRouter);
     app.use('/api/backgrounds', backgroundsRouter);
+    app.use('/api/thumbnails', thumbnailsRouter);
     app.use('/api/sprites', spritesRouter);
     app.use('/api/content', contentManagerRouter);
     app.use('/api/settings', settingsRouter);
