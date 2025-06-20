@@ -7,7 +7,7 @@ import {
     dimensions,
     invalidateThumbnail,
     generateThumbnail,
-    currentMetadataVersion as sharedMetadataVersion,
+    currentMetadataVersion,
 } from './thumbnails.js';
 import { sync as sharedWriteFileAtomicSync } from 'write-file-atomic';
 import { getImages } from '../util.js';
@@ -121,9 +121,9 @@ router.post('/upload', function (request, response) {
                     const currentVersionInFile = aspectRatiosData._metadata_version;
                     delete aspectRatiosData._metadata_version;
 
-                    if (aspectRatiosData[filename] !== thumbnailResult.aspectRatio || currentVersionInFile !== sharedMetadataVersion) {
+                    if (aspectRatiosData[filename] !== thumbnailResult.aspectRatio || currentVersionInFile !== currentMetadataVersion) {
                         aspectRatiosData[filename] = thumbnailResult.aspectRatio;
-                        aspectRatiosData._metadata_version = sharedMetadataVersion;
+                        aspectRatiosData._metadata_version = currentMetadataVersion;
                         try {
                             sharedWriteFileAtomicSync(aspectRatiosJsonPath, JSON.stringify(aspectRatiosData, null, 2));
                         } catch (e) {
