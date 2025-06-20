@@ -228,7 +228,6 @@ class BackgroundSelector {
 
         const menu = document.createElement('div');
         menu.className = 'jg-menu';
-        // FIX: The "Copy" icon div is removed from this HTML string.
         menu.innerHTML = `
             <div data-action="lock" class="jg-button jg-lock fa-solid fa-lock fa-fw pointer" title="${translate('Lock Background')}"></div>
             <div data-action="unlock" class="jg-button jg-unlock fa-solid fa-unlock fa-fw pointer" title="${translate('Unlock Background')}"></div>
@@ -458,7 +457,6 @@ function onSelectBackgroundClick() {
 
     if (!bgFile || !fullResUrl) return;
 
-    // The logic here remains the same as before.
     const backgroundCssUrl = `url("${fullResUrl}")`;
 
     // Automatically lock the background if it's custom or other background is locked
@@ -615,7 +613,6 @@ export async function getBackgrounds() {
             const isAnimated = filename.toLowerCase().endsWith('.webp');
             let thumbnailUrl;
 
-            // The logic for which URL to use is now self-contained.
             // If animations are ON, use the full animated file. Otherwise, use the static thumbnail endpoint.
             if (isAnimated && background_settings.animation) {
                 thumbnailUrl = getBackgroundPath(filename);
