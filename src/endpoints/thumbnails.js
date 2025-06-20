@@ -5,7 +5,6 @@ import express from 'express';
 import sanitize from 'sanitize-filename';
 import { Jimp, JimpMime } from '../jimp.js';
 import { sync as writeFileAtomicSync } from 'write-file-atomic';
-import { ASPECT_RATIOS_FILENAME } from '../constants.js';
 import { getFileNameValidationFunction } from '../middleware/validateFileName.js';
 
 import { getConfigValue } from '../util.js';
@@ -80,22 +79,6 @@ export function invalidateThumbnail(directories, type, file) {
 
     if (fs.existsSync(pathToThumbnail)) {
         try { fs.unlinkSync(pathToThumbnail); } catch (e) { console.error(`[invalidateThumbnail] Failed to delete thumbnail file ${pathToThumbnail}:`, e); }
-    }
-
-    if (type === 'bg' && directories.root) {
-        const aspectRatiosJsonPath = path.join(directories.root, ASPECT_RATIOS_FILENAME);
-        try {
-            if (fs.existsSync(aspectRatiosJsonPath)) {
-                const aspectRatios = JSON.parse(fs.readFileSync(aspectRatiosJsonPath, 'utf-8'));
-                if (Object.prototype.hasOwnProperty.call(aspectRatios, file)) {
-                    delete aspectRatios[file];
-                    aspectRatios._metadata_version = currentMetadataVersion;
-                    writeFileAtomicSync(aspectRatiosJsonPath, JSON.stringify(aspectRatios, null, 2));
-                }
-            }
-        } catch (e) {
-            console.error(`[invalidateThumbnail] Failed to update aspect_ratios.json for deleted file ${file}:`, e);
-        }
     }
 }
 
@@ -194,15 +177,13 @@ export async function ensureThumbnailCache(directoriesList) {
 export const router = express.Router();
 
 router.post('/upload-generated', getFileNameValidationFunction('originalFilename'), async function(request, response) {
-    // The global multer instance has already processed the file and put it in request.file.
-    // The multerMonkeyPatch has already fixed the filename.
     if (!request.file || !request.body?.originalFilename) {
         console.error('[thumbnails/upload-generated] Request is missing file or originalFilename.');
         return response.sendStatus(400);
     }
 
     const sanitizedFilename = request.body.originalFilename;
-    const tempPath = request.file.path;	// Store temp path before rename
+    const tempPath = request.file.path;
 
     try {
         const thumbnailFolder = getThumbnailFolder(request.user.directories, 'bg');
@@ -211,38 +192,10 @@ router.post('/upload-generated', getFileNameValidationFunction('originalFilename
         }
 
         const destinationPath = path.join(thumbnailFolder, sanitizedFilename);
-
-        // Move the temporary file from the generic 'uploads' folder to the permanent thumbnail cache.
         fs.renameSync(tempPath, destinationPath);
-
-        // After saving the file, calculate its aspect ratio and update server records.
-        try {
-            if (request.user.directories.root) {
-                const image = await Jimp.read(destinationPath);
-                const aspectRatio = (image.bitmap.height > 0) ? (image.bitmap.width / image.bitmap.height) : 1.0;
-
-                const aspectRatiosJsonPath = path.join(request.user.directories.root, ASPECT_RATIOS_FILENAME);
-                let aspectRatiosData = {};
-
-                if (fs.existsSync(aspectRatiosJsonPath)) {
-                    aspectRatiosData = JSON.parse(fs.readFileSync(aspectRatiosJsonPath, 'utf-8'));
-                }
-
-                aspectRatiosData[sanitizedFilename] = aspectRatio;
-                aspectRatiosData._metadata_version = currentMetadataVersion; // Use variable from file scope
-
-                writeFileAtomicSync(aspectRatiosJsonPath, JSON.stringify(aspectRatiosData, null, 2));
-            }
-        } catch (err) {
-            // Log the error, but don't fail the entire request, as the thumbnail was still saved.
-            console.error(`[thumbnails/upload-generated] Failed to update aspect ratio for ${sanitizedFilename}:`, err);
-        }
-
-        // Send a "No Content" response to indicate success without needing a body.
         return response.sendStatus(204);
     } catch (error) {
         console.error(`[thumbnails/upload-generated] Failed to save generated thumbnail for ${sanitizedFilename}:`, error);
-        // If an error occurs, ensure the temporary file is cleaned up.
         if (fs.existsSync(tempPath)) {
             fs.unlinkSync(tempPath);
         }

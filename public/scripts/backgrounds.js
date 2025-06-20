@@ -3,7 +3,7 @@ import { chat_metadata, eventSource, event_types, generateQuietPrompt, getCurren
 import { openThirdPartyExtensionMenu, saveMetadataDebounced } from './extensions.js';
 import { SlashCommand } from './slash-commands/SlashCommand.js';
 import { SlashCommandParser } from './slash-commands/SlashCommandParser.js';
-import { flashHighlight, stringFormat } from './utils.js';
+import { flashHighlight, stringFormat, debounce } from './utils.js';
 import { t, translate } from './i18n.js';
 import { Popup } from './popup.js';
 
@@ -124,126 +124,48 @@ export let background_settings = {
 const GAP_SIZE = 3; // pixels
 const TARGET_ROW_HEIGHT = 120;
 
-class JustifiedGallery {
-    constructor(container, targetRowHeight = TARGET_ROW_HEIGHT) {
-        this.container = container;
-        this.targetRowHeight = targetRowHeight;
-        this.currentRow = [];
-        this.currentRowWidth = 0;
-
-        if (!this.container) {
-            console.error('JustifiedGallery: Container element is null.');
-        }
-    }
-
-    reset() {
-        if (!this.container) return;
-        this.container.innerHTML = '';
-        this.currentRow = [];
-        this.currentRowWidth = 0;
-    }
-
-    addImage(imageData) {
-        if (!this.container) return;
-
-        const scaledWidth = this.targetRowHeight * imageData.aspectRatio;
-        this.currentRow.push({ ...imageData,
-            scaledWidth,
-        });
-        this.currentRowWidth += scaledWidth;
-
-        // We check against the container width when deciding to complete a row.
-        const containerWidth = this.container.offsetWidth;
-        if (containerWidth > 0 && this.currentRowWidth >= containerWidth) {
-            this.completeRow();
-        }
-    }
-
-    completeRow(isLastRow = false) {
-        if (this.currentRow.length === 0) return;
-
-        const containerWidth = this.container.offsetWidth;
-        if (containerWidth === 0) {
-            // If the container is hidden, we don't lose the images. They stay in currentRow,
-            // waiting for the next addImage call to trigger a valid completeRow.
-            return;
-        }
-
-        let finalHeight = this.targetRowHeight;
-        if (!isLastRow) {
-            const totalAspectRatio = this.currentRow.reduce((sum, img) => sum + img.aspectRatio, 0);
-            const gapWidth = (this.currentRow.length - 1) * GAP_SIZE;
-            finalHeight = (containerWidth - gapWidth) / totalAspectRatio;
-        }
-
-        this.renderRow(this.currentRow, finalHeight);
-
-        // Clear the row only after a successful render.
-        this.currentRow = [];
-        this.currentRowWidth = 0;
-    }
-
-    renderRow(imagesInRow, finalHeight) {
-        const rowElement = document.createElement('div');
-        rowElement.className = 'gallery-row';
-
-        imagesInRow.forEach(imgData => {
-            const width = finalHeight * imgData.aspectRatio;
-
-            const thumbnail = document.createElement('div');
-            thumbnail.className = 'thumbnail';
-            thumbnail.style.width = `${width}px`;
-            thumbnail.style.height = `${finalHeight}px`;
-            thumbnail.style.backgroundImage = `url("${imgData.url}")`;
-
-            const lockedBgUrl = `url("${imgData.fullResUrl}")`;
-            if (chat_metadata[BG_METADATA_KEY] === lockedBgUrl) {
-                thumbnail.classList.add('locked');
-            }
-
-            thumbnail.dataset.id = imgData.id;
-            thumbnail.dataset.bgfile = imgData.filename;
-            thumbnail.dataset.url = imgData.fullResUrl;
-            thumbnail.title = imgData.filename;
-            if (imgData.isCustom) {
-                thumbnail.setAttribute('custom', 'true');
-            }
-
-            const menu = document.createElement('div');
-            menu.className = 'jg-menu';
-
-            menu.innerHTML = `
-                <div data-action="lock" class="jg-button jg-lock fa-solid fa-lock fa-fw pointer" title="${translate('Lock Background')}"></div>
-                <div data-action="unlock" class="jg-button jg-unlock fa-solid fa-unlock fa-fw pointer" title="${translate('Unlock Background')}"></div>
-                <div data-action="edit" class="jg-button jg-edit fa-solid fa-pen-to-square fa-fw pointer" title="${translate('Rename Background')}"></div>
-                <div data-action="delete" class="jg-button jg-delete fa-solid fa-trash-can fa-fw pointer" title="${translate('Delete Background')}"></div>
-                <div data-action="copy" class="jg-button jg-copy fa-solid fa-copy fa-fw pointer" title="${translate('Copy to System')}"></div>
-            `;
-
-            thumbnail.appendChild(menu);
-
-            const titleDiv = document.createElement('div');
-            titleDiv.className = 'BGSampleTitle';
-            titleDiv.textContent = imgData.filename.substring(0, imgData.filename.lastIndexOf('.')) || imgData.filename;
-            thumbnail.appendChild(titleDiv);
-
-            rowElement.appendChild(thumbnail);
-        });
-
-        this.container.appendChild(rowElement);
-    }
-}
-
 class BackgroundSelector {
     constructor(containerId) {
         this.container = document.getElementById(containerId);
-        this.gallery = new JustifiedGallery(this.container);
         this.images = [];
         this.filteredImages = [];
         this.currentIndex = 0;
         this.batchSize = 90;
         this.scrollerElement = document.getElementById('Backgrounds');
         this.isLoading = false;
+        this.columns = [];
+        this.imageCounter = 0;
+        this.currentColumnCount = 0;
+
+        const debouncedLayout = debounce(() => {
+            if (this.currentColumnCount !== this._getColumnsForWidth()) {
+                this.resetAndLoad();
+            }
+        }, 150);
+        const resizeObserver = new ResizeObserver(debouncedLayout);
+        resizeObserver.observe(this.container);
+    }
+
+    _getColumnsForWidth() {
+        const width = this.container.offsetWidth;
+        if (width > 1600) return 9;
+        if (width > 1200) return 7;
+        if (width > 992) return 6;
+        if (width > 768) return 5;
+        if (width > 576) return 4;
+        return 3;
+    }
+
+    setupColumns() {
+        this.container.innerHTML = '';
+        this.columns = [];
+        this.currentColumnCount = this._getColumnsForWidth();
+        for (let i = 0; i < this.currentColumnCount; i++) {
+            const column = document.createElement('div');
+            column.className = 'masonry-column';
+            this.container.appendChild(column);
+            this.columns.push(column);
+        }
     }
 
     setImages(imageDataList) {
@@ -255,69 +177,85 @@ class BackgroundSelector {
         const lowerQuery = query.toLowerCase().trim();
         this.filteredImages = !lowerQuery
             ? this.images
-            : this.images.filter(img =>
-                (img.tags && img.tags.some(tag => tag.toLowerCase().includes(lowerQuery))) ||
-                img.filename.toLowerCase().includes(lowerQuery),
-            );
+            : this.images.filter(img => img.filename.toLowerCase().includes(lowerQuery));
         this.resetAndLoad();
     }
 
     resetAndLoad() {
-        this.gallery.reset();
+        if (!this.container) return;
+        this.setupColumns();
         this.currentIndex = 0;
-        setTimeout(() => {
-            this.loadUntilScrollable();
-        }, 0);
-    }
-
-    loadUntilScrollable() {
-        if (this.isLoading) return;
-        this.isLoading = true;
-
+        this.imageCounter = 0;
         this.loadBatch();
-
-        const hasMoreImages = this.currentIndex < this.filteredImages.length;
-        const isContainerVisible = this.gallery.container.offsetWidth > 0;
-        const isScrollable = this.scrollerElement.scrollHeight > this.scrollerElement.clientHeight;
-
-        if (hasMoreImages && isContainerVisible && !isScrollable) {
-            this.isLoading = false;
-            this.loadUntilScrollable();
-        } else {
-            this.isLoading = false;
-        }
     }
 
     loadBatch() {
-        if (!this.gallery) return;
-
-        const batch = this.filteredImages.slice(
-            this.currentIndex,
-            this.currentIndex + this.batchSize,
-        );
-
-        batch.forEach(img => this.gallery.addImage(img));
+        if (this.isLoading) return;
+        this.isLoading = true;
+        const batch = this.filteredImages.slice(this.currentIndex, this.currentIndex + this.batchSize);
+        batch.forEach(imgData => this.addImage(imgData));
         this.currentIndex += this.batchSize;
+        this.isLoading = false;
+    }
 
-        if (this.currentIndex >= this.filteredImages.length) {
-            this.gallery.completeRow(true);
+    addImage(imgData) {
+        if (!this.container || this.columns.length === 0) return;
+
+        const columnIndex = this.imageCounter % this.columns.length;
+        const targetColumn = this.columns[columnIndex];
+        this.imageCounter++;
+
+        const imgElement = new Image();
+        const thumbnail = document.createElement('div');
+        thumbnail.className = 'thumbnail';
+
+        const lockedBgUrl = `url("${imgData.fullResUrl}")`;
+        if (chat_metadata[BG_METADATA_KEY] === lockedBgUrl) {
+            thumbnail.classList.add('locked');
         }
+
+        thumbnail.dataset.id = imgData.id;
+        thumbnail.dataset.bgfile = imgData.filename;
+        thumbnail.dataset.url = imgData.fullResUrl;
+        thumbnail.title = imgData.filename;
+        if (imgData.isCustom) {
+            thumbnail.setAttribute('custom', 'true');
+        }
+
+        const titleDiv = document.createElement('div');
+        titleDiv.className = 'BGSampleTitle';
+        titleDiv.textContent = imgData.filename.substring(0, imgData.filename.lastIndexOf('.')) || imgData.filename;
+
+        const menu = document.createElement('div');
+        menu.className = 'jg-menu';
+        // FIX: The "Copy" icon div is removed from this HTML string.
+        menu.innerHTML = `
+            <div data-action="lock" class="jg-button jg-lock fa-solid fa-lock fa-fw pointer" title="${translate('Lock Background')}"></div>
+            <div data-action="unlock" class="jg-button jg-unlock fa-solid fa-unlock fa-fw pointer" title="${translate('Unlock Background')}"></div>
+            <div data-action="edit" class="jg-button jg-edit fa-solid fa-pen-to-square fa-fw pointer" title="${translate('Rename Background')}"></div>
+            <div data-action="delete" class="jg-button jg-delete fa-solid fa-trash-can fa-fw pointer" title="${translate('Delete Background')}"></div>
+        `;
+
+        thumbnail.appendChild(imgElement);
+        thumbnail.appendChild(titleDiv);
+        thumbnail.appendChild(menu);
+
+        targetColumn.appendChild(thumbnail);
+        imgElement.src = imgData.thumbnailUrl;
     }
 
     setupInfiniteScroll() {
         if (!this.scrollerElement) return;
-
         this.scrollerElement.addEventListener('scroll', () => {
             if (this.isLoading) return;
-
-            if (this.scrollerElement.scrollTop + this.scrollerElement.clientHeight >= this.scrollerElement.scrollHeight - 500) {
-                if (this.currentIndex < this.filteredImages.length) {
-                    this.loadUntilScrollable();
-                }
+            const hasMoreImages = this.currentIndex < this.filteredImages.length;
+            if (hasMoreImages && this.scrollerElement.scrollTop + this.scrollerElement.clientHeight >= this.scrollerElement.scrollHeight - 500) {
+                this.loadBatch();
             }
         });
     }
 }
+
 
 /**
  * Sets up or resets the IntersectionObserver for the gallery.
@@ -520,6 +458,7 @@ function onSelectBackgroundClick() {
 
     if (!bgFile || !fullResUrl) return;
 
+    // The logic here remains the same as before.
     const backgroundCssUrl = `url("${fullResUrl}")`;
 
     // Automatically lock the background if it's custom or other background is locked
@@ -537,40 +476,11 @@ function onSelectBackgroundClick() {
     }
 }
 
-async function onCopyToSystemBackgroundClick(e) {
-    e.stopPropagation();
-    const bgNames = await getNewBackgroundName(this);
-
-    if (!bgNames) {
-        return;
-    }
-
-    const bgFile = await fetch(bgNames.oldBg);
-
-    if (!bgFile.ok) {
-        toastr.warning('Failed to copy background');
-        return;
-    }
-
-    const blob = await bgFile.blob();
-    const file = new File([blob], bgNames.newBg);
-    const formData = new FormData();
-    formData.set('avatar', file);
-
-    await uploadBackground(formData);
-
-    const list = chat_metadata[LIST_METADATA_KEY] || [];
-    const index = list.indexOf(bgNames.oldBg);
-    list.splice(index, 1);
-    saveMetadataDebounced();
-    await getChatBackgroundsList();
-}
-
-async function getNewBackgroundName(referenceElement) {
-    const exampleBlock = $(referenceElement).closest('.thumbnail');
+async function getNewBackgroundName(thumbnailElement) {
+    const exampleBlock = $(thumbnailElement);
     const isCustom = exampleBlock.attr('custom') === 'true';
-
-    const oldBg = exampleBlock.data('bgfile') || exampleBlock.attr('bgfile');
+    
+    const oldBg = exampleBlock.data('bgfile');
 
     if (!oldBg) {
         console.debug('Could not find bgfile for rename operation.');
@@ -592,7 +502,13 @@ async function getNewBackgroundName(referenceElement) {
 async function onRenameBackgroundClick(e) {
     e.stopPropagation();
 
-    const bgNames = await getNewBackgroundName(this);
+    // The 'this' context is the jg-button that was clicked.
+    // We get the bgfile directly from the parent thumbnail's dataset.
+    const thumbnail = this.closest('.thumbnail');
+    if (!thumbnail) return;
+
+    // Pass the thumbnail element to getNewBackgroundName
+    const bgNames = await getNewBackgroundName(thumbnail);
 
     if (!bgNames) {
         return;
@@ -690,60 +606,34 @@ export async function getBackgrounds() {
             headers: getRequestHeaders(),
             body: JSON.stringify({}),
         });
-
-        if (!response.ok) {
-            console.error(`Failed to fetch backgrounds: ${response.status}`, await response.text());
-            if (backgroundSelector) {
-                backgroundSelector.setImages([]);
-            }
-            return;
-        }
+        if (!response.ok) throw new Error(`Failed to fetch backgrounds: ${response.status}`);
 
         const data = await response.json();
         const filenames = data.images || [];
-        const aspectsMap = data.aspects || {};
 
-        const imageDataListPromises = filenames.map(async (filename) => {
+        const imageDataList = filenames.map(filename => {
             const isAnimated = filename.toLowerCase().endsWith('.webp');
-            const hasServerThumb = aspectsMap[filename] !== undefined;
             let thumbnailUrl;
-            let finalAspectRatio;
 
-            // Case 1: User wants animations ON. Use the full, original file for the thumbnail.
+            // The logic for which URL to use is now self-contained.
+            // If animations are ON, use the full animated file. Otherwise, use the static thumbnail endpoint.
             if (isAnimated && background_settings.animation) {
                 thumbnailUrl = getBackgroundPath(filename);
-                finalAspectRatio = Number(aspectsMap[filename]) || 1.777;
-            }
-            // Case 2: User wants animations OFF, but the server has no pre-generated thumbnail.
-            // This is the one-time generation path.
-            else if (isAnimated && !hasServerThumb) {
-                const result = await getStaticThumbnailFromAnimatedSource(filename);
-                thumbnailUrl = result.blobUrl;
-                finalAspectRatio = result.aspectRatio;
-            }
-            // Case 3: All other scenarios (standard images, or animated images when animations are OFF
-            // and a server thumbnail already exists).
-            else {
+            } else {
                 thumbnailUrl = `/thumbnail?file=${encodeURIComponent(filename)}&type=bg`;
-                finalAspectRatio = Number(aspectsMap[filename]) || 1.777;
             }
 
             return {
                 id: filename,
                 filename: filename,
-                aspectRatio: (finalAspectRatio > 0) ? finalAspectRatio : 1.777,
-                url: thumbnailUrl,
+                thumbnailUrl: thumbnailUrl, // Pass the URL to be loaded
                 fullResUrl: getBackgroundPath(filename),
-                tags: filename.replace(/_/g, ' ').split('.').slice(0, -1).join('.').split(' '),
             };
         });
-
-        const imageDataList = await Promise.all(imageDataListPromises);
 
         if (backgroundSelector) {
             backgroundSelector.setImages(imageDataList);
         }
-
         highlightLockedBackground();
 
     } catch (error) {
@@ -912,7 +802,6 @@ export function initBackgrounds() {
             case 'unlock': onUnlockBackgroundClick.call(thumbnailContext, e); break;
             case 'edit': onRenameBackgroundClick.call(thumbnailContext, e); break;
             case 'delete': onDeleteBackgroundClick.call(thumbnailContext, e); break;
-            case 'copy': onCopyToSystemBackgroundClick.call(thumbnailContext, e); break;
         }
     });
 

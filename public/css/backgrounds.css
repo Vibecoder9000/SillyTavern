@@ -1,89 +1,40 @@
 #bg_menu_content {
-    width: 100%;
+    display: flex;
+    gap: 5px;
+    padding: 5px;
+    flex-wrap: wrap; 
 }
 
-.gallery-row {
+.masonry-column {
     display: flex;
-    margin-bottom: 0px;
-    position: relative;
+    flex-direction: column;
+    gap: 5px;
+    flex: 1;
 }
 
 .thumbnail {
     position: relative;
+    display: block;
+    width: 100%;
+    height: auto;
+    border-radius: 4px;
     overflow: hidden;
-    background-color: #1c1c1c;
-    flex-shrink: 0;
-    margin-right: 0px;
-    background-size: cover;
-    background-position: center;
-    background-repeat: no-repeat;
-}
-
-.gallery-row .thumbnail:last-child {
-    margin-right: 0;
+    cursor: pointer;
 }
 
 .thumbnail img {
     width: 100%;
-    height: 100%;
-    object-fit: cover;
+    height: auto;
     display: block;
+    background-color: #333;
 }
 
-.thumbnail .jg-menu {
-    /* The menu that appears on hover */
-    display: none;
-    position: absolute;
-    top: 5px;
-    right: 5px;
-    z-index: 2;
-    background-color: rgba(0, 0, 0, 0.5);
-    border-radius: 4px;
-    padding: 2px;
-    gap: 2px;
-}
-
-.thumbnail:hover .jg-menu {
-    display: flex;
-}
-
-.jg-button {
-    display: flex;
-    justify-content: center;
-    align-items: center;
-    padding: 5px;
-    color: white;
-    background-color: rgba(0, 0, 0, 0.5);
-    border-radius: 4px;
-}
-
-.thumbnail .jg-unlock,
-.thumbnail .jg-copy {
-    display: none;
-}
-
-.thumbnail.locked .jg-lock {
-    display: none;
-}
-.thumbnail.locked .jg-unlock {
-    display: flex;
-}
-
-.thumbnail[custom="true"] .jg-lock,
-.thumbnail[custom="true"] .jg-unlock,
-.thumbnail[custom="true"] .jg-edit {
-    display: none;
-}
-.thumbnail[custom="true"] .jg-copy {
-    display: flex;
-}
-
-.BGSampleTitle {
+.thumbnail .BGSampleTitle {
     position: absolute;
     bottom: 0;
     left: 0;
     right: 0;
-    background-color: rgba(0, 0, 0, 0.5);
+    background-color: rgba(0, 0, 0, 0.6);
     color: white;
     font-size: 0.8em;
     padding: 2px 4px;
@@ -91,6 +42,39 @@
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-    border-bottom-left-radius: 0px;
-    border-bottom-right-radius: 0px;
+}
+
+.thumbnail .jg-menu {
+    position: absolute;
+    top: 0;
+    right: 0;
+    background-color: rgba(0, 0, 0, 0.6);
+    border-bottom-left-radius: 4px;
+    display: none;
+    gap: 2px;
+    padding: 2px;
+    z-index: 2;
+}
+
+.thumbnail:hover .jg-menu {
+    display: flex;
+}
+
+.thumbnail .jg-button {
+    color: white;
+    padding: 5px;
+}
+
+.thumbnail .jg-unlock {
+    display: none; /* Hide unlock by default */
+}
+.thumbnail.locked .jg-lock {
+    display: none; /* Hide lock when thumbnail IS locked */
+}
+.thumbnail.locked .jg-unlock {
+    display: flex; /* Show unlock when thumbnail IS locked */
+}
+
+.thumbnail.locked {
+    outline: 2px solid var(--golden);
 }
