@@ -3295,23 +3295,6 @@ input[type=search]:focus::-webkit-search-cancel-button {
     display: none;
 }
 
-.BGSampleTitle {
-    display: flex;
-    width: 100%;
-    height: min-content;
-    text-align: center;
-    justify-content: center;
-    align-self: flex-end;
-    bottom: 0;
-    position: relative;
-    word-break: break-word;
-    background-color: var(--SmartThemeBlurTintColor);
-    font-size: calc(var(--fontScale) * 0.9em);
-    max-height: 50%;
-    overflow-y: clip;
-    border-radius: 0 0 7px 7px;
-}
-
 .bg_example[custom="true"] .BGSampleTitle {
     display: none;
 }
