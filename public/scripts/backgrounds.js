@@ -25,13 +25,6 @@ const LIST_METADATA_KEY = 'chat_backgrounds';
 const PNG_PIXEL = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=';
 
 /**
- * In-memory cache for generated static thumbnail blob URLs.
- * This function now caches the entire result object (URL and aspect ratio) in memory for the session.
- * @type {Map<string, {blobUrl: string, aspectRatio: number}>}
- */
-const THUMBNAIL_BLOBS = new Map();
-
-/**
  * Generates a static thumbnail from an animated WebP and returns its blob URL and aspect ratio.
  * This function  caches the entire result object (URL and aspect ratio) in memory for the session.
  * @param {string} bgFilename The filename of the animated background.
@@ -120,9 +113,6 @@ export let background_settings = {
     fitting: 'classic',
     animation: false,
 };
-
-const GAP_SIZE = 3; // pixels
-const TARGET_ROW_HEIGHT = 120;
 
 class BackgroundSelector {
     constructor(containerId) {
@@ -449,6 +439,18 @@ function unsetCustomBackground() {
     $('#bg_custom').css('background-image', 'none');
 }
 
+/**
+ * Manages the visual 'selected' state for thumbnails.
+ * @param {HTMLElement} selectedElement The thumbnail element that was clicked.
+ */
+function highlightSelectedBackground(selectedElement) {
+    $('.thumbnail.selected').removeClass('selected');
+
+    if (selectedElement) {
+        $(selectedElement).addClass('selected');
+    }
+}
+
 function onSelectBackgroundClick() {
     const $this = $(this);
     const bgFile = $this.data('bgfile');
@@ -459,16 +461,17 @@ function onSelectBackgroundClick() {
 
     const backgroundCssUrl = `url("${fullResUrl}")`;
 
-    // Automatically lock the background if it's custom or other background is locked
     if (hasCustomBackground() || isCustom) {
         saveBackgroundMetadata(backgroundCssUrl);
         setCustomBackground();
     }
+    
+    highlightSelectedBackground(this);
+    
     highlightLockedBackground();
 
     const customBg = window.getComputedStyle(document.getElementById('bg_custom')).backgroundImage;
 
-    // Custom background is set. Do not override the layer below
     if (customBg === 'none' || isCustom) {
         setBackground(bgFile, backgroundCssUrl);
     }
@@ -477,7 +480,7 @@ function onSelectBackgroundClick() {
 async function getNewBackgroundName(thumbnailElement) {
     const exampleBlock = $(thumbnailElement);
     const isCustom = exampleBlock.attr('custom') === 'true';
-    
+
     const oldBg = exampleBlock.data('bgfile');
 
     if (!oldBg) {

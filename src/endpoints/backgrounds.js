@@ -4,7 +4,6 @@ import path from 'node:path';
 import express from 'express';
 import sanitize from 'sanitize-filename';
 import { invalidateThumbnail } from './thumbnails.js';
-import { sync as writeFileAtomicSync } from 'write-file-atomic';
 import { getImages } from '../util.js';
 import { getFileNameValidationFunction } from '../middleware/validateFileName.js';
 

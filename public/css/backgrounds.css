@@ -20,6 +20,14 @@
     border-radius: 4px;
     overflow: hidden;
     cursor: pointer;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+    transition: transform 0.15s ease-out, box-shadow 0.15s ease-out;
+}
+
+.thumbnail:hover {
+    transform: translateY(-3px);
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.3);
+    z-index: 10;
 }
 
 .thumbnail img {
@@ -42,6 +50,11 @@
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+}
+
+.thumbnail.selected {
+    outline: 2px solid var(--golden);
+    outline-offset: -2px;
 }
 
 .thumbnail .jg-menu {
