@@ -594,7 +594,7 @@ async function delBackground(bg) {
 }
 
 async function onBackgroundUploadSelected() {
-    const form = $('#form_bg_upload').get(0);
+    const form = document.getElementById('form_bg_upload');
 
     if (!(form instanceof HTMLFormElement)) {
         console.error('form_bg_upload is not a form');
@@ -647,7 +647,7 @@ async function convertFileIfVideo(formData) {
 }
 
 /**
- * Uploads a background to the server
+ * Uploads a background to the server and updates the UI.
  * @param {FormData} formData
  */
 async function uploadBackground(formData) {
@@ -672,8 +672,23 @@ async function uploadBackground(formData) {
         }
 
         const bg = await response.text();
-        await getBackgrounds();
-        highlightNewBackground(bg);
+
+        const newImageData = {
+            id: bg,
+            filename: bg,
+            // Use the server thumbnail endpoint for the new image.
+            thumbnailUrl: `/thumbnail?file=${encodeURIComponent(bg)}&type=bg`,
+            fullResUrl: getBackgroundPath(bg),
+        };
+
+        backgroundSelector.images.unshift(newImageData); // Add to the beginning of the main list
+        backgroundSelector.filteredImages.unshift(newImageData);
+        backgroundSelector.addImage(newImageData);
+
+        setTimeout(() => {
+            highlightNewBackground(bg);
+        }, 100);
+
     } catch (error) {
         console.error('Error uploading background:', error);
     }
@@ -742,10 +757,6 @@ export function initBackgrounds() {
     $('#auto_background').on('click', autoBackgroundCommand);
     $('#add_bg_button').on('change', onBackgroundUploadSelected);
     $('#bg-filter').on('input', onBackgroundFilterInput);
-
-    $('#add_background_button_top').on('click', () => {
-        $('#add_bg_button').click();
-    });
 
     $('#background_fitting').on('input', function () {
         background_settings.fitting = String($(this).val());
