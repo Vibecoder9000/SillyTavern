@@ -352,6 +352,20 @@
     .bg_list {
         width: unset;
     }
+
+    #Backgrounds .flex-container.align-items-baseline {
+        flex-wrap: wrap;
+        row-gap: 10px;
+    }
+
+    #add_background_button_top {
+        width: 100%;
+        height: auto;
+        text-align: center;
+        padding-top: 0.8rem;
+        padding-bottom: 0.8rem;
+        font-size: 1.1em;
+    }
 }
 
 /*landscape mode phones and ipads*/
