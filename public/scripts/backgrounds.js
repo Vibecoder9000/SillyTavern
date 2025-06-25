@@ -41,7 +41,8 @@ class BackgroundSelector {
         this.images = [];
         this.filteredImages = [];
         this.currentIndex = 0;
-        this.batchSize = 90;
+        this.initialBatchSize = 120;
+        this.scrollBatchSize = 120;
         this.scrollerElement = document.getElementById('Backgrounds');
         this.isLoading = false;
         this.columns = [];
@@ -103,9 +104,13 @@ class BackgroundSelector {
     loadBatch() {
         if (this.isLoading) return;
         this.isLoading = true;
-        const batch = this.filteredImages.slice(this.currentIndex, this.currentIndex + this.batchSize);
+
+        // Use the initial size for the first batch, and the scroll size for the rest.
+        const size = this.currentIndex === 0 ? this.initialBatchSize : this.scrollBatchSize;
+        const batch = this.filteredImages.slice(this.currentIndex, this.currentIndex + size);
+
         batch.forEach(imgData => this.addImage(imgData));
-        this.currentIndex += this.batchSize;
+        this.currentIndex += size;
         this.isLoading = false;
     }
 
@@ -159,7 +164,7 @@ class BackgroundSelector {
         this.scrollerElement.addEventListener('scroll', () => {
             if (this.isLoading) return;
             const hasMoreImages = this.currentIndex < this.filteredImages.length;
-            if (hasMoreImages && this.scrollerElement.scrollTop + this.scrollerElement.clientHeight >= this.scrollerElement.scrollHeight - 500) {
+            if (hasMoreImages && this.scrollerElement.scrollTop + this.scrollerElement.clientHeight >= this.scrollerElement.scrollHeight - 1000) {
                 this.loadBatch();
             }
         });
