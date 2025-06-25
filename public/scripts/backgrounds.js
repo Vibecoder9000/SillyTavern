@@ -191,6 +191,10 @@ function setupGalleryObserver() {
         const observer = new IntersectionObserver((entries) => {
             const entry = entries[0];
             if (entry.isIntersecting) {
+                if (backgroundSelector.currentColumnCount !== backgroundSelector._getColumnsForWidth()) {
+                    backgroundSelector.resetAndLoad();
+                }
+
                 // The logic to check if a refresh is needed is now tied to this specific observer instance.
                 if (!hasLoaded || backgroundsNeedRefresh) {
                     getBackgrounds();
