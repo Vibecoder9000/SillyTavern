@@ -9,6 +9,9 @@ import { getFileNameValidationFunction } from '../middleware/validateFileName.js
 
 import { getConfigValue } from '../util.js';
 
+export const publicRouter = express.Router();
+export const apiRouter = express.Router();
+
 const SKIPPED_EXTENSIONS_FOR_JIMP = ['.apng', '.mp4', '.webm', '.avi', '.mkv', '.flv', '.webp'];
 
 const thumbnailResolution = getConfigValue('thumbnails.resolution', 15000);
@@ -113,7 +116,7 @@ export async function generateThumbnail(directories, type, file, knownAspectRati
         const numericalAspectRatio = (image.bitmap.height > 0) ? (image.bitmap.width / image.bitmap.height) : 1.0;
         const thumbImage = image.clone();
 
-       if (type === 'bg') {
+        if (type === 'bg') {
             const targetPixelArea = thumbnailResolution;
             const safeAspectRatio = numericalAspectRatio > 0 ? numericalAspectRatio : 1;
             let newHeight = Math.round(Math.sqrt(targetPixelArea / safeAspectRatio));
@@ -175,7 +178,7 @@ export async function ensureThumbnailCache(directoriesList) {
 
 export const router = express.Router();
 
-router.post('/upload-generated', getFileNameValidationFunction('originalFilename'), async function(request, response) {
+apiRouter.post('/upload-generated', getFileNameValidationFunction('originalFilename'), async function(request, response) {
     if (!request.file || !request.body?.originalFilename) {
         console.error('[thumbnails/upload-generated] Request is missing file or originalFilename.');
         return response.sendStatus(400);
@@ -203,7 +206,7 @@ router.post('/upload-generated', getFileNameValidationFunction('originalFilename
 });
 
 // Important: This route must be mounted as '/thumbnail'. It is used in the client code and saved to chat files.
-router.get('/', async function (request, response) {
+publicRouter.get('/', async function (request, response) {
     try {
         const { file: rawFile, type } = request.query;
         if (typeof rawFile !== 'string' || typeof type !== 'string') {
