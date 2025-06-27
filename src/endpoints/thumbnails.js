@@ -9,9 +9,7 @@ import { getFileNameValidationFunction } from '../middleware/validateFileName.js
 
 import { getConfigValue } from '../util.js';
 
-export const currentMetadataVersion = '1.0.0';
-
-const SKIPPED_EXTENSIONS_FOR_JIMP = ['.apng', '.mp4', '.webm', '.avi', '.mkv', '.flv', 'webp'];
+const SKIPPED_EXTENSIONS_FOR_JIMP = ['.apng', '.mp4', '.webm', '.avi', '.mkv', '.flv', '.webp'];
 
 const thumbnailsEnabled = !!getConfigValue('thumbnails.enabled', true, 'boolean');
 const quality = Math.min(100, Math.max(1, parseInt(getConfigValue('thumbnails.quality', 95, 'number'))));
