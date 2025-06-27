@@ -137,8 +137,10 @@ thumbnails:
   format: "jpg"
   # JPG thumbnail quality (0-100)
   quality: 95
-  # Maximum thumbnail dimensions per type [width, height]
-  dimensions: { 'bg': [160, 90], 'avatar': [96, 144] }
+  # Target resolution (total pixel area) for background thumbnails.
+  resolution: 15000
+  # Fixed dimensions [width, height] for avatars
+  dimensions: { 'avatar': [96, 144] }
 
 # PERFORMANCE-RELATED CONFIGURATION
 performance:

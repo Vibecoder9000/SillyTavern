@@ -11,16 +11,15 @@ import { getConfigValue } from '../util.js';
 
 const SKIPPED_EXTENSIONS_FOR_JIMP = ['.apng', '.mp4', '.webm', '.avi', '.mkv', '.flv', '.webp'];
 
+const thumbnailResolution = getConfigValue('thumbnails.resolution', 15000);
 const thumbnailsEnabled = !!getConfigValue('thumbnails.enabled', true, 'boolean');
 const quality = Math.min(100, Math.max(1, parseInt(getConfigValue('thumbnails.quality', 95, 'number'))));
 const pngFormat = String(getConfigValue('thumbnails.format', 'jpg')).toLowerCase().trim() === 'png';
 
 /** @type {Record<string, number[]>} */
 export const dimensions = {
-    bg: getConfigValue('thumbnails.dimensions.bg', [160, 90]),
     avatar: getConfigValue('thumbnails.dimensions.avatar', [96, 144]),
 };
-
 /**
  * Gets a path to thumbnail folder based on the type.
  * @param {import('../users.js').UserDirectoryList} directories User directories
@@ -114,15 +113,17 @@ export async function generateThumbnail(directories, type, file, knownAspectRati
         const numericalAspectRatio = (image.bitmap.height > 0) ? (image.bitmap.width / image.bitmap.height) : 1.0;
         const thumbImage = image.clone();
 
-        if (type === 'bg') {
-            const targetPixelArea = 25000;
+       if (type === 'bg') {
+            const targetPixelArea = thumbnailResolution;
             const safeAspectRatio = numericalAspectRatio > 0 ? numericalAspectRatio : 1;
             let newHeight = Math.round(Math.sqrt(targetPixelArea / safeAspectRatio));
             let newWidth = Math.round(newHeight * safeAspectRatio);
 
             if (newWidth === 0 || newHeight === 0) {
-                const [w, h] = dimensions[type];
-                thumbImage.cover({ w: w || 160, h: h || 90 });
+                const fallbackAspectRatio = 1;
+                const h = Math.round(Math.sqrt(targetPixelArea / fallbackAspectRatio));
+                const w = Math.round(h * fallbackAspectRatio);
+                thumbImage.cover({ w, h });
             } else {
                 thumbImage.scaleToFit({ w: newWidth, h: newHeight, mode: Jimp.RESIZE_BILINEAR });
             }
