@@ -201,6 +201,7 @@ function setupGalleryObserver() {
             background_settings.animation = !!$(this).prop('checked');
             saveSettingsDebounced();
         });
+
     } else {
         console.error('Background gallery container #bg_menu_content not found during setup.');
     }
@@ -680,7 +681,7 @@ async function uploadBackground(formData) {
             throw new Error(`Upload failed: ${response.status}`);
         }
 
-        await getBackgrounds(); 
+        await getBackgrounds();
         const bg = await response.text();
         setTimeout(() => { highlightNewBackground(bg); }, 100);
 
