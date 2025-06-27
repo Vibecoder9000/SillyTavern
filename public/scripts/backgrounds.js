@@ -173,8 +173,7 @@ class BackgroundSelector {
 
 
 /**
- * Sets up or resets the IntersectionObserver for the gallery.
- * This ensures we are always observing the currently active gallery element.
+ * Sets up or resets the IntersectionObserver to fetch fresh background data when the gallery becomes visible.
  */
 function setupGalleryObserver() {
     // Disconnect any old "zombie" observer to prevent memory leaks.
@@ -184,23 +183,11 @@ function setupGalleryObserver() {
 
     const galleryContainer = document.getElementById('bg_menu_content');
     if (galleryContainer) {
-        // These flags must be accessible to the observer's callback.
-        let hasLoaded = false;
-        let backgroundsNeedRefresh = false;
-
         const observer = new IntersectionObserver((entries) => {
             const entry = entries[0];
             if (entry.isIntersecting) {
-                if (backgroundSelector.currentColumnCount !== backgroundSelector._getColumnsForWidth()) {
-                    backgroundSelector.resetAndLoad();
-                }
-
-                // The logic to check if a refresh is needed is now tied to this specific observer instance.
-                if (!hasLoaded || backgroundsNeedRefresh) {
-                    getBackgrounds();
-                    hasLoaded = true;
-                    backgroundsNeedRefresh = false;
-                }
+                // Always refresh the data from the server when the panel becomes visible.
+                getBackgrounds();
             }
         }, {
             root: null,
@@ -208,17 +195,14 @@ function setupGalleryObserver() {
         });
 
         observer.observe(galleryContainer);
-        galleryObserver = observer; // Store the new, active observer.
+        galleryObserver = observer;
 
-        // We also need to listen for the toggle change within this scope.
         $('#background_thumbnails_animation').off('input.bg').on('input.bg', function () {
             background_settings.animation = !!$(this).prop('checked');
             saveSettingsDebounced();
-            backgroundsNeedRefresh = true;
         });
-
     } else {
-        console.error('Critical: Background gallery container #bg_menu_content not found during setup.');
+        console.error('Background gallery container #bg_menu_content not found during setup.');
     }
 }
 
@@ -479,6 +463,16 @@ async function onDeleteBackgroundClick(e) {
         if (index > -1) list.splice(index, 1);
     }
 
+    const index = backgroundSelector.images.findIndex(img => img.filename === bg);
+    if (index > -1) {
+        // Remove it from both the master list and the filtered list.
+        backgroundSelector.images.splice(index, 1);
+        const filteredIndex = backgroundSelector.filteredImages.findIndex(img => img.filename === bg);
+        if (filteredIndex > -1) {
+            backgroundSelector.filteredImages.splice(filteredIndex, 1);
+        }
+    }
+
     const allThumbnails = $('#bg_menu_content').find('.thumbnail');
     const currentIndex = allThumbnails.index(bgToDelete);
 
@@ -573,9 +567,15 @@ export async function getBackgrounds() {
             backgroundSelector.setImages(imageDataList);
         }
 
-        highlightLockedBackground();
-        // Also highlight the currently selected background on load.
-        highlightSelectedBackground(document.querySelector('.thumbnail.locked'));
+        setTimeout(() => {
+            highlightLockedBackground();
+
+            const selectedBgFile = background_settings.name;
+            if (selectedBgFile) {
+                const selectedElement = document.querySelector(`.thumbnail[data-bgfile="${selectedBgFile}"]`);
+                highlightSelectedBackground(selectedElement);
+            }
+        }, 0);
 
     } catch (error) {
         console.error('Error in getBackgrounds:', error);
@@ -680,23 +680,9 @@ async function uploadBackground(formData) {
             throw new Error(`Upload failed: ${response.status}`);
         }
 
+        await getBackgrounds(); 
         const bg = await response.text();
-
-        const newImageData = {
-            id: bg,
-            filename: bg,
-            // Use the server thumbnail endpoint for the new image.
-            thumbnailUrl: `/thumbnail?file=${encodeURIComponent(bg)}&type=bg`,
-            fullResUrl: getBackgroundPath(bg),
-        };
-
-        backgroundSelector.images.unshift(newImageData); // Add to the beginning of the main list
-        backgroundSelector.filteredImages.unshift(newImageData);
-        backgroundSelector.addImage(newImageData);
-
-        setTimeout(() => {
-            highlightNewBackground(bg);
-        }, 100);
+        setTimeout(() => { highlightNewBackground(bg); }, 100);
 
     } catch (error) {
         console.error('Error uploading background:', error);
