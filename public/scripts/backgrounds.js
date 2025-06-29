@@ -263,8 +263,8 @@ class BackgroundSelector {
             // Block until the restore cycle has completed at least once
             if (!restoreHasRun) return;
 
-            // Block if panel hidden
-            if (!isGalleryVisible) return;
+            // Block if panel hidden or saving is disabled
+            if (!isGalleryVisible || !allowSaving) return;
 
             // Block during cool-down right after a programmatic restore
             const timeSinceRestore = Date.now() - (self._restoreDoneAt || 0);
