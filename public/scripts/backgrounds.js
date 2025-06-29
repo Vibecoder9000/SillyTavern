@@ -17,7 +17,6 @@ function generateUrlParameter(bg, isCustom) {
 
 let galleryObserver = null;
 let backgroundSelector = null;
-let isGalleryVisible = false;
 
 const BG_METADATA_KEY = 'custom_background';
 const LIST_METADATA_KEY = 'chat_backgrounds';
@@ -42,10 +41,10 @@ function getGalleryScrollState() {
         return savedState ? JSON.parse(savedState) : {
             top: 0,
             fraction: 0,
-            filter: ''
+            filter: '',
         };
     } catch (e) {
-        console.error("Failed to parse gallery scroll state:", e);
+        console.error('Failed to parse gallery scroll state:', e);
         return { top: 0, fraction: 0, filter: '' };
     }
 }
@@ -290,7 +289,7 @@ class BackgroundSelector {
             const currentState = {
                 top: s.scrollTop,
                 fraction: s.scrollTop / max,
-                filter: currentFilter
+                filter: currentFilter,
             };
 
             setGalleryScrollState(currentState);
