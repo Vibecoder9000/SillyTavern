@@ -116,36 +116,10 @@ export async function generateThumbnail(directories, type, file, knownAspectRati
         return null;
     }
 
-    let thumbnailFolder = getThumbnailFolder(directories, type);
-    let originalFolder = getOriginalFolder(directories, type);
-    if (thumbnailFolder === undefined || originalFolder === undefined) throw new Error('Invalid thumbnail type');
-
-    const pathToCachedFile = path.join(thumbnailFolder, file);
-    const pathToOriginalFile = path.join(originalFolder, file);
-
-    const cachedFileExists = fs.existsSync(pathToCachedFile);
-    const originalFileExists = fs.existsSync(pathToOriginalFile);
-
-    // to handle cases when original image was updated after thumb creation
-    let shouldRegenerate = false;
-
-    if (cachedFileExists && originalFileExists) {
-        const originalStat = fs.statSync(pathToOriginalFile);
-        const cachedStat = fs.statSync(pathToCachedFile);
-
-        if (originalStat.mtimeMs <= cachedStat.mtimeMs) {
-            return { path: pathToCachedFile, aspectRatio: knownAspectRatio ?? 1.0 };
-        }
-        shouldRegenerate = true;
-    }
-
-    // Skip thumbnail generation for these extensions, unless forceGenerate is true
-    if (!forceGenerate && SKIPPED_EXTENSIONS_FOR_JIMP.includes(fileExtension)) {
-        return null;
-    }
-
+    // Use these variables from the original declaration
     const thumbnailFolder = getThumbnailFolder(directories, type);
     const originalFolder = getOriginalFolder(directories, type);
+
     if (!thumbnailFolder || !originalFolder) {
         throw new Error('Invalid thumbnail type');
     }
@@ -154,14 +128,20 @@ export async function generateThumbnail(directories, type, file, knownAspectRati
     const pathToOriginalFile = path.join(originalFolder, file);
 
     try {
-        if (!fs.existsSync(pathToOriginalFile)) {
-            if (fs.existsSync(pathToCachedFile)) {
-                try { fs.unlinkSync(pathToCachedFile); } catch (e) { /* ignore */ }
+        // Check if files exist
+        const cachedFileExists = fs.existsSync(pathToCachedFile);
+        const originalFileExists = fs.existsSync(pathToOriginalFile);
+
+        // Handle missing original file
+        if (!originalFileExists) {
+            if (cachedFileExists) {
+                try { fs.unlinkSync(pathToCachedFile); } catch (e) { /*ignore*/ }
             }
             return null;
         }
 
-        if (fs.existsSync(pathToCachedFile)) {
+        // Check if we need to regenerate
+        if (cachedFileExists) {
             const originalStat = fs.statSync(pathToOriginalFile);
             const cachedStat = fs.statSync(pathToCachedFile);
             if (originalStat.mtimeMs <= cachedStat.mtimeMs) {
@@ -169,6 +149,7 @@ export async function generateThumbnail(directories, type, file, knownAspectRati
             }
         }
 
+        // Generate the thumbnail
         const image = await Jimp.read(pathToOriginalFile);
         const numericalAspectRatio = (image.bitmap.height > 0) ? (image.bitmap.width / image.bitmap.height) : 1.0;
         const thumbImage = image.clone();
@@ -280,7 +261,7 @@ publicRouter.get('/', async function (request, response) {
             return response.sendStatus(403);
         }
 
-        if (type !== 'bg' && type !== 'avatar') {
+        if (type !== 'bg' && type !== 'avatar' && type !== 'persona') {
             return response.sendStatus(400);
         }
 
