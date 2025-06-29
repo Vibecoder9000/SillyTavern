@@ -17,6 +17,7 @@ function generateUrlParameter(bg, isCustom) {
 
 let galleryObserver = null;
 let backgroundSelector = null;
+let isGalleryVisible = false;
 
 const BG_METADATA_KEY = 'custom_background';
 const LIST_METADATA_KEY = 'chat_backgrounds';
@@ -35,6 +36,24 @@ export let background_settings = {
     animation: false,
 };
 
+function getGalleryScrollState() {
+    try {
+        const savedState = sessionStorage.getItem('galleryScrollState');
+        return savedState ? JSON.parse(savedState) : {
+            top: 0,
+            fraction: 0,
+            filter: ''
+        };
+    } catch (e) {
+        console.error("Failed to parse gallery scroll state:", e);
+        return { top: 0, fraction: 0, filter: '' };
+    }
+}
+
+function setGalleryScrollState(newState) {
+    sessionStorage.setItem('galleryScrollState', JSON.stringify(newState));
+}
+
 class BackgroundSelector {
     constructor(containerId) {
         this.container = document.getElementById(containerId);
@@ -48,6 +67,8 @@ class BackgroundSelector {
         this.columns = [];
         this.imageCounter = 0;
         this.currentColumnCount = 0;
+        this.isRestoring = false;
+        this._hasRestored = false;
 
         const debouncedLayout = debounce(() => {
             if (this.currentColumnCount !== this._getColumnsForWidth()) {
@@ -95,23 +116,89 @@ class BackgroundSelector {
 
     resetAndLoad() {
         if (!this.container) return;
+        this._hasRestored = false;
         this.setupColumns();
         this.currentIndex = 0;
         this.imageCounter = 0;
+
+        // Load everything at once
         this.loadBatch();
     }
 
     loadBatch() {
-        if (this.isLoading) return;
-        this.isLoading = true;
+        // Load everything at once instead of batching
+        const remainingImages = this.filteredImages.slice(this.currentIndex);
 
-        // Use the initial size for the first batch, and the scroll size for the rest.
-        const size = this.currentIndex === 0 ? this.initialBatchSize : this.scrollBatchSize;
-        const batch = this.filteredImages.slice(this.currentIndex, this.currentIndex + size);
+        if (remainingImages.length === 0) return;
 
-        batch.forEach(imgData => this.addImage(imgData));
-        this.currentIndex += size;
-        this.isLoading = false;
+        remainingImages.forEach(imgData => this.addImage(imgData));
+
+        // Mark all images as loaded
+        this.currentIndex = this.filteredImages.length;
+    }
+
+    async waitForImagesAndRestore() {
+        const scrollState = getGalleryScrollState();
+        const currentFilter = $('#bg-filter').val() || '';
+
+        // Always enable saving at the end
+        const enableSavingAtEnd = () => {
+            const imageCount = this.filteredImages.length;
+            const baseDelay = 50;
+            const perImageDelay = 0.1;
+            const maxDelay = 5000;
+            const dynamicDelay = Math.min(baseDelay + (imageCount * perImageDelay), maxDelay);
+
+            setTimeout(() => {
+                this.isRestoring = false;
+                this._restoreDoneAt = Date.now();
+                if (typeof this.enableSaving === 'function') {
+                    this.enableSaving();
+                }
+            }, dynamicDelay);
+        };
+
+        // If we already restored scroll for this gallery build, just enable saving and exit
+        if (this._hasRestored) {
+            enableSavingAtEnd();
+            return;
+        }
+
+        // Check if the current filter matches the saved filter
+        const savedFilter = scrollState.filter || '';
+        const normalizedCurrentFilter = currentFilter || '';
+        const normalizedSavedFilter = savedFilter || '';
+
+        if (normalizedCurrentFilter !== normalizedSavedFilter) {
+            this._hasRestored = true;
+            enableSavingAtEnd();
+            return;
+        }
+
+        // Nothing to restore if stored position is zero
+        if (scrollState.top === 0) {
+            this._hasRestored = true;
+            enableSavingAtEnd();
+            return;
+        }
+
+        const s = this.scrollerElement;
+        const wantedPx = scrollState.top;
+
+        this.isRestoring = true;
+
+        // Wait for layout to settle, then restore position
+        const imageCount = this.filteredImages.length;
+        const baseDelay = 50;
+        const perImageDelay = 0.1;
+        const maxDelay = 5000;
+        const dynamicDelay = Math.min(baseDelay + (imageCount * perImageDelay), maxDelay);
+
+        setTimeout(() => {
+            s.scrollTo({ top: wantedPx, behavior: 'auto' });
+            this._hasRestored = true;
+            enableSavingAtEnd();
+        }, dynamicDelay);
     }
 
     addImage(imgData) {
@@ -159,52 +246,137 @@ class BackgroundSelector {
         imgElement.src = imgData.thumbnailUrl;
     }
 
-    setupInfiniteScroll() {
+    setupScrollPositionSaving() {
         if (!this.scrollerElement) return;
-        this.scrollerElement.addEventListener('scroll', () => {
-            if (this.isLoading) return;
-            const hasMoreImages = this.currentIndex < this.filteredImages.length;
-            if (hasMoreImages && this.scrollerElement.scrollTop + this.scrollerElement.clientHeight >= this.scrollerElement.scrollHeight - 1000) {
-                this.loadBatch();
+
+        const self = this;
+        let allowSaving = false;
+        let restoreHasRun = false;
+        let userHasScrolled = false;
+        let lastUserScrollTime = 0;
+
+        const SAVE_COOLDOWN = 600; // ms after restore during which we ignore events
+
+        const saveScrollState = () => {
+            const s = self.scrollerElement;
+
+            // Block until the restore cycle has completed at least once
+            if (!restoreHasRun) return;
+
+            // Block if panel hidden
+            if (!allowSaving) return;
+
+            // Block during cool-down right after a programmatic restore
+            const timeSinceRestore = Date.now() - (self._restoreDoneAt || 0);
+            if (timeSinceRestore < SAVE_COOLDOWN) return;
+
+            // Block while still restoring
+            if (self.isRestoring) return;
+
+            // Block if element is collapsed
+            if (s.clientHeight === 0 || s.scrollHeight === 0) return;
+
+            // Block if user hasn't actually scrolled recently
+            const timeSinceUserScroll = Date.now() - lastUserScrollTime;
+            if (!userHasScrolled || timeSinceUserScroll > 5000) return;
+
+            // Only ignore scrollTop === 0 if it happens very soon after restoration
+            if (s.scrollTop === 0 && timeSinceRestore < SAVE_COOLDOWN) return;
+
+            // Get the current filter state
+            const currentFilter = $('#bg-filter').val() || '';
+
+            const max = Math.max(1, s.scrollHeight - s.clientHeight);
+            const currentState = {
+                top: s.scrollTop,
+                fraction: s.scrollTop / max,
+                filter: currentFilter
+            };
+
+            setGalleryScrollState(currentState);
+        };
+
+        this.debouncedSaveScrollState = debounce(saveScrollState, 250);
+
+        let scrollTimeout;
+        const handleScroll = (e) => {
+            // Only mark as user scroll if it's trusted AND not during any restoration period
+            const timeSinceRestore = Date.now() - (self._restoreDoneAt || 0);
+            if (e.isTrusted && !self.isRestoring && timeSinceRestore > SAVE_COOLDOWN) {
+                userHasScrolled = true;
+                lastUserScrollTime = Date.now();
+            }
+
+            clearTimeout(scrollTimeout);
+            scrollTimeout = setTimeout(saveScrollState, 150);
+            this.debouncedSaveScrollState();
+        };
+
+        this.scrollerElement.addEventListener('scroll', handleScroll);
+
+        this.container.addEventListener('click', (e) => {
+            if (e.target.closest('.thumbnail')) {
+                userHasScrolled = true;
+                lastUserScrollTime = Date.now();
+                setTimeout(saveScrollState, 50);
             }
         });
+
+        // Public toggles used by the IntersectionObserver
+        this.enableSaving = () => {
+            allowSaving = true;
+            restoreHasRun = true;
+        };
+        this.disableSaving = () => {
+            allowSaving = false;
+            userHasScrolled = false;
+            lastUserScrollTime = 0;
+        };
     }
 }
 
-
-/**
- * Sets up or resets the IntersectionObserver to fetch fresh background data when the gallery becomes visible.
- */
 function setupGalleryObserver() {
-    // Disconnect any old "zombie" observer to prevent memory leaks.
-    if (galleryObserver) {
-        galleryObserver.disconnect();
-    }
+    if (galleryObserver) galleryObserver.disconnect();
 
     const galleryContainer = document.getElementById('bg_menu_content');
-    if (galleryContainer) {
-        const observer = new IntersectionObserver((entries) => {
-            const entry = entries[0];
-            if (entry.isIntersecting) {
-                // Always refresh the data from the server when the panel becomes visible.
-                getBackgrounds();
-            }
-        }, {
-            root: null,
-            threshold: 0.01,
-        });
-
-        observer.observe(galleryContainer);
-        galleryObserver = observer;
-
-        $('#background_thumbnails_animation').off('input.bg').on('input.bg', function () {
-            background_settings.animation = !!$(this).prop('checked');
-            saveSettingsDebounced();
-        });
-
-    } else {
-        console.error('Background gallery container #bg_menu_content not found during setup.');
+    if (!galleryContainer) {
+        console.error('Critical: #bg_menu_content not found.');
+        return;
     }
+
+    let hasLoaded = false;
+
+    galleryObserver = new IntersectionObserver(entries => {
+        const entry = entries[0];
+
+        if (entry.isIntersecting) {
+            isGalleryVisible = true;
+            if (!hasLoaded) {
+                getBackgrounds();
+                hasLoaded = true;
+            } else {
+                // On subsequent opens, restore scroll and highlight selected background
+                if (backgroundSelector) {
+                    backgroundSelector.waitForImagesAndRestore();
+
+                    // Re-highlight the selected background
+                    setTimeout(() => {
+                        const selectedBgFile = background_settings.name;
+                        if (selectedBgFile) {
+                            const selectedElement = document.querySelector(`.thumbnail[data-bgfile="${selectedBgFile}"]`);
+                            highlightSelectedBackground(selectedElement);
+                        }
+                    }, 100);
+                }
+            }
+        } else {
+            isGalleryVisible = false;
+            backgroundSelector?.disableSaving();
+            if (backgroundSelector) backgroundSelector._hasRestored = false;
+        }
+    }, { root: null, threshold: 0.01 });
+
+    galleryObserver.observe(galleryContainer);
 }
 
 export function loadBackgroundSettings(settings) {
@@ -218,6 +390,8 @@ export function loadBackgroundSettings(settings) {
     if (!Object.hasOwn(backgroundSettings, 'animation')) {
         backgroundSettings.animation = false;
     }
+
+    background_settings.animation = backgroundSettings.animation;
     setBackground(backgroundSettings.name, backgroundSettings.url);
     setFittingClass(backgroundSettings.fitting);
     $('#background_fitting').val(backgroundSettings.fitting);
@@ -249,7 +423,6 @@ async function onChatChanged() {
         unsetCustomBackground();
     }
 
-    // Re-initialize the observer every time the chat changes
     setupGalleryObserver();
 
     await getChatBackgroundsList();
@@ -288,7 +461,6 @@ function highlightLockedBackground() {
         }
     });
 }
-
 /**
  * Locks the background for the current chat
  * @param {Event} e Click event
@@ -311,7 +483,6 @@ function onLockBackgroundClick(e) {
     highlightLockedBackground();
     return '';
 }
-
 /**
  * Locks the background for the current chat
  * @param {Event} e Click event
@@ -342,7 +513,6 @@ function removeBackgroundMetadata() {
 function setCustomBackground() {
     const file = chat_metadata[BG_METADATA_KEY];
 
-    // bg already set
     if (document.getElementById('bg_custom').style.backgroundImage == file) {
         return;
     }
@@ -382,7 +552,6 @@ function onSelectBackgroundClick() {
     }
 
     highlightSelectedBackground(this);
-
     highlightLockedBackground();
 
     const customBg = window.getComputedStyle(document.getElementById('bg_custom')).backgroundImage;
@@ -418,12 +587,9 @@ async function getNewBackgroundName(thumbnailElement) {
 async function onRenameBackgroundClick(e) {
     e.stopPropagation();
 
-    // The 'this' context is the jg-button that was clicked.
-    // We get the bgfile directly from the parent thumbnail's dataset.
     const thumbnail = this.closest('.thumbnail');
     if (!thumbnail) return;
 
-    // Pass the thumbnail element to getNewBackgroundName
     const bgNames = await getNewBackgroundName(thumbnail);
 
     if (!bgNames) {
@@ -466,7 +632,6 @@ async function onDeleteBackgroundClick(e) {
 
     const index = backgroundSelector.images.findIndex(img => img.filename === bg);
     if (index > -1) {
-        // Remove it from both the master list and the filtered list.
         backgroundSelector.images.splice(index, 1);
         const filteredIndex = backgroundSelector.filteredImages.findIndex(img => img.filename === bg);
         if (filteredIndex > -1) {
@@ -503,7 +668,6 @@ async function onDeleteBackgroundClick(e) {
 const autoBgPrompt = 'Ignore previous instructions and choose a location ONLY from the provided list that is the most suitable for the current scene. Do not output any other text:\n{0}';
 
 async function autoBackgroundCommand() {
-    /** @type {HTMLElement[]} */
     const bgTitles = Array.from(document.querySelectorAll('#bg_menu_content .BGSampleTitle'));
     const options = bgTitles.map(x => ({ element: $(x).closest('.thumbnail')[0], text: x.innerText.trim() })).filter(x => x.text.length > 0);
     if (options.length === 0) {
@@ -547,13 +711,13 @@ export async function getBackgrounds() {
             const isAnimated = filename.toLowerCase().endsWith('.webp');
             let thumbnailUrl;
 
-            // If the animation toggle is ON and the file is a WebP, use the full animated file as the thumbnail.
+            // If the animation toggle is ON and the file is a WebP, use the full animated file
             if (isAnimated && background_settings.animation) {
                 thumbnailUrl = getBackgroundPath(filename);
             }
-            // Otherwise, use the fast, static server-side thumbnail endpoint.
+            // Otherwise, use the server-side thumbnail endpoint
             else {
-                thumbnailUrl = `/thumbnail?file=${encodeURIComponent(filename)}&type=bg`;
+                thumbnailUrl = `/thumbnail?file=${encodeURIComponent(filename)}&type=bg&animated=${background_settings.animation}`;
             }
 
             return {
@@ -576,6 +740,11 @@ export async function getBackgrounds() {
                 const selectedElement = document.querySelector(`.thumbnail[data-bgfile="${selectedBgFile}"]`);
                 highlightSelectedBackground(selectedElement);
             }
+
+            if (backgroundSelector) {
+                backgroundSelector.waitForImagesAndRestore();
+            }
+
         }, 0);
 
     } catch (error) {
@@ -726,13 +895,11 @@ function onBackgroundFilterInput() {
 }
 
 export function initBackgrounds() {
-    backgroundSelector = new BackgroundSelector('bg_menu_content'); // Initialize the module-scoped variable
-    backgroundSelector.setupInfiniteScroll();
+    backgroundSelector = new BackgroundSelector('bg_menu_content');
+    backgroundSelector.setupScrollPositionSaving();
 
-    // Call the setup function on initial load
     setupGalleryObserver();
 
-    // The rest of the event listeners are for elements that are not rebuilt.
     eventSource.on(event_types.CHAT_CHANGED, onChatChanged);
     eventSource.on(event_types.FORCE_SET_BACKGROUND, forceSetBackground);
 
@@ -758,6 +925,14 @@ export function initBackgrounds() {
         background_settings.fitting = String($(this).val());
         setFittingClass(background_settings.fitting);
         saveSettingsDebounced();
+    });
+
+    $('#background_thumbnails_animation').on('change', function() {
+        background_settings.animation = $(this).prop('checked');
+        saveSettingsDebounced();
+        if (backgroundSelector) {
+            getBackgrounds();
+        }
     });
 
     SlashCommandParser.addCommandObject(SlashCommand.fromProps({

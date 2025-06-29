@@ -19,10 +19,10 @@ const thumbnailsEnabled = !!getConfigValue('thumbnails.enabled', true, 'boolean'
 const quality = Math.min(100, Math.max(1, parseInt(getConfigValue('thumbnails.quality', 95, 'number'))));
 const pngFormat = String(getConfigValue('thumbnails.format', 'jpg')).toLowerCase().trim() === 'png';
 
-/** @type {Record<string, number[]>} */
 export const dimensions = {
     avatar: getConfigValue('thumbnails.dimensions.avatar', [96, 144]),
 };
+
 /**
  * Gets a path to thumbnail folder based on the type.
  * @param {import('../users.js').UserDirectoryList} directories User directories
@@ -65,12 +65,6 @@ function getOriginalFolder(directories, type) {
     return originalFolder;
 }
 
-/**
- * Removes the generated thumbnail from the disk.
- * @param {import('../users.js').UserDirectoryList} directories User directories
- * @param {'bg' | 'avatar'} type Type of the thumbnail
- * @param {string} file Name of the file
- */
 export function invalidateThumbnail(directories, type, file) {
     const folder = getThumbnailFolder(directories, type);
     if (folder === undefined) throw new Error('Invalid thumbnail type');
@@ -78,12 +72,19 @@ export function invalidateThumbnail(directories, type, file) {
     const pathToThumbnail = path.join(folder, file);
 
     if (fs.existsSync(pathToThumbnail)) {
-        try { fs.unlinkSync(pathToThumbnail); } catch (e) { console.error(`[invalidateThumbnail] Failed to delete thumbnail file ${pathToThumbnail}:`, e); }
+        try {
+            fs.unlinkSync(pathToThumbnail);
+        } catch (e) {
+            console.error(`[invalidateThumbnail] Failed to delete thumbnail file ${pathToThumbnail}:`, e);
+        }
     }
 }
 
-export async function generateThumbnail(directories, type, file, knownAspectRatio = null) {
-    if (SKIPPED_EXTENSIONS_FOR_JIMP.includes(path.extname(file).toLowerCase())) {
+export async function generateThumbnail(directories, type, file, knownAspectRatio = null, forceGenerate = false) {
+    const fileExtension = path.extname(file).toLowerCase();
+
+    // Skip thumbnail generation for these extensions, unless forceGenerate is true
+    if (!forceGenerate && SKIPPED_EXTENSIONS_FOR_JIMP.includes(fileExtension)) {
         return null;
     }
 
@@ -99,7 +100,7 @@ export async function generateThumbnail(directories, type, file, knownAspectRati
     try {
         if (!fs.existsSync(pathToOriginalFile)) {
             if (fs.existsSync(pathToCachedFile)) {
-                try { fs.unlinkSync(pathToCachedFile); } catch (e) { /* ignore */ }
+                try { fs.unlinkSync(pathToCachedFile); } catch (e) { /*ignore*/ }
             }
             return null;
         }
@@ -157,7 +158,6 @@ export async function ensureThumbnailCache(directoriesList) {
     for (const directories of directoriesList) {
         const cacheFiles = fs.readdirSync(directories.thumbnailsBg);
 
-        // files exist, all ok
         if (cacheFiles.length) {
             continue;
         }
@@ -208,7 +208,7 @@ apiRouter.post('/upload-generated', getFileNameValidationFunction('originalFilen
 // Important: This route must be mounted as '/thumbnail'. It is used in the client code and saved to chat files.
 publicRouter.get('/', async function (request, response) {
     try {
-        const { file: rawFile, type } = request.query;
+        const { file: rawFile, type, animated } = request.query;
         if (typeof rawFile !== 'string' || typeof type !== 'string') {
             return response.sendStatus(400);
         }
@@ -223,6 +223,9 @@ publicRouter.get('/', async function (request, response) {
             return response.sendStatus(400);
         }
 
+        const animatedEnabled = animated === 'true';
+        const isWebP = file.toLowerCase().endsWith('.webp');
+
         const serveOriginal = async () => {
             const folder = getOriginalFolder(request.user.directories, type);
             if (!folder) return response.sendStatus(400);
@@ -231,21 +234,23 @@ publicRouter.get('/', async function (request, response) {
             return response.sendFile(pathToOriginalFile);
         };
 
+        // If animations are enabled and this is a WebP, serve the original
+        if (animatedEnabled && isWebP) {
+            return await serveOriginal();
+        }
+
         if (!thumbnailsEnabled) {
             return await serveOriginal();
         }
 
-        // Attempt to generate a thumbnail.
-        // This will return null for skipped types like .webp, triggering the fallback.
-        const thumbnailResult = await generateThumbnail(request.user.directories, type, file);
+        // For WebP files with animations disabled, force thumbnail generation
+        const forceGenerate = isWebP && !animatedEnabled;
+        const thumbnailResult = await generateThumbnail(request.user.directories, type, file, null, forceGenerate);
 
-        // If thumbnail generation failed or was skipped, serve the original file.
-        // This is the correct path for animated WebP files.
         if (!thumbnailResult?.path || !fs.existsSync(thumbnailResult.path)) {
             return await serveOriginal();
         }
 
-        // If we successfully generated a thumbnail (for .jpg, .png, etc.), serve it.
         return response.sendFile(path.resolve(thumbnailResult.path));
 
     } catch (error) {
