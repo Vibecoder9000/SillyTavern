@@ -21,6 +21,7 @@ browserLaunch:
   # Open the browser automatically on server startup.
   enabled: true
   # Browser to use for opening the URL.
+  # NOT SUPPORTED ON ANDROID DEVICES.
   # - Use "default" to use the system default browser
   # - Use "firefox", "chrome", "edge"
   browser: 'default'
@@ -139,8 +140,9 @@ thumbnails:
   quality: 95
   # Target resolution (total pixel area) for background thumbnails.
   resolution: 15000
-  # Fixed dimensions [width, height] for avatars
-  dimensions: { 'avatar': [96, 144] }
+  # Maximum thumbnail dimensions per type [width, height]
+  dimensions: { 'bg': [160, 90], 'avatar': [96, 144], 'persona': [96, 144] }
+
 
 # PERFORMANCE-RELATED CONFIGURATION
 performance:

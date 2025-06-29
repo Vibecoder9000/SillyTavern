@@ -19,15 +19,21 @@ const thumbnailsEnabled = !!getConfigValue('thumbnails.enabled', true, 'boolean'
 const quality = Math.min(100, Math.max(1, parseInt(getConfigValue('thumbnails.quality', 95, 'number'))));
 const pngFormat = String(getConfigValue('thumbnails.format', 'jpg')).toLowerCase().trim() === 'png';
 
+/**
+ * @typedef {'bg' | 'avatar' | 'persona'} ThumbnailType
+ */
+
 /** @type {Record<string, number[]>} */
 export const dimensions = {
-    avatar: getConfigValue('thumbnails.dimensions.avatar', [96, 144]),
+    'bg': getConfigValue('thumbnails.dimensions.bg', [160, 90]),
+    'avatar': getConfigValue('thumbnails.dimensions.avatar', [96, 144]),
+    'persona': getConfigValue('thumbnails.dimensions.persona', [96, 144]),
 };
 
 /**
  * Gets a path to thumbnail folder based on the type.
  * @param {import('../users.js').UserDirectoryList} directories User directories
- * @param {'bg' | 'avatar'} type Thumbnail type
+ * @param {ThumbnailType} type Thumbnail type
  * @returns {string} Path to the thumbnails folder
  */
 function getThumbnailFolder(directories, type) {
@@ -40,6 +46,9 @@ function getThumbnailFolder(directories, type) {
         case 'avatar':
             thumbnailFolder = directories.thumbnailsAvatar;
             break;
+        case 'persona':
+            thumbnailFolder = directories.thumbnailsPersona;
+            break;
     }
 
     return thumbnailFolder;
@@ -48,7 +57,7 @@ function getThumbnailFolder(directories, type) {
 /**
  * Gets a path to the original images folder based on the type.
  * @param {import('../users.js').UserDirectoryList} directories User directories
- * @param {'bg' | 'avatar'} type Thumbnail type
+ * @param {ThumbnailType} type Thumbnail type
  * @returns {string} Path to the original images folder
  */
 function getOriginalFolder(directories, type) {
@@ -61,6 +70,9 @@ function getOriginalFolder(directories, type) {
         case 'avatar':
             originalFolder = directories.characters;
             break;
+        case 'persona':
+            originalFolder = directories.avatars;
+            break;
     }
 
     return originalFolder;
@@ -69,14 +81,14 @@ function getOriginalFolder(directories, type) {
 /**
  * Removes the generated thumbnail from the disk.
  * @param {import('../users.js').UserDirectoryList} directories User directories
- * @param {'bg' | 'avatar'} type Type of the thumbnail
+ * @param {ThumbnailType} type Type of the thumbnail
  * @param {string} file Name of the file
  */
 export function invalidateThumbnail(directories, type, file) {
     const folder = getThumbnailFolder(directories, type);
     if (folder === undefined) throw new Error('Invalid thumbnail type');
 
-    const pathToThumbnail = path.join(folder, file);
+    const pathToThumbnail = path.join(folder, sanitize(file));
 
     if (fs.existsSync(pathToThumbnail)) {
         try {
@@ -87,8 +99,45 @@ export function invalidateThumbnail(directories, type, file) {
     }
 }
 
+/**
+ * Generates a thumbnail for the given file.
+ * @param {import('../users.js').UserDirectoryList} directories User directories
+ * @param {ThumbnailType} type Type of the thumbnail
+ * @param {string} file Name of the file
+ * @param {number|null} knownAspectRatio Optional known aspect ratio
+ * @param {boolean} forceGenerate Whether to force thumbnail generation for normally skipped file types
+ * @returns {Promise<{path: string, aspectRatio: number}|null>}
+ */
 export async function generateThumbnail(directories, type, file, knownAspectRatio = null, forceGenerate = false) {
     const fileExtension = path.extname(file).toLowerCase();
+
+    // Skip thumbnail generation for these extensions, unless forceGenerate is true
+    if (!forceGenerate && SKIPPED_EXTENSIONS_FOR_JIMP.includes(fileExtension)) {
+        return null;
+    }
+
+    let thumbnailFolder = getThumbnailFolder(directories, type);
+    let originalFolder = getOriginalFolder(directories, type);
+    if (thumbnailFolder === undefined || originalFolder === undefined) throw new Error('Invalid thumbnail type');
+
+    const pathToCachedFile = path.join(thumbnailFolder, file);
+    const pathToOriginalFile = path.join(originalFolder, file);
+
+    const cachedFileExists = fs.existsSync(pathToCachedFile);
+    const originalFileExists = fs.existsSync(pathToOriginalFile);
+
+    // to handle cases when original image was updated after thumb creation
+    let shouldRegenerate = false;
+
+    if (cachedFileExists && originalFileExists) {
+        const originalStat = fs.statSync(pathToOriginalFile);
+        const cachedStat = fs.statSync(pathToCachedFile);
+
+        if (originalStat.mtimeMs <= cachedStat.mtimeMs) {
+            return { path: pathToCachedFile, aspectRatio: knownAspectRatio ?? 1.0 };
+        }
+        shouldRegenerate = true;
+    }
 
     // Skip thumbnail generation for these extensions, unless forceGenerate is true
     if (!forceGenerate && SKIPPED_EXTENSIONS_FOR_JIMP.includes(fileExtension)) {
@@ -218,6 +267,10 @@ publicRouter.get('/', async function (request, response) {
     try {
         const { file: rawFile, type, animated } = request.query;
         if (typeof rawFile !== 'string' || typeof type !== 'string') {
+            return response.sendStatus(400);
+        }
+
+        if (!(type === 'bg' || type === 'avatar' || type === 'persona')) {
             return response.sendStatus(400);
         }
 

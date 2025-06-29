@@ -1499,7 +1499,7 @@
                                             </div>
                                         </div>
                                     </div>
-                                    <div data-tg-type="ooba,infermaticai,koboldcpp,llamacpp,ollama,tabby" id="mirostat_block_ooba" class="wide100p">
+                                    <div data-tg-type="ooba,infermaticai,koboldcpp,llamacpp,tabby" id="mirostat_block_ooba" class="wide100p">
                                         <h4 class="wide100p textAlignCenter">
                                             <label data-i18n="Mirostat (mode=1 is only for llama.cpp)">Mirostat</label>
                                             <div class=" fa-solid fa-circle-info opacity50p " data-i18n="[title]Mirostat_desc" title="Mirostat is a thermostat for output perplexity.&#13;Mirostat matches the output perplexity to that of the input, thus avoiding the repetition trap&#13;(where, as the autoregressive inference produces text, the perplexity of the output tends toward zero)&#13;and the confusion trap (where the perplexity diverges).&#13;For details, see the paper Mirostat: A Neural Text Decoding Algorithm that Directly Controls Perplexity by Basu et al. (2020).&#13;Mode chooses the Mirostat version. 0=disable, 1=Mirostat 1.0 (llama.cpp only), 2=Mirostat 2.0."></div>
@@ -3192,12 +3192,15 @@
                                 <h4 data-i18n="Google Model">Google Model</h4>
                                 <select id="model_google_select">
                                     <optgroup label="Gemini 2.5">
+                                        <option value="gemini-2.5-pro">gemini-2.5-pro</option>
                                         <option value="gemini-2.5-pro-preview-06-05">gemini-2.5-pro-preview-06-05</option>
                                         <option value="gemini-2.5-pro-preview-05-06">gemini-2.5-pro-preview-05-06</option>
                                         <option value="gemini-2.5-pro-preview-03-25">gemini-2.5-pro-preview-03-25</option>
                                         <option value="gemini-2.5-pro-exp-03-25">gemini-2.5-pro-exp-03-25</option>
+                                        <option value="gemini-2.5-flash">gemini-2.5-flash</option>
                                         <option value="gemini-2.5-flash-preview-05-20">gemini-2.5-flash-preview-05-20</option>
                                         <option value="gemini-2.5-flash-preview-04-17">gemini-2.5-flash-preview-04-17</option>
+                                        <option value="gemini-2.5-flash-lite-preview-06-17">gemini-2.5-flash-lite-preview-06-17</option>
                                     </optgroup>
                                     <optgroup label="Gemini 2.0">
                                         <option value="gemini-2.0-pro-exp-02-05">gemini-2.0-pro-exp-02-05 → 2.5-pro-exp-03-25</option>
@@ -3257,19 +3260,38 @@
                             <!-- Express Mode Configuration -->
                             <div id="vertexai_express_config" class="vertexai-auth-section" data-mode="express">
                                 <h4>
-                                    <span data-i18n="Google Vertex AI API Key">
-                                        Google Vertex AI API Key
+                                    <span data-i18n="Google Vertex AI Configuration">
+                                        Google Vertex AI Configuration
                                     </span>
                                     <a href="https://cloud.google.com/vertex-ai/generative-ai/docs/start/express-mode/overview" data-i18n="(Express mode)" target="_blank" rel="noopener noreferrer">
                                         (Express mode)
                                     </a>
                                 </h4>
-                                <div class="flex-container">
-                                    <input id="api_key_vertexai" name="api_key_vertexai" class="text_pole flex1" value="" type="text" autocomplete="off">
-                                    <div title="Manage API keys" data-i18n="[title]Manage API keys" class="menu_button fa-solid fa-key fa-fw manage-api-keys" data-key="api_key_vertexai"></div>
+                                <!-- API Key -->
+                                <div class="flex-container flexFlowColumn">
+                                    <label for="api_key_vertexai" data-i18n="API Key">API Key:</label>
+                                    <div class="flex-container">
+                                        <input id="api_key_vertexai" name="api_key_vertexai" class="text_pole flex1" value="" type="text" autocomplete="off">
+                                        <div title="Manage API keys" data-i18n="[title]Manage API keys" class="menu_button fa-solid fa-key fa-fw manage-api-keys" data-key="api_key_vertexai"></div>
+                                    </div>
+                                    <div data-for="api_key_vertexai" class="neutral_warning" data-i18n="For privacy reasons, your API key will be hidden after you click 'Connect'.">
+                                        For privacy reasons, your API key will be hidden after you click 'Connect'.
+                                    </div>
                                 </div>
-                                <div data-for="api_key_vertexai" class="neutral_warning" data-i18n="For privacy reasons, your API key will be hidden after you click 'Connect'.">
-                                    For privacy reasons, your API key will be hidden after you click 'Connect'.
+                                <!-- Project ID -->
+                                <div class="flex-container flexFlowColumn marginTop10">
+                                    <label for="vertexai_express_project_id">
+                                        <span data-i18n="Project ID">Project ID:</span>
+                                    </label>
+                                    <div class="flex-container">
+                                        <input id="vertexai_express_project_id" name="vertexai_express_project_id" class="text_pole flex1" value="" type="text" autocomplete="off" placeholder="Enter your Project ID">
+                                    </div>
+                                    <div class="toggle-description justifyLeft marginBot5">
+                                        <small data-i18n="Project ID is required when selecting regions other than the default (us-central1). You can find this in a model 404 error message.">
+                                            `Project ID` is only required when selecting regions other than the default (us-central1).<br>
+                                            You can find this in a model 404 error message.
+                                        </small>
+                                    </div>
                                 </div>
                             </div>
 
@@ -3283,20 +3305,6 @@
                                         <i class="fa-solid fa-circle-question"></i>
                                     </a>
                                 </h4>
-
-                                <!-- Region -->
-                                <div class="flex-container flexFlowColumn">
-                                    <label for="vertexai_region">
-                                        <span data-i18n="Region">
-                                            Region:
-                                        </span>
-                                        <a href="https://cloud.google.com/vertex-ai/generative-ai/docs/learn/locations" target="_blank" rel="noopener noreferrer" title="View available regions and models" data-i18n="[title]View available regions and models" class="notes-link">
-                                            <span class="fa-solid fa-circle-question note-link-span"></span>
-                                        </a>
-                                    </label>
-                                    <input id="vertexai_region" name="vertexai_region" class="text_pole flex1" value="us-central1" type="text" autocomplete="off" placeholder="e.g., global, us-central1, europe-west1, asia-northeast1">
-                                </div>
-
                                 <!-- Service Account JSON Content -->
                                 <div class="flex-container flexFlowColumn">
                                     <label for="vertexai_service_account_json" data-i18n="Service Account JSON Content">Service Account JSON Content:</label>
@@ -3316,34 +3324,62 @@
                                 </div>
                             </div>
 
+                            <!-- Region -->
+                            <div class="flex-container flexFlowColumn">
+                                <label for="vertexai_region">
+                                    <span data-i18n="Region">
+                                        Region:
+                                    </span>
+                                    <a href="https://cloud.google.com/vertex-ai/generative-ai/docs/learn/locations" target="_blank" rel="noopener noreferrer" title="View available regions and models" data-i18n="[title]View available regions and models" class="notes-link">
+                                        <span class="fa-solid fa-circle-question note-link-span"></span>
+                                    </a>
+                                </label>
+                                <input id="vertexai_region" name="vertexai_region" class="text_pole flex1" value="us-central1" type="text" autocomplete="off" placeholder="e.g., global, us-central1, europe-west1, asia-northeast1" list="vertexai_region_suggestions">
+
+                                <datalist id="vertexai_region_suggestions">
+                                    <option value="global">global</option>
+                                    <option value="us-central1">us-central1</option>
+                                    <option value="us-east1">us-east1</option>
+                                    <option value="us-east4">us-east4</option>
+                                    <option value="us-west1">us-west1</option>
+                                    <option value="us-west2">us-west2</option>
+                                    <option value="us-west3">us-west3</option>
+                                    <option value="us-west4">us-west4</option>
+                                    <option value="europe-west1">europe-west1</option>
+                                    <option value="europe-west2">europe-west2</option>
+                                    <option value="europe-west3">europe-west3</option>
+                                    <option value="europe-west4">europe-west4</option>
+                                    <option value="europe-west6">europe-west6</option>
+                                    <option value="europe-central2">europe-central2</option>
+                                    <option value="asia-northeast1">asia-northeast1</option>
+                                    <option value="asia-northeast3">asia-northeast3</option>
+                                    <option value="asia-southeast1">asia-southeast1</option>
+                                    <option value="asia-south1">asia-south1</option>
+                                    <option value="australia-southeast1">australia-southeast1</option>
+                                </datalist>
+                            </div>
+
                             <!-- Model Selection -->
                             <div>
                                 <h4 data-i18n="Google Model">Google Model</h4>
                                 <select id="model_vertexai_select">
-                                    <!-- Express Mode Models -->
-                                    <optgroup id="vertexai_express_models" label="Express Mode Models" data-mode="express">
-                                        <option value="gemini-2.5-pro-preview-05-06">gemini-2.5-pro-preview-05-06</option>
-                                        <option value="gemini-2.5-pro-preview-03-25">gemini-2.5-pro-preview-03-25</option>
-                                        <option value="gemini-2.5-flash-preview-05-20">gemini-2.5-flash-preview-05-20</option>
-                                        <option value="gemini-2.5-flash-preview-04-17">gemini-2.5-flash-preview-04-17</option>
-                                        <option value="gemini-2.0-flash-001">gemini-2.0-flash-001</option>
-                                        <option value="gemini-2.0-flash-lite-001">gemini-2.0-flash-lite-001</option>
-                                    </optgroup>
-
-                                    <!-- Full Version Models -->
-                                    <optgroup id="vertexai_full_gemini_25" label="Gemini 2.5" data-mode="full">
+                                    <!-- data-mode="full" is for models that require a service account -->
+                                    <optgroup label="Gemini 2.5">
+                                        <option value="gemini-2.5-pro">gemini-2.5-pro</option>
                                         <option value="gemini-2.5-pro-preview-06-05">gemini-2.5-pro-preview-06-05</option>
                                         <option value="gemini-2.5-pro-preview-05-06">gemini-2.5-pro-preview-05-06</option>
                                         <option value="gemini-2.5-pro-preview-03-25">gemini-2.5-pro-preview-03-25</option>
-                                        <option value="gemini-2.5-pro-exp-03-25">gemini-2.5-pro-exp-03-25</option>
+                                        <option value="gemini-2.5-pro-exp-03-25" data-mode="full">gemini-2.5-pro-exp-03-25</option>
+                                        <option value="gemini-2.5-flash">gemini-2.5-flash</option>
                                         <option value="gemini-2.5-flash-preview-05-20">gemini-2.5-flash-preview-05-20</option>
                                         <option value="gemini-2.5-flash-preview-04-17">gemini-2.5-flash-preview-04-17</option>
+                                        <option value="gemini-2.5-flash-lite-preview-06-17">gemini-2.5-flash-lite-preview-06-17</option>
                                     </optgroup>
-                                    <optgroup id="vertexai_full_gemini_20" label="Gemini 2.0" data-mode="full">
-                                        <option value="gemini-2.0-flash-001">gemini-2.0-flash-001</option>
-                                        <option value="gemini-2.0-flash-exp">gemini-2.0-flash-exp</option>
-                                        <option value="gemini-2.0-flash-preview-image-generation">gemini-2.0-flash-preview-image-generation</option>
+                                    <optgroup label="Gemini 2.0">
+                                        <option value="gemini-2.0-flash-exp" data-mode="full">gemini-2.0-flash-exp</option>
+                                        <option value="gemini-2.0-flash-preview-image-generation" data-mode="full">gemini-2.0-flash-preview-image-generation</option>
                                         <option value="gemini-2.0-flash">gemini-2.0-flash</option>
+                                        <option value="gemini-2.0-flash-001">gemini-2.0-flash-001</option>
                                         <option value="gemini-2.0-flash-lite-001">gemini-2.0-flash-lite-001</option>
                                     </optgroup>
                                 </select>
@@ -3674,13 +3710,17 @@
                             </h4>
                             <select id="custom_prompt_post_processing" class="text_pole" title="Applies additional processing to the prompt before sending it to the API." data-i18n="[title]Applies additional processing to the prompt before sending it to the API.">
                                 <option data-i18n="prompt_post_processing_none" value="">None</option>
-                                <option data-i18n="prompt_post_processing_merge" value="merge">Merge consecutive roles (no tools)</option>
-                                <option data-i18n="prompt_post_processing_merge_tools" value="merge_tools">Merge consecutive roles (with tools)</option>
-                                <option data-i18n="prompt_post_processing_semi" value="semi">Semi-strict (alternating roles; no tools)</option>
-                                <option data-i18n="prompt_post_processing_semi_tools" value="semi_tools">Semi-strict (alternating roles; with tools)</option>
-                                <option data-i18n="prompt_post_processing_strict" value="strict">Strict (user first, alternating roles; no tools)</option>
-                                <option data-i18n="prompt_post_processing_strict_tools" value="strict_tools">Strict (user first, alternating roles; with tools)</option>
-                                <option data-i18n="prompt_post_processing_single" value="single">Single user message (no tools)</option>
+                                <optgroup label="With Tools">
+                                    <option data-i18n="prompt_post_processing_merge_tools" value="merge_tools">Merge consecutive roles (with tools)</option>
+                                    <option data-i18n="prompt_post_processing_semi_tools" value="semi_tools">Semi-strict (alternating roles; with tools)</option>
+                                    <option data-i18n="prompt_post_processing_strict_tools" value="strict_tools">Strict (user first, alternating roles; with tools)</option>
+                                </optgroup>
+                                <optgroup label="No Tools">
+                                    <option data-i18n="prompt_post_processing_merge" value="merge">Merge consecutive roles (no tools)</option>
+                                    <option data-i18n="prompt_post_processing_semi" value="semi">Semi-strict (alternating roles; no tools)</option>
+                                    <option data-i18n="prompt_post_processing_strict" value="strict">Strict (user first, alternating roles; no tools)</option>
+                                    <option data-i18n="prompt_post_processing_single" value="single">Single user message (no tools)</option>
+                                </optgroup>
                             </select>
                         </div>
                         <div class="flex-container flex">
@@ -3688,7 +3728,7 @@
                             <div class="api_loading menu_button menu_button_icon" data-i18n="Cancel">Cancel</div>
                             <div data-source="custom" id="customize_additional_parameters" class="menu_button menu_button_icon" data-i18n="Additional Parameters">Additional Parameters</div>
                             <div data-source="openrouter" class="menu_button menu_button_icon openrouter_authorize" title="Get your OpenRouter API token using OAuth flow. You will be redirected to openrouter.ai" data-i18n="Authorize;[title]Get your OpenRouter API token using OAuth flow. You will be redirected to openrouter.ai">Authorize</div>
-                            <div id="test_api_button" class="menu_button menu_button_icon" title="Verifies your API connection by sending a short test message. Be aware that you'll be credited for it!" data-i18n="[title]Verifies your API connection by sending a short test message. Be aware that you'll be credited for it!"><span data-i18n="Test Message">Test Message</span></div>
+                            <div id="test_api_button" class="menu_button menu_button_icon" title="Verifies your API connection by sending a short test message. Be aware that you'll be credited for it!" data-i18n="Test Message;[title]Verifies your API connection by sending a short test message. Be aware that you'll be credited for it!">Test Message</div>
                         </div>
                         <div class="online_status">
                             <div class="online_status_indicator"></div>
@@ -4267,7 +4307,7 @@
                                 </span>
                             </div>
                             <div class="range-block-range">
-                                <select id="world_info" class="select2_multi_sameline" multiple>
+                                <select id="world_info" multiple>
                                     <option value="" data-i18n="-- World Info not found --">-- World Info not found -- </option>
                                 </select>
                             </div>
@@ -4760,7 +4800,7 @@
                                 <input id="never_resize_avatars" type="checkbox" />
                                 <small data-i18n="Never resize avatars">Never resize avatars</small>
                             </label>
-                           <label data-i18n="[title]Make animated backgrounds static in the selection menu. This will reduce UI and network lag if you have a large amount. This is only a change for the selection menu." for="background_thumbnails_animation" class="checkbox_label" title="Make animated backgrounds static in the selection menu. This will reduce UI and network lag if you have a large amount. This is only a change for the selection menu.">
+                           <label data-i18n="[title]Allow animations for WEBP backgrounds. This is only a change for the selection menu." for="background_thumbnails_animation" class="checkbox_label" title="Allow animations for WEBP backgrounds. This is only a change for the selection menu.">
                                <input id="background_thumbnails_animation" type="checkbox" />
                                <small data-i18n="Animated background thumbnails">Animated background thumbnails</small>
                            </label>
@@ -6234,7 +6274,7 @@
                                 </span>
                             </small>
                             <small class="textAlignCenter" data-i18n="Primary Keywords">Primary Keywords</small>
-                            <select class="keyprimaryselect keyselect select2_multi_sameline" name="key" data-i18n="[placeholder]Keywords or Regexes" placeholder="Keywords or Regexes" multiple="multiple"></select>
+                            <select class="keyprimaryselect keyselect" name="key" data-i18n="[placeholder]Keywords or Regexes" placeholder="Keywords or Regexes" multiple="multiple"></select>
                             <textarea class="text_pole keyprimarytextpole mobile" name="key" rows="1" data-i18n="[placeholder]Comma separated list" placeholder="Comma separated list" style="display: none;"></textarea>
                             <button type="button" class="switch_input_type_icon" tabindex="-1" title="Switch to plaintext mode" data-i18n="[title]Switch to plaintext mode" data-icon-on="✨" data-icon-off="⌨️" data-tooltip-on="Switch to fancy mode" data-tooltip-off="Switch to plaintext mode">
                                 ⌨️
@@ -6256,7 +6296,7 @@
                                 </span>
                             </small>
                             <small class="textAlignCenter" data-i18n="Optional Filter">Optional Filter</small>
-                            <select class="keysecondaryselect keyselect select2_multi_sameline" name="keysecondary" data-i18n="[placeholder]Keywords or Regexes (ignored if empty)" placeholder="Keywords or Regexes (ignored if empty)" multiple="multiple"></select>
+                            <select class="keysecondaryselect keyselect" name="keysecondary" data-i18n="[placeholder]Keywords or Regexes (ignored if empty)" placeholder="Keywords or Regexes (ignored if empty)" multiple="multiple"></select>
                             <textarea class="text_pole keysecondarytextpole mobile" name="keysecondary" rows="1" data-i18n="[placeholder]Comma separated list (ignored if empty)" placeholder="Comma separated list (ignored if empty)" style="display: none;"></textarea>
                             <button type="button" class="switch_input_type_icon" tabindex="-1" title="Switch to plaintext mode" data-i18n="[title]Switch to plaintext mode" data-icon-on="✨" data-icon-off="⌨️" data-tooltip-on="Switch to fancy mode" data-tooltip-off="Switch to plaintext mode">
                                 ⌨️
@@ -6443,7 +6483,7 @@
                             </label>
                         </div>
                         <div class="range-block-range">
-                            <select name="characterFilter" class="select2_multi_sameline" multiple>
+                            <select name="characterFilter" multiple>
                                 <option value="" data-i18n="-- Characters not found --">
                                     -- Characters not found --
                                 </option>
@@ -6805,19 +6845,19 @@
                         <div class="mes_reasoning"></div>
                     </details>
                     <div class="mes_text"></div>
-                    <div class="mes_img_container">
-                        <div class="mes_img_controls">
-                            <div title="Expand and zoom" class="right_menu_button fa-lg fa-solid fa-magnifying-glass mes_img_enlarge" data-i18n="[title]Expand and zoom"></div>
-                            <div title="Caption" class="right_menu_button fa-lg fa-solid fa-envelope-open-text mes_img_caption" data-i18n="[title]Caption"></div>
-                            <div title="Delete" class="right_menu_button fa-lg fa-solid fa-trash-can mes_img_delete" data-i18n="[title]Delete"></div>
-                        </div>
-                        <div class="mes_img_swipes">
-                            <div title="Swipe left" class="right_menu_button fa-lg fa-solid fa-chevron-left mes_img_swipe_left" data-i18n="[title]Swipe left"></div>
-                            <div class="mes_img_swipe_counter">1/1</div>
-                            <div title="Swipe right" class="right_menu_button fa-lg fa-solid fa-chevron-right mes_img_swipe_right" data-i18n="[title]Swipe right"></div>
-                        </div>
-                        <img class="mes_img" src="" />
-                    </div>
+            <div class="mes_img_container">
+                <div class="mes_img_controls">
+                    <div title="Expand and zoom" class="right_menu_button fa-lg fa-solid fa-magnifying-glass mes_img_enlarge" data-i18n="[title]Expand and zoom"></div>
+                    <div title="Caption" class="right_menu_button fa-lg fa-solid fa-envelope-open-text mes_img_caption" data-i18n="[title]Caption"></div>
+                    <div title="Delete" class="right_menu_button fa-lg fa-solid fa-trash-can mes_img_delete" data-i18n="[title]Delete"></div>
+                </div>
+                <div class="mes_img_swipes">
+                    <div title="Swipe left" class="right_menu_button fa-lg fa-solid fa-chevron-left mes_img_swipe_left" data-i18n="[title]Swipe left"></div>
+                    <div class="mes_img_swipe_counter">1/1</div>
+                    <div title="Swipe right" class="right_menu_button fa-lg fa-solid fa-chevron-right mes_img_swipe_right" data-i18n="[title]Swipe right"></div>
+                </div>
+                <img class="mes_img" src="" />
+            </div>
                     <div class="mes_bias"></div>
                 </div>
                 <div class="flex-container swipeRightBlock flexFlowColumn flexNoGap">
@@ -7025,6 +7065,16 @@
                 <div class="mes_file_size"></div>
                 <div class="right_menu_button mes_file_open fa-solid fa-magnifying-glass" title="View contents" data-i18n="[title]View contents"></div>
                 <div class="right_menu_button mes_file_delete fa-solid fa-trash-can" title="Remove the file" data-i18n="[title]Remove the file"></div>
+            </div>
+        </div>
+
+        <div id="message_video_template" class="template_element">
+            <div class="mes_video_container">
+                <div class="mes_video_controls">
+                    <div><!-- Placeholder --></div>
+                    <div title="Delete" class="right_menu_button fa-lg fa-solid fa-trash-can mes_video_delete" data-i18n="[title]Delete"></div>
+                </div>
+                <video class="mes_video" controls preload="metadata"></video>
             </div>
         </div>
     </div>

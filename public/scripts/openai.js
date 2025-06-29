@@ -240,6 +240,7 @@ const sensitiveFields = [
     'custom_exclude_body',
     'custom_include_headers',
     'vertexai_region',
+    'vertexai_express_project_id',
 ];
 
 /**
@@ -314,6 +315,7 @@ export const settingsToUpdate = {
     use_makersuite_sysprompt: ['#use_makersuite_sysprompt', 'use_makersuite_sysprompt', true, false],
     vertexai_auth_mode: ['#vertexai_auth_mode', 'vertexai_auth_mode', false, true],
     vertexai_region: ['#vertexai_region', 'vertexai_region', false, true],
+    vertexai_express_project_id: ['#vertexai_express_project_id', 'vertexai_express_project_id', false, true],
     use_alt_scale: ['#use_alt_scale', 'use_alt_scale', true, true],
     squash_system_messages: ['#squash_system_messages', 'squash_system_messages', true, false],
     image_inlining: ['#openai_image_inlining', 'image_inlining', true, false],
@@ -399,6 +401,7 @@ const default_settings = {
     use_makersuite_sysprompt: true,
     vertexai_auth_mode: 'express',
     vertexai_region: 'us-central1',
+    vertexai_express_project_id: '',
     use_alt_scale: false,
     squash_system_messages: false,
     image_inlining: false,
@@ -487,6 +490,7 @@ const oai_settings = {
     use_makersuite_sysprompt: true,
     vertexai_auth_mode: 'express',
     vertexai_region: 'us-central1',
+    vertexai_express_project_id: '',
     use_alt_scale: false,
     squash_system_messages: false,
     image_inlining: false,
@@ -2319,6 +2323,7 @@ async function sendOpenAIRequest(type, messages, signal) {
         if (isVertexAI) {
             generate_data['vertexai_auth_mode'] = oai_settings.vertexai_auth_mode;
             generate_data['vertexai_region'] = oai_settings.vertexai_region;
+            generate_data['vertexai_express_project_id'] = oai_settings.vertexai_express_project_id;
         }
     }
 
@@ -2385,8 +2390,6 @@ async function sendOpenAIRequest(type, messages, signal) {
             delete generate_data.top_logprobs;
             delete generate_data.logprobs;
             delete generate_data.logit_bias;
-            delete generate_data.tools;
-            delete generate_data.tool_choice;
         }
     }
 
@@ -2946,13 +2949,15 @@ class Message {
             chat_completion_sources.MISTRALAI,
             chat_completion_sources.VERTEXAI,
         ];
-        if (compressImageSources.includes(oai_settings.chat_completion_source)) {
-            const sizeThreshold = 2 * 1024 * 1024;
-            const dataSize = image.length * 0.75;
-            const maxSide = 1024;
-            if (dataSize > sizeThreshold) {
-                image = await createThumbnail(image, maxSide);
-            }
+        const sizeThreshold = 2 * 1024 * 1024;
+        const dataSize = image.length * 0.75;
+        const safeMimeTypes = ['image/jpeg', 'image/png', 'image/webp'];
+        const mimeType = image?.split(';')?.[0]?.split(':')?.[1];
+        if (compressImageSources.includes(oai_settings.chat_completion_source) && dataSize > sizeThreshold) {
+            const maxSide = 2048;
+            image = await createThumbnail(image, maxSide, maxSide);
+        } else if (!safeMimeTypes.includes(mimeType)) {
+            image = await createThumbnail(image, null, null);
         }
         return image;
     }
@@ -3554,6 +3559,7 @@ function loadOpenAISettings(data, settings) {
     oai_settings.inline_image_quality = settings.inline_image_quality ?? default_settings.inline_image_quality;
     oai_settings.video_inlining = settings.video_inlining ?? default_settings.video_inlining;
     oai_settings.bypass_status_check = settings.bypass_status_check ?? default_settings.bypass_status_check;
+    oai_settings.vertexai_express_project_id = settings.vertexai_express_project_id ?? default_settings.vertexai_express_project_id;
     oai_settings.show_thoughts = settings.show_thoughts ?? default_settings.show_thoughts;
     oai_settings.reasoning_effort = settings.reasoning_effort ?? default_settings.reasoning_effort;
     oai_settings.enable_web_search = settings.enable_web_search ?? default_settings.enable_web_search;
@@ -3591,6 +3597,7 @@ function loadOpenAISettings(data, settings) {
     if (settings.use_makersuite_sysprompt !== undefined) oai_settings.use_makersuite_sysprompt = !!settings.use_makersuite_sysprompt;
     if (settings.vertexai_auth_mode !== undefined) oai_settings.vertexai_auth_mode = settings.vertexai_auth_mode;
     if (settings.vertexai_region !== undefined) oai_settings.vertexai_region = settings.vertexai_region;
+    if (settings.vertexai_express_project_id !== undefined) oai_settings.vertexai_express_project_id = settings.vertexai_express_project_id;
     if (settings.use_alt_scale !== undefined) { oai_settings.use_alt_scale = !!settings.use_alt_scale; updateScaleForm(); }
     $('#stream_toggle').prop('checked', oai_settings.stream_openai);
     $('#api_url_scale').val(oai_settings.api_url_scale);
@@ -3652,6 +3659,7 @@ function loadOpenAISettings(data, settings) {
     $('#use_makersuite_sysprompt').prop('checked', oai_settings.use_makersuite_sysprompt);
     $('#vertexai_auth_mode').val(oai_settings.vertexai_auth_mode);
     $('#vertexai_region').val(oai_settings.vertexai_region);
+    $('#vertexai_express_project_id').val(oai_settings.vertexai_express_project_id);
     // Don't display Service Account JSON in textarea - it's stored in backend secrets
     $('#vertexai_service_account_json').val('');
     updateVertexAIServiceAccountStatus();
@@ -3982,6 +3990,7 @@ async function saveOpenAIPreset(name, settings, triggerUi = true) {
         use_makersuite_sysprompt: settings.use_makersuite_sysprompt,
         vertexai_auth_mode: settings.vertexai_auth_mode,
         vertexai_region: settings.vertexai_region,
+        vertexai_express_project_id: settings.vertexai_express_project_id,
         use_alt_scale: settings.use_alt_scale,
         squash_system_messages: settings.squash_system_messages,
         image_inlining: settings.image_inlining,
@@ -6378,6 +6387,10 @@ export function initOpenAI() {
     $('#vertexai_auth_mode').on('change', onVertexAIAuthModeChange);
     $('#vertexai_region').on('input', function () {
         oai_settings.vertexai_region = String($(this).val());
+        saveSettingsDebounced();
+    });
+    $('#vertexai_express_project_id').on('input', function () {
+        oai_settings.vertexai_express_project_id = String($(this).val());
         saveSettingsDebounced();
     });
     $('#vertexai_service_account_json').on('input', onVertexAIServiceAccountJsonChange);
