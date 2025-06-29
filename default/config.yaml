@@ -143,7 +143,6 @@ thumbnails:
   # Maximum thumbnail dimensions per type [width, height]
   dimensions: { 'bg': [160, 90], 'avatar': [96, 144], 'persona': [96, 144] }
 
-
 # PERFORMANCE-RELATED CONFIGURATION
 performance:
   # Enables lazy loading of character cards. Improves performances with large card libraries.

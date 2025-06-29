@@ -565,6 +565,11 @@ function onSelectBackgroundClick() {
     }
 }
 
+/**
+ * Gets the new background name from the user.
+ * @param {Element} referenceElement
+ * @returns {Promise<{oldBg: string, newBg: string}>}
+ * */
 async function getNewBackgroundName(thumbnailElement) {
     const exampleBlock = $(thumbnailElement);
     const isCustom = exampleBlock.attr('custom') === 'true';
