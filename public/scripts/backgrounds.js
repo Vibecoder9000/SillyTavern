@@ -17,6 +17,7 @@ function generateUrlParameter(bg, isCustom) {
 
 let galleryObserver = null;
 let backgroundSelector = null;
+let isGalleryVisible = false;
 
 const BG_METADATA_KEY = 'custom_background';
 const LIST_METADATA_KEY = 'chat_backgrounds';
