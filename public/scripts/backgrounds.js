@@ -264,7 +264,7 @@ class BackgroundSelector {
             if (!restoreHasRun) return;
 
             // Block if panel hidden
-            if (!allowSaving) return;
+            if (!isGalleryVisible) return;
 
             // Block during cool-down right after a programmatic restore
             const timeSinceRestore = Date.now() - (self._restoreDoneAt || 0);
