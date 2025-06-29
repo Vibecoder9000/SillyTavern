@@ -19,6 +19,7 @@ const thumbnailsEnabled = !!getConfigValue('thumbnails.enabled', true, 'boolean'
 const quality = Math.min(100, Math.max(1, parseInt(getConfigValue('thumbnails.quality', 95, 'number'))));
 const pngFormat = String(getConfigValue('thumbnails.format', 'jpg')).toLowerCase().trim() === 'png';
 
+/** @type {Record<string, number[]>} */
 export const dimensions = {
     avatar: getConfigValue('thumbnails.dimensions.avatar', [96, 144]),
 };
@@ -65,6 +66,12 @@ function getOriginalFolder(directories, type) {
     return originalFolder;
 }
 
+/**
+ * Removes the generated thumbnail from the disk.
+ * @param {import('../users.js').UserDirectoryList} directories User directories
+ * @param {'bg' | 'avatar'} type Type of the thumbnail
+ * @param {string} file Name of the file
+ */
 export function invalidateThumbnail(directories, type, file) {
     const folder = getThumbnailFolder(directories, type);
     if (folder === undefined) throw new Error('Invalid thumbnail type');
@@ -100,7 +107,7 @@ export async function generateThumbnail(directories, type, file, knownAspectRati
     try {
         if (!fs.existsSync(pathToOriginalFile)) {
             if (fs.existsSync(pathToCachedFile)) {
-                try { fs.unlinkSync(pathToCachedFile); } catch (e) { /*ignore*/ }
+                try { fs.unlinkSync(pathToCachedFile); } catch (e) { /* ignore */ }
             }
             return null;
         }
@@ -158,6 +165,7 @@ export async function ensureThumbnailCache(directoriesList) {
     for (const directories of directoriesList) {
         const cacheFiles = fs.readdirSync(directories.thumbnailsBg);
 
+        // files exist, all ok
         if (cacheFiles.length) {
             continue;
         }
@@ -247,10 +255,13 @@ publicRouter.get('/', async function (request, response) {
         const forceGenerate = isWebP && !animatedEnabled;
         const thumbnailResult = await generateThumbnail(request.user.directories, type, file, null, forceGenerate);
 
+        // If thumbnail generation failed or was skipped, serve the original file.
+        // This is the correct path for animated WebP files.
         if (!thumbnailResult?.path || !fs.existsSync(thumbnailResult.path)) {
             return await serveOriginal();
         }
 
+        // If we successfully generated a thumbnail (for .jpg, .png, etc.), serve it.
         return response.sendFile(path.resolve(thumbnailResult.path));
 
     } catch (error) {

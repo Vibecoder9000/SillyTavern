@@ -422,6 +422,7 @@ async function onChatChanged() {
         unsetCustomBackground();
     }
 
+    // Re-initialize the observer every time the chat changes
     setupGalleryObserver();
 
     await getChatBackgroundsList();
@@ -460,6 +461,7 @@ function highlightLockedBackground() {
         }
     });
 }
+
 /**
  * Locks the background for the current chat
  * @param {Event} e Click event
@@ -482,6 +484,7 @@ function onLockBackgroundClick(e) {
     highlightLockedBackground();
     return '';
 }
+
 /**
  * Locks the background for the current chat
  * @param {Event} e Click event
@@ -512,6 +515,7 @@ function removeBackgroundMetadata() {
 function setCustomBackground() {
     const file = chat_metadata[BG_METADATA_KEY];
 
+    // bg already set
     if (document.getElementById('bg_custom').style.backgroundImage == file) {
         return;
     }
@@ -586,9 +590,12 @@ async function getNewBackgroundName(thumbnailElement) {
 async function onRenameBackgroundClick(e) {
     e.stopPropagation();
 
+    // The 'this' context is the jg-button that was clicked.
+    // We get the bgfile directly from the parent thumbnail's dataset.
     const thumbnail = this.closest('.thumbnail');
     if (!thumbnail) return;
 
+    // Pass the thumbnail element to getNewBackgroundName
     const bgNames = await getNewBackgroundName(thumbnail);
 
     if (!bgNames) {
@@ -631,6 +638,7 @@ async function onDeleteBackgroundClick(e) {
 
     const index = backgroundSelector.images.findIndex(img => img.filename === bg);
     if (index > -1) {
+        // Remove it from both the master list and the filtered list.
         backgroundSelector.images.splice(index, 1);
         const filteredIndex = backgroundSelector.filteredImages.findIndex(img => img.filename === bg);
         if (filteredIndex > -1) {
@@ -667,6 +675,7 @@ async function onDeleteBackgroundClick(e) {
 const autoBgPrompt = 'Ignore previous instructions and choose a location ONLY from the provided list that is the most suitable for the current scene. Do not output any other text:\n{0}';
 
 async function autoBackgroundCommand() {
+    /** @type {HTMLElement[]} */
     const bgTitles = Array.from(document.querySelectorAll('#bg_menu_content .BGSampleTitle'));
     const options = bgTitles.map(x => ({ element: $(x).closest('.thumbnail')[0], text: x.innerText.trim() })).filter(x => x.text.length > 0);
     if (options.length === 0) {
@@ -710,7 +719,7 @@ export async function getBackgrounds() {
             const isAnimated = filename.toLowerCase().endsWith('.webp');
             let thumbnailUrl;
 
-            // If the animation toggle is ON and the file is a WebP, use the full animated file
+            // If the animation toggle is ON and the file is a WebP, use the full animated file as the thumbnail.
             if (isAnimated && background_settings.animation) {
                 thumbnailUrl = getBackgroundPath(filename);
             }
@@ -897,8 +906,10 @@ export function initBackgrounds() {
     backgroundSelector = new BackgroundSelector('bg_menu_content');
     backgroundSelector.setupScrollPositionSaving();
 
+    // Call the setup function on initial load
     setupGalleryObserver();
 
+    // The rest of the event listeners are for elements that are not rebuilt.
     eventSource.on(event_types.CHAT_CHANGED, onChatChanged);
     eventSource.on(event_types.FORCE_SET_BACKGROUND, forceSetBackground);
 
