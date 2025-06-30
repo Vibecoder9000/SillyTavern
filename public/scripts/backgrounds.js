@@ -667,10 +667,19 @@ async function onDeleteBackgroundClick(e) {
         $('.thumbnail[data-bgfile="__transparent.png"]').trigger('click');
     }
 
-    if (`url("${url}")` === chat_metadata[BG_METADATA_KEY]) {
+    // Check if this background is currently active (not locked)
+    const currentBgUrl = `url("${url}")`;
+
+    if (background_settings.url === currentBgUrl) {
+        setBackground('__transparent.png', generateUrlParameter('__transparent.png', false));
+    }
+
+    // Check if this background is locked to the current chat
+    if (currentBgUrl === chat_metadata[BG_METADATA_KEY]) {
         removeBackgroundMetadata();
         unsetCustomBackground();
     }
+
     highlightLockedBackground();
     if (isCustom) {
         await getChatBackgroundsList();
