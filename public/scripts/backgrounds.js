@@ -1025,29 +1025,29 @@ export function initBackgrounds() {
         saveSettingsDebounced();
     });
 
-	$('#background_thumbnails_animation').on('change', function() {
-		background_settings.animation = $(this).prop('checked');
-		saveSettingsDebounced();
-		if (backgroundSelector) {
-			// Preserve the current search term
-			const currentFilter = $('#bg-filter').val() || '';
+    $('#background_thumbnails_animation').on('change', function() {
+        background_settings.animation = $(this).prop('checked');
+        saveSettingsDebounced();
+        if (backgroundSelector) {
+            // Preserve the current search term
+            const currentFilter = $('#bg-filter').val() || '';
 
-			// Clear the saved scroll state since image heights will change
-			setGalleryScrollState({ top: 0, fraction: 0, filter: currentFilter });
+            // Clear the saved scroll state since image heights will change
+            setGalleryScrollState({ top: 0, fraction: 0, filter: currentFilter });
 
-			// Set the filter value immediately
-			if (currentFilter) {
-				$('#bg-filter').val(currentFilter);
-			}
+            // Set the filter value immediately
+            if (currentFilter) {
+                $('#bg-filter').val(currentFilter);
+            }
 
-			getBackgrounds().then(() => {
-				// Apply the search after backgrounds are loaded
-				if (currentFilter) {
-					backgroundSelector.search(currentFilter);
-				}
-			});
-		}
-	});
+            getBackgrounds().then(() => {
+                // Apply the search after backgrounds are loaded
+                if (currentFilter) {
+                    backgroundSelector.search(currentFilter);
+                }
+            });
+        }
+    });
 
     SlashCommandParser.addCommandObject(SlashCommand.fromProps({
         name: 'lockbg',
