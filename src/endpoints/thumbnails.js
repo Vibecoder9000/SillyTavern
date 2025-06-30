@@ -150,32 +150,39 @@ export async function generateThumbnail(directories, type, file, knownAspectRati
         }
 
         // Generate the thumbnail
-        const image = await Jimp.read(pathToOriginalFile);
-        const numericalAspectRatio = (image.bitmap.height > 0) ? (image.bitmap.width / image.bitmap.height) : 1.0;
-        const thumbImage = image.clone();
+        let buffer;
+        try {
+            const image = await Jimp.read(pathToOriginalFile);
+            const numericalAspectRatio = (image.bitmap.height > 0) ? (image.bitmap.width / image.bitmap.height) : 1.0;
+            const thumbImage = image.clone();
 
-        if (type === 'bg') {
-            const targetPixelArea = thumbnailResolution;
-            const safeAspectRatio = numericalAspectRatio > 0 ? numericalAspectRatio : 1;
-            let newHeight = Math.round(Math.sqrt(targetPixelArea / safeAspectRatio));
-            let newWidth = Math.round(newHeight * safeAspectRatio);
+            if (type === 'bg') {
+                const targetPixelArea = thumbnailResolution;
+                const safeAspectRatio = numericalAspectRatio > 0 ? numericalAspectRatio : 1;
+                let newHeight = Math.round(Math.sqrt(targetPixelArea / safeAspectRatio));
+                let newWidth = Math.round(newHeight * safeAspectRatio);
 
-            if (newWidth === 0 || newHeight === 0) {
-                const fallbackAspectRatio = 1;
-                const h = Math.round(Math.sqrt(targetPixelArea / fallbackAspectRatio));
-                const w = Math.round(h * fallbackAspectRatio);
-                thumbImage.cover({ w, h });
+                if (newWidth === 0 || newHeight === 0) {
+                    const fallbackAspectRatio = 1;
+                    const h = Math.round(Math.sqrt(targetPixelArea / fallbackAspectRatio));
+                    const w = Math.round(h * fallbackAspectRatio);
+                    thumbImage.cover({ w, h });
+                } else {
+                    thumbImage.scaleToFit({ w: newWidth, h: newHeight, mode: Jimp.RESIZE_BILINEAR });
+                }
             } else {
-                thumbImage.scaleToFit({ w: newWidth, h: newHeight, mode: Jimp.RESIZE_BILINEAR });
+                const [w, h] = dimensions[type];
+                thumbImage.cover({ w: w || 96, h: h || 144 });
             }
-        } else {
-            const [w, h] = dimensions[type];
-            thumbImage.cover({ w: w || 96, h: h || 144 });
-        }
 
-        const buffer = pngFormat
-            ? await thumbImage.getBuffer(JimpMime.png)
-            : await thumbImage.getBuffer(JimpMime.jpeg, { quality: quality, jpegColorSpace: 'ycbcr' });
+            buffer = pngFormat
+                ? await thumbImage.getBuffer(JimpMime.png)
+                : await thumbImage.getBuffer(JimpMime.jpeg, { quality: quality, jpegColorSpace: 'ycbcr' });
+
+        } catch (inner) {
+            console.warn(`Thumbnailer can not process the image: ${pathToOriginalFile}. Using original size`, inner);
+            buffer = fs.readFileSync(pathToOriginalFile);
+        }
 
         writeFileAtomicSync(pathToCachedFile, buffer);
         return { path: pathToCachedFile, aspectRatio: numericalAspectRatio };
@@ -285,9 +292,7 @@ publicRouter.get('/', async function (request, response) {
             return await serveOriginal();
         }
 
-        // For WebP files with animations disabled, force thumbnail generation
-        const forceGenerate = isWebP && !animatedEnabled;
-        const thumbnailResult = await generateThumbnail(request.user.directories, type, file, null, forceGenerate);
+        const thumbnailResult = await generateThumbnail(request.user.directories, type, file);
 
         // If thumbnail generation failed or was skipped, serve the original file.
         // This is the correct path for animated WebP files.

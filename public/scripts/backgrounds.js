@@ -1,9 +1,9 @@
-import { Fuse } from '../lib.js';
+import { Fuse, localforage } from '../lib.js';
 import { chat_metadata, eventSource, event_types, generateQuietPrompt, getCurrentChatId, getRequestHeaders, saveSettingsDebounced } from '../script.js';
 import { openThirdPartyExtensionMenu, saveMetadataDebounced } from './extensions.js';
 import { SlashCommand } from './slash-commands/SlashCommand.js';
 import { SlashCommandParser } from './slash-commands/SlashCommandParser.js';
-import { flashHighlight, stringFormat, debounce } from './utils.js';
+import { flashHighlight, stringFormat, debounce, createThumbnail, getBase64Async } from './utils.js';
 import { t, translate } from './i18n.js';
 import { Popup } from './popup.js';
 
@@ -14,6 +14,18 @@ function getBackgroundPath(fileUrl) {
 function generateUrlParameter(bg, isCustom) {
     return isCustom ? `url("${encodeURI(bg)}")` : `url("${getBackgroundPath(bg)}")`;
 }
+
+const PNG_PIXEL = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=';
+const PNG_PIXEL_BLOB = new Blob([Uint8Array.from(atob(PNG_PIXEL), c => c.charCodeAt(0))], { type: 'image/png' });
+const PLACEHOLDER_IMAGE = `url('data:image/png;base64,${PNG_PIXEL}')`;
+
+const THUMBNAIL_STORAGE = localforage.createInstance({ name: 'SillyTavern_Thumbnails' });
+const THUMBNAIL_BLOBS = new Map();
+
+let THUMBNAIL_CONFIG = {
+    width: 160,
+    height: 90,
+};
 
 let galleryObserver = null;
 let backgroundSelector = null;
@@ -35,6 +47,40 @@ export let background_settings = {
     fitting: 'classic',
     animation: false,
 };
+
+async function getThumbnailFromStorage(bg) {
+    const cachedBlobUrl = THUMBNAIL_BLOBS.get(bg);
+    if (cachedBlobUrl) {
+        return cachedBlobUrl;
+    }
+
+    const savedBlob = await THUMBNAIL_STORAGE.getItem(bg);
+    if (savedBlob) {
+        const savedBlobUrl = URL.createObjectURL(savedBlob);
+        THUMBNAIL_BLOBS.set(bg, savedBlobUrl);
+        return savedBlobUrl;
+    }
+
+    try {
+        const response = await fetch(getBackgroundPath(bg), { cache: 'force-cache' });
+        if (!response.ok) {
+            throw new Error('Fetch failed with status: ' + response.status);
+        }
+        const imageBlob = await response.blob();
+        const imageBase64 = await getBase64Async(imageBlob);
+        const thumbnailBase64 = await createThumbnail(imageBase64, THUMBNAIL_CONFIG.width, THUMBNAIL_CONFIG.height);
+        const thumbnailBlob = await fetch(thumbnailBase64).then(res => res.blob());
+        await THUMBNAIL_STORAGE.setItem(bg, thumbnailBlob);
+        const blobUrl = URL.createObjectURL(thumbnailBlob);
+        THUMBNAIL_BLOBS.set(bg, blobUrl);
+        return blobUrl;
+    } catch (error) {
+        console.error('Error fetching thumbnail, fallback image will be used:', error);
+        const fallbackBlobUrl = URL.createObjectURL(PNG_PIXEL_BLOB);
+        THUMBNAIL_BLOBS.set(bg, fallbackBlobUrl);
+        return fallbackBlobUrl;
+    }
+}
 
 function getGalleryScrollState() {
     try {
@@ -729,17 +775,29 @@ export async function getBackgrounds() {
         }
 
         const data = await response.json();
-        const filenames = data.images || [];
-        const imageDataList = filenames.map(filename => {
-            const isAnimated = filename.toLowerCase().endsWith('.webp');
+        const { images = [], config } = data;
+
+        // Update thumbnail config if provided
+        if (config) {
+            Object.assign(THUMBNAIL_CONFIG, config);
+        }
+
+        const imageDataList = await Promise.all(images.map(async filename => {
+            const isWebP = filename.toLowerCase().endsWith('.webp');
             let thumbnailUrl;
 
-            // If the animation toggle is ON and the file is a WebP, use the full animated file as the thumbnail.
-            if (isAnimated && background_settings.animation) {
-                thumbnailUrl = getBackgroundPath(filename);
-            }
-            // Otherwise, use the server-side thumbnail endpoint
-            else {
+            if (isWebP) {
+                if (background_settings.animation) {
+                    // Use full animated WebP + generate thumbnail in background
+                    thumbnailUrl = getBackgroundPath(filename);
+                    // Generate thumbnail in background for future use
+                    getThumbnailFromStorage(filename).catch(console.error);
+                } else {
+                    // Use cached thumbnail or fallback to PNG
+                    thumbnailUrl = await getThumbnailFromStorage(filename);
+                }
+            } else {
+                // Regular images use server-side thumbnails
                 thumbnailUrl = `/thumbnail?file=${encodeURIComponent(filename)}&type=bg&animated=${background_settings.animation}`;
             }
 
@@ -749,7 +807,7 @@ export async function getBackgrounds() {
                 thumbnailUrl: thumbnailUrl,
                 fullResUrl: getBackgroundPath(filename),
             };
-        });
+        }));
 
         if (backgroundSelector) {
             backgroundSelector.setImages(imageDataList);
@@ -862,6 +920,8 @@ async function uploadBackground(formData) {
         const headers = getRequestHeaders();
         delete headers['Content-Type'];
 
+        const currentFilter = $('#bg-filter').val() || '';
+
         const response = await fetch('/api/backgrounds/upload', {
             method: 'POST',
             headers: headers,
@@ -873,8 +933,15 @@ async function uploadBackground(formData) {
             throw new Error(`Upload failed: ${response.status}`);
         }
 
-        await getBackgrounds();
         const bg = await response.text();
+
+        await getBackgrounds();
+
+        if (currentFilter) {
+            $('#bg-filter').val(currentFilter);
+            backgroundSelector.search(currentFilter);
+        }
+
         setTimeout(() => { highlightNewBackground(bg); }, 100);
 
     } catch (error) {
@@ -882,16 +949,22 @@ async function uploadBackground(formData) {
     }
 }
 
+
 /**
  * Scrolls to, highlights, and selects a newly added background.
  * @param {string} bg
  */
 function highlightNewBackground(bg) {
+    const currentFilter = $('#bg-filter').val() || '';
+    if (currentFilter) {
+        return;
+    }
+
     const newBg = $(`.thumbnail[data-bgfile="${bg}"]`);
     if (newBg.length) {
         const scroller = $('#Backgrounds');
         const offsetTop = newBg.offset().top - scroller.offset().top + scroller.scrollTop();
-        scroller.animate({ scrollTop: offsetTop - 50 }, 300, function() {
+        scroller.animate({ scrollTop: offsetTop - 50 }, 500, function() {
             flashHighlight(newBg);
             newBg.trigger('click');
         });
@@ -952,13 +1025,29 @@ export function initBackgrounds() {
         saveSettingsDebounced();
     });
 
-    $('#background_thumbnails_animation').on('change', function() {
-        background_settings.animation = $(this).prop('checked');
-        saveSettingsDebounced();
-        if (backgroundSelector) {
-            getBackgrounds();
-        }
-    });
+	$('#background_thumbnails_animation').on('change', function() {
+		background_settings.animation = $(this).prop('checked');
+		saveSettingsDebounced();
+		if (backgroundSelector) {
+			// Preserve the current search term
+			const currentFilter = $('#bg-filter').val() || '';
+
+			// Clear the saved scroll state since image heights will change
+			setGalleryScrollState({ top: 0, fraction: 0, filter: currentFilter });
+
+			// Set the filter value immediately
+			if (currentFilter) {
+				$('#bg-filter').val(currentFilter);
+			}
+
+			getBackgrounds().then(() => {
+				// Apply the search after backgrounds are loaded
+				if (currentFilter) {
+					backgroundSelector.search(currentFilter);
+				}
+			});
+		}
+	});
 
     SlashCommandParser.addCommandObject(SlashCommand.fromProps({
         name: 'lockbg',
