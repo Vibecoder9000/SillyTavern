@@ -144,19 +144,18 @@ class BackgroundSelector {
         this.images = [];
         this.filteredImages = [];
         this.currentIndex = 0;
-        this.scrollerElement = document.getElementById('Backgrounds');
+        this.scrollerElement = document.getElementById('bg-scrollable-content');
         this.isLoading = false;
         this.columns = [];
         this.imageCounter = 0;
         this.currentColumnCount = 0;
         this.isRestoring = false;
         this._hasRestored = false;
-
         // Scroll to top button
         this.scrollBtn = null;
         this.handleScrollDebounced = null;
-        this.handleResizeDebounced = null; // For updating button position on window resize
-        this.drawerElement = document.getElementById('Backgrounds'); // Reference to the drawer
+        this.handleResizeDebounced = null;
+        this.drawerElement = document.getElementById('Backgrounds');
 
         const debouncedLayout = debounce(() => {
             if (this.currentColumnCount !== this._getColumnsForWidth()) {

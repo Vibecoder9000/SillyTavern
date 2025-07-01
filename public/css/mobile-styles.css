@@ -366,6 +366,16 @@
         padding-bottom: 0.8rem;
         font-size: 1.1em;
     }
+	
+    #Backgrounds.drawer-content.openDrawer.bg-drawer-layout {
+        width: 100dvw !important;
+        max-width: 100dvw !important;
+    }
+
+    #bg-header-fixed > .flex-container {
+        flex-wrap: wrap;
+        row-gap: 10px;
+    }
 }
 
 /*landscape mode phones and ipads*/
