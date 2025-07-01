@@ -190,9 +190,9 @@ class BackgroundSelector {
         this.ensureScrollTopButton();
     }
 
-    setImages(imageDataList) {
+    setImages(imageDataList, defaultQuery = '') {
         this.images = imageDataList;
-        this.search('');
+        this.search(defaultQuery);
     }
 
     search(query) {
@@ -941,6 +941,8 @@ async function autoBackgroundCommand() {
 
 export async function getBackgrounds() {
     try {
+        const currentSearchQuery = $('#bg-filter').val() || '';
+
         const response = await fetch('/api/backgrounds/all', {
             method: 'POST',
             headers: getRequestHeaders(),
@@ -950,7 +952,7 @@ export async function getBackgrounds() {
         if (!response.ok) {
             console.error(`Failed to fetch backgrounds: ${response.status}`, await response.text());
             if (backgroundSelector) {
-                backgroundSelector.setImages([]);
+                backgroundSelector.setImages([], currentSearchQuery);
             }
             return;
         }
@@ -992,7 +994,7 @@ export async function getBackgrounds() {
         }));
 
         if (backgroundSelector) {
-            backgroundSelector.setImages(imageDataList);
+            backgroundSelector.setImages(imageDataList, currentSearchQuery);
         }
 
         setTimeout(() => {
@@ -1013,7 +1015,7 @@ export async function getBackgrounds() {
     } catch (error) {
         console.error('Error in getBackgrounds:', error);
         if (backgroundSelector) {
-            backgroundSelector.setImages([]);
+            backgroundSelector.setImages([], currentSearchQuery);
         }
     }
 }
@@ -1143,7 +1145,7 @@ function highlightNewBackground(bg) {
 
     const newBg = $(`.thumbnail[data-bgfile="${bg}"]`);
     if (newBg.length) {
-        const scroller = $('#Backgrounds');
+        const scroller = $('#bg-scrollable-content');
         const offsetTop = newBg.offset().top - scroller.offset().top + scroller.scrollTop();
         scroller.animate({ scrollTop: offsetTop - 50 }, 500, function() {
             flashHighlight(newBg);
@@ -1214,7 +1216,7 @@ export async function initBackgrounds() {
         setFittingClass(background_settings.fitting);
         saveSettingsDebounced();
     });
-
+    
     $('#background_thumbnails_animation').on('change', function() {
         background_settings.animation = $(this).prop('checked');
         saveSettingsDebounced();
@@ -1224,18 +1226,8 @@ export async function initBackgrounds() {
 
             // Clear the saved scroll state since image heights will change
             setGalleryScrollState({ top: 0, fraction: 0, filter: currentFilter });
-
-            // Set the filter value immediately
-            if (currentFilter) {
-                $('#bg-filter').val(currentFilter);
-            }
-
-            getBackgrounds().then(() => {
-                // Apply the search after backgrounds are loaded
-                if (currentFilter) {
-                    backgroundSelector.search(currentFilter);
-                }
-            });
+            
+            getBackgrounds();
         }
     });
 
