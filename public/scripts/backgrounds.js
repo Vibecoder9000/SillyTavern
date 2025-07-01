@@ -501,7 +501,7 @@ function setupGalleryObserver() {
                 getBackgrounds();
                 hasLoaded = true;
             } else {
-				// On subsequent opens, restore scroll and highlight selected background
+                // On subsequent opens, restore scroll and highlight selected background
                 if (backgroundSelector) {
                     backgroundSelector.waitForImagesAndRestore();
 
