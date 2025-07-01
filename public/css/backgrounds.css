@@ -2,7 +2,7 @@
     display: flex;
     gap: 5px;
     padding: 5px;
-    flex-wrap: wrap; 
+    flex-wrap: wrap;
 }
 
 .masonry-column {
@@ -51,6 +51,14 @@
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+    opacity: 0;
+    transition: opacity 0.2s ease-in-out;
+    pointer-events: none;
+}
+
+.thumbnail:hover .BGSampleTitle {
+    opacity: 1;
+    pointer-events: auto;
 }
 
 .thumbnail.selected {
@@ -77,16 +85,39 @@
 .thumbnail .jg-button {
     color: white;
     padding: 5px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1em;
 }
 
+.thumbnail .jg-star .fa-solid {
+    color: var(--golden);
+    display: none;
+}
+
+.thumbnail .jg-star .fa-regular {
+    color: white;
+    display: flex;
+}
+
+.thumbnail.starred .jg-star .fa-solid {
+    display: flex;
+}
+
+.thumbnail.starred .jg-star .fa-regular {
+    display: none;
+}
+
+
 .thumbnail .jg-unlock {
-    display: none; /* Hide unlock by default */
+    display: none;
 }
 .thumbnail.locked .jg-lock {
-    display: none; /* Hide lock when thumbnail IS locked */
+    display: none;
 }
 .thumbnail.locked .jg-unlock {
-    display: flex; /* Show unlock when thumbnail IS locked */
+    display: flex;
 }
 
 .thumbnail.locked {

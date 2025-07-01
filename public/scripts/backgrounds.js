@@ -12,6 +12,8 @@ const PNG_PIXEL_BLOB = new Blob([Uint8Array.from(atob(PNG_PIXEL), c => c.charCod
 
 const THUMBNAIL_STORAGE = localforage.createInstance({ name: 'SillyTavern_Thumbnails' });
 const THUMBNAIL_BLOBS = new Map();
+const STARRED_BG_STORAGE = localforage.createInstance({ name: 'SillyTavern_StarredBackgrounds' });
+let starredBackgrounds = new Set();
 
 let THUMBNAIL_CONFIG = {
     width: 160,
@@ -24,6 +26,42 @@ let isGalleryVisible = false;
 
 const BG_METADATA_KEY = 'custom_background';
 const LIST_METADATA_KEY = 'chat_backgrounds';
+
+async function loadStarredBackgrounds() {
+    const stored = await STARRED_BG_STORAGE.getItem('starred_list');
+    if (stored) {
+        starredBackgrounds = new Set(stored);
+    } else {
+        starredBackgrounds = new Set();
+    }
+}
+
+async function saveStarredBackgrounds() {
+    await STARRED_BG_STORAGE.setItem('starred_list', Array.from(starredBackgrounds));
+}
+
+function isBackgroundStarred(filename) {
+    return starredBackgrounds.has(filename);
+}
+
+async function toggleStarredBackground(filename) {
+    const isCurrentlyStarred = starredBackgrounds.has(filename);
+    if (isCurrentlyStarred) {
+        starredBackgrounds.delete(filename);
+    } else {
+        starredBackgrounds.add(filename);
+    }
+    await saveStarredBackgrounds();
+
+    // Find the image data in the selector's master list and update its starred status
+    const imgDataToUpdate = backgroundSelector.images.find(img => img.filename === filename);
+    if (imgDataToUpdate) {
+        imgDataToUpdate.isStarred = !isCurrentlyStarred; // Update the internal state
+    }
+
+    // Re-render the gallery using the updated internal data
+    backgroundSelector.search($('#bg-filter').val() || '');
+}
 
 function getBackgroundPath(fileUrl) {
     return `backgrounds/${encodeURIComponent(fileUrl)}`;
@@ -160,9 +198,33 @@ class BackgroundSelector {
 
     search(query) {
         const lowerQuery = query.toLowerCase().trim();
-        this.filteredImages = !lowerQuery
-            ? this.images
-            : this.images.filter(img => img.filename.toLowerCase().includes(lowerQuery));
+        let sortedImages = [];
+
+        if (lowerQuery) {
+            // Filter first, then sort starred items to the top if they match the search
+            const filtered = this.images.filter(img => img.filename.toLowerCase().includes(lowerQuery));
+
+            filtered.sort((a, b) => {
+                const aStarred = a.isStarred;
+                const bStarred = b.isStarred;
+
+                if (aStarred && !bStarred) return -1;
+                if (!aStarred && bStarred) return 1;
+                return a.filename.localeCompare(b.filename); // Stable sort by filename
+            });
+            sortedImages = filtered;
+        } else {
+            // All starred items at the very top
+            const starred = this.images.filter(img => img.isStarred);
+            const unstarred = this.images.filter(img => !img.isStarred);
+
+            starred.sort((a, b) => a.filename.localeCompare(b.filename)); // Keep starred sorted alphabetically
+            unstarred.sort((a, b) => a.filename.localeCompare(b.filename)); // Keep unstarred sorted alphabetically
+
+            sortedImages = [...starred, ...unstarred];
+        }
+
+        this.filteredImages = sortedImages;
         this.resetAndLoad();
     }
 
@@ -270,6 +332,10 @@ class BackgroundSelector {
             thumbnail.classList.add('locked');
         }
 
+        if (imgData.isStarred) {
+            thumbnail.classList.add('starred');
+        }
+
         thumbnail.dataset.id = imgData.id;
         thumbnail.dataset.bgfile = imgData.filename;
         thumbnail.dataset.url = imgData.fullResUrl;
@@ -285,6 +351,9 @@ class BackgroundSelector {
         const menu = document.createElement('div');
         menu.className = 'jg-menu';
         menu.innerHTML = `
+            <div data-action="star" class="jg-button jg-star fa-fw pointer" title="${translate('Star Background')}">
+                <i class="fa-solid fa-star"></i><i class="fa-regular fa-star"></i>
+            </div>
             <div data-action="lock" class="jg-button jg-lock fa-solid fa-lock fa-fw pointer" title="${translate('Lock Background')}"></div>
             <div data-action="unlock" class="jg-button jg-unlock fa-solid fa-unlock fa-fw pointer" title="${translate('Unlock Background')}"></div>
             <div data-action="edit" class="jg-button jg-edit fa-solid fa-pen-to-square fa-fw pointer" title="${translate('Rename Background')}"></div>
@@ -764,6 +833,12 @@ async function onRenameBackgroundClick(e) {
     });
 
     if (response.ok) {
+        // If the old background was starred, update its starred status to the new name
+        if (isBackgroundStarred(bgNames.oldBg)) {
+            starredBackgrounds.delete(bgNames.oldBg);
+            starredBackgrounds.add(bgNames.newBg);
+            await saveStarredBackgrounds();
+        }
         await getBackgrounds();
         highlightNewBackground(bgNames.newBg);
     } else {
@@ -787,6 +862,12 @@ async function onDeleteBackgroundClick(e) {
         const list = chat_metadata[LIST_METADATA_KEY] || [];
         const index = list.indexOf(bg);
         if (index > -1) list.splice(index, 1);
+    }
+
+    // Remove from starred backgrounds if it was starred
+    if (isBackgroundStarred(bg)) {
+        starredBackgrounds.delete(bg);
+        await saveStarredBackgrounds();
     }
 
     const index = backgroundSelector.images.findIndex(img => img.filename === bg);
@@ -907,6 +988,7 @@ export async function getBackgrounds() {
                 filename: filename,
                 thumbnailUrl: thumbnailUrl,
                 fullResUrl: getBackgroundPath(filename),
+                isStarred: isBackgroundStarred(filename),
             };
         }));
 
@@ -1090,7 +1172,9 @@ function onBackgroundFilterInput() {
     }
 }
 
-export function initBackgrounds() {
+export async function initBackgrounds() {
+    await loadStarredBackgrounds();
+
     backgroundSelector = new BackgroundSelector('bg_menu_content');
     backgroundSelector.setupScrollPositionSaving();
 
@@ -1105,7 +1189,14 @@ export function initBackgrounds() {
         e.stopPropagation();
         const action = $(this).data('action');
         const thumbnailContext = $(this).closest('.thumbnail').get(0);
+        const filename = $(thumbnailContext).data('bgfile'); // Get filename for star action
+
         switch (action) {
+            case 'star':
+                if (filename) {
+                    toggleStarredBackground(filename);
+                }
+                break;
             case 'lock': onLockBackgroundClick.call(thumbnailContext, e); break;
             case 'unlock': onUnlockBackgroundClick.call(thumbnailContext, e); break;
             case 'edit': onRenameBackgroundClick.call(thumbnailContext, e); break;
