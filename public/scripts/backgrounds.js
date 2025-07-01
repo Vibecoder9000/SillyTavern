@@ -9,7 +9,6 @@ import { Popup } from './popup.js';
 
 const PNG_PIXEL = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=';
 const PNG_PIXEL_BLOB = new Blob([Uint8Array.from(atob(PNG_PIXEL), c => c.charCodeAt(0))], { type: 'image/png' });
-const PLACEHOLDER_IMAGE = `url('data:image/png;base64,${PNG_PIXEL}')`;
 
 const THUMBNAIL_STORAGE = localforage.createInstance({ name: 'SillyTavern_Thumbnails' });
 const THUMBNAIL_BLOBS = new Map();
@@ -339,6 +338,7 @@ class BackgroundSelector {
 
             // Get the current filter state
             const currentFilter = $('#bg-filter').val() || '';
+
             const max = Math.max(1, s.scrollHeight - s.clientHeight);
             const currentState = {
                 top: s.scrollTop,
@@ -414,7 +414,7 @@ class BackgroundSelector {
             }
         };
         ['pointerdown', 'mousedown', 'touchstart', 'click'].forEach(evt =>
-            window.addEventListener(evt, captureScrollStop, true)
+            window.addEventListener(evt, captureScrollStop, true),
         );
 
         // Add a small delay before checking scroll position on drawer open
@@ -501,6 +501,7 @@ function setupGalleryObserver() {
                 getBackgrounds();
                 hasLoaded = true;
             } else {
+				// On subsequent opens, restore scroll and highlight selected background
                 if (backgroundSelector) {
                     backgroundSelector.waitForImagesAndRestore();
 
@@ -680,6 +681,7 @@ function unsetCustomBackground() {
  */
 function highlightSelectedBackground(selectedElement) {
     $('.thumbnail.selected').removeClass('selected');
+
     if (selectedElement) {
         $(selectedElement).addClass('selected');
     }
@@ -718,6 +720,7 @@ function onSelectBackgroundClick() {
 async function getNewBackgroundName(thumbnailElement) {
     const exampleBlock = $(thumbnailElement);
     const isCustom = exampleBlock.attr('custom') === 'true';
+
     const oldBg = exampleBlock.data('bgfile');
 
     if (!oldBg) {
@@ -813,6 +816,7 @@ async function onDeleteBackgroundClick(e) {
 
     // Check if this background is currently active (not locked)
     const currentBgUrl = `url("${url}")`;
+
     if (background_settings.url === currentBgUrl) {
         setBackground('__transparent.png', generateUrlParameter('__transparent.png', false));
     }
@@ -822,6 +826,7 @@ async function onDeleteBackgroundClick(e) {
         removeBackgroundMetadata();
         unsetCustomBackground();
     }
+
     highlightLockedBackground();
     if (isCustom) {
         await getChatBackgroundsList();
@@ -1126,12 +1131,15 @@ export function initBackgrounds() {
         if (backgroundSelector) {
             // Preserve the current search term
             const currentFilter = $('#bg-filter').val() || '';
+
             // Clear the saved scroll state since image heights will change
             setGalleryScrollState({ top: 0, fraction: 0, filter: currentFilter });
+
             // Set the filter value immediately
             if (currentFilter) {
                 $('#bg-filter').val(currentFilter);
             }
+
             getBackgrounds().then(() => {
                 // Apply the search after backgrounds are loaded
                 if (currentFilter) {

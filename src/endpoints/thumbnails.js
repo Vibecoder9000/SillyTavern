@@ -151,9 +151,11 @@ export async function generateThumbnail(directories, type, file, knownAspectRati
 
         // Generate the thumbnail
         let buffer;
+        let numericalAspectRatio = 1.0; // Default aspect ratio
+
         try {
             const image = await Jimp.read(pathToOriginalFile);
-            const numericalAspectRatio = (image.bitmap.height > 0) ? (image.bitmap.width / image.bitmap.height) : 1.0;
+            numericalAspectRatio = (image.bitmap.height > 0) ? (image.bitmap.width / image.bitmap.height) : 1.0;
             const thumbImage = image.clone();
 
             if (type === 'bg') {
@@ -178,9 +180,8 @@ export async function generateThumbnail(directories, type, file, knownAspectRati
             buffer = pngFormat
                 ? await thumbImage.getBuffer(JimpMime.png)
                 : await thumbImage.getBuffer(JimpMime.jpeg, { quality: quality, jpegColorSpace: 'ycbcr' });
-
         } catch (inner) {
-            console.warn(`Thumbnailer can not process the image: ${pathToOriginalFile}. Using original size`, inner);
+            console.warn(`[Thumbnails] Could not process image with Jimp: ${pathToOriginalFile}. Using original file as thumbnail.`, inner);
             buffer = fs.readFileSync(pathToOriginalFile);
         }
 
@@ -192,6 +193,7 @@ export async function generateThumbnail(directories, type, file, knownAspectRati
         return null;
     }
 }
+
 
 /**
  * Ensures that the thumbnail cache for backgrounds is valid.
