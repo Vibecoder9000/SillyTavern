@@ -200,7 +200,7 @@ class BackgroundSelector {
         let sortedImages = [];
 
         if (lowerQuery) {
-            // Filter first, then sort starred items to the top if they match the search
+            // Search mode: Filter first, then sort starred items to the top if they match the search
             const filtered = this.images.filter(img => img.filename.toLowerCase().includes(lowerQuery));
 
             filtered.sort((a, b) => {
@@ -209,16 +209,18 @@ class BackgroundSelector {
 
                 if (aStarred && !bStarred) return -1;
                 if (!aStarred && bStarred) return 1;
-                return a.filename.localeCompare(b.filename); // Stable sort by filename
+                // Use localeCompare with numeric: true for natural sorting
+                return a.filename.localeCompare(b.filename, undefined, { numeric: true, sensitivity: 'base' });
             });
             sortedImages = filtered;
         } else {
-            // All starred items at the very top
+            // Non-search mode: All starred items at the very top
             const starred = this.images.filter(img => img.isStarred);
             const unstarred = this.images.filter(img => !img.isStarred);
 
-            starred.sort((a, b) => a.filename.localeCompare(b.filename)); // Keep starred sorted alphabetically
-            unstarred.sort((a, b) => a.filename.localeCompare(b.filename)); // Keep unstarred sorted alphabetically
+            // Use localeCompare with numeric: true for natural sorting
+            starred.sort((a, b) => a.filename.localeCompare(b.filename, undefined, { numeric: true, sensitivity: 'base' }));
+            unstarred.sort((a, b) => a.filename.localeCompare(b.filename, undefined, { numeric: true, sensitivity: 'base' }));
 
             sortedImages = [...starred, ...unstarred];
         }
@@ -940,6 +942,7 @@ async function autoBackgroundCommand() {
 }
 
 export async function getBackgrounds() {
+    let currentSearchQuery = ''; 
     try {
         const currentSearchQuery = $('#bg-filter').val() || '';
 
@@ -1216,7 +1219,7 @@ export async function initBackgrounds() {
         setFittingClass(background_settings.fitting);
         saveSettingsDebounced();
     });
-    
+
     $('#background_thumbnails_animation').on('change', function() {
         background_settings.animation = $(this).prop('checked');
         saveSettingsDebounced();
@@ -1226,7 +1229,7 @@ export async function initBackgrounds() {
 
             // Clear the saved scroll state since image heights will change
             setGalleryScrollState({ top: 0, fraction: 0, filter: currentFilter });
-            
+
             getBackgrounds();
         }
     });
