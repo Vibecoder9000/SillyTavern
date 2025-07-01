@@ -7,14 +7,6 @@ import { flashHighlight, stringFormat, debounce, createThumbnail, getBase64Async
 import { t, translate } from './i18n.js';
 import { Popup } from './popup.js';
 
-function getBackgroundPath(fileUrl) {
-    return `backgrounds/${encodeURIComponent(fileUrl)}`;
-}
-
-function generateUrlParameter(bg, isCustom) {
-    return isCustom ? `url("${encodeURI(bg)}")` : `url("${getBackgroundPath(bg)}")`;
-}
-
 const PNG_PIXEL = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=';
 const PNG_PIXEL_BLOB = new Blob([Uint8Array.from(atob(PNG_PIXEL), c => c.charCodeAt(0))], { type: 'image/png' });
 const PLACEHOLDER_IMAGE = `url('data:image/png;base64,${PNG_PIXEL}')`;
@@ -34,6 +26,14 @@ let isGalleryVisible = false;
 const BG_METADATA_KEY = 'custom_background';
 const LIST_METADATA_KEY = 'chat_backgrounds';
 
+function getBackgroundPath(fileUrl) {
+    return `backgrounds/${encodeURIComponent(fileUrl)}`;
+}
+
+function generateUrlParameter(bg, isCustom) {
+    return isCustom ? `url("${encodeURI(bg)}")` : `url("${getBackgroundPath(bg)}")`;
+}
+
 function getUrlParameter(element) {
     const $this = $(element);
     const isCustom = $this.attr('custom') === 'true';
@@ -48,6 +48,25 @@ export let background_settings = {
     animation: false,
 };
 
+function getGalleryScrollState() {
+    try {
+        const savedState = sessionStorage.getItem('galleryScrollState');
+        return savedState ? JSON.parse(savedState) : {
+            top: 0,
+            fraction: 0,
+            filter: '',
+        };
+    } catch (e) {
+        console.error('Failed to parse gallery scroll state:', e);
+        return { top: 0, fraction: 0, filter: '' };
+    }
+}
+
+function setGalleryScrollState(newState) {
+    sessionStorage.setItem('galleryScrollState', JSON.stringify(newState));
+}
+
+// Client-side thumbnail generation function
 async function getThumbnailFromStorage(bg) {
     const cachedBlobUrl = THUMBNAIL_BLOBS.get(bg);
     if (cachedBlobUrl) {
@@ -82,32 +101,12 @@ async function getThumbnailFromStorage(bg) {
     }
 }
 
-function getGalleryScrollState() {
-    try {
-        const savedState = sessionStorage.getItem('galleryScrollState');
-        return savedState ? JSON.parse(savedState) : {
-            top: 0,
-            fraction: 0,
-            filter: '',
-        };
-    } catch (e) {
-        console.error('Failed to parse gallery scroll state:', e);
-        return { top: 0, fraction: 0, filter: '' };
-    }
-}
-
-function setGalleryScrollState(newState) {
-    sessionStorage.setItem('galleryScrollState', JSON.stringify(newState));
-}
-
 class BackgroundSelector {
     constructor(containerId) {
         this.container = document.getElementById(containerId);
         this.images = [];
         this.filteredImages = [];
         this.currentIndex = 0;
-        this.initialBatchSize = 120;
-        this.scrollBatchSize = 120;
         this.scrollerElement = document.getElementById('Backgrounds');
         this.isLoading = false;
         this.columns = [];
@@ -115,6 +114,12 @@ class BackgroundSelector {
         this.currentColumnCount = 0;
         this.isRestoring = false;
         this._hasRestored = false;
+
+        // Scroll to top button
+        this.scrollBtn = null;
+        this.handleScrollDebounced = null;
+        this.handleResizeDebounced = null; // For updating button position on window resize
+        this.drawerElement = document.getElementById('Backgrounds'); // Reference to the drawer
 
         const debouncedLayout = debounce(() => {
             if (this.currentColumnCount !== this._getColumnsForWidth()) {
@@ -145,6 +150,8 @@ class BackgroundSelector {
             this.container.appendChild(column);
             this.columns.push(column);
         }
+        // Ensure scroll-to-top button is set up after columns are created
+        this.ensureScrollTopButton();
     }
 
     setImages(imageDataList) {
@@ -172,7 +179,7 @@ class BackgroundSelector {
     }
 
     loadBatch() {
-        // Load everything at once instead of batching
+        // Load everything at once
         const remainingImages = this.filteredImages.slice(this.currentIndex);
 
         if (remainingImages.length === 0) return;
@@ -250,6 +257,7 @@ class BackgroundSelector {
     addImage(imgData) {
         if (!this.container || this.columns.length === 0) return;
 
+        // Simple round-robin distribution for masonry layout
         const columnIndex = this.imageCounter % this.columns.length;
         const targetColumn = this.columns[columnIndex];
         this.imageCounter++;
@@ -301,7 +309,7 @@ class BackgroundSelector {
         let userHasScrolled = false;
         let lastUserScrollTime = 0;
 
-        const SAVE_COOLDOWN = 600; // ms after restore during which we ignore events
+        const SAVE_COOLDOWN = 600;
 
         const saveScrollState = () => {
             const s = self.scrollerElement;
@@ -331,7 +339,6 @@ class BackgroundSelector {
 
             // Get the current filter state
             const currentFilter = $('#bg-filter').val() || '';
-
             const max = Math.max(1, s.scrollHeight - s.clientHeight);
             const currentState = {
                 top: s.scrollTop,
@@ -379,6 +386,97 @@ class BackgroundSelector {
             lastUserScrollTime = 0;
         };
     }
+
+    ensureScrollTopButton() {
+        if (this.scrollBtn) return;
+
+        // Create the button element
+        this.scrollBtn = document.createElement('div');
+        this.scrollBtn.id = 'bg_scroll_top';
+
+        // Ensure button is hidden initially
+        this.scrollBtn.style.opacity = '0';
+        this.scrollBtn.style.pointerEvents = 'none';
+
+        // Create the icon element properly
+        const icon = document.createElement('i');
+        icon.className = 'fa-solid fa-chevron-up';
+        this.scrollBtn.appendChild(icon);
+
+        document.body.appendChild(this.scrollBtn); // Append to body for fixed positioning
+
+        // Capture-phase handler to prevent drawer from closing
+        const captureScrollStop = e => {
+            if (e.target === this.scrollBtn || this.scrollBtn.contains(e.target)) {
+                e.preventDefault();
+                this.scrollerElement.scrollTo({ top: 0, behavior: 'smooth' });
+                e.stopImmediatePropagation();
+            }
+        };
+        ['pointerdown', 'mousedown', 'touchstart', 'click'].forEach(evt =>
+            window.addEventListener(evt, captureScrollStop, true)
+        );
+
+        // Add a small delay before checking scroll position on drawer open
+        const delayedRefresh = () => {
+            // First hide the button
+            this.scrollBtn.style.opacity = '0';
+            this.scrollBtn.style.pointerEvents = 'none';
+
+            // Then check after a small delay to avoid flickering
+            setTimeout(() => {
+                this.refreshScrollBtn();
+            }, 50);
+        };
+
+        // Observe drawer open/close state
+        if (this.drawerElement) {
+            const observer = new MutationObserver(delayedRefresh);
+            observer.observe(this.drawerElement, { attributes: true, attributeFilter: ['class'] });
+        }
+
+        // Debounce the scroll handler for performance
+        this.handleScrollDebounced = debounce(this.refreshScrollBtn.bind(this), 10);
+        this.scrollerElement.addEventListener('scroll', this.handleScrollDebounced);
+
+        // Update position on window resize
+        this.handleResizeDebounced = debounce(this.refreshScrollBtn.bind(this), 100);
+        window.addEventListener('resize', this.handleResizeDebounced);
+
+        // Initial check (after a small delay)
+        setTimeout(() => {
+            this.refreshScrollBtn();
+        }, 50);
+    }
+
+    refreshScrollBtn() {
+        if (!this.scrollBtn || !this.scrollerElement || !this.drawerElement) return;
+
+        const isDrawerOpen = !this.drawerElement.classList.contains('closedDrawer');
+        const scrolledDownEnough = this.scrollerElement.scrollTop > 150;
+
+        // Calculate position relative to drawer bounds
+        const drawerRect = this.drawerElement.getBoundingClientRect();
+        const padding = 15;
+
+        let rightPos = window.innerWidth - drawerRect.right + padding;
+        let bottomPos = window.innerHeight - drawerRect.bottom + padding;
+
+        rightPos = Math.max(padding, rightPos);
+        bottomPos = Math.max(padding, bottomPos);
+
+        this.scrollBtn.style.right = `${rightPos}px`;
+        this.scrollBtn.style.bottom = `${bottomPos}px`;
+
+        // Toggle visibility with opacity for smoothness
+        if (isDrawerOpen && scrolledDownEnough) {
+            this.scrollBtn.style.opacity = '1';
+            this.scrollBtn.style.pointerEvents = 'auto';
+        } else {
+            this.scrollBtn.style.opacity = '0';
+            this.scrollBtn.style.pointerEvents = 'none';
+        }
+    }
 }
 
 function setupGalleryObserver() {
@@ -398,27 +496,29 @@ function setupGalleryObserver() {
         if (entry.isIntersecting) {
             isGalleryVisible = true;
             if (!hasLoaded) {
+                // Clear any stale scroll state on first load
+                setGalleryScrollState({ top: 0, fraction: 0, filter: '' });
                 getBackgrounds();
                 hasLoaded = true;
             } else {
-                // On subsequent opens, restore scroll and highlight selected background
                 if (backgroundSelector) {
                     backgroundSelector.waitForImagesAndRestore();
 
-                    // Re-highlight the selected background
-                    setTimeout(() => {
-                        const selectedBgFile = background_settings.name;
-                        if (selectedBgFile) {
-                            const selectedElement = document.querySelector(`.thumbnail[data-bgfile="${selectedBgFile}"]`);
-                            highlightSelectedBackground(selectedElement);
-                        }
-                    }, 100);
+                    const selectedBgFile = background_settings.name;
+                    if (selectedBgFile) {
+                        const selectedElement = document.querySelector(`.thumbnail[data-bgfile="${selectedBgFile}"]`);
+                        highlightSelectedBackground(selectedElement);
+                    }
                 }
             }
+            // Refresh button visibility when drawer opens/closes
+            backgroundSelector?.refreshScrollBtn();
         } else {
             isGalleryVisible = false;
             backgroundSelector?.disableSaving();
             if (backgroundSelector) backgroundSelector._hasRestored = false;
+            // Refresh button visibility when drawer opens/closes
+            backgroundSelector?.refreshScrollBtn();
         }
     }, { root: null, threshold: 0.01 });
 
@@ -580,7 +680,6 @@ function unsetCustomBackground() {
  */
 function highlightSelectedBackground(selectedElement) {
     $('.thumbnail.selected').removeClass('selected');
-
     if (selectedElement) {
         $(selectedElement).addClass('selected');
     }
@@ -619,7 +718,6 @@ function onSelectBackgroundClick() {
 async function getNewBackgroundName(thumbnailElement) {
     const exampleBlock = $(thumbnailElement);
     const isCustom = exampleBlock.attr('custom') === 'true';
-
     const oldBg = exampleBlock.data('bgfile');
 
     if (!oldBg) {
@@ -715,7 +813,6 @@ async function onDeleteBackgroundClick(e) {
 
     // Check if this background is currently active (not locked)
     const currentBgUrl = `url("${url}")`;
-
     if (background_settings.url === currentBgUrl) {
         setBackground('__transparent.png', generateUrlParameter('__transparent.png', false));
     }
@@ -725,7 +822,6 @@ async function onDeleteBackgroundClick(e) {
         removeBackgroundMetadata();
         unsetCustomBackground();
     }
-
     highlightLockedBackground();
     if (isCustom) {
         await getChatBackgroundsList();
@@ -949,7 +1045,6 @@ async function uploadBackground(formData) {
     }
 }
 
-
 /**
  * Scrolls to, highlights, and selects a newly added background.
  * @param {string} bg
@@ -1031,15 +1126,12 @@ export function initBackgrounds() {
         if (backgroundSelector) {
             // Preserve the current search term
             const currentFilter = $('#bg-filter').val() || '';
-
             // Clear the saved scroll state since image heights will change
             setGalleryScrollState({ top: 0, fraction: 0, filter: currentFilter });
-
             // Set the filter value immediately
             if (currentFilter) {
                 $('#bg-filter').val(currentFilter);
             }
-
             getBackgrounds().then(() => {
                 // Apply the search after backgrounds are loaded
                 if (currentFilter) {

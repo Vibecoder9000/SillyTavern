@@ -103,3 +103,33 @@
     clip: rect(0, 0, 0, 0);
     border: 0;
 }
+
+#bg_scroll_top {
+    position: fixed;
+    width: 42px;
+    height: 42px;
+    border-radius: 50%;
+    background: rgba(40, 40, 40, 0.92);
+    color: #fff;
+    border: 1px solid var(--SmartThemeBorderColor, #888);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    z-index: 9999;
+    font-size: 18px;
+    transition: background 0.2s, border-color 0.2s, opacity 0.3s ease;
+    opacity: 0;
+    pointer-events: none;
+}
+
+#bg_scroll_top:hover {
+    background: rgba(60, 60, 60, 0.95);
+    border-color: var(--golden, #ffd700);
+}
+
+#bg_scroll_top .fa-solid {
+    margin: 0;
+    padding: 0;
+    line-height: 1;
+}
