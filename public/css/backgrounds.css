@@ -52,7 +52,7 @@
     overflow: hidden;
     text-overflow: ellipsis;
     opacity: 0;
-    transition: opacity 0.2s ease-in-out;
+    transition: opacity 0.05s ease-in-out;
     pointer-events: none;
 }
 
