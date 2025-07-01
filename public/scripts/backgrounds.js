@@ -942,7 +942,7 @@ async function autoBackgroundCommand() {
 }
 
 export async function getBackgrounds() {
-    let currentSearchQuery = ''; 
+    let currentSearchQuery = '';
     try {
         const currentSearchQuery = $('#bg-filter').val() || '';
 
