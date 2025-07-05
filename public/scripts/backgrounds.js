@@ -300,7 +300,7 @@ class BackgroundSelector {
 
             // Filter for image and video files
             const validFiles = files.filter(file =>
-                file.type.startsWith('image/') || file.type.startsWith('video/')
+                file.type.startsWith('image/') || file.type.startsWith('video/'),
             );
 
             if (validFiles.length === 0) {
