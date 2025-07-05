@@ -53,14 +53,15 @@ async function toggleStarredBackground(filename) {
     }
     await saveStarredBackgrounds();
 
-    // Find the image data in the selector's master list and update its starred status
+    // Update the master image data
     const imgDataToUpdate = backgroundSelector.images.find(img => img.filename === filename);
     if (imgDataToUpdate) {
-        imgDataToUpdate.isStarred = !isCurrentlyStarred; // Update the internal state
+        imgDataToUpdate.isStarred = !isCurrentlyStarred;
     }
 
-    // Re-render the gallery using the updated internal data
-    backgroundSelector.search($('#bg-filter').val() || '');
+    // The search method will detect the starring change and clear caches automatically
+    const currentFilter = $('#bg-filter').val() || '';
+    backgroundSelector.search(currentFilter);
 }
 
 function getBackgroundPath(fileUrl) {
@@ -139,106 +140,174 @@ async function getThumbnailFromStorage(bg) {
 }
 
 class BackgroundSelector {
-    constructor(containerId) {
-        this.container = document.getElementById(containerId);
-        this.images = [];
-        this.filteredImages = [];
-        this.currentIndex = 0;
-        this.scrollerElement = document.getElementById('bg-scrollable-content');
-        this.isLoading = false;
-        this.columns = [];
-        this.imageCounter = 0;
-        this.currentColumnCount = 0;
-        this.isRestoring = false;
-        this._hasRestored = false;
-        // Scroll to top button
-        this.scrollBtn = null;
-        this.handleScrollDebounced = null;
-        this.handleResizeDebounced = null;
-        this.drawerElement = document.getElementById('Backgrounds');
+	constructor(containerId) {
+		this.container = document.getElementById(containerId);
+		this.images = [];
+		this.filteredImages = [];
+		this.currentIndex = 0;
+		this.scrollerElement = document.getElementById('bg-scrollable-content');
+		this.isLoading = false;
+		this.columns = [];
+		this.imageCounter = 0;
+		this.currentColumnCount = 0;
+		this.isRestoring = false;
+		this._hasRestored = false;
+		this.scrollBtn = null;
+		this.handleScrollDebounced = null;
+		this.handleResizeDebounced = null;
+		this.drawerElement = document.getElementById('Backgrounds');
 
-        const debouncedLayout = debounce(() => {
-            if (this.currentColumnCount !== this._getColumnsForWidth()) {
-                this.resetAndLoad();
-            }
-        }, 150);
-        const resizeObserver = new ResizeObserver(debouncedLayout);
-        resizeObserver.observe(this.container);
-    }
+		// Simple debounced search for user input
+		this.debouncedSearch = debounce((query) => {
+			this.search(query);
+		}, 200);
 
-    _getColumnsForWidth() {
-        const width = this.container.offsetWidth;
-        if (width > 1600) return 9;
-        if (width > 1200) return 7;
-        if (width > 992) return 6;
-        if (width > 768) return 5;
-        if (width > 576) return 4;
-        return 3;
-    }
+		const debouncedLayout = debounce(() => {
+			if (this.currentColumnCount !== this._getColumnsForWidth()) {
+				this.resetAndLoad();
+			}
+		}, 150);
+		const resizeObserver = new ResizeObserver(debouncedLayout);
+		resizeObserver.observe(this.container);
+	}
 
-    setupColumns() {
-        this.container.innerHTML = '';
-        this.columns = [];
-        this.currentColumnCount = this._getColumnsForWidth();
-        for (let i = 0; i < this.currentColumnCount; i++) {
-            const column = document.createElement('div');
-            column.className = 'masonry-column';
-            this.container.appendChild(column);
-            this.columns.push(column);
-        }
-        // Ensure scroll-to-top button is set up after columns are created
-        this.ensureScrollTopButton();
-    }
+	_getColumnsForWidth() {
+		const width = this.container.offsetWidth;
 
-    setImages(imageDataList, defaultQuery = '') {
-        this.images = imageDataList;
-        this.search(defaultQuery);
-    }
+		if (width > 2400) return 10;
+		if (width > 2000) return 8;
+		if (width > 1600) return 7;
+		if (width > 1200) return 6;
+		if (width > 900) return 5;
+		return 4;
+	}
 
-    search(query) {
-        const lowerQuery = query.toLowerCase().trim();
-        let sortedImages = [];
+	setupColumns() {
+		const requiredColumns = this._getColumnsForWidth();
 
-        if (lowerQuery) {
-            // Search mode: Filter first, then sort starred items to the top if they match the search
-            const filtered = this.images.filter(img => img.filename.toLowerCase().includes(lowerQuery));
+		// Remove existing masonry container if present
+		const existingContainer = this.container.querySelector('#masonry-container');
+		if (existingContainer) {
+			existingContainer.remove();
+		}
 
-            filtered.sort((a, b) => {
-                const aStarred = a.isStarred;
-                const bStarred = b.isStarred;
+		// Create new masonry container
+		const masonryContainer = document.createElement('div');
+		masonryContainer.id = 'masonry-container';
+		this.container.appendChild(masonryContainer);
 
-                if (aStarred && !bStarred) return -1;
-                if (!aStarred && bStarred) return 1;
-                // Use localeCompare with numeric: true for natural sorting
-                return a.filename.localeCompare(b.filename, undefined, { numeric: true, sensitivity: 'base' });
-            });
-            sortedImages = filtered;
-        } else {
-            // Non-search mode: All starred items at the very top
-            const starred = this.images.filter(img => img.isStarred);
-            const unstarred = this.images.filter(img => !img.isStarred);
+		this.columns = [];
+		this.currentColumnCount = requiredColumns;
 
-            // Use localeCompare with numeric: true for natural sorting
-            starred.sort((a, b) => a.filename.localeCompare(b.filename, undefined, { numeric: true, sensitivity: 'base' }));
-            unstarred.sort((a, b) => a.filename.localeCompare(b.filename, undefined, { numeric: true, sensitivity: 'base' }));
+		for (let i = 0; i < requiredColumns; i++) {
+			const column = document.createElement('div');
+			column.className = 'masonry-column';
+			masonryContainer.appendChild(column);
+			this.columns.push(column);
+		}
 
-            sortedImages = [...starred, ...unstarred];
-        }
+		this.ensureScrollTopButton();
 
-        this.filteredImages = sortedImages;
-        this.resetAndLoad();
-    }
+		// Ensure ResizeObserver is working
+		this.setupResizeObserver();
+	}
+	
+	setupResizeObserver() {
+		if (this.resizeObserver) {
+			this.resizeObserver.disconnect();
+		}
 
-    resetAndLoad() {
-        if (!this.container) return;
-        this._hasRestored = false;
-        this.setupColumns();
-        this.currentIndex = 0;
-        this.imageCounter = 0;
+		const debouncedLayout = debounce(() => {
+			const currentColumns = this.currentColumnCount;
+			const requiredColumns = this._getColumnsForWidth();
 
-        // Load everything at once
-        this.loadBatch();
-    }
+			if (currentColumns !== requiredColumns) {
+				this.resetAndLoad();
+			}
+		}, 150);
+
+		this.resizeObserver = new ResizeObserver(debouncedLayout);
+		this.resizeObserver.observe(this.container);
+	}
+
+	search(query) {
+		const lowerQuery = query.toLowerCase().trim();
+		let sortedImages = [];
+
+		if (lowerQuery) {
+			const fuse = new Fuse(this.images, {
+				keys: ['filename'],
+				threshold: 0.4, // Fuzzy search threshold
+				includeScore: true,
+				ignoreLocation: true,
+				findAllMatches: true
+			});
+
+			const searchResults = fuse.search(lowerQuery);
+			const filtered = searchResults.map(result => result.item);
+
+			// Sort by starred status first, then by filename
+			filtered.sort((a, b) => {
+				const aStarred = a.isStarred;
+				const bStarred = b.isStarred;
+				if (aStarred && !bStarred) return -1;
+				if (!aStarred && bStarred) return 1;
+				return a.filename.localeCompare(b.filename, undefined, { numeric: true, sensitivity: 'base' });
+			});
+			sortedImages = filtered;
+		} else {
+			// No search query - show all images sorted by starred status
+			const starred = this.images.filter(img => img.isStarred);
+			const unstarred = this.images.filter(img => !img.isStarred);
+			starred.sort((a, b) => a.filename.localeCompare(b.filename, undefined, { numeric: true, sensitivity: 'base' }));
+			unstarred.sort((a, b) => a.filename.localeCompare(b.filename, undefined, { numeric: true, sensitivity: 'base' }));
+			sortedImages = [...starred, ...unstarred];
+		}
+
+		this.filteredImages = sortedImages;
+		this.resetAndLoad();
+	}
+
+	// Clear cached order when images change
+	setImages(imageDataList, defaultQuery = '') {
+		this.images = imageDataList;
+		this.search(defaultQuery);
+	}
+
+	updateThumbnailStates() {
+		const allThumbnails = this.container.querySelectorAll('.thumbnail');
+
+		allThumbnails.forEach(thumbnail => {
+			const filename = thumbnail.dataset.bgfile;
+			const imgData = this.images.find(img => img.filename === filename);
+
+			if (imgData) {
+				// Update starred state
+				if (imgData.isStarred) {
+					thumbnail.classList.add('starred');
+				} else {
+					thumbnail.classList.remove('starred');
+				}
+
+				// Update locked state
+				const lockedBgUrl = `url("${imgData.fullResUrl}")`;
+				if (chat_metadata[BG_METADATA_KEY] === lockedBgUrl) {
+					thumbnail.classList.add('locked');
+				} else {
+					thumbnail.classList.remove('locked');
+				}
+			}
+		});
+	}
+
+	resetAndLoad() {
+		if (!this.container) return;
+		this._hasRestored = false;
+		this.setupColumns();
+		this.currentIndex = 0;
+		this.imageCounter = 0;
+		this.loadBatch();
+	}
 
     loadBatch() {
         // Load everything at once
@@ -316,58 +385,70 @@ class BackgroundSelector {
         }, dynamicDelay);
     }
 
-    addImage(imgData) {
-        if (!this.container || this.columns.length === 0) return;
+	addImage(imgData) {
+		if (!this.container || this.columns.length === 0) return;
 
-        // Simple round-robin distribution for masonry layout
-        const columnIndex = this.imageCounter % this.columns.length;
-        const targetColumn = this.columns[columnIndex];
-        this.imageCounter++;
+		const columnIndex = this.imageCounter % this.columns.length;
+		const targetColumn = this.columns[columnIndex];
+		this.imageCounter++;
 
-        const imgElement = new Image();
-        const thumbnail = document.createElement('div');
-        thumbnail.className = 'thumbnail';
+		const imgElement = new Image();
+		const thumbnail = document.createElement('div');
+		thumbnail.className = 'thumbnail fade-in';
 
-        const lockedBgUrl = `url("${imgData.fullResUrl}")`;
-        if (chat_metadata[BG_METADATA_KEY] === lockedBgUrl) {
-            thumbnail.classList.add('locked');
-        }
+		// Store state data but don't apply visual classes yet
+		thumbnail.dataset.id = imgData.id;
+		thumbnail.dataset.bgfile = imgData.filename;
+		thumbnail.dataset.url = imgData.fullResUrl;
+		thumbnail.title = imgData.filename;
+		thumbnail.dataset.isStarred = imgData.isStarred;
+		thumbnail.dataset.isLocked = chat_metadata[BG_METADATA_KEY] === `url("${imgData.fullResUrl}")`;
 
-        if (imgData.isStarred) {
-            thumbnail.classList.add('starred');
-        }
+		if (imgData.isCustom) {
+			thumbnail.setAttribute('custom', 'true');
+		}
 
-        thumbnail.dataset.id = imgData.id;
-        thumbnail.dataset.bgfile = imgData.filename;
-        thumbnail.dataset.url = imgData.fullResUrl;
-        thumbnail.title = imgData.filename;
-        if (imgData.isCustom) {
-            thumbnail.setAttribute('custom', 'true');
-        }
+		const titleDiv = document.createElement('div');
+		titleDiv.className = 'BGSampleTitle';
+		titleDiv.textContent = imgData.filename.substring(0, imgData.filename.lastIndexOf('.')) || imgData.filename;
 
-        const titleDiv = document.createElement('div');
-        titleDiv.className = 'BGSampleTitle';
-        titleDiv.textContent = imgData.filename.substring(0, imgData.filename.lastIndexOf('.')) || imgData.filename;
+		const menu = document.createElement('div');
+		menu.className = 'jg-menu';
+		menu.innerHTML = `
+			<div data-action="star" class="jg-button jg-star fa-fw pointer" title="${translate('Star Background')}">
+				<i class="fa-solid fa-star"></i><i class="fa-regular fa-star"></i>
+			</div>
+			<div data-action="lock" class="jg-button jg-lock fa-solid fa-lock fa-fw pointer" title="${translate('Lock Background')}"></div>
+			<div data-action="unlock" class="jg-button jg-unlock fa-solid fa-unlock fa-fw pointer" title="${translate('Unlock Background')}"></div>
+			<div data-action="edit" class="jg-button jg-edit fa-solid fa-pen-to-square fa-fw pointer" title="${translate('Rename Background')}"></div>
+			<div data-action="delete" class="jg-button jg-delete fa-solid fa-trash-can fa-fw pointer" title="${translate('Delete Background')}"></div>
+		`;
 
-        const menu = document.createElement('div');
-        menu.className = 'jg-menu';
-        menu.innerHTML = `
-            <div data-action="star" class="jg-button jg-star fa-fw pointer" title="${translate('Star Background')}">
-                <i class="fa-solid fa-star"></i><i class="fa-regular fa-star"></i>
-            </div>
-            <div data-action="lock" class="jg-button jg-lock fa-solid fa-lock fa-fw pointer" title="${translate('Lock Background')}"></div>
-            <div data-action="unlock" class="jg-button jg-unlock fa-solid fa-unlock fa-fw pointer" title="${translate('Unlock Background')}"></div>
-            <div data-action="edit" class="jg-button jg-edit fa-solid fa-pen-to-square fa-fw pointer" title="${translate('Rename Background')}"></div>
-            <div data-action="delete" class="jg-button jg-delete fa-solid fa-trash-can fa-fw pointer" title="${translate('Delete Background')}"></div>
-        `;
+		thumbnail.appendChild(imgElement);
+		thumbnail.appendChild(titleDiv);
+		thumbnail.appendChild(menu);
+		targetColumn.appendChild(thumbnail);
 
-        thumbnail.appendChild(imgElement);
-        thumbnail.appendChild(titleDiv);
-        thumbnail.appendChild(menu);
+		// Apply visual states only after image loads
+		imgElement.onload = () => {
+			// Apply visual state classes after image is loaded
+			if (thumbnail.dataset.isStarred === 'true') {
+				thumbnail.classList.add('starred');
+			}
+			if (thumbnail.dataset.isLocked === 'true') {
+				thumbnail.classList.add('locked');
+			}
 
-        targetColumn.appendChild(thumbnail);
-        imgElement.src = imgData.thumbnailUrl;
-    }
+			// Trigger fade-in
+			requestAnimationFrame(() => {
+				requestAnimationFrame(() => {
+					thumbnail.classList.add('visible');
+				});
+			});
+		};
+
+		imgElement.src = imgData.thumbnailUrl;
+	}
 
     setupScrollPositionSaving() {
         if (!this.scrollerElement) return;
@@ -1172,7 +1253,7 @@ function setFittingClass(fitting) {
 function onBackgroundFilterInput() {
     const filterValue = String($(this).val());
     if (backgroundSelector) {
-        backgroundSelector.search(filterValue);
+        backgroundSelector.debouncedSearch(filterValue);
     }
 }
 

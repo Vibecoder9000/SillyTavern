@@ -15,6 +15,7 @@
 
     overflow: hidden;
     overflow-y: hidden;
+    overflow-x: hidden;
 
     position: fixed;
     top: var(--topBarBlockSize);
@@ -50,6 +51,7 @@
 #bg-scrollable-content {
     flex-grow: 1;
     overflow-y: auto;
+    overflow-x: hidden;
     padding: 5px;
     width: 100%;
     box-sizing: border-box;
@@ -59,22 +61,8 @@
 #bg_menu_content,
 #bg_custom_content {
     padding: 0;
-}
-
-#bg-scrollable-content h3 {
-    margin-top: 15px;
-    margin-bottom: 5px;
-    padding: 0;
-}
-
-#bg-scrollable-content #bg_chat_hint {
-    margin-bottom: 15px;
-    padding: 0;
-}
-
-#bg_menu_content,
-#bg_custom_content {
-    padding: 0;
+    width: 100%;
+    box-sizing: border-box;
 }
 
 #bg-scrollable-content h3 {
@@ -89,43 +77,69 @@
 }
 
 #bg_menu_content {
+    width: 100%;
+    box-sizing: border-box;
+    padding: 0;
+}
+
+#masonry-container {
     display: flex;
     gap: 5px;
     padding: 5px;
-    flex-wrap: wrap;
+    width: 100%;
+    box-sizing: border-box;
+    overflow: hidden;
 }
 
 .masonry-column {
     display: flex;
     flex-direction: column;
     gap: 5px;
-    flex: 1 1 0;
+    flex: 1;
     min-width: 0;
+    width: 0;
 }
 
 .thumbnail {
-    position: relative;
-    display: block;
+    transition: transform 0.2s ease-out, box-shadow 0.2s ease-out;
     width: 100%;
-    height: auto;
-    border-radius: 4px;
-    overflow: hidden;
-    cursor: pointer;
-    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
-    transition: transform 0.15s ease-out, box-shadow 0.15s ease-out;
+    box-sizing: border-box;
 }
 
 .thumbnail:hover {
     transform: translateY(-3px);
-    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.3);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
     z-index: 10;
 }
 
+.thumbnail.fade-in {
+    opacity: 0;
+    transform: translateY(10px);
+    transition: opacity 0.3s ease-out, transform 0.3s ease-out;
+}
+
+.thumbnail.fade-in.visible {
+    opacity: 1;
+    transform: translateY(0);
+}
+
+.thumbnail.fade-in.visible {
+    transition: transform 0.2s ease-out, box-shadow 0.2s ease-out;
+}
+
+.thumbnail:hover {
+    transform: translateY(-3px);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
+}
+
 .thumbnail img {
+    border-radius: 6px;
     width: 100%;
     height: auto;
     display: block;
-    background-color: #333;
+    border-radius: 8px;
+    max-width: 100%;
+    overflow: hidden;
 }
 
 .thumbnail .BGSampleTitle {
@@ -133,56 +147,74 @@
     bottom: 0;
     left: 0;
     right: 0;
-    background-color: rgba(0, 0, 0, 0.6);
+    background: linear-gradient(transparent, rgba(0, 0, 0, 0.8));
     color: white;
-    font-size: 0.8em;
-    padding: 2px 4px;
+    font-size: 0.85em;
+    padding: 8px 6px 4px;
     text-align: center;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
     opacity: 0;
-    transition: opacity 0.05s ease-in-out;
+    transition: opacity 0.15s ease-in-out;
     pointer-events: none;
+    border-radius: 0 0 7px 7px;
+    clip-path: inset(0 0 0 0 round 0 0 7px 7px);
 }
+
 
 .thumbnail:hover .BGSampleTitle {
     opacity: 1;
-    pointer-events: auto;
+    transition-delay: 0.05s;
 }
 
-.thumbnail.selected {
-    outline: 2px solid var(--golden);
-    outline-offset: -2px;
-}
 
 .thumbnail .jg-menu {
     position: absolute;
-    top: 0;
-    right: 0;
-    background-color: rgba(0, 0, 0, 0.6);
-    border-bottom-left-radius: 4px;
+    top: 4px;
+    right: 4px;
+    background-color: rgba(0, 0, 0, 0.7);
+    border-radius: 6px;
     display: none;
-    gap: 2px;
+    gap: 1px;
     padding: 2px;
     z-index: 2;
+    backdrop-filter: blur(4px);
 }
 
 .thumbnail:hover .jg-menu {
     display: flex;
+    animation: fadeInMenu 0.2s ease-out;
+}
+
+@keyframes fadeInMenu {
+    from {
+        opacity: 0;
+        transform: scale(0.9);
+    }
+    to {
+        opacity: 1;
+        transform: scale(1);
+    }
 }
 
 .thumbnail .jg-button {
     color: white;
-    padding: 5px;
+    padding: 6px;
     display: flex;
     align-items: center;
     justify-content: center;
-    font-size: 1em;
+    font-size: 0.9em;
+    border-radius: 4px;
+    transition: background-color 0.15s ease;
+}
+
+.thumbnail .jg-button:hover {
+    background-color: rgba(255, 255, 255, 0.2);
 }
 
 .thumbnail .jg-star .fa-solid {
-    color: var(--golden);
+    color: var(--golden, #ffd700);
     display: none;
 }
 
@@ -199,19 +231,70 @@
     display: none;
 }
 
+.thumbnail.starred {
+    position: relative;
+}
+
+.thumbnail.starred::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 20px;
+    height: 20px;
+    background: var(--golden, #ffd700);
+    clip-path: polygon(0 0, 100% 0, 0 100%);
+    border-radius: 6px 0 0 0;
+    z-index: 2;
+}
+
 
 .thumbnail .jg-unlock {
     display: none;
 }
+
 .thumbnail.locked .jg-lock {
     display: none;
 }
+
 .thumbnail.locked .jg-unlock {
     display: flex;
 }
 
+.thumbnail.selected {
+    outline: none;
+    position: relative;
+}
+
+.thumbnail.selected::after {
+    content: '';
+    position: absolute;
+    top: -3px;
+    left: -3px;
+    right: -3px;
+    bottom: -3px;
+    border: 3px solid white;
+    border-radius: 9px;
+    pointer-events: none;
+    z-index: 1;
+}
+
 .thumbnail.locked {
-    outline: 2px solid var(--golden);
+    outline: none;
+    position: relative;
+}
+
+.thumbnail.locked::after {
+    content: '';
+    position: absolute;
+    top: -3px;
+    left: -3px;
+    right: -3px;
+    bottom: -3px;
+    border: 3px solid var(--golden, #ffd700);
+    border-radius: 9px;
+    pointer-events: none;
+    z-index: 1;
 }
 
 #form_bg_upload input[type="file"] {
