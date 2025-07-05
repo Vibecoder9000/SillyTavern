@@ -1120,33 +1120,31 @@ export async function getBackgrounds() {
             Object.assign(THUMBNAIL_CONFIG, config);
         }
 
-        const imageDataList = await Promise.all(images.map(async filename => {
-            const isWebP = filename.toLowerCase().endsWith('.webp');
-            let thumbnailUrl;
+		const imageDataList = await Promise.all(images.map(async filename => {
+			const isWebP = filename.toLowerCase().endsWith('.webp');
+			let thumbnailUrl;
 
-            if (isWebP) {
-                if (background_settings.animation) {
-                    // Use full animated WebP + generate thumbnail in background
-                    thumbnailUrl = getBackgroundPath(filename);
-                    // Generate thumbnail in background for future use
-                    getThumbnailFromStorage(filename).catch(console.error);
-                } else {
-                    // Use cached thumbnail or fallback to PNG
-                    thumbnailUrl = await getThumbnailFromStorage(filename);
-                }
-            } else {
-                // Regular images use server-side thumbnails
-                thumbnailUrl = `/thumbnail?file=${encodeURIComponent(filename)}&type=bg&animated=${background_settings.animation}`;
-            }
+			if (isWebP) {
+				if (background_settings.animation) {
+					// Use full animated WebP for thumbnails when animation is enabled
+					thumbnailUrl = getBackgroundPath(filename);
+				} else {
+					// Use cached thumbnail when animation is disabled
+					thumbnailUrl = await getThumbnailFromStorage(filename);
+				}
+			} else {
+				// Regular images use server-side thumbnails
+				thumbnailUrl = `/thumbnail?file=${encodeURIComponent(filename)}&type=bg&animated=${background_settings.animation}`;
+			}
 
-            return {
-                id: filename,
-                filename: filename,
-                thumbnailUrl: thumbnailUrl,
-                fullResUrl: getBackgroundPath(filename),
-                isStarred: isBackgroundStarred(filename),
-            };
-        }));
+			return {
+				id: filename,
+				filename: filename,
+				thumbnailUrl: thumbnailUrl,
+				fullResUrl: getBackgroundPath(filename),
+				isStarred: isBackgroundStarred(filename),
+			};
+		}));
 
         if (backgroundSelector) {
             backgroundSelector.setImages(imageDataList, currentSearchQuery);
