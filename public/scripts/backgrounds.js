@@ -14,6 +14,7 @@ const THUMBNAIL_STORAGE = localforage.createInstance({ name: 'SillyTavern_Thumbn
 const THUMBNAIL_BLOBS = new Map();
 const STARRED_BG_STORAGE = localforage.createInstance({ name: 'SillyTavern_StarredBackgrounds' });
 let starredBackgrounds = new Set();
+const SERVER_THUMBNAIL_CACHE = new Map();
 
 let THUMBNAIL_CONFIG = {
     width: 160,
@@ -26,6 +27,32 @@ let isGalleryVisible = false;
 
 const BG_METADATA_KEY = 'custom_background';
 const LIST_METADATA_KEY = 'chat_backgrounds';
+
+async function getCachedServerThumbnail(thumbnailUrl) {
+    // Check if we already have this thumbnail cached
+    if (SERVER_THUMBNAIL_CACHE.has(thumbnailUrl)) {
+        return SERVER_THUMBNAIL_CACHE.get(thumbnailUrl);
+    }
+
+    try {
+        const response = await fetch(thumbnailUrl, { cache: 'force-cache' });
+        if (!response.ok) {
+            throw new Error('Failed to fetch thumbnail');
+        }
+
+        const blob = await response.blob();
+        const blobUrl = URL.createObjectURL(blob);
+
+        // Cache the blob URL
+        SERVER_THUMBNAIL_CACHE.set(thumbnailUrl, blobUrl);
+
+        return blobUrl;
+    } catch (error) {
+        console.warn('Failed to cache server thumbnail:', thumbnailUrl, error);
+        // Return the original URL as fallback
+        return thumbnailUrl;
+    }
+}
 
 async function loadStarredBackgrounds() {
     const stored = await STARRED_BG_STORAGE.getItem('starred_list');
@@ -163,6 +190,8 @@ class BackgroundSelector {
             this.search(query);
         }, 200);
 
+        this.currentColumnCount = this._getColumnsForWidth();
+
         const debouncedLayout = debounce(() => {
             if (this.currentColumnCount !== this._getColumnsForWidth()) {
                 this.resetAndLoad();
@@ -184,6 +213,13 @@ class BackgroundSelector {
     }
 
     setupColumns() {
+        // Ensure we have a valid container width before calculating columns
+        if (!this.container || this.container.offsetWidth === 0) {
+            // Container not ready, try again on next frame
+            requestAnimationFrame(() => this.setupColumns());
+            return;
+        }
+
         const requiredColumns = this._getColumnsForWidth();
 
         // Remove existing masonry container if present
@@ -342,6 +378,12 @@ class BackgroundSelector {
     // Clear cached order when images change
     setImages(imageDataList, defaultQuery = '') {
         this.images = imageDataList;
+
+        // Set up columns immediately if not already done
+        if (this.columns.length === 0) {
+            this.setupColumns();
+        }
+
         this.search(defaultQuery);
     }
 
@@ -717,14 +759,23 @@ function setupGalleryObserver() {
 
         if (entry.isIntersecting) {
             isGalleryVisible = true;
+
             if (!hasLoaded) {
-                // Clear any stale scroll state on first load
+                // Only load backgrounds when the menu is first opened, not on page load
                 setGalleryScrollState({ top: 0, fraction: 0, filter: '' });
                 getBackgrounds();
                 hasLoaded = true;
             } else {
-                // On subsequent opens, restore scroll and highlight selected background
-                if (backgroundSelector) {
+                // On subsequent opens - work with existing data
+                if (backgroundSelector && backgroundSelector.images.length > 0) {
+                    const correctColumns = backgroundSelector._getColumnsForWidth();
+
+                    if (backgroundSelector.currentColumnCount !== correctColumns) {
+                        backgroundSelector.currentColumnCount = correctColumns;
+                        backgroundSelector.setupColumns();
+                    }
+
+                    backgroundSelector.resetAndLoad();
                     backgroundSelector.waitForImagesAndRestore();
 
                     const selectedBgFile = background_settings.name;
@@ -734,13 +785,13 @@ function setupGalleryObserver() {
                     }
                 }
             }
-            // Refresh button visibility when drawer opens/closes
             backgroundSelector?.refreshScrollBtn();
         } else {
             isGalleryVisible = false;
             backgroundSelector?.disableSaving();
-            if (backgroundSelector) backgroundSelector._hasRestored = false;
-            // Refresh button visibility when drawer opens/closes
+            if (backgroundSelector) {
+                backgroundSelector._hasRestored = false;
+            }
             backgroundSelector?.refreshScrollBtn();
         }
     }, { root: null, threshold: 0.01 });
@@ -1133,8 +1184,9 @@ export async function getBackgrounds() {
                     thumbnailUrl = await getThumbnailFromStorage(filename);
                 }
             } else {
-                // Regular images use server-side thumbnails
-                thumbnailUrl = `/thumbnail?file=${encodeURIComponent(filename)}&type=bg&animated=${background_settings.animation}`;
+                // Cache server-side thumbnails for regular images
+                const serverThumbnailUrl = `/thumbnail?file=${encodeURIComponent(filename)}&type=bg&animated=${background_settings.animation}`;
+                thumbnailUrl = await getCachedServerThumbnail(serverThumbnailUrl);
             }
 
             return {

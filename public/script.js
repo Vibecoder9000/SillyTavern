@@ -1017,7 +1017,6 @@ async function firstLoadInit() {
     initMacros();
     await getUserAvatars(true, user_avatar);
     await getCharacters();
-    await getBackgrounds();
     await initTokenizers();
     initBackgrounds();
     initAuthorsNote();
