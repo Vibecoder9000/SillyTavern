@@ -337,3 +337,33 @@
     padding: 0;
     line-height: 1;
 }
+
+#Backgrounds.drag-over {
+    position: relative;
+}
+
+#Backgrounds.drag-over::before {
+    content: 'Drop an image or mp4 here';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.8);
+    color: white;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.5em;
+    font-weight: bold;
+    z-index: 1000;
+    backdrop-filter: blur(4px);
+    border: 3px dashed var(--white, #FFFFFF);
+    border-radius: 10px;
+    margin: 5px;
+}
+
+#Backgrounds.drag-over #bg-scrollable-content,
+#Backgrounds.drag-over #bg-header-fixed {
+    pointer-events: none;
+}
