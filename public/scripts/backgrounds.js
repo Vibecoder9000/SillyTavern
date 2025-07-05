@@ -269,75 +269,75 @@ class BackgroundSelector {
         this.resetAndLoad();
     }
 
-	setupDropToUpload() {
-		const dropZone = this.container.closest('#Backgrounds');
-		if (!dropZone) return;
+    setupDropToUpload() {
+        const dropZone = this.container.closest('#Backgrounds');
+        if (!dropZone) return;
 
-		// Prevent default drag behaviors on the entire drawer
-		['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
-			dropZone.addEventListener(eventName, (e) => {
-				e.preventDefault();
-				e.stopPropagation();
-			});
-		});
+        // Prevent default drag behaviors on the entire drawer
+        ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
+            dropZone.addEventListener(eventName, (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+            });
+        });
 
-		// Add visual feedback for drag over
-		['dragenter', 'dragover'].forEach(eventName => {
-			dropZone.addEventListener(eventName, () => {
-				dropZone.classList.add('drag-over');
-			});
-		});
+        // Add visual feedback for drag over
+        ['dragenter', 'dragover'].forEach(eventName => {
+            dropZone.addEventListener(eventName, () => {
+                dropZone.classList.add('drag-over');
+            });
+        });
 
-		['dragleave', 'drop'].forEach(eventName => {
-			dropZone.addEventListener(eventName, () => {
-				dropZone.classList.remove('drag-over');
-			});
-		});
+        ['dragleave', 'drop'].forEach(eventName => {
+            dropZone.addEventListener(eventName, () => {
+                dropZone.classList.remove('drag-over');
+            });
+        });
 
-		// Handle the actual drop
-		dropZone.addEventListener('drop', async (e) => {
-			const files = Array.from(e.dataTransfer.files);
+        // Handle the actual drop
+        dropZone.addEventListener('drop', async (e) => {
+            const files = Array.from(e.dataTransfer.files);
 
-			// Filter for image and video files
-			const validFiles = files.filter(file =>
-				file.type.startsWith('image/') || file.type.startsWith('video/')
-			);
+            // Filter for image and video files
+            const validFiles = files.filter(file =>
+                file.type.startsWith('image/') || file.type.startsWith('video/')
+            );
 
-			if (validFiles.length === 0) {
-				toastr.warning('Please drop image or video files only.');
-				return;
-			}
+            if (validFiles.length === 0) {
+                toastr.warning('Please drop image or video files only.');
+                return;
+            }
 
-			// Process each file
-			for (const file of validFiles) {
-				const formData = new FormData();
-				formData.append('avatar', file);
+            // Process each file
+            for (const file of validFiles) {
+                const formData = new FormData();
+                formData.append('avatar', file);
 
-				try {
-					await convertFileIfVideo(formData);
-					await uploadBackground(formData);
-				} catch (error) {
-					console.error('Error uploading file:', file.name, error);
-					toastr.error(`Failed to upload ${file.name}`);
-				}
-			}
+                try {
+                    await convertFileIfVideo(formData);
+                    await uploadBackground(formData);
+                } catch (error) {
+                    console.error('Error uploading file:', file.name, error);
+                    toastr.error(`Failed to upload ${file.name}`);
+                }
+            }
 
-			// Refresh the gallery after all uploads
-			const currentFilter = $('#bg-filter').val() || '';
-			await getBackgrounds();
+            // Refresh the gallery after all uploads
+            const currentFilter = $('#bg-filter').val() || '';
+            await getBackgrounds();
 
-			if (currentFilter) {
-				$('#bg-filter').val(currentFilter);
-				this.search(currentFilter);
-			}
+            if (currentFilter) {
+                $('#bg-filter').val(currentFilter);
+                this.search(currentFilter);
+            }
 
-			// Highlight the last uploaded file if only one was uploaded
-			if (validFiles.length === 1) {
-				const fileName = validFiles[0].name;
-				setTimeout(() => { highlightNewBackground(fileName); }, 100);
-			}
-		});
-	}
+            // Highlight the last uploaded file if only one was uploaded
+            if (validFiles.length === 1) {
+                const fileName = validFiles[0].name;
+                setTimeout(() => { highlightNewBackground(fileName); }, 100);
+            }
+        });
+    }
 
     // Clear cached order when images change
     setImages(imageDataList, defaultQuery = '') {
@@ -1120,31 +1120,31 @@ export async function getBackgrounds() {
             Object.assign(THUMBNAIL_CONFIG, config);
         }
 
-		const imageDataList = await Promise.all(images.map(async filename => {
-			const isWebP = filename.toLowerCase().endsWith('.webp');
-			let thumbnailUrl;
+        const imageDataList = await Promise.all(images.map(async filename => {
+            const isWebP = filename.toLowerCase().endsWith('.webp');
+            let thumbnailUrl;
 
-			if (isWebP) {
-				if (background_settings.animation) {
-					// Use full animated WebP for thumbnails when animation is enabled
-					thumbnailUrl = getBackgroundPath(filename);
-				} else {
-					// Use cached thumbnail when animation is disabled
-					thumbnailUrl = await getThumbnailFromStorage(filename);
-				}
-			} else {
-				// Regular images use server-side thumbnails
-				thumbnailUrl = `/thumbnail?file=${encodeURIComponent(filename)}&type=bg&animated=${background_settings.animation}`;
-			}
+            if (isWebP) {
+                if (background_settings.animation) {
+                    // Use full animated WebP for thumbnails when animation is enabled
+                    thumbnailUrl = getBackgroundPath(filename);
+                } else {
+                    // Use cached thumbnail when animation is disabled
+                    thumbnailUrl = await getThumbnailFromStorage(filename);
+                }
+            } else {
+                // Regular images use server-side thumbnails
+                thumbnailUrl = `/thumbnail?file=${encodeURIComponent(filename)}&type=bg&animated=${background_settings.animation}`;
+            }
 
-			return {
-				id: filename,
-				filename: filename,
-				thumbnailUrl: thumbnailUrl,
-				fullResUrl: getBackgroundPath(filename),
-				isStarred: isBackgroundStarred(filename),
-			};
-		}));
+            return {
+                id: filename,
+                filename: filename,
+                thumbnailUrl: thumbnailUrl,
+                fullResUrl: getBackgroundPath(filename),
+                isStarred: isBackgroundStarred(filename),
+            };
+        }));
 
         if (backgroundSelector) {
             backgroundSelector.setImages(imageDataList, currentSearchQuery);
