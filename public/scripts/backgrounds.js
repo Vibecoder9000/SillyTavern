@@ -140,174 +140,174 @@ async function getThumbnailFromStorage(bg) {
 }
 
 class BackgroundSelector {
-	constructor(containerId) {
-		this.container = document.getElementById(containerId);
-		this.images = [];
-		this.filteredImages = [];
-		this.currentIndex = 0;
-		this.scrollerElement = document.getElementById('bg-scrollable-content');
-		this.isLoading = false;
-		this.columns = [];
-		this.imageCounter = 0;
-		this.currentColumnCount = 0;
-		this.isRestoring = false;
-		this._hasRestored = false;
-		this.scrollBtn = null;
-		this.handleScrollDebounced = null;
-		this.handleResizeDebounced = null;
-		this.drawerElement = document.getElementById('Backgrounds');
+    constructor(containerId) {
+        this.container = document.getElementById(containerId);
+        this.images = [];
+        this.filteredImages = [];
+        this.currentIndex = 0;
+        this.scrollerElement = document.getElementById('bg-scrollable-content');
+        this.isLoading = false;
+        this.columns = [];
+        this.imageCounter = 0;
+        this.currentColumnCount = 0;
+        this.isRestoring = false;
+        this._hasRestored = false;
+        this.scrollBtn = null;
+        this.handleScrollDebounced = null;
+        this.handleResizeDebounced = null;
+        this.drawerElement = document.getElementById('Backgrounds');
 
-		// Simple debounced search for user input
-		this.debouncedSearch = debounce((query) => {
-			this.search(query);
-		}, 200);
+        // Simple debounced search for user input
+        this.debouncedSearch = debounce((query) => {
+            this.search(query);
+        }, 200);
 
-		const debouncedLayout = debounce(() => {
-			if (this.currentColumnCount !== this._getColumnsForWidth()) {
-				this.resetAndLoad();
-			}
-		}, 150);
-		const resizeObserver = new ResizeObserver(debouncedLayout);
-		resizeObserver.observe(this.container);
-	}
+        const debouncedLayout = debounce(() => {
+            if (this.currentColumnCount !== this._getColumnsForWidth()) {
+                this.resetAndLoad();
+            }
+        }, 150);
+        const resizeObserver = new ResizeObserver(debouncedLayout);
+        resizeObserver.observe(this.container);
+    }
 
-	_getColumnsForWidth() {
-		const width = this.container.offsetWidth;
+    _getColumnsForWidth() {
+        const width = this.container.offsetWidth;
 
-		if (width > 2400) return 10;
-		if (width > 2000) return 8;
-		if (width > 1600) return 7;
-		if (width > 1200) return 6;
-		if (width > 900) return 5;
-		return 4;
-	}
+        if (width > 2400) return 10;
+        if (width > 2000) return 8;
+        if (width > 1600) return 7;
+        if (width > 1200) return 6;
+        if (width > 900) return 5;
+        return 4;
+    }
 
-	setupColumns() {
-		const requiredColumns = this._getColumnsForWidth();
+    setupColumns() {
+        const requiredColumns = this._getColumnsForWidth();
 
-		// Remove existing masonry container if present
-		const existingContainer = this.container.querySelector('#masonry-container');
-		if (existingContainer) {
-			existingContainer.remove();
-		}
+        // Remove existing masonry container if present
+        const existingContainer = this.container.querySelector('#masonry-container');
+        if (existingContainer) {
+            existingContainer.remove();
+        }
 
-		// Create new masonry container
-		const masonryContainer = document.createElement('div');
-		masonryContainer.id = 'masonry-container';
-		this.container.appendChild(masonryContainer);
+        // Create new masonry container
+        const masonryContainer = document.createElement('div');
+        masonryContainer.id = 'masonry-container';
+        this.container.appendChild(masonryContainer);
 
-		this.columns = [];
-		this.currentColumnCount = requiredColumns;
+        this.columns = [];
+        this.currentColumnCount = requiredColumns;
 
-		for (let i = 0; i < requiredColumns; i++) {
-			const column = document.createElement('div');
-			column.className = 'masonry-column';
-			masonryContainer.appendChild(column);
-			this.columns.push(column);
-		}
+        for (let i = 0; i < requiredColumns; i++) {
+            const column = document.createElement('div');
+            column.className = 'masonry-column';
+            masonryContainer.appendChild(column);
+            this.columns.push(column);
+        }
 
-		this.ensureScrollTopButton();
+        this.ensureScrollTopButton();
 
-		// Ensure ResizeObserver is working
-		this.setupResizeObserver();
-	}
-	
-	setupResizeObserver() {
-		if (this.resizeObserver) {
-			this.resizeObserver.disconnect();
-		}
+        // Ensure ResizeObserver is working
+        this.setupResizeObserver();
+    }
 
-		const debouncedLayout = debounce(() => {
-			const currentColumns = this.currentColumnCount;
-			const requiredColumns = this._getColumnsForWidth();
+    setupResizeObserver() {
+        if (this.resizeObserver) {
+            this.resizeObserver.disconnect();
+        }
 
-			if (currentColumns !== requiredColumns) {
-				this.resetAndLoad();
-			}
-		}, 150);
+        const debouncedLayout = debounce(() => {
+            const currentColumns = this.currentColumnCount;
+            const requiredColumns = this._getColumnsForWidth();
 
-		this.resizeObserver = new ResizeObserver(debouncedLayout);
-		this.resizeObserver.observe(this.container);
-	}
+            if (currentColumns !== requiredColumns) {
+                this.resetAndLoad();
+            }
+        }, 150);
 
-	search(query) {
-		const lowerQuery = query.toLowerCase().trim();
-		let sortedImages = [];
+        this.resizeObserver = new ResizeObserver(debouncedLayout);
+        this.resizeObserver.observe(this.container);
+    }
 
-		if (lowerQuery) {
-			const fuse = new Fuse(this.images, {
-				keys: ['filename'],
-				threshold: 0.4, // Fuzzy search threshold
-				includeScore: true,
-				ignoreLocation: true,
-				findAllMatches: true
-			});
+    search(query) {
+        const lowerQuery = query.toLowerCase().trim();
+        let sortedImages = [];
 
-			const searchResults = fuse.search(lowerQuery);
-			const filtered = searchResults.map(result => result.item);
+        if (lowerQuery) {
+            const fuse = new Fuse(this.images, {
+                keys: ['filename'],
+                threshold: 0.4, // Fuzzy search threshold
+                includeScore: true,
+                ignoreLocation: true,
+                findAllMatches: true,
+            });
 
-			// Sort by starred status first, then by filename
-			filtered.sort((a, b) => {
-				const aStarred = a.isStarred;
-				const bStarred = b.isStarred;
-				if (aStarred && !bStarred) return -1;
-				if (!aStarred && bStarred) return 1;
-				return a.filename.localeCompare(b.filename, undefined, { numeric: true, sensitivity: 'base' });
-			});
-			sortedImages = filtered;
-		} else {
-			// No search query - show all images sorted by starred status
-			const starred = this.images.filter(img => img.isStarred);
-			const unstarred = this.images.filter(img => !img.isStarred);
-			starred.sort((a, b) => a.filename.localeCompare(b.filename, undefined, { numeric: true, sensitivity: 'base' }));
-			unstarred.sort((a, b) => a.filename.localeCompare(b.filename, undefined, { numeric: true, sensitivity: 'base' }));
-			sortedImages = [...starred, ...unstarred];
-		}
+            const searchResults = fuse.search(lowerQuery);
+            const filtered = searchResults.map(result => result.item);
 
-		this.filteredImages = sortedImages;
-		this.resetAndLoad();
-	}
+            // Sort by starred status first, then by filename
+            filtered.sort((a, b) => {
+                const aStarred = a.isStarred;
+                const bStarred = b.isStarred;
+                if (aStarred && !bStarred) return -1;
+                if (!aStarred && bStarred) return 1;
+                return a.filename.localeCompare(b.filename, undefined, { numeric: true, sensitivity: 'base' });
+            });
+            sortedImages = filtered;
+        } else {
+            // No search query - show all images sorted by starred status
+            const starred = this.images.filter(img => img.isStarred);
+            const unstarred = this.images.filter(img => !img.isStarred);
+            starred.sort((a, b) => a.filename.localeCompare(b.filename, undefined, { numeric: true, sensitivity: 'base' }));
+            unstarred.sort((a, b) => a.filename.localeCompare(b.filename, undefined, { numeric: true, sensitivity: 'base' }));
+            sortedImages = [...starred, ...unstarred];
+        }
 
-	// Clear cached order when images change
-	setImages(imageDataList, defaultQuery = '') {
-		this.images = imageDataList;
-		this.search(defaultQuery);
-	}
+        this.filteredImages = sortedImages;
+        this.resetAndLoad();
+    }
 
-	updateThumbnailStates() {
-		const allThumbnails = this.container.querySelectorAll('.thumbnail');
+    // Clear cached order when images change
+    setImages(imageDataList, defaultQuery = '') {
+        this.images = imageDataList;
+        this.search(defaultQuery);
+    }
 
-		allThumbnails.forEach(thumbnail => {
-			const filename = thumbnail.dataset.bgfile;
-			const imgData = this.images.find(img => img.filename === filename);
+    updateThumbnailStates() {
+        const allThumbnails = this.container.querySelectorAll('.thumbnail');
 
-			if (imgData) {
-				// Update starred state
-				if (imgData.isStarred) {
-					thumbnail.classList.add('starred');
-				} else {
-					thumbnail.classList.remove('starred');
-				}
+        allThumbnails.forEach(thumbnail => {
+            const filename = thumbnail.dataset.bgfile;
+            const imgData = this.images.find(img => img.filename === filename);
 
-				// Update locked state
-				const lockedBgUrl = `url("${imgData.fullResUrl}")`;
-				if (chat_metadata[BG_METADATA_KEY] === lockedBgUrl) {
-					thumbnail.classList.add('locked');
-				} else {
-					thumbnail.classList.remove('locked');
-				}
-			}
-		});
-	}
+            if (imgData) {
+                // Update starred state
+                if (imgData.isStarred) {
+                    thumbnail.classList.add('starred');
+                } else {
+                    thumbnail.classList.remove('starred');
+                }
 
-	resetAndLoad() {
-		if (!this.container) return;
-		this._hasRestored = false;
-		this.setupColumns();
-		this.currentIndex = 0;
-		this.imageCounter = 0;
-		this.loadBatch();
-	}
+                // Update locked state
+                const lockedBgUrl = `url("${imgData.fullResUrl}")`;
+                if (chat_metadata[BG_METADATA_KEY] === lockedBgUrl) {
+                    thumbnail.classList.add('locked');
+                } else {
+                    thumbnail.classList.remove('locked');
+                }
+            }
+        });
+    }
+
+    resetAndLoad() {
+        if (!this.container) return;
+        this._hasRestored = false;
+        this.setupColumns();
+        this.currentIndex = 0;
+        this.imageCounter = 0;
+        this.loadBatch();
+    }
 
     loadBatch() {
         // Load everything at once
@@ -385,70 +385,70 @@ class BackgroundSelector {
         }, dynamicDelay);
     }
 
-	addImage(imgData) {
-		if (!this.container || this.columns.length === 0) return;
+    addImage(imgData) {
+        if (!this.container || this.columns.length === 0) return;
 
-		const columnIndex = this.imageCounter % this.columns.length;
-		const targetColumn = this.columns[columnIndex];
-		this.imageCounter++;
+        const columnIndex = this.imageCounter % this.columns.length;
+        const targetColumn = this.columns[columnIndex];
+        this.imageCounter++;
 
-		const imgElement = new Image();
-		const thumbnail = document.createElement('div');
-		thumbnail.className = 'thumbnail fade-in';
+        const imgElement = new Image();
+        const thumbnail = document.createElement('div');
+        thumbnail.className = 'thumbnail fade-in';
 
-		// Store state data but don't apply visual classes yet
-		thumbnail.dataset.id = imgData.id;
-		thumbnail.dataset.bgfile = imgData.filename;
-		thumbnail.dataset.url = imgData.fullResUrl;
-		thumbnail.title = imgData.filename;
-		thumbnail.dataset.isStarred = imgData.isStarred;
-		thumbnail.dataset.isLocked = chat_metadata[BG_METADATA_KEY] === `url("${imgData.fullResUrl}")`;
+        // Store state data but don't apply visual classes yet
+        thumbnail.dataset.id = imgData.id;
+        thumbnail.dataset.bgfile = imgData.filename;
+        thumbnail.dataset.url = imgData.fullResUrl;
+        thumbnail.title = imgData.filename;
+        thumbnail.dataset.isStarred = imgData.isStarred;
+        thumbnail.dataset.isLocked = chat_metadata[BG_METADATA_KEY] === `url("${imgData.fullResUrl}")`;
 
-		if (imgData.isCustom) {
-			thumbnail.setAttribute('custom', 'true');
-		}
+        if (imgData.isCustom) {
+            thumbnail.setAttribute('custom', 'true');
+        }
 
-		const titleDiv = document.createElement('div');
-		titleDiv.className = 'BGSampleTitle';
-		titleDiv.textContent = imgData.filename.substring(0, imgData.filename.lastIndexOf('.')) || imgData.filename;
+        const titleDiv = document.createElement('div');
+        titleDiv.className = 'BGSampleTitle';
+        titleDiv.textContent = imgData.filename.substring(0, imgData.filename.lastIndexOf('.')) || imgData.filename;
 
-		const menu = document.createElement('div');
-		menu.className = 'jg-menu';
-		menu.innerHTML = `
-			<div data-action="star" class="jg-button jg-star fa-fw pointer" title="${translate('Star Background')}">
-				<i class="fa-solid fa-star"></i><i class="fa-regular fa-star"></i>
-			</div>
-			<div data-action="lock" class="jg-button jg-lock fa-solid fa-lock fa-fw pointer" title="${translate('Lock Background')}"></div>
-			<div data-action="unlock" class="jg-button jg-unlock fa-solid fa-unlock fa-fw pointer" title="${translate('Unlock Background')}"></div>
-			<div data-action="edit" class="jg-button jg-edit fa-solid fa-pen-to-square fa-fw pointer" title="${translate('Rename Background')}"></div>
-			<div data-action="delete" class="jg-button jg-delete fa-solid fa-trash-can fa-fw pointer" title="${translate('Delete Background')}"></div>
-		`;
+        const menu = document.createElement('div');
+        menu.className = 'jg-menu';
+        menu.innerHTML = `
+            <div data-action="star" class="jg-button jg-star fa-fw pointer" title="${translate('Star Background')}">
+                <i class="fa-solid fa-star"></i><i class="fa-regular fa-star"></i>
+            </div>
+            <div data-action="lock" class="jg-button jg-lock fa-solid fa-lock fa-fw pointer" title="${translate('Lock Background')}"></div>
+            <div data-action="unlock" class="jg-button jg-unlock fa-solid fa-unlock fa-fw pointer" title="${translate('Unlock Background')}"></div>
+            <div data-action="edit" class="jg-button jg-edit fa-solid fa-pen-to-square fa-fw pointer" title="${translate('Rename Background')}"></div>
+            <div data-action="delete" class="jg-button jg-delete fa-solid fa-trash-can fa-fw pointer" title="${translate('Delete Background')}"></div>
+        `;
 
-		thumbnail.appendChild(imgElement);
-		thumbnail.appendChild(titleDiv);
-		thumbnail.appendChild(menu);
-		targetColumn.appendChild(thumbnail);
+        thumbnail.appendChild(imgElement);
+        thumbnail.appendChild(titleDiv);
+        thumbnail.appendChild(menu);
+        targetColumn.appendChild(thumbnail);
 
-		// Apply visual states only after image loads
-		imgElement.onload = () => {
-			// Apply visual state classes after image is loaded
-			if (thumbnail.dataset.isStarred === 'true') {
-				thumbnail.classList.add('starred');
-			}
-			if (thumbnail.dataset.isLocked === 'true') {
-				thumbnail.classList.add('locked');
-			}
+        // Apply visual states only after image loads
+        imgElement.onload = () => {
+            // Apply visual state classes after image is loaded
+            if (thumbnail.dataset.isStarred === 'true') {
+                thumbnail.classList.add('starred');
+            }
+            if (thumbnail.dataset.isLocked === 'true') {
+                thumbnail.classList.add('locked');
+            }
 
-			// Trigger fade-in
-			requestAnimationFrame(() => {
-				requestAnimationFrame(() => {
-					thumbnail.classList.add('visible');
-				});
-			});
-		};
+            // Trigger fade-in
+            requestAnimationFrame(() => {
+                requestAnimationFrame(() => {
+                    thumbnail.classList.add('visible');
+                });
+            });
+        };
 
-		imgElement.src = imgData.thumbnailUrl;
-	}
+        imgElement.src = imgData.thumbnailUrl;
+    }
 
     setupScrollPositionSaving() {
         if (!this.scrollerElement) return;
