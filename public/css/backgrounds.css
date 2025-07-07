@@ -1,21 +1,17 @@
-.bg-drawer-layout {
-    flex-direction: column;
-    height: 100%;
-    max-height: 100%;
-    padding: 0;
-}
+/* Drawer Layout & Structure */
 
+/* This is the main flex container for the entire drawer.
+   It establishes the column layout and fixed height needed for internal scrolling. */
 #Backgrounds.drawer-content.openDrawer.bg-drawer-layout {
     display: flex;
+    flex-direction: column;
 
     height: calc(100vh - var(--topBarBlockSize));
     max-height: calc(100vh - var(--topBarBlockSize));
-    height: calc(100dvh - var(--topBarBlockSize));
+    height: calc(100dvh - var(--topBarBlockSize)); /* Dynamic viewport height for mobile */
     max-height: calc(100dvh - var(--topBarBlockSize));
 
-    overflow: hidden;
-    overflow-y: hidden;
-    overflow-x: hidden;
+    overflow: hidden; /* Hide scrollbars on the main drawer */
 
     position: fixed;
     top: var(--topBarBlockSize);
@@ -25,10 +21,11 @@
 
     width: var(--sheldWidth);
     max-width: var(--sheldWidth);
+    padding: 0;
 }
 
 #bg-header-fixed {
-    flex-shrink: 0;
+    flex-shrink: 0; /* Prevent header from shrinking */
     padding: 5px;
     background-color: var(--SmartThemeBlurTintColor);
     z-index: 10;
@@ -39,23 +36,24 @@
 }
 
 #bg-header-fixed > .flex-container {
+    display: flex;
     align-items: center;
     margin: 0;
     padding: 0;
     width: 100%;
     box-sizing: border-box;
-
     flex-wrap: nowrap;
 }
 
+/* This container will grow to fill available space and handle its own scrolling. */
 #bg-scrollable-content {
     flex-grow: 1;
-    overflow-y: auto;
+    overflow-y: auto; /* Enable vertical scrolling for content */
     overflow-x: hidden;
-    padding: 5px;
+    padding: 0px;
     width: 100%;
     box-sizing: border-box;
-    min-height: 0;
+    min-height: 0; /* Crucial for flex items with overflow */
 }
 
 #bg_menu_content,
@@ -77,40 +75,102 @@
 }
 
 #bg_menu_content {
-    width: 100%;
-    box-sizing: border-box;
-    padding: 0;
-}
-
-#masonry-container {
     display: flex;
-    gap: 5px;
-    padding: 5px;
-    width: 100%;
-    box-sizing: border-box;
-    overflow: hidden;
+    flex-direction: column; /* Stack Starred and Main sections vertically */
+    gap: 20px; /* Creates space between the two sections */
 }
 
-.masonry-column {
+
+/* Thumbnail Containers & Rows */
+
+.thumbnail-container {
     display: flex;
     flex-direction: column;
-    gap: 5px;
-    flex: 1;
-    min-width: 0;
-    width: 0;
+    gap: 5px; /* Vertical gap between rows */
+    min-height: 120px; /* Prevent layout shift during loading */
 }
 
+.thumbnail-row {
+    display: flex; /* Creates the horizontal grid */
+    gap: 5px;     /* Horizontal gap between images */
+    align-items: flex-end; /* Align items to the bottom for a clean look */
+    animation: rowLoading 0.3s ease forwards; /* Animation for new rows */
+    opacity: 0; /* Initial state for animation */
+}
+
+.thumbnail-row:last-child {
+    justify-content: flex-start; /* Left align the last row if it's not full */
+}
+
+#starred-backgrounds-container .thumbnail {
+    min-width: 100px;
+    min-height: 100px;
+}
+
+
+/* Individual Thumbnail Styling */
+
 .thumbnail {
-    transition: transform 0.2s ease-out, box-shadow 0.2s ease-out;
-    width: 100%;
-    box-sizing: border-box;
+    flex-shrink: 0; /* Prevent thumbnails from shrinking */
+    border-radius: 8px;
+    overflow: hidden;
     position: relative;
+    transition: transform 0.2s ease-out, box-shadow 0.2s ease-out, outline 0.2s ease-out;
 }
 
 .thumbnail:hover {
     transform: translateY(-3px);
     box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
     z-index: 10;
+}
+
+.thumbnail img {
+    object-fit: cover;
+    width: 100%;
+    height: 100%;
+    background-color: rgba(0,0,0,0.1);
+    opacity: 0; /* Initial state for fade-in */
+    transition: opacity 0.4s ease;
+}
+
+.thumbnail.loaded img,
+.thumbnail.loaded-instantly img {
+    opacity: 1;
+}
+
+
+/* Thumbnail Placeholder & Loading States */
+
+.thumbnail .thumbnail-placeholder {
+    width: 100%;
+    height: 100%;
+    background-color: var(--SmartThemeBodyColor);
+    border: 1px dashed var(--SmartThemeBorderColor);
+    border-radius: 6px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    position: absolute;
+    top: 0;
+    left: 0;
+    opacity: 0; /* Start transparent */
+    animation: placeholderPulse 1.5s infinite;
+    animation-delay: 0.5s; /* Wait half a second before showing the pulse */
+    transition: opacity 0.3s ease;
+}
+
+.thumbnail .thumbnail-placeholder::after {
+    content: "🖼️"; /* Emoji as placeholder icon */
+    opacity: 0.3;
+    font-size: 24px;
+}
+
+.thumbnail.loaded .thumbnail-placeholder {
+    opacity: 0;
+}
+
+.thumbnail.loaded-instantly .thumbnail-placeholder {
+    display: none;
 }
 
 .thumbnail.fade-in {
@@ -131,24 +191,8 @@
     z-index: 10;
 }
 
-.thumbnail.fade-in.visible {
-    transition: transform 0.2s ease-out, box-shadow 0.2s ease-out;
-}
 
-.thumbnail:hover {
-    transform: translateY(-3px);
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
-}
-
-.thumbnail img {
-    border-radius: 6px;
-    width: 100%;
-    height: auto;
-    display: block;
-    border-radius: 8px;
-    max-width: 100%;
-    overflow: hidden;
-}
+/* Thumbnail Title */
 
 .thumbnail .BGSampleTitle {
     position: absolute;
@@ -158,32 +202,35 @@
     background: linear-gradient(transparent, rgba(0, 0, 0, 0.8));
     color: white;
     font-size: 0.85em;
-    padding: 8px 6px 4px;
+    padding: 8px 6px 0px;
     text-align: center;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
     opacity: 0;
     transition: opacity 0.15s ease-in-out;
-    pointer-events: none;
-    border-radius: 0 0 7px 7px;
-    clip-path: inset(0 0 0 0 round 0 0 7px 7px);
+    pointer-events: none; /* Allow clicks to pass through to the thumbnail */
+    border-radius: 0 0 2px 2px;
+    clip-path: inset(0 0 -1px 0 round 0 0 2px 2px); /* Ensures sharp bottom corners */
+    transform: translateY(1px); /* Small adjustment for visual alignment */
 }
-
 
 .thumbnail:hover .BGSampleTitle {
     opacity: 1;
     transition-delay: 0.05s;
+    transform: translateY(1px);
 }
 
 
+/* Thumbnail Menu & Buttons */
+
 .thumbnail .jg-menu {
+    display: none; /* Hidden by default */
     position: absolute;
     top: 4px;
     right: 4px;
     background-color: rgba(0, 0, 0, 0.7);
     border-radius: 6px;
-    display: none;
     gap: 1px;
     padding: 2px;
     z-index: 2;
@@ -191,27 +238,16 @@
 }
 
 .thumbnail:hover .jg-menu {
-    display: flex;
+    display: flex; /* Show on hover */
     animation: fadeInMenu 0.2s ease-out;
 }
 
-@keyframes fadeInMenu {
-    from {
-        opacity: 0;
-        transform: scale(0.9);
-    }
-    to {
-        opacity: 1;
-        transform: scale(1);
-    }
-}
-
 .thumbnail .jg-button {
-    color: white;
-    padding: 6px;
     display: flex;
     align-items: center;
     justify-content: center;
+    color: white;
+    padding: 6px;
     font-size: 0.9em;
     border-radius: 4px;
     transition: background-color 0.15s ease;
@@ -231,79 +267,76 @@
     display: flex;
 }
 
-.thumbnail.starred .jg-star .fa-solid {
+.thumbnail[data-is-starred="true"] .jg-star .fa-solid {
     display: flex;
 }
-
-.thumbnail.starred .jg-star .fa-regular {
+.thumbnail[data-is-starred="true"] .jg-star .fa-regular {
     display: none;
 }
-
-.thumbnail.starred {
-    position: relative;
-}
-
-.thumbnail.starred::before {
-    content: '';
-    position: absolute;
-    top: 0;
-    left: 0;
-    width: 20px;
-    height: 20px;
-    background: var(--golden, #ffd700);
-    clip-path: polygon(0 0, 100% 0, 0 100%);
-    border-radius: 6px 0 0 0;
-    z-index: 2;
-}
-
 
 .thumbnail .jg-unlock {
     display: none;
 }
 
-.thumbnail.locked .jg-lock {
+.thumbnail[data-is-locked="true"] .jg-lock {
     display: none;
 }
 
-.thumbnail.locked .jg-unlock {
+.thumbnail[data-is-locked="true"] .jg-unlock {
     display: flex;
 }
 
+
+/* Starred Section Specifics */
+
+.starred-section:has(.thumbnail) {
+    padding-bottom: 10px;
+    margin-bottom: 0px;
+    border-bottom: 1px solid var(--SmartThemeBorderColor);
+}
+
+.starred-section:not(:has(.thumbnail)) {
+    display: none;
+}
+
+.starred-section[style*="display: none"] {
+    display: none !important;
+}
+
+.starred-section[style*="display: block"] {
+    display: block !important;
+}
+
+.starred-title {
+    margin: 0;
+    padding: 0;
+    font-size: 1em;
+    font-weight: bold;
+    opacity: 0.8;
+}
+
+.thumbnail[data-is-starred="true"]::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    border-style: solid;
+    border-width: 20px 20px 0 0;
+    border-color: #ffd700 transparent transparent transparent;
+    z-index: 2;
+}
+
+
+/* Thumbnail States (Selected, Locked) */
+
 .thumbnail.selected {
-    outline: none;
-    position: relative;
+    outline: 3px solid white;
+    outline-offset: 1px;
+    z-index: 5;
 }
 
-.thumbnail.selected::after {
-    content: '';
-    position: absolute;
-    top: -3px;
-    left: -3px;
-    right: -3px;
-    bottom: -3px;
-    border: 3px solid white;
-    border-radius: 9px;
-    pointer-events: none;
-    z-index: 1;
-}
 
-.thumbnail.locked {
-    outline: none;
-    position: relative;
-}
-
-.thumbnail.locked::after {
-    content: '';
-    position: absolute;
-    top: -3px;
-    left: -3px;
-    right: -3px;
-    bottom: -3px;
-    border: 3px solid var(--golden, #ffd700);
-    border-radius: 9px;
-    pointer-events: none;
-    z-index: 1;
-}
+/* Upload & Drag-and-Drop */
 
 #form_bg_upload input[type="file"] {
     position: absolute;
@@ -315,6 +348,39 @@
     clip: rect(0, 0, 0, 0);
     border: 0;
 }
+
+#Backgrounds.drag-over {
+    position: relative;
+}
+
+#Backgrounds.drag-over::before {
+    content: 'Drop an image or mp4 here';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.8);
+    color: white;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.5em;
+    font-weight: bold;
+    z-index: 1000;
+    backdrop-filter: blur(4px);
+    border: 3px dashed var(--white, #FFFFFF);
+    border-radius: 10px;
+    margin: 5px;
+}
+
+#Backgrounds.drag-over #bg-scrollable-content,
+#Backgrounds.drag-over #bg-header-fixed {
+    pointer-events: none;
+}
+
+
+/* Scroll-to-Top Button */
 
 #bg_scroll_top {
     position: fixed;
@@ -346,32 +412,28 @@
     line-height: 1;
 }
 
-#Backgrounds.drag-over {
-    position: relative;
+
+/* Keyframe Animations */
+
+@keyframes rowLoading {
+    0% { opacity: 0.5; transform: translateY(10px); }
+    100% { opacity: 1; transform: translateY(0); }
 }
 
-#Backgrounds.drag-over::before {
-    content: 'Drop an image or mp4 here';
-    position: absolute;
-    top: 0;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    background: rgba(0, 0, 0, 0.8);
-    color: white;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 1.5em;
-    font-weight: bold;
-    z-index: 1000;
-    backdrop-filter: blur(4px);
-    border: 3px dashed var(--white, #FFFFFF);
-    border-radius: 10px;
-    margin: 5px;
+@keyframes placeholderPulse {
+    0% { opacity: 0; }
+    33% { opacity: 0.5; }
+    66% { opacity: 0.3; }
+    100% { opacity: 0.5; }
 }
 
-#Backgrounds.drag-over #bg-scrollable-content,
-#Backgrounds.drag-over #bg-header-fixed {
-    pointer-events: none;
+@keyframes fadeInMenu {
+    from {
+        opacity: 0;
+        transform: scale(0.9);
+    }
+    to {
+        opacity: 1;
+        transform: scale(1);
+    }
 }
