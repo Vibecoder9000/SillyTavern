@@ -1140,6 +1140,13 @@ body .panelControlBar {
     font-size: calc(var(--mainFontSize) * 1.1);
 }
 
+#extensionsMenu,
+#options .options-content {
+    max-height: calc(100vh - calc(2 * var(--bottomFormBlockSize) + 10px));
+    max-height: calc(100dvh - calc(2 * var(--bottomFormBlockSize) + 10px));
+    overflow-y: auto;
+}
+
 .options-content i,
 .extensionsMenuExtensionButton {
     height: 20px;
@@ -3217,6 +3224,7 @@ input[type=search]:focus::-webkit-search-cancel-button {
     display: block;
 }
 
+.avatar-container .ch_additional_info,
 .character_name_block .character_version {
     text-overflow: ellipsis;
     overflow: hidden;
