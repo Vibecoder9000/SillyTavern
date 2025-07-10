@@ -975,10 +975,14 @@ async function convertFileIfVideo(formData) {
  */
 async function uploadBackground(formData) {
     try {
-        if (!formData.has('avatar')) return;
+        if (!formData.has('avatar')) {
+            console.log('No file provided. Background upload cancelled.');
+            return;
+        }
+
         const response = await fetch('/api/backgrounds/upload', {
             method: 'POST',
-            headers: getHeadersForFormData(),
+            headers: getRequestHeaders({ omitContentType: true }),
             body: formData,
         });
         if (!response.ok) throw new Error(`Upload failed: ${await response.text()}`);
