@@ -1,5 +1,5 @@
 import { Fuse, localforage } from '../lib.js';
-import { chat_metadata, eventSource, event_types, generateQuietPrompt, getCurrentChatId, getRequestHeaders, saveSettingsDebounced } from '../script.js';
+import { chat_metadata, eventSource, generateQuietPrompt, getCurrentChatId, getRequestHeaders, saveSettingsDebounced } from '../script.js';
 import { openThirdPartyExtensionMenu, saveMetadataDebounced } from './extensions.js';
 import { SlashCommand } from './slash-commands/SlashCommand.js';
 import { SlashCommandParser } from './slash-commands/SlashCommandParser.js';
@@ -13,7 +13,6 @@ let starredBackgrounds = new Set();
 const SERVER_THUMBNAIL_CACHE = new Map();
 let THUMBNAIL_CONFIG = { width: 160, height: 90 };
 let backgroundSelector = null;
-let isGalleryVisible = false;
 let hasGalleryLoaded = false;
 let galleryLoadInProgress = false;
 const BG_METADATA_KEY = 'custom_background';
@@ -510,7 +509,7 @@ async function processAndUploadStaticThumbnails(imagesToProcess) {
                 fileDataUrl,
                 THUMBNAIL_CONFIG.width,
                 THUMBNAIL_CONFIG.height,
-                'image/jpeg'
+                'image/jpeg',
             );
 
             const staticThumbnailBlob = await (await fetch(thumbnailDataUrl)).blob();
@@ -534,42 +533,6 @@ async function processAndUploadStaticThumbnails(imagesToProcess) {
     await Promise.allSettled(promises);
     toastr.success(t`Background processing complete!`);
     await getBackgrounds(true);
-}
-
-/**
- * Helper to update the DOM directly after an aspect ratio is found.
- * @param {object} imageData The image data object.
- * @param {number} newAspectRatio The newly discovered aspect ratio.
- */
-function updateRowLayoutWithNewAspectRatio(imageData, newAspectRatio) {
-    imageData.aspectRatio = newAspectRatio;
-    const imageMap = new Map(backgroundSelector.images.map(img => [img.filename, img]));
-    const thumbElements = document.querySelectorAll(`.thumbnail[data-bgfile="${imageData.filename}"]`);
-    if (thumbElements.length === 0) return;
-    for (const thumbElement of thumbElements) {
-        const rowElement = thumbElement.closest('.thumbnail-row');
-        if (!rowElement) continue;
-        const siblingThumbElements = Array.from(rowElement.querySelectorAll('.thumbnail'));
-        const rowImageData = siblingThumbElements.map(thumb => imageMap.get(thumb.dataset.bgfile)).filter(Boolean);
-        if (rowImageData.length !== siblingThumbElements.length) continue;
-        const containerWidth = rowElement.parentElement.offsetWidth;
-        const rowGap = 5;
-        const isLastRow = !rowElement.nextElementSibling;
-        let newRowHeight;
-        if (isLastRow && rowElement.parentElement.id === 'main-backgrounds-container') {
-            newRowHeight = 110;
-        } else {
-            const summedAspectRatio = rowImageData.reduce((sum, img) => sum + (img.aspectRatio || 1.77), 0);
-            newRowHeight = (containerWidth - (rowImageData.length - 1) * rowGap) / summedAspectRatio;
-        }
-        siblingThumbElements.forEach((sibling, index) => {
-            const data = rowImageData[index];
-            const aspectRatio = data.aspectRatio || 1.77;
-            const calculatedSize = calculateImageSize(aspectRatio, newRowHeight);
-            sibling.style.width = `${calculatedSize.width}px`;
-            sibling.style.height = `${calculatedSize.height}px`;
-        });
-    }
 }
 
 /**

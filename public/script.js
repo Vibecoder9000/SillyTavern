@@ -234,7 +234,7 @@ import {
     updatePersonaConnectionsAvatarList,
     isPersonaPanelOpen,
 } from './scripts/personas.js';
-import { getBackgrounds, initBackgrounds, loadBackgroundSettings, background_settings } from './scripts/backgrounds.js';
+import { initBackgrounds, loadBackgroundSettings, background_settings } from './scripts/backgrounds.js';
 import { hideLoader, showLoader } from './scripts/loader.js';
 import { BulkEditOverlay, CharacterContextMenu } from './scripts/BulkEditOverlay.js';
 import { initTextGenModels } from './scripts/textgen-models.js';

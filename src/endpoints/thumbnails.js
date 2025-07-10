@@ -6,7 +6,6 @@ import express from 'express';
 import sanitize from 'sanitize-filename';
 import { Jimp, JimpMime } from '../jimp.js';
 import { sync as writeFileAtomicSync } from 'write-file-atomic';
-import { getFileNameValidationFunction } from '../middleware/validateFileName.js';
 import { imageSize as sizeOf } from 'image-size';
 
 import { getImages, getConfigValue } from '../util.js';
