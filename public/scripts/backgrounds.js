@@ -1005,13 +1005,10 @@ export async function initBackgrounds() {
             const isNowOpen = drawerElement.classList.contains('openDrawer');
             if (isNowOpen && !hasGalleryLoaded && !galleryLoadInProgress) {
                 galleryLoadInProgress = true;
-                isGalleryVisible = true;
                 getBackgrounds().finally(() => {
                     hasGalleryLoaded = true;
                     galleryLoadInProgress = false;
                 });
-            } else if (!isNowOpen) {
-                isGalleryVisible = false;
             }
         };
         new MutationObserver(checkVisibility).observe(drawerElement, { attributes: true, attributeFilter: ['class'] });
