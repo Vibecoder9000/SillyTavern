@@ -141,7 +141,7 @@ thumbnails:
   # Target resolution (total pixel area) for background thumbnails.
   resolution: 15000
   # Maximum thumbnail dimensions per type [width, height]
-  dimensions: { 'bg': [160, 90], 'avatar': [96, 144], 'persona': [96, 144] }
+  dimensions: { 'avatar': [96, 144], 'persona': [96, 144] }
 
 # PERFORMANCE-RELATED CONFIGURATION
 performance:
