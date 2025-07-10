@@ -235,7 +235,6 @@ export async function ensureThumbnailCache(directoriesList) {
             return !fs.existsSync(pathToCachedFile);
         });
         if (filesToProcess.length === 0) {
-            console.info('[Thumbnails] Backgrounds cache is up to date. No new images to process.');
             continue;
         }
         console.info(`[Thumbnails] Found ${filesToProcess.length} new images. Starting processing in batches of ${CONCURRENCY_LIMIT}...`);
