@@ -135,37 +135,6 @@ export async function generateThumbnail(directories, type, file, forceGenerate =
 }
 
 /**
- * Logs a summary of thumbnail generation timings.
- * @param {Array<object>} timings - Array of timing objects for each processed image.
- * @param {number} duration - Total duration of the generation process in seconds.
- */
-function logGenerationSummary(timings, duration) {
-    if (timings.length === 0) return;
-    console.info('--- Thumbnail Generation Summary ---');
-    console.info(`Processed ${timings.length} new images in ${duration.toFixed(2)} seconds.`);
-    const steps = ['read', 'resize', 'buffer', 'write', 'total'];
-    const summary = {};
-    steps.forEach(step => {
-        const totalTime = timings.reduce((sum, t) => sum + t[step], 0);
-        summary[step] = {
-            avg: totalTime / timings.length,
-            outliers: [...timings].sort((a, b) => b[step] - a[step]).slice(0, 5),
-        };
-        let logMsg = `Step '${step}' took an average of ${summary[step].avg.toFixed(2)} ms.`;
-        if (timings.length > 1 && summary[step].avg > 0) {
-            const outlierStrings = summary[step].outliers
-                .filter(o => o[step] > summary[step].avg)
-                .map(o => `${o.filename} [${o[step].toFixed(0)} ms]`);
-            if (outlierStrings.length > 0) {
-                logMsg += ` (Slowest: ${outlierStrings.join(', ')})`;
-            }
-        }
-        console.info(logMsg);
-    });
-    console.info('------------------------------------');
-}
-
-/**
  * Processes a single image to generate its thumbnail.
  * @param {string} file - The filename of the image.
  * @param {string} originalFolder - Path to the original image folder.
@@ -255,7 +224,7 @@ export async function ensureThumbnailCache(directoriesList) {
         const timings = allResults.filter(r => r.success).map(r => r.timings);
         const errors = allResults.filter(r => !r.success);
         if (timings.length > 0) {
-            logGenerationSummary(timings, duration);
+            console.info(`[Thumbnails] Processed ${timings.length} new images in ${duration.toFixed(2)} seconds.`);
         }
         if (errors.length > 0) {
             console.warn(`[Thumbnails] Failed to process ${errors.length} images. Check logs above for details.`);

@@ -17,7 +17,6 @@ let hasGalleryLoaded = false;
 let galleryLoadInProgress = false;
 const BG_METADATA_KEY = 'custom_background';
 const LIST_METADATA_KEY = 'chat_backgrounds';
-const ANIMATED_THUMB_INFO_SEEN = 'SillyTavern_AnimatedThumbInfoSeen';
 
 /**
  * Loads the list of starred backgrounds from local storage.
