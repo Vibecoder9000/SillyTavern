@@ -338,6 +338,11 @@ publicRouter.get('/', async function (request, response) {
             return response.sendFile(path.resolve(pathToCachedFile));
         }
 
+        // Serve whole gif disregarding toggle
+        if (fileExtension === '.gif') {
+            return serveOriginal();
+        }
+
         // Do NOT fall back to the original file. Send a 404 so the frontend can
         // display a placeholder, respecting the user's choice to not load animated files.
         return response.sendStatus(404);

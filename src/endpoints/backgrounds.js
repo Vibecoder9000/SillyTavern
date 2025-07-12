@@ -74,19 +74,24 @@ router.post('/rename', function (request, response) {
  * @param {express.Request} request - The Express request object.
  * @param {express.Response} response - The Express response object.
  */
-router.post('/upload', function (request, response) {
+router.post('/upload', async function (request, response) {
     if (!request.body || !request.file) return response.sendStatus(400);
+
     const img_path = path.join(request.file.destination, request.file.filename);
     const { originalname: filename } = request.file;
+
     try {
         fs.copyFileSync(img_path, path.join(request.user.directories.backgrounds, filename));
         fs.unlinkSync(img_path);
-        // Attempt to generate a thumbnail for the newly uploaded image on-demand.
-        // This will succeed for static formats like JPG/PNG.
-        generateThumbnail(request.user.directories, 'bg', filename, true, false);
+
+        // Generate a thumbnail for static images
+        await generateThumbnail(request.user.directories, 'bg', filename, true, false);
+
         response.send(filename);
     } catch (err) {
         console.error(err);
-        response.sendStatus(500);
+        if (!response.headersSent) {
+            response.sendStatus(500);
+        }
     }
 });
