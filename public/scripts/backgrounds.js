@@ -132,7 +132,7 @@ export let background_settings = {
     name: '__transparent.png',
     url: generateUrlParameter('__transparent.png', false),
     fitting: 'classic',
-    animation: false,
+    animation: true,
 };
 
 /**
@@ -464,21 +464,6 @@ async function updateMissingAspectRatios(imageDataList) {
     if (unknownImages.length === 0) return;
     const useAnimation = document.getElementById('background_thumbnails_animation').checked;
     if (!useAnimation) {
-        const hasSeenInfo = await localforage.getItem(ANIMATED_THUMB_INFO_SEEN);
-        if (!hasSeenInfo) {
-            await localforage.setItem(ANIMATED_THUMB_INFO_SEEN, true);
-            toastr.info(
-                t`To see previews for animated files, this toggle must be enabled once to process them. Click here to do that now.`,
-                t`Animated Backgrounds Require Processing`,
-                {
-                    timeOut: 20000,
-                    extendedTimeOut: 10000,
-                    onclick: () => {
-                        $('#background_thumbnails_animation').prop('checked', true).trigger('change');
-                    },
-                },
-            );
-        }
         return;
     }
     processAndUploadStaticThumbnails(unknownImages);
@@ -531,7 +516,6 @@ async function processAndUploadStaticThumbnails(imagesToProcess) {
         }
     });
     await Promise.allSettled(promises);
-    toastr.success(t`Background processing complete!`);
     await getBackgrounds(true);
 }
 
@@ -587,7 +571,7 @@ export function loadBackgroundSettings(settings) {
         backgroundSettings = background_settings;
     }
     if (!backgroundSettings.fitting) backgroundSettings.fitting = 'classic';
-    if (!Object.hasOwn(backgroundSettings, 'animation')) backgroundSettings.animation = false;
+    if (!Object.hasOwn(backgroundSettings, 'animation')) backgroundSettings.animation = true;
     background_settings.animation = backgroundSettings.animation;
     setBackground(backgroundSettings.name, backgroundSettings.url);
     setFittingClass(backgroundSettings.fitting);
