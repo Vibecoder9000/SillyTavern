@@ -71,6 +71,7 @@ import { ensureThumbnailCache } from './endpoints/thumbnails.js';
 
 // Routers
 import { router as usersPublicRouter } from './endpoints/users-public.js';
+import { publicRouter as thumbnailPublicRouter } from './endpoints/thumbnails.js';
 import { init as statsInit, onExit as statsOnExit } from './endpoints/stats.js';
 import { checkForNewContent } from './endpoints/content-manager.js';
 import { init as settingsInit } from './endpoints/settings.js';
@@ -227,6 +228,9 @@ app.get('/login', loginPageMiddleware);
 const webpackMiddleware = getWebpackServeMiddleware();
 app.use(webpackMiddleware);
 app.use(express.static(path.join(serverDirectory, 'public'), {}));
+
+// Host public thumbnails
+app.use('/thumbnail', thumbnailPublicRouter);
 
 // Public API
 app.use('/api/users', usersPublicRouter);

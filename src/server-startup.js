@@ -147,7 +147,6 @@ export function setupPrivateEndpoints(app) {
     app.use('/api/tokenizers', tokenizersRouter);
     app.use('/api/presets', presetsRouter);
     app.use('/api/secrets', secretsRouter);
-    app.use('/thumbnail', thumbnailPublicRouter);
     app.use('/api/novelai', novelAiRouter);
     app.use('/api/extensions', extensionsRouter);
     app.use('/api/assets', assetsRouter);
@@ -158,7 +157,6 @@ export function setupPrivateEndpoints(app) {
     app.use('/api/worldinfo', worldInfoRouter);
     app.use('/api/stats', statsRouter);
     app.use('/api/backgrounds', backgroundsRouter);
-    app.use('/api/thumbnails', thumbnailApiRouter);
     app.use('/api/sprites', spritesRouter);
     app.use('/api/content', contentManagerRouter);
     app.use('/api/settings', settingsRouter);
