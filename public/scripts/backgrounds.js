@@ -326,6 +326,7 @@ class BackgroundSelector {
         this.setupResizeObserver();
         this.debouncedSearch = debounce((query) => this.search(query), 250);
         this.setupDropToUpload();
+        this.setupScrollToTop();
     }
 
     setupResizeObserver() {
@@ -447,9 +448,56 @@ class BackgroundSelector {
         });
     }
 
+    setupScrollToTop() {
+        // Defer execution slightly to prevent a race condition.
+        setTimeout(() => {
+            const scrollContainer = document.getElementById('bg-scrollable-content');
+            const btn = document.getElementById('bg_scroll_top'); // This will find the *first* button
+            const drawer = document.getElementById('Backgrounds');
+
+            if (!scrollContainer || !btn || !drawer) {
+                console.error('Scroll-to-top dependencies not found.');
+                return;
+            }
+
+            // --- Event Listeners ---
+
+            // 1. Show/hide based on scroll position.
+            scrollContainer.addEventListener('scroll', () => {
+                if (scrollContainer.scrollTop > 300) {
+                    btn.classList.add('visible');
+                } else {
+                    btn.classList.remove('visible');
+                }
+            });
+
+            // 2. Hide the button if the drawer is closed.
+            const drawerObserver = new MutationObserver(() => {
+                if (!drawer.classList.contains('openDrawer')) {
+                    btn.classList.remove('visible');
+                }
+            });
+            drawerObserver.observe(drawer, { attributes: true, attributeFilter: ['class'] });
+
+            // 3. Handle the click.
+            btn.addEventListener('click', e => {
+                e.preventDefault();
+                e.stopPropagation();
+                scrollContainer.scrollTo({ top: 0, behavior: 'smooth' });
+            });
+
+        }, 100);
+    }
+
     destroy() {
         if (this.imageObserver) this.imageObserver.disconnect();
         if (this.resizeObserver) this.resizeObserver.disconnect();
+        const scrollToTopButton = document.getElementById('bg_scroll_top');
+        if (scrollToTopButton) {
+            scrollToTopButton.style.display = 'none';
+            scrollToTopButton.style.opacity = '0';
+            scrollToTopButton.style.pointerEvents = 'none';
+        }
     }
 }
 
