@@ -30,7 +30,7 @@ import { router as statsRouter } from './endpoints/stats.js';
 import { router as contentManagerRouter } from './endpoints/content-manager.js';
 import { router as settingsRouter } from './endpoints/settings.js';
 import { router as backgroundsRouter } from './endpoints/backgrounds.js';
-// import { publicRouter as thumbnailPublicRouter } from './endpoints/thumbnails.js';
+import { publicRouter as thumbnailPublicRouter } from './endpoints/thumbnails.js';
 import { apiRouter as thumbnailApiRouter } from './endpoints/thumbnails.js';
 import { router as spritesRouter } from './endpoints/sprites.js';
 import { router as stableDiffusionRouter } from './endpoints/stable-diffusion.js';
