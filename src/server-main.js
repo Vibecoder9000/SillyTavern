@@ -176,6 +176,12 @@ if (!cliArgs.disableCsrf) {
             req.session.csrfToken = token;
         },
         size: 32,
+        skipCsrfProtection: (req) => {
+            if (req.method === 'GET' && req.path.startsWith('/thumbnail')) {
+                return true;
+            }
+            return false;
+        },
     });
 
     app.get('/csrf-token', (req, res) => {
@@ -228,9 +234,6 @@ app.get('/login', loginPageMiddleware);
 const webpackMiddleware = getWebpackServeMiddleware();
 app.use(webpackMiddleware);
 app.use(express.static(path.join(serverDirectory, 'public'), {}));
-
-// Host public thumbnails
-app.use('/thumbnail', thumbnailPublicRouter);
 
 // Public API
 app.use('/api/users', usersPublicRouter);

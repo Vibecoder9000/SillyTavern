@@ -156,6 +156,7 @@ export function setupPrivateEndpoints(app) {
     app.use('/api/groups', groupsRouter);
     app.use('/api/worldinfo', worldInfoRouter);
     app.use('/api/stats', statsRouter);
+    app.use('/thumbnail', thumbnailPublicRouter);
     app.use('/api/backgrounds', backgroundsRouter);
     app.use('/api/thumbnails', thumbnailApiRouter);
     app.use('/api/sprites', spritesRouter);
