@@ -238,6 +238,9 @@ app.use(express.static(path.join(serverDirectory, 'public'), {}));
 // Public API
 app.use('/api/users', usersPublicRouter);
 
+// Host public thumbnails
+app.use('/thumbnail', thumbnailPublicRouter);
+
 // Everything below this line requires authentication
 app.use(requireLoginMiddleware);
 app.post('/api/ping', (request, response) => {
