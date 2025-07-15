@@ -18,7 +18,7 @@ import { deepMerge, humanizedISO8601DateTime, tryParse, extractFileFromZipBuffer
 import { TavernCardValidator } from '../validator/TavernCardValidator.js';
 import { parse, read, write } from '../character-card-parser.js';
 import { readWorldInfoFile } from './worldinfo.js';
-import { invalidateThumbnail } from './thumbnails.js';
+import { invalidateThumbnail, generateThumbnail } from './thumbnails.js';
 import { importRisuSprites } from './sprites.js';
 import { getUserDirectories } from '../users.js';
 import { getChatInfo } from './chats.js';
@@ -746,6 +746,11 @@ async function importFromYaml(uploadPath, context, preservedFileName) {
         'tags': '',
     }, context.request.user.directories);
     const result = await writeCharacterData(DEFAULT_AVATAR_PATH, JSON.stringify(char), fileName, context.request);
+
+    if (result) {
+        await generateThumbnail(context.request.user.directories, 'avatar', `${fileName}.png`, true, false);
+    }
+
     return result ? fileName : '';
 }
 
@@ -792,6 +797,11 @@ async function importFromCharX(uploadPath, { request }, preservedFileName) {
     card.name = sanitize(card.name);
     const fileName = preservedFileName || getPngName(card.name, request.user.directories);
     const result = await writeCharacterData(avatar, JSON.stringify(card), fileName, request);
+
+    if (result) {
+        await generateThumbnail(request.user.directories, 'avatar', `${fileName}.png`, true, false);
+    }
+
     return result ? fileName : '';
 }
 
@@ -817,6 +827,9 @@ async function importFromJson(uploadPath, { request }, preservedFileName) {
         const pngName = preservedFileName || getPngName(jsonData.data?.name || jsonData.name, request.user.directories);
         const char = JSON.stringify(jsonData);
         const result = await writeCharacterData(DEFAULT_AVATAR_PATH, char, pngName, request);
+        if (result) {
+            await generateThumbnail(request.user.directories, 'avatar', `${pngName}.png`, true, false);
+        }
         return result ? pngName : '';
     } else if (jsonData.name !== undefined) {
         console.info('Importing from v1 json');
@@ -843,6 +856,9 @@ async function importFromJson(uploadPath, { request }, preservedFileName) {
         char = convertToV2(char, request.user.directories);
         let charJSON = JSON.stringify(char);
         const result = await writeCharacterData(DEFAULT_AVATAR_PATH, charJSON, pngName, request);
+        if (result) {
+            await generateThumbnail(request.user.directories, 'avatar', `${pngName}.png`, true, false);
+        }
         return result ? pngName : '';
     } else if (jsonData.char_name !== undefined) {//json Pygmalion notepad
         console.info('Importing from gradio json');
@@ -869,6 +885,9 @@ async function importFromJson(uploadPath, { request }, preservedFileName) {
         char = convertToV2(char, request.user.directories);
         const charJSON = JSON.stringify(char);
         const result = await writeCharacterData(DEFAULT_AVATAR_PATH, charJSON, pngName, request);
+        if (result) {
+            await generateThumbnail(request.user.directories, 'avatar', `${pngName}.png`, true, false);
+        }
         return result ? pngName : '';
     }
 
@@ -900,6 +919,9 @@ async function importFromPng(uploadPath, { request }, preservedFileName) {
         const char = JSON.stringify(jsonData);
         const result = await writeCharacterData(uploadPath, char, pngName, request);
         fs.unlinkSync(uploadPath);
+        if (result) {
+            await generateThumbnail(request.user.directories, 'avatar', `${pngName}.png`, true, false);
+        }
         return result ? pngName : '';
     } else if (jsonData.name !== undefined) {
         console.info('Found a v1 character file.');
@@ -950,12 +972,14 @@ router.post('/create', getFileNameValidationFunction('file_name'), async functio
 
         if (!request.file) {
             await writeCharacterData(DEFAULT_AVATAR_PATH, char, internalName, request);
+            await generateThumbnail(request.user.directories, 'avatar', avatarName, true, false);
             return response.send(avatarName);
         } else {
             const crop = tryParse(request.query.crop);
             const uploadPath = path.join(request.file.destination, request.file.filename);
             await writeCharacterData(uploadPath, char, internalName, request, crop);
             fs.unlinkSync(uploadPath);
+            await generateThumbnail(request.user.directories, 'avatar', avatarName, true, false);
             return response.send(avatarName);
         }
     } catch (err) {
@@ -992,6 +1016,9 @@ router.post('/rename', validateAvatarUrlMiddleware, async function (request, res
 
         // Write data to new location
         await writeCharacterData(oldAvatarPath, newData, newInternalName, request);
+
+        // Make new thumbnail
+        await generateThumbnail(request.user.directories, 'avatar', newAvatarName, true, false);
 
         // Rename chats folder
         if (fs.existsSync(oldChatsPath) && !fs.existsSync(newChatsPath)) {
@@ -1040,6 +1067,7 @@ router.post('/edit', validateAvatarUrlMiddleware, async function (request, respo
             invalidateThumbnail(request.user.directories, 'avatar', request.body.avatar_url);
             await writeCharacterData(newAvatarPath, char, targetFile, request, crop);
             fs.unlinkSync(newAvatarPath);
+            await generateThumbnail(request.user.directories, 'avatar', request.body.avatar_url, true, false);
 
             // Bust cache to reload the new avatar
             response.setHeader('Clear-Site-Data', '"cache"');

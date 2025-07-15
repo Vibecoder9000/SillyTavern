@@ -51,7 +51,7 @@ router.post('/delete', getFileNameValidationFunction('bg'), function (request, r
  * @param {express.Request} request - The Express request object.
  * @param {express.Response} response - The Express response object.
  */
-router.post('/rename', function (request, response) {
+router.post('/rename', async function (request, response) {
     if (!request.body) return response.sendStatus(400);
     const oldFileName = path.join(request.user.directories.backgrounds, sanitize(request.body.old_bg));
     const newFileName = path.join(request.user.directories.backgrounds, sanitize(request.body.new_bg));
@@ -66,7 +66,11 @@ router.post('/rename', function (request, response) {
     fs.copyFileSync(oldFileName, newFileName);
     fs.unlinkSync(oldFileName);
     invalidateThumbnail(request.user.directories, 'bg', request.body.old_bg);
-    return response.send('ok');
+    const thumbnailResult = await generateThumbnail(request.user.directories, 'bg', request.body.new_bg, true, false);
+    return response.json({
+        filename: request.body.new_bg,
+        aspectRatio: thumbnailResult?.aspectRatio || null,
+    });
 });
 
 /**

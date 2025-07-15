@@ -806,12 +806,28 @@ async function onRenameBackgroundClick(e) {
         body: JSON.stringify({ old_bg: bgNames.oldBg, new_bg: bgNames.newBg }),
     });
     if (response.ok) {
+        const updatedImageData = await response.json();
         if (isBackgroundStarred(bgNames.oldBg)) {
             starredBackgrounds.delete(bgNames.oldBg);
             starredBackgrounds.add(bgNames.newBg);
             await saveStarredBackgrounds();
         }
-        await getBackgrounds(true);
+
+        // Find the image in our local data array and update it in place
+        const imageIndex = backgroundSelector.images.findIndex(img => img.filename === bgNames.oldBg);
+        if (imageIndex !== -1) {
+            const imageToUpdate = backgroundSelector.images[imageIndex];
+            imageToUpdate.filename = updatedImageData.filename;
+            imageToUpdate.thumbnailUrl = getThumbnailUrl(updatedImageData.filename);
+            imageToUpdate.fullResUrl = getBackgroundPath(updatedImageData.filename);
+            imageToUpdate.aspectRatio = updatedImageData.aspectRatio;
+            imageToUpdate.isStarred = isBackgroundStarred(updatedImageData.filename);
+        }
+
+        // Trigger a re-render of the gallery with the updated data
+        const currentQuery = $('#bg-filter').val() || '';
+        backgroundSelector.search(currentQuery);
+
         setTimeout(() => highlightNewBackground(bgNames.newBg), 100);
     } else {
         toastr.warning(translate('Failed to rename background'));
