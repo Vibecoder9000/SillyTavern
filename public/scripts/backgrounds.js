@@ -76,7 +76,7 @@ async function toggleStarredBackground(filename) {
         return;
     }
     const containerWidth = layoutContainer.offsetWidth;
-    const starredImages = allImages.filter(img => isBackgroundStarred(img.filename));
+    const starredImages = backgroundSelector.filteredImages.filter(img => isBackgroundStarred(img.filename));
     starredImages.sort((a, b) => a.filename.localeCompare(b.filename, undefined, { numeric: true }));
     starredContainer.innerHTML = '';
     if (starredImages.length > 0) {
