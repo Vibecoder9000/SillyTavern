@@ -1,3 +1,4 @@
+
 import { Fuse, localforage } from '../lib.js';
 import { chat_metadata, eventSource, generateQuietPrompt, getCurrentChatId, getRequestHeaders, saveSettingsDebounced } from '../script.js';
 import { openThirdPartyExtensionMenu, saveMetadataDebounced } from './extensions.js';
@@ -57,41 +58,44 @@ async function toggleStarredBackground(filename) {
         starredBackgrounds.add(filename);
     }
     await saveStarredBackgrounds();
-    const allImages = backgroundSelector.images;
-    if (!allImages) {
-        return;
+
+    const isNowStarred = !isCurrentlyStarred;
+
+    const imageInMasterList = backgroundSelector.images.find(img => img.filename === filename);
+    if (imageInMasterList) {
+        imageInMasterList.isStarred = isNowStarred;
     }
-    const imageToUpdate = allImages.find(img => img.filename === filename);
-    if (imageToUpdate) {
-        imageToUpdate.isStarred = !isCurrentlyStarred;
+    const imageInFilteredList = backgroundSelector.filteredImages.find(img => img.filename === filename);
+    if (imageInFilteredList) {
+        imageInFilteredList.isStarred = isNowStarred;
     }
+
     const mainGalleryThumb = document.querySelector(`#main-backgrounds-container .thumbnail[data-bgfile="${filename}"]`);
     if (mainGalleryThumb) {
-        mainGalleryThumb.dataset.isStarred = String(!isCurrentlyStarred);
+        mainGalleryThumb.dataset.isStarred = String(isNowStarred);
     }
+
     const starredContainer = document.getElementById('starred-backgrounds-container');
-    const layoutContainer = document.getElementById('bg_menu_content');
-    if (!layoutContainer) {
-        console.error('Could not find #bg_menu_content to calculate layout width.');
-        return;
-    }
-    const containerWidth = layoutContainer.offsetWidth;
-    const starredImages = backgroundSelector.filteredImages.filter(img => isBackgroundStarred(img.filename));
+
+    // THE FIX: Use the authoritative width from the backgroundSelector instance.
+    // This is the same value the main render() function uses, guaranteeing consistency.
+    const containerWidth = backgroundSelector.containerWidth;
+    const starredImages = backgroundSelector.filteredImages.filter(img => img.isStarred);
     starredImages.sort((a, b) => a.filename.localeCompare(b.filename, undefined, { numeric: true }));
+
     starredContainer.innerHTML = '';
     if (starredImages.length > 0) {
-        const starredRows = calculateRowLayout(containerWidth, starredImages);
+        const starredRows = calculateRowLayout(containerWidth, starredImages, true);
         starredRows.forEach(rowData => {
             const rowElement = createRowElement(rowData);
             starredContainer.appendChild(rowElement);
         });
     }
+
     const newThumbs = starredContainer.querySelectorAll('.thumbnail');
     newThumbs.forEach(thumb => backgroundSelector.imageObserver.observe(thumb));
-    // For the specific case where we just added the VERY FIRST starred item,
-    // the IntersectionObserver won't see it because its parent is hidden by CSS.
-    // We must manually trigger the load for this one thumbnail.
-    if (!isCurrentlyStarred && newThumbs.length === 1) {
+
+    if (isNowStarred && newThumbs.length === 1) {
         backgroundSelector.loadSingleThumbnail(newThumbs[0]);
     }
 }
@@ -166,34 +170,95 @@ function getThumbnailUrl(filename) {
 }
 
 /**
+ * Creates a thumbnail from a video file object using a canvas.
+ * @param {File} videoFile The video file.
+ * @param {object} options Thumbnail dimensions.
+ * @returns {Promise<Blob>} A promise that resolves with the thumbnail as a Blob.
+ */
+function createVideoThumbnail(videoFile, options) {
+    return new Promise((resolve, reject) => {
+        const video = document.createElement('video');
+        const canvas = document.createElement('canvas');
+        const context = canvas.getContext('2d');
+        const url = URL.createObjectURL(videoFile);
+
+        video.onloadeddata = () => {
+            // Seek to 1 second to get a better frame than the very first one.
+            video.currentTime = 1;
+        };
+
+        video.onseeked = () => {
+            // Set canvas dimensions based on video aspect ratio
+            const aspectRatio = video.videoWidth / video.videoHeight;
+            let width = options.maxWidth;
+            let height = options.maxWidth / aspectRatio;
+
+            if (height > options.maxHeight) {
+                height = options.maxHeight;
+                width = height * aspectRatio;
+            }
+            canvas.width = width;
+            canvas.height = height;
+
+            context.drawImage(video, 0, 0, width, height);
+            canvas.toBlob(
+                (blob) => {
+                    URL.revokeObjectURL(url); // Clean up the object URL
+                    resolve(blob);
+                },
+                options.format || 'image/jpeg',
+                options.quality || 0.9,
+            );
+        };
+
+        video.onerror = (err) => {
+            URL.revokeObjectURL(url);
+            reject(new Error('Failed to load video for thumbnail generation.'));
+        };
+
+        video.src = url;
+    });
+}
+
+/**
  * Calculates the layout for a row of images to achieve a justified gallery effect.
  * @param {number} containerWidth - The width of the container.
  * @param {Array<object>} images - An array of image data objects.
  * @returns {Array<object>} An array of row data, each containing images and calculated height.
  */
-function calculateRowLayout(containerWidth, images) {
+function calculateRowLayout(containerWidth, images, forceJustify = false) {
     const rows = [];
     if (!images || images.length === 0 || containerWidth <= 0) return rows;
     const rowGap = 5;
     const targetRowHeight = 110;
     let currentRow = [];
-    let currentRowWidth = 0;
+    let currentRowSummedAspectRatio = 0;
+
     images.forEach(image => {
         const aspectRatio = image.aspectRatio || 1.77;
-        const effectiveWidth = calculateImageSize(aspectRatio, targetRowHeight).width;
-        if (currentRow.length > 0 && currentRowWidth + rowGap + effectiveWidth > containerWidth) {
-            const summedAspectRatio = currentRow.reduce((sum, img) => sum + (img.aspectRatio || 1.77), 0);
-            const rowHeight = (containerWidth - (currentRow.length - 1) * rowGap) / summedAspectRatio;
+        const prospectiveTotalAspectRatio = currentRowSummedAspectRatio + aspectRatio;
+        const prospectiveWidth = (prospectiveTotalAspectRatio * targetRowHeight) + (currentRow.length * rowGap);
+
+        if (currentRow.length > 0 && prospectiveWidth > containerWidth) {
+            const totalGapWidth = (currentRow.length - 1) * rowGap;
+            const rowHeight = (containerWidth - totalGapWidth) / currentRowSummedAspectRatio;
             rows.push({ images: currentRow, height: rowHeight });
             currentRow = [image];
-            currentRowWidth = effectiveWidth;
+            currentRowSummedAspectRatio = aspectRatio;
         } else {
             currentRow.push(image);
-            currentRowWidth += effectiveWidth;
+            currentRowSummedAspectRatio += aspectRatio;
         }
     });
+
     if (currentRow.length > 0) {
-        rows.push({ images: currentRow, height: targetRowHeight });
+        if (forceJustify && currentRow.length > 1) {
+            const totalGapWidth = (currentRow.length - 1) * rowGap;
+            const rowHeight = (containerWidth - totalGapWidth) / currentRowSummedAspectRatio;
+            rows.push({ images: currentRow, height: rowHeight });
+        } else {
+            rows.push({ images: currentRow, height: targetRowHeight });
+        }
     }
     return rows;
 }
@@ -205,13 +270,18 @@ function calculateRowLayout(containerWidth, images) {
  * @returns {{width: number, height: number}} The calculated width and height.
  */
 function calculateImageSize(aspectRatio, rowHeight) {
-    const minWidth = 60;
+    const MIN_THUMB_WIDTH = 60;
+
     let width = rowHeight * aspectRatio;
-    let height = rowHeight;
-    if (width < minWidth) {
-        width = minWidth;
-        height = minWidth / aspectRatio;
+    const height = rowHeight; // Height is sacred and must not change for a given row.
+
+    // If the ideal width is unreadably narrow, enforce a minimum width.
+    // This will cause a slight aspect ratio distortion for that specific thumbnail,
+    // which is the correct trade-off for usability.
+    if (width < MIN_THUMB_WIDTH) {
+        width = MIN_THUMB_WIDTH;
     }
+
     return {
         width: Math.round(width),
         height: Math.round(height),
@@ -225,6 +295,7 @@ function calculateImageSize(aspectRatio, rowHeight) {
  * @returns {HTMLElement} The created thumbnail element.
  */
 function createThumbnailElement(imageData, calculatedSize) {
+    console.log(`[CreateThumb] Creating thumbnail for "${imageData.filename}" with data:`, JSON.parse(JSON.stringify(imageData)));
     const thumbnail = document.createElement('div');
     thumbnail.className = 'thumbnail';
     thumbnail.dataset.bgfile = imageData.filename;
@@ -329,21 +400,20 @@ class BackgroundSelector {
         this.setupScrollToTop();
     }
 
-    setupResizeObserver() {
-        if (this.resizeObserver) this.resizeObserver.disconnect();
-        this.resizeObserver = new ResizeObserver(entries => {
-            const entry = entries[0];
-            const newWidth = entry.contentRect.width;
-            if (this.isInitialRender) {
-                return;
-            }
-            // Compare rounded integer widths to prevent re-renders from sub-pixel changes.
-            if (Math.round(newWidth) > 0 && Math.round(newWidth) !== Math.round(this.containerWidth)) {
-                this.debouncedRender();
-            }
-        });
-        this.resizeObserver.observe(this.container);
-    }
+	setupResizeObserver() {
+			if (this.resizeObserver) this.resizeObserver.disconnect();
+			this.resizeObserver = new ResizeObserver(entries => {
+				if (this.isInitialRender) {
+					return;
+				}
+				const newWidth = this.container.clientWidth;
+				// Re-render if the width has changed. this.containerWidth was set in the last render.
+				if (newWidth > 0 && newWidth !== this.containerWidth) {
+					this.debouncedRender();
+				}
+			});
+			this.resizeObserver.observe(this.container);
+		}
 
     setupImageObserver() {
         if (this.imageObserver) this.imageObserver.disconnect();
@@ -375,9 +445,9 @@ class BackgroundSelector {
     }
 
     render(isInitial = false) {
-        if (!this.container || this.container.offsetWidth === 0) return;
+        if (!this.container || this.container.clientWidth === 0) return;
         this.isInitialRender = isInitial;
-        this.containerWidth = this.container.offsetWidth;
+        this.containerWidth = this.container.clientWidth;
         this.imageObserver.disconnect();
         this.container.innerHTML = '';
         if (this.filteredImages.length === 0) {
@@ -393,13 +463,15 @@ class BackgroundSelector {
         this.container.appendChild(mainContainer);
         if (starred.length > 0) {
             const starredContainer = starredSection.querySelector('#starred-backgrounds-container');
-            const starredRows = calculateRowLayout(this.containerWidth, starred);
+            // Force the starred section to always justify its rows.
+            const starredRows = calculateRowLayout(this.containerWidth, starred, true);
             starredRows.forEach(rowData => {
                 const rowElement = createRowElement(rowData);
                 starredContainer.appendChild(rowElement);
             });
         }
-        const regularRows = calculateRowLayout(this.containerWidth, regular);
+        // The regular section should NOT force justification on its last row.
+        const regularRows = calculateRowLayout(this.containerWidth, regular, false);
         regularRows.forEach(rowData => {
             const rowElement = createRowElement(rowData);
             mainContainer.appendChild(rowElement);
@@ -546,8 +618,9 @@ async function processAndUploadStaticThumbnails(imagesToProcess) {
 
             const staticThumbnailBlob = await (await fetch(thumbnailDataUrl)).blob();
             const thumbFormData = new FormData();
-            thumbFormData.append('avatar', staticThumbnailBlob, imageData.filename);
-            thumbFormData.append('originalFilename', imageData.filename);
+            thumbFormData.append('thumbnail', staticThumbnailBlob, imageData.filename);
+
+            const uploadUrl = `/api/thumbnails/upload-generated?originalFilename=${encodeURIComponent(imageData.filename)}`;
 
             const uploadResponse = await fetch('/api/thumbnails/upload-generated', {
                 method: 'POST',
@@ -951,28 +1024,43 @@ async function convertFileIfVideo(formData) {
     let toastMessage;
     try {
         toastMessage = toastr.info(t`Preparing video for upload...`, t`Please wait`, { timeOut: 0 });
+
+        // Convert the video to an animated WebP in memory
         const sourceBuffer = await file.arrayBuffer();
         const convertedBuffer = await globalThis.convertVideoToAnimatedWebp({ buffer: new Uint8Array(sourceBuffer), name: file.name });
         const convertedFile = new File([convertedBuffer], file.name.replace(/\.[^/.]+$/, '.webp'), { type: 'image/webp' });
         formData.set('avatar', convertedFile);
-        const staticThumbnailBlob = await createThumbnail(file, {
-            format: 'jpeg',
+
+        // Generate a static thumbnail from the original video
+        const staticThumbnailBlob = await createVideoThumbnail(file, {
+            format: 'image/webp',
             quality: 0.9,
             maxWidth: THUMBNAIL_CONFIG.width,
             maxHeight: THUMBNAIL_CONFIG.height,
         });
+
+        // Upload the static thumbnail and wait for it to succeed
         const thumbFormData = new FormData();
-        thumbFormData.append('thumbnail', staticThumbnailBlob, convertedFile.name);
-        thumbFormData.append('originalFilename', convertedFile.name);
-        fetch('/api/thumbnails/upload-generated', {
+        thumbFormData.append('avatar', staticThumbnailBlob, convertedFile.name);
+        const uploadUrl = `/api/thumbnails/upload-generated?originalFilename=${encodeURIComponent(convertedFile.name)}`;
+
+        const thumbResponse = await fetch(uploadUrl, {
             method: 'POST',
             headers: getHeadersForFormData(),
             body: thumbFormData,
-        }).catch(err => console.error('Failed to upload generated static thumbnail:', err));
+        });
+
+        if (!thumbResponse.ok) {
+            throw new Error(`Static thumbnail upload failed with status: ${thumbResponse.status}`);
+        }
+
+        // Only after the thumbnail is confirmed saved, upload the main animated background
+        await uploadBackground(formData);
+
         toastMessage.remove();
     } catch (error) {
         toastMessage?.remove();
-        console.error('Error converting video:', error);
+        console.error('Error during video conversion or upload process:', error);
         toastr.error(t`Error converting video to animated webp`);
         throw error;
     }
