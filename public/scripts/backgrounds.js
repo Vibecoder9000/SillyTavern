@@ -252,7 +252,7 @@ function calculateRowLayout(containerWidth, images, forceJustify = false) {
     });
 
     if (currentRow.length > 0) {
-        if (forceJustify && currentRow.length > 1) {
+        if (forceJustify && currentRow.length > 5) {
             const totalGapWidth = (currentRow.length - 1) * rowGap;
             const rowHeight = (containerWidth - totalGapWidth) / currentRowSummedAspectRatio;
             rows.push({ images: currentRow, height: rowHeight });
