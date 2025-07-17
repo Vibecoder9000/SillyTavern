@@ -400,20 +400,20 @@ class BackgroundSelector {
         this.setupScrollToTop();
     }
 
-	setupResizeObserver() {
-			if (this.resizeObserver) this.resizeObserver.disconnect();
-			this.resizeObserver = new ResizeObserver(entries => {
-				if (this.isInitialRender) {
-					return;
-				}
-				const newWidth = this.container.clientWidth;
-				// Re-render if the width has changed. this.containerWidth was set in the last render.
-				if (newWidth > 0 && newWidth !== this.containerWidth) {
-					this.debouncedRender();
-				}
-			});
-			this.resizeObserver.observe(this.container);
-		}
+    setupResizeObserver() {
+            if (this.resizeObserver) this.resizeObserver.disconnect();
+            this.resizeObserver = new ResizeObserver(entries => {
+                if (this.isInitialRender) {
+                    return;
+                }
+                const newWidth = this.container.clientWidth;
+                // Re-render if the width has changed. this.containerWidth was set in the last render.
+                if (newWidth > 0 && newWidth !== this.containerWidth) {
+                    this.debouncedRender();
+                }
+            });
+            this.resizeObserver.observe(this.container);
+        }
 
     setupImageObserver() {
         if (this.imageObserver) this.imageObserver.disconnect();
@@ -622,7 +622,7 @@ async function processAndUploadStaticThumbnails(imagesToProcess) {
 
             const uploadUrl = `/api/thumbnails/upload-generated?originalFilename=${encodeURIComponent(imageData.filename)}`;
 
-            const uploadResponse = await fetch('/api/thumbnails/upload-generated', {
+            const uploadResponse = await fetch(uploadUrl, {
                 method: 'POST',
                 headers: getHeadersForFormData(),
                 body: thumbFormData,
