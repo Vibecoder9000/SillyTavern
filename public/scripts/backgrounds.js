@@ -295,7 +295,6 @@ function calculateImageSize(aspectRatio, rowHeight) {
  * @returns {HTMLElement} The created thumbnail element.
  */
 function createThumbnailElement(imageData, calculatedSize) {
-    console.log(`[CreateThumb] Creating thumbnail for "${imageData.filename}" with data:`, JSON.parse(JSON.stringify(imageData)));
     const thumbnail = document.createElement('div');
     thumbnail.className = 'thumbnail';
     thumbnail.dataset.bgfile = imageData.filename;
