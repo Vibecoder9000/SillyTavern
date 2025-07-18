@@ -329,6 +329,11 @@ function createThumbnailElement(imageData, calculatedSize) {
     // Append the elements that need to be clipped
     const placeholder = document.createElement('div');
     placeholder.className = 'thumbnail-placeholder shimmer';
+
+    if (imageData.dominantColor) {
+        placeholder.style.backgroundColor = imageData.dominantColor;
+    }
+
     clipper.appendChild(placeholder);
 
     const imgElement = new Image();
@@ -680,13 +685,13 @@ export async function getBackgrounds(force = false) {
     const data = await response.json();
     const { images: imagesFromServer = [], config } = data;
     if (config) Object.assign(THUMBNAIL_CONFIG, config);
+
     let imageDataList = imagesFromServer.map(imgData => ({
+        ...imgData,
         id: imgData.filename,
-        filename: imgData.filename,
         thumbnailUrl: getThumbnailUrl(imgData.filename),
         fullResUrl: getBackgroundPath(imgData.filename),
         isStarred: isBackgroundStarred(imgData.filename),
-        aspectRatio: imgData.aspectRatio,
         isCustom: false,
     }));
     if (backgroundSelector) {

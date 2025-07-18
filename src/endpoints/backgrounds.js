@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import fsp from 'node:fs/promises';
 import path from 'node:path';
 import express from 'express';
 import sanitize from 'sanitize-filename';
@@ -9,24 +10,35 @@ import { getFileNameValidationFunction } from '../middleware/validateFileName.js
 export const router = express.Router();
 
 /**
- * Handles the request to get all background image filenames and their aspect ratios.
+ * Handles the request to get all background images and their metadata.
  * @param {express.Request} request - The Express request object.
  * @param {express.Response} response - The Express response object.
  */
 router.post('/all', async function (request, response) {
-    const bgFileNames = getImages(request.user.directories.backgrounds);
-    bgFileNames.sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' }));
+    try {
+        const backgroundsJsonPath = path.join(request.user.directories.root, 'backgrounds.json');
+        const rawData = await fsp.readFile(backgroundsJsonPath, 'utf8');
+        const metadata = JSON.parse(rawData);
 
-    const allImages = await Promise.all(bgFileNames.map(async (filename) => {
-        const result = await generateThumbnail(request.user.directories, 'bg', filename, false, true);
-        return {
+        // The frontend expects an array of image data. The keys of the 'images' object are the filenames, so we need to transform it
+        const allImages = Object.entries(metadata.images).map(([filename, data]) => ({
             filename: filename,
-            aspectRatio: result?.aspectRatio || null,
-        };
-    }));
+            ...data,
+        }));
 
-    const config = { width: dimensions.bg[0], height: dimensions.bg[1] };
-    response.json({ images: allImages, config });
+        // Sort the images alphabetically by filename, with numeric sorting
+        allImages.sort((a, b) => a.filename.localeCompare(b.filename, undefined, { numeric: true, sensitivity: 'base' }));
+
+        // Use the thumbnail dimensions already available in the module
+        const config = { width: dimensions.bg[0], height: dimensions.bg[1] };
+
+        response.json({ images: allImages, config });
+
+    } catch (error) {
+        console.error('Failed to read or parse backgrounds.json:', error);
+        // If the file doesn't exist or is corrupt, send an empty array to prevent frontend errors
+        response.json({ images: [], config: { width: dimensions.bg[0], height: dimensions.bg[1] } });
+    }
 });
 
 /**
