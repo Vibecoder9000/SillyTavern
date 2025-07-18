@@ -50,7 +50,7 @@
     flex-grow: 1;
     overflow-y: auto; /* Enable vertical scrolling for content */
     overflow-x: hidden;
-    padding: 0px;
+    padding: 0 5px;
     width: 100%;
     box-sizing: border-box;
     min-height: 0; /* Crucial for flex items with overflow */
@@ -302,9 +302,25 @@
 /* Starred Section Specifics */
 
 .starred-section:has(.thumbnail) {
-    padding-bottom: 10px;
+    padding-bottom: 20px;
     margin-bottom: 0px;
-    border-bottom: 1px solid var(--SmartThemeBorderColor);
+    position: relative;
+}
+
+.starred-section:has(.thumbnail)::after {
+    content: '';
+    position: absolute;
+    bottom: 0px;
+    left: 5px;
+    right: 5px;
+    height: 1px;
+    background: linear-gradient(to right,
+        transparent 0%,
+        var(--SmartThemeBorderColor) 10%,
+        var(--SmartThemeBorderColor) 90%,
+        transparent 100%
+    );
+    opacity: 0.5;
 }
 
 .starred-section:not(:has(.thumbnail)) {
