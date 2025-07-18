@@ -53,22 +53,45 @@ router.post('/delete', getFileNameValidationFunction('bg'), function (request, r
  */
 router.post('/rename', async function (request, response) {
     if (!request.body) return response.sendStatus(400);
+
     const oldFileName = path.join(request.user.directories.backgrounds, sanitize(request.body.old_bg));
-    const newFileName = path.join(request.user.directories.backgrounds, sanitize(request.body.new_bg));
+    const sanitizedNewName = sanitize(request.body.new_bg);
+    const fileExtension = path.extname(sanitizedNewName);
+    const baseName = path.basename(sanitizedNewName, fileExtension);
+
+    let finalNewName = sanitizedNewName;
+    let newFileName = path.join(request.user.directories.backgrounds, finalNewName);
+    let counter = 1;
+
+    // Loop as long as a file at the target path exists AND it's not the same as the source file.
+    while (fs.existsSync(newFileName) && newFileName !== oldFileName) {
+        finalNewName = `${baseName} (${counter})${fileExtension}`;
+        newFileName = path.join(request.user.directories.backgrounds, finalNewName);
+        counter++;
+    }
+
+    // If the final name is the same as the old one, it's a no-op. Return success without file operations.
+    if (newFileName === oldFileName) {
+        const thumbnailResult = await generateThumbnail(request.user.directories, 'bg', request.body.old_bg, false, true);
+        return response.json({
+            filename: request.body.old_bg,
+            aspectRatio: thumbnailResult?.aspectRatio || null,
+        });
+    }
+
     if (!fs.existsSync(oldFileName)) {
         console.error('BG file not found');
         return response.sendStatus(400);
     }
-    if (fs.existsSync(newFileName)) {
-        console.error('New BG file already exists');
-        return response.sendStatus(400);
-    }
+
     fs.copyFileSync(oldFileName, newFileName);
     fs.unlinkSync(oldFileName);
+
     invalidateThumbnail(request.user.directories, 'bg', request.body.old_bg);
-    const thumbnailResult = await generateThumbnail(request.user.directories, 'bg', request.body.new_bg, true, false);
+    const thumbnailResult = await generateThumbnail(request.user.directories, 'bg', finalNewName, true, false);
+
     return response.json({
-        filename: request.body.new_bg,
+        filename: finalNewName,
         aspectRatio: thumbnailResult?.aspectRatio || null,
     });
 });
