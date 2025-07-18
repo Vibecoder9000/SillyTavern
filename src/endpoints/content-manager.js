@@ -272,6 +272,7 @@ export function getContentOfType(type, format) {
 function getTargetByType(type, directories) {
     switch (type) {
         case CONTENT_TYPES.SETTINGS:
+        case CONTENT_TYPES.BACKGROUNDS_METADATA:
             return directories.root;
         case CONTENT_TYPES.CHARACTER:
             return directories.characters;

@@ -48,6 +48,18 @@ export const USER_DIRECTORY_TEMPLATE = Object.freeze({
 });
 
 /**
+ * Defines the content types used in default/content/index.json
+ * @readonly
+ * @enum {string}
+ */
+export const CONTENT_TYPES = Object.freeze({
+    SETTINGS: 'settings',
+    CHARACTER: 'character',
+    THEME: 'theme',
+    BACKGROUNDS_METADATA: 'backgrounds_metadata',
+});
+
+/**
  * @type {import('./users.js').User}
  * @readonly
  */
