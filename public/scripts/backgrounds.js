@@ -400,19 +400,19 @@ class BackgroundSelector {
     }
 
     setupResizeObserver() {
-            if (this.resizeObserver) this.resizeObserver.disconnect();
-            this.resizeObserver = new ResizeObserver(entries => {
-                if (this.isInitialRender) {
-                    return;
-                }
-                const newWidth = this.container.clientWidth;
-                // Re-render if the width has changed. this.containerWidth was set in the last render.
-                if (newWidth > 0 && newWidth !== this.containerWidth) {
-                    this.debouncedRender();
-                }
-            });
-            this.resizeObserver.observe(this.container);
-        }
+        if (this.resizeObserver) this.resizeObserver.disconnect();
+        this.resizeObserver = new ResizeObserver(entries => {
+            if (this.isInitialRender) {
+                return;
+            }
+            const newWidth = this.container.clientWidth;
+            // Re-render if the width has changed. this.containerWidth was set in the last render.
+            if (newWidth > 0 && newWidth !== this.containerWidth) {
+                this.debouncedRender();
+            }
+        });
+        this.resizeObserver.observe(this.container);
+    }
 
     setupImageObserver() {
         if (this.imageObserver) this.imageObserver.disconnect();
