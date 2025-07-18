@@ -92,7 +92,7 @@ export async function syncBackgroundsMetadata(userDirectories) {
         const rawData = await fs.readFile(backgroundsJsonPath, 'utf8');
         metadata = JSON.parse(rawData);
     } catch (error) {
-        console.warn(`Creating new metadata.json`);
+        console.warn('Creating new metadata.json');
         metadata = { version: 1, images: {}, folders: [], tags: [] };
     }
 
