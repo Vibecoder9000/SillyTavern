@@ -82,6 +82,7 @@ const OOBA_DEFAULT_ORDER = [
     'temperature',
     'dynamic_temperature',
     'quadratic_sampling',
+    'top_n_sigma',
     'top_k',
     'top_p',
     'typical_p',
@@ -224,6 +225,7 @@ const settings = {
     min_keep: 0,
     featherless_model: '',
     generic_model: '',
+    extensions: {},
 };
 
 export {
@@ -306,6 +308,7 @@ export const setting_names = [
     'nsigma',
     'min_keep',
     'generic_model',
+    'extensions',
 ];
 
 const DYNATEMP_BLOCK = document.getElementById('dynatemp_block_ooba');
@@ -904,9 +907,10 @@ export function initTextGenSettings() {
         saveSettingsDebounced();
     });
 
-    $('#settings_preset_textgenerationwebui').on('change', function () {
+    $('#settings_preset_textgenerationwebui').on('change', async function () {
         const presetName = $(this).val();
-        selectPreset(presetName);
+        await selectPreset(presetName);
+        await eventSource.emit(event_types.PRESET_CHANGED, { apiId: 'textgenerationwebui', name: presetName });
     });
 
     $('#samplerResetButton').off('click').on('click', function () {
@@ -1098,6 +1102,12 @@ function insertMissingArrayItems(source, target) {
 }
 
 function setSettingByName(setting, value, trigger) {
+    if ('extensions' === setting) {
+        value = value || {};
+        settings.extensions = value;
+        return;
+    }
+
     if (value === null || value === undefined) {
         return;
     }

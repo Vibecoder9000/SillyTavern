@@ -1,5 +1,7 @@
 import {
     abortStatusCheck,
+    event_types,
+    eventSource,
     getRequestHeaders,
     getStoppingStrings,
     resultCheckStatus,
@@ -56,6 +58,7 @@ export const nai_settings = {
     banned_tokens: '',
     order: default_order,
     logit_bias: [],
+    extensions: {},
 };
 
 const nai_tiers = {
@@ -140,6 +143,7 @@ export function convertNovelPreset(data) {
         math1_quad_entropy_scale: data.parameters.math1_quad_entropy_scale,
         min_p: data.parameters.min_p,
         order: Array.isArray(data.parameters.order) ? data.parameters.order.filter(s => s.enabled && Object.keys(samplers).includes(s.id)).map(s => samplers[s.id]) : default_order,
+        extensions: {},
     };
 }
 
@@ -205,6 +209,7 @@ export function loadNovelPreset(preset) {
     nai_settings.math1_temp = preset.math1_temp || 1;
     nai_settings.math1_quad = preset.math1_quad || 0;
     nai_settings.math1_quad_entropy_scale = preset.math1_quad_entropy_scale || 0;
+    nai_settings.extensions = preset.extensions || {};
     loadNovelSettingsUi(nai_settings);
 }
 
@@ -258,6 +263,7 @@ export function loadNovelSettings(data, settings) {
     nai_settings.math1_temp = settings.math1_temp || 1;
     nai_settings.math1_quad = settings.math1_quad || 0;
     nai_settings.math1_quad_entropy_scale = settings.math1_quad_entropy_scale || 0;
+    nai_settings.extensions = settings.extensions || {};
     loadNovelSettingsUi(nai_settings);
 }
 
@@ -886,11 +892,12 @@ export function initNovelAISettings() {
         await getStatusNovel();
     });
 
-    $('#settings_preset_novel').on('change', function () {
+    $('#settings_preset_novel').on('change', async function () {
         nai_settings.preset_settings_novel = $('#settings_preset_novel').find(':selected').text();
         const preset = novelai_settings[novelai_setting_names[nai_settings.preset_settings_novel]];
         loadNovelPreset(preset);
         saveSettingsDebounced();
+        await eventSource.emit(event_types.PRESET_CHANGED, { apiId: 'novel', name: nai_settings.preset_settings_novel });
     });
 
     $('#streaming_novel').on('input', function () {

@@ -179,7 +179,7 @@ import {
 import { debounce_timeout, IGNORE_SYMBOL } from './scripts/constants.js';
 
 import { cancelDebouncedMetadataSave, doDailyExtensionUpdatesCheck, extension_settings, initExtensions, loadExtensionSettings, runGenerationInterceptors, saveMetadataDebounced } from './scripts/extensions.js';
-import { COMMENT_NAME_DEFAULT, CONNECT_API_MAP, executeSlashCommandsOnChatInput, getSlashCommandsHelp, initDefaultSlashCommands, isExecutingCommandsFromChatInput, pauseScriptExecution, processChatSlashCommands, stopScriptExecution, UNIQUE_APIS } from './scripts/slash-commands.js';
+import { COMMENT_NAME_DEFAULT, CONNECT_API_MAP, executeSlashCommandsOnChatInput, initDefaultSlashCommands, isExecutingCommandsFromChatInput, pauseScriptExecution, stopScriptExecution, UNIQUE_APIS } from './scripts/slash-commands.js';
 import {
     tag_map,
     tags,
@@ -204,7 +204,6 @@ import {
     applyCharacterTagsToMessageDivs,
 } from './scripts/tags.js';
 import { initSecrets, readSecretState } from './scripts/secrets.js';
-import { EventEmitter } from './lib/eventemitter.js';
 import { markdownExclusionExt } from './scripts/showdown-exclusion.js';
 import { markdownUnderscoreExt } from './scripts/showdown-underscore.js';
 import { NOTE_MODULE_NAME, initAuthorsNote, metadata_keys, setFloatingPrompt, shouldWIAddPrompt } from './scripts/authors-note.js';
@@ -236,7 +235,7 @@ import {
 } from './scripts/personas.js';
 import { initBackgrounds, loadBackgroundSettings, background_settings } from './scripts/backgrounds.js';
 import { hideLoader, showLoader } from './scripts/loader.js';
-import { BulkEditOverlay, CharacterContextMenu } from './scripts/BulkEditOverlay.js';
+import { BulkEditOverlay } from './scripts/BulkEditOverlay.js';
 import { initTextGenModels } from './scripts/textgen-models.js';
 import { appendFileContent, hasPendingFileAttachment, populateFileAttachment, decodeStyleTags, encodeStyleTags, isExternalMediaAllowed, preserveNeutralChat, restoreNeutralChat, formatCreatorNotes, initChatUtilities, addDOMPurifyHooks } from './scripts/chats.js';
 import { getPresetManager, initPresetManager } from './scripts/preset-manager.js';
@@ -245,7 +244,6 @@ import { currentUser, setUserControls } from './scripts/user.js';
 import { POPUP_RESULT, POPUP_TYPE, Popup, callGenericPopup, fixToastrForDialogs } from './scripts/popup.js';
 import { renderTemplate, renderTemplateAsync } from './scripts/templates.js';
 import { initScrapers } from './scripts/scrapers.js';
-import { SlashCommandBrowser } from './scripts/slash-commands/SlashCommandBrowser.js';
 import { initCustomSelectedSamplers, validateDisabledSamplers } from './scripts/samplerSelect.js';
 import { DragAndDropHandler } from './scripts/dragdrop.js';
 import { INTERACTABLE_CONTROL_CLASS, initKeyboard } from './scripts/keyboard.js';
@@ -266,6 +264,8 @@ import { accountStorage } from './scripts/util/AccountStorage.js';
 import { initWelcomeScreen, openPermanentAssistantChat, openPermanentAssistantCard, getPermanentAssistantAvatar } from './scripts/welcome-screen.js';
 import { initDataMaid } from './scripts/data-maid.js';
 import { clearItemizedPrompts, deleteItemizedPrompts, findItemizedPromptSet, initItemizedPrompts, itemizedParams, itemizedPrompts, loadItemizedPrompts, promptItemize, replaceItemizedPromptText, saveItemizedPrompts } from './scripts/itemized-prompts.js';
+import { getSystemMessageByType, initSystemMessages, SAFETY_CHAT, sendSystemMessage, system_message_types, system_messages } from './scripts/system-messages.js';
+import { event_types, eventSource } from './scripts/events.js';
 
 // API OBJECT FOR EXTERNAL WIRING
 globalThis.SillyTavern = {
@@ -297,6 +297,12 @@ export {
     novelai_setting_names,
     UNIQUE_APIS,
     CONNECT_API_MAP,
+    system_messages,
+    system_message_types,
+    sendSystemMessage,
+    getSystemMessageByType,
+    event_types,
+    eventSource,
 };
 
 /**
@@ -334,101 +340,7 @@ toastr.options = {
     },
 };
 
-// Event source init
-//MARK: event_types
-export const event_types = {
-    APP_READY: 'app_ready',
-    EXTRAS_CONNECTED: 'extras_connected',
-    MESSAGE_SWIPED: 'message_swiped',
-    MESSAGE_SENT: 'message_sent',
-    MESSAGE_RECEIVED: 'message_received',
-    MESSAGE_EDITED: 'message_edited',
-    MESSAGE_DELETED: 'message_deleted',
-    MESSAGE_UPDATED: 'message_updated',
-    MESSAGE_FILE_EMBEDDED: 'message_file_embedded',
-    MESSAGE_REASONING_EDITED: 'message_reasoning_edited',
-    MESSAGE_REASONING_DELETED: 'message_reasoning_deleted',
-    MORE_MESSAGES_LOADED: 'more_messages_loaded',
-    IMPERSONATE_READY: 'impersonate_ready',
-    CHAT_CHANGED: 'chat_id_changed',
-    GENERATION_AFTER_COMMANDS: 'GENERATION_AFTER_COMMANDS',
-    GENERATION_STARTED: 'generation_started',
-    GENERATION_STOPPED: 'generation_stopped',
-    GENERATION_ENDED: 'generation_ended',
-    SD_PROMPT_PROCESSING: 'sd_prompt_processing',
-    EXTENSIONS_FIRST_LOAD: 'extensions_first_load',
-    EXTENSION_SETTINGS_LOADED: 'extension_settings_loaded',
-    SETTINGS_LOADED: 'settings_loaded',
-    SETTINGS_UPDATED: 'settings_updated',
-    GROUP_UPDATED: 'group_updated',
-    MOVABLE_PANELS_RESET: 'movable_panels_reset',
-    SETTINGS_LOADED_BEFORE: 'settings_loaded_before',
-    SETTINGS_LOADED_AFTER: 'settings_loaded_after',
-    CHATCOMPLETION_SOURCE_CHANGED: 'chatcompletion_source_changed',
-    CHATCOMPLETION_MODEL_CHANGED: 'chatcompletion_model_changed',
-    OAI_PRESET_CHANGED_BEFORE: 'oai_preset_changed_before',
-    OAI_PRESET_CHANGED_AFTER: 'oai_preset_changed_after',
-    OAI_PRESET_EXPORT_READY: 'oai_preset_export_ready',
-    OAI_PRESET_IMPORT_READY: 'oai_preset_import_ready',
-    WORLDINFO_SETTINGS_UPDATED: 'worldinfo_settings_updated',
-    WORLDINFO_UPDATED: 'worldinfo_updated',
-    CHARACTER_EDITED: 'character_edited',
-    CHARACTER_PAGE_LOADED: 'character_page_loaded',
-    CHARACTER_GROUP_OVERLAY_STATE_CHANGE_BEFORE: 'character_group_overlay_state_change_before',
-    CHARACTER_GROUP_OVERLAY_STATE_CHANGE_AFTER: 'character_group_overlay_state_change_after',
-    USER_MESSAGE_RENDERED: 'user_message_rendered',
-    CHARACTER_MESSAGE_RENDERED: 'character_message_rendered',
-    FORCE_SET_BACKGROUND: 'force_set_background',
-    CHAT_DELETED: 'chat_deleted',
-    CHAT_CREATED: 'chat_created',
-    GROUP_CHAT_DELETED: 'group_chat_deleted',
-    GROUP_CHAT_CREATED: 'group_chat_created',
-    GENERATE_BEFORE_COMBINE_PROMPTS: 'generate_before_combine_prompts',
-    GENERATE_AFTER_COMBINE_PROMPTS: 'generate_after_combine_prompts',
-    GENERATE_AFTER_DATA: 'generate_after_data',
-    GROUP_MEMBER_DRAFTED: 'group_member_drafted',
-    GROUP_WRAPPER_STARTED: 'group_wrapper_started',
-    GROUP_WRAPPER_FINISHED: 'group_wrapper_finished',
-    WORLD_INFO_ACTIVATED: 'world_info_activated',
-    TEXT_COMPLETION_SETTINGS_READY: 'text_completion_settings_ready',
-    CHAT_COMPLETION_SETTINGS_READY: 'chat_completion_settings_ready',
-    CHAT_COMPLETION_PROMPT_READY: 'chat_completion_prompt_ready',
-    CHARACTER_FIRST_MESSAGE_SELECTED: 'character_first_message_selected',
-    // TODO: Naming convention is inconsistent with other events
-    CHARACTER_DELETED: 'characterDeleted',
-    CHARACTER_DUPLICATED: 'character_duplicated',
-    CHARACTER_RENAMED: 'character_renamed',
-    CHARACTER_RENAMED_IN_PAST_CHAT: 'character_renamed_in_past_chat',
-    /** @deprecated The event is aliased to STREAM_TOKEN_RECEIVED. */
-    SMOOTH_STREAM_TOKEN_RECEIVED: 'stream_token_received',
-    STREAM_TOKEN_RECEIVED: 'stream_token_received',
-    STREAM_REASONING_DONE: 'stream_reasoning_done',
-    FILE_ATTACHMENT_DELETED: 'file_attachment_deleted',
-    WORLDINFO_FORCE_ACTIVATE: 'worldinfo_force_activate',
-    OPEN_CHARACTER_LIBRARY: 'open_character_library',
-    ONLINE_STATUS_CHANGED: 'online_status_changed',
-    IMAGE_SWIPED: 'image_swiped',
-    CONNECTION_PROFILE_LOADED: 'connection_profile_loaded',
-    CONNECTION_PROFILE_CREATED: 'connection_profile_created',
-    CONNECTION_PROFILE_DELETED: 'connection_profile_deleted',
-    CONNECTION_PROFILE_UPDATED: 'connection_profile_updated',
-    TOOL_CALLS_PERFORMED: 'tool_calls_performed',
-    TOOL_CALLS_RENDERED: 'tool_calls_rendered',
-    CHARACTER_MANAGEMENT_DROPDOWN: 'charManagementDropdown',
-    SECRET_WRITTEN: 'secret_written',
-    SECRET_DELETED: 'secret_deleted',
-    SECRET_ROTATED: 'secret_rotated',
-    SECRET_EDITED: 'secret_edited',
-};
-
-export const eventSource = new EventEmitter([event_types.APP_READY]);
-
-eventSource.on(event_types.CHAT_CHANGED, processChatSlashCommands);
-
 export const characterGroupOverlay = new BulkEditOverlay();
-const characterContextMenu = new CharacterContextMenu(characterGroupOverlay);
-eventSource.on(event_types.CHARACTER_PAGE_LOADED, characterGroupOverlay.onPageLoad);
-console.debug('Character context menu initialized', characterContextMenu);
 
 // Markdown converter
 export let mesForShowdownParse; //intended to be used as a context to compare showdown strings against
@@ -508,25 +420,6 @@ export const saveCharacterDebounced = debounce(() => $('#create_button').trigger
 export const printCharactersDebounced = debounce(() => { printCharacters(false); }, DEFAULT_PRINT_TIMEOUT);
 
 /**
- * @enum {string} System message types
- */
-export const system_message_types = {
-    HELP: 'help',
-    WELCOME: 'welcome',
-    EMPTY: 'empty',
-    GENERIC: 'generic',
-    NARRATOR: 'narrator',
-    COMMENT: 'comment',
-    SLASH_COMMANDS: 'slash_commands',
-    FORMATTING: 'formatting',
-    HOTKEYS: 'hotkeys',
-    MACROS: 'macros',
-    WELCOME_PROMPT: 'welcome_prompt',
-    ASSISTANT_NOTE: 'assistant_note',
-    ASSISTANT_MESSAGE: 'assistant_message',
-};
-
-/**
  * @enum {number} Extension prompt types
  */
 export const extension_prompt_types = {
@@ -546,106 +439,6 @@ export const extension_prompt_roles = {
 };
 
 export const MAX_INJECTION_DEPTH = 10000;
-
-// Initialized in getSystemMessages()
-const SAFETY_CHAT = [];
-
-export let system_messages = {};
-
-async function getSystemMessages() {
-    system_messages = {
-        help: {
-            name: systemUserName,
-            force_avatar: system_avatar,
-            is_user: false,
-            is_system: true,
-            mes: await renderTemplateAsync('help'),
-        },
-        slash_commands: {
-            name: systemUserName,
-            force_avatar: system_avatar,
-            is_user: false,
-            is_system: true,
-            mes: '',
-        },
-        hotkeys: {
-            name: systemUserName,
-            force_avatar: system_avatar,
-            is_user: false,
-            is_system: true,
-            mes: await renderTemplateAsync('hotkeys'),
-        },
-        formatting: {
-            name: systemUserName,
-            force_avatar: system_avatar,
-            is_user: false,
-            is_system: true,
-            mes: await renderTemplateAsync('formatting'),
-        },
-        macros: {
-            name: systemUserName,
-            force_avatar: system_avatar,
-            is_user: false,
-            is_system: true,
-            mes: await renderTemplateAsync('macros'),
-        },
-        welcome:
-        {
-            name: systemUserName,
-            force_avatar: system_avatar,
-            is_user: false,
-            is_system: true,
-            uses_system_ui: true,
-            mes: await renderTemplateAsync('welcome', { displayVersion }),
-        },
-        empty: {
-            name: systemUserName,
-            force_avatar: system_avatar,
-            is_user: false,
-            is_system: true,
-            mes: 'No one hears you. <b>Hint&#58;</b> add more members to the group!',
-        },
-        generic: {
-            name: systemUserName,
-            force_avatar: system_avatar,
-            is_user: false,
-            is_system: true,
-            mes: 'Generic system message. User `text` parameter to override the contents',
-        },
-        welcome_prompt: {
-            name: systemUserName,
-            force_avatar: system_avatar,
-            is_user: false,
-            is_system: true,
-            uses_system_ui: true,
-            mes: await renderTemplateAsync('welcomePrompt'),
-            extra: {
-                isSmallSys: true,
-            },
-        },
-        assistant_note: {
-            name: systemUserName,
-            force_avatar: system_avatar,
-            is_user: false,
-            is_system: true,
-            mes: await renderTemplateAsync('assistantNote'),
-            uses_system_ui: true,
-            extra: {
-                isSmallSys: true,
-            },
-        },
-    };
-
-    const safetyMessage = {
-        name: systemUserName,
-        force_avatar: system_avatar,
-        is_system: true,
-        is_user: false,
-        create_date: 0,
-        mes: t`You deleted a character/chat and arrived back here for safety reasons! Pick another character!`,
-    };
-    SAFETY_CHAT.splice(0, SAFETY_CHAT.length, safetyMessage);
-}
 
 async function getClientVersion() {
     try {
@@ -865,7 +658,7 @@ async function firstLoadInit() {
     initExtensionSlashCommands();
     ToolManager.initToolSlashCommands();
     await initPresetManager();
-    await getSystemMessages();
+    await initSystemMessages();
     await getSettings();
     initKeyboard();
     initDynamicStyles();
@@ -2536,35 +2329,43 @@ export function getStoppingStrings(isImpersonate, isContinue) {
 
 /**
  * Background generation based on the provided prompt.
- * @param {string} quiet_prompt Instruction prompt for the AI
- * @param {boolean} quietToLoud Whether the message should be sent in a foreground (loud) or background (quiet) mode
- * @param {boolean} skipWIAN whether to skip addition of World Info and Author's Note into the prompt
- * @param {string} quietImage Image to use for the quiet prompt
- * @param {string} quietName Name to use for the quiet prompt (defaults to "System:")
- * @param {number} [responseLength] Maximum response length. If unset, the global default value is used.
- * @param {number} force_chid Character ID to use for this generation run. Works in groups only.
- * @returns
+ * @typedef {object} GenerateQuietPromptParams
+ * @prop {string} [quietPrompt] Instruction prompt for the AI
+ * @prop {boolean} [quietToLoud] Whether the message should be sent in a foreground (loud) or background (quiet) mode
+ * @prop {boolean} [skipWIAN] Whether to skip addition of World Info and Author's Note into the prompt
+ * @prop {string} [quietImage] Image to use for the quiet prompt
+ * @prop {string} [quietName] Name to use for the quiet prompt (defaults to "System:")
+ * @prop {number} [responseLength] Maximum response length. If unset, the global default value is used.
+ * @prop {number} [forceChId] Character ID to use for this generation run. Works in groups only.
+ * @prop {object} [jsonSchema] JSON schema to use for the structured generation. Usually requires a special instruction.
+ * @param {GenerateQuietPromptParams} params Parameters for the quiet prompt generation
+ * @returns {Promise<string>} Generated text. If using structured output, will contain a serialized JSON object.
  */
-export async function generateQuietPrompt(quiet_prompt, quietToLoud, skipWIAN, quietImage = null, quietName = null, responseLength = null, force_chid = null) {
-    console.log('got into genQuietPrompt');
+export async function generateQuietPrompt({ quietPrompt = '', quietToLoud = false, skipWIAN = false, quietImage = null, quietName = null, responseLength = null, forceChId = null, jsonSchema = null } = {}) {
+    if (arguments.length > 0 && typeof arguments[0] !== 'object') {
+        console.trace('generateQuietPrompt called with positional arguments. Please use an object instead.');
+        [quietPrompt, quietToLoud, skipWIAN, quietImage, quietName, responseLength, forceChId, jsonSchema] = arguments;
+    }
+
     const responseLengthCustomized = typeof responseLength === 'number' && responseLength > 0;
     let eventHook = () => { };
     try {
         /** @type {GenerateOptions} */
-        const options = {
-            quiet_prompt,
-            quietToLoud,
-            skipWIAN: skipWIAN,
+        const generateOptions = {
+            quiet_prompt: quietPrompt ?? '',
+            quietToLoud: quietToLoud ?? false,
+            skipWIAN: skipWIAN ?? false,
             force_name2: true,
-            quietImage: quietImage,
-            quietName: quietName,
-            force_chid: force_chid,
+            quietImage: quietImage ?? null,
+            quietName: quietName ?? null,
+            force_chid: forceChId ?? null,
+            jsonSchema: jsonSchema ?? null,
         };
         if (responseLengthCustomized) {
             TempResponseLength.save(main_api, responseLength);
             eventHook = TempResponseLength.setupEventHook(main_api);
         }
-        const result = await Generate('quiet', options);
+        const result = await Generate('quiet', generateOptions);
         return removeReasoningFromString(result);
     } finally {
         if (responseLengthCustomized && TempResponseLength.isCustomized()) {
@@ -2587,60 +2388,6 @@ export async function processCommands(message) {
         clearChatInput: true,
     });
     return true;
-}
-
-/**
- * Gets a system message by type.
- * @param {string} type Type of system message
- * @param {string} [text] Text to be sent
- * @param {object} [extra] Additional data to be added to the message
- * @returns {object} System message object
- */
-export function getSystemMessageByType(type, text, extra = {}) {
-    const systemMessage = system_messages[type];
-
-    if (!systemMessage) {
-        return;
-    }
-
-    const newMessage = { ...systemMessage, send_date: getMessageTimeStamp() };
-
-    if (text) {
-        newMessage.mes = text;
-    }
-
-    if (type === system_message_types.SLASH_COMMANDS) {
-        newMessage.mes = getSlashCommandsHelp();
-    }
-
-    if (!newMessage.extra) {
-        newMessage.extra = {};
-    }
-
-    newMessage.extra = Object.assign(newMessage.extra, extra);
-    newMessage.extra.type = type;
-    return newMessage;
-}
-
-/**
- * Sends a system message to the chat.
- * @param {string} type Type of system message
- * @param {string} [text] Text to be sent
- * @param {object} [extra] Additional data to be added to the message
- */
-export function sendSystemMessage(type, text, extra = {}) {
-    const newMessage = getSystemMessageByType(type, text, extra);
-    chat.push(newMessage);
-    addOneMessage(newMessage);
-    is_send_press = false;
-    if (type === system_message_types.SLASH_COMMANDS) {
-        const browser = new SlashCommandBrowser();
-        const spinner = document.querySelector('#chat .last_mes .custom-slashHelp');
-        const parent = spinner.parentElement;
-        spinner.remove();
-        browser.renderInto(parent);
-        browser.search.focus();
-    }
 }
 
 /**
@@ -3313,37 +3060,101 @@ class StreamingProcessor {
 }
 
 /**
- * Generates a message using the provided prompt.
- * @param {string} prompt Prompt to generate a message from
- * @param {string} api API to use. Main API is used if not specified.
+ * Constructs a prompt to be used for either Text Completion or Chat Completion. Input is format-agnostic.
+ * @param {string | object[]} prompt Input prompt. Can be a string or an array of chat-style messages, i.e. [{role: '', content: ''}, ...]
+ * @param {string} api API to use.
  * @param {boolean} instructOverride true to override instruct mode, false to use the default value
  * @param {boolean} quietToLoud true to generate a message in system mode, false to generate a message in character mode
- * @param {string} [systemPrompt] System prompt to use. Only Instruct mode or OpenAI.
- * @param {number} [responseLength] Maximum response length. If unset, the global default value is used.
- * @param {boolean} [trimNames] Whether to allow trimming "{{user}}:" and "{{char}}:" from the response.
+ * @param {string} [systemPrompt] System prompt to use.
+ * @param {string} [prefill] Prefill for the prompt.
+ * @returns {string | object[]} Prompt ready for use in generation. If using TC, this will be a string. If using CC, this will be an array of chat-style messages.
+ */
+export function createRawPrompt(prompt, api, instructOverride, quietToLoud, systemPrompt, prefill) {
+    const isInstruct = power_user.instruct.enabled && api !== 'openai' && api !== 'novel' && !instructOverride;
+
+    // If the prompt was given as a string, convert to a message-style object assuming user role
+    if (typeof prompt === 'string') {
+        const message = api === 'openai'
+            ? { role: 'user', content: prompt.trim() }
+            : { role: 'system', content: prompt };
+        prompt = [message];
+    } else {  // checks for message-style object
+        if (prompt.length === 0 && !systemPrompt) throw Error('No messages provided');
+    }
+
+    // Substitute the prefill if provided
+    prefill = substituteParams(prefill ?? '');
+
+    // Format each message in the prompt, accounting for the provided roles
+    for (const message of prompt) {
+        let name = '';
+        if (message.role === 'user') name = message.name ?? name1;
+        if (message.role === 'assistant') name = message.name ?? name2;
+        if (message.role === 'system') name = message.name ?? '';
+        const prefix = isInstruct || api === 'openai' ? '' : (name ? `${name}: ` : '');
+        message.content = prefix + substituteParams(message.content ?? '');
+        if (isInstruct) {  // instruct formatting for text completion
+            const isUser = message.role === 'user';
+            const isNarrator = message.role === 'system';
+            message.content = formatInstructModeChat(name, message.content, isUser, isNarrator, '', name1, name2, false);
+        }
+    }
+
+    // prepend system prompt, if provided
+    if (systemPrompt) {
+        systemPrompt = substituteParams(systemPrompt);
+        systemPrompt = isInstruct ? (formatInstructModeSystemPrompt(systemPrompt) + '\n') : systemPrompt.trim();
+        prompt.unshift({ role: 'system', content: systemPrompt });
+    }
+
+    // with Chat Completion, the prefill is an additional assistant message at the end.
+    if (api === 'openai' && prefill) {
+        prompt.push({ role: 'assistant', content: prefill });
+    }
+
+    // if text completion, convert to text prompt by concatenating all message contents and adding the prefill as a promptBias.
+    if (api !== 'openai') {
+        const joiner = isInstruct ? '' : '\n';
+        prompt = prompt.map(message => message.content).join(joiner);
+        prompt = api === 'novel' ? adjustNovelInstructionPrompt(prompt) : prompt;
+        prompt = prompt + (isInstruct ? formatInstructModePrompt(name2, false, prefill, name1, name2, true, quietToLoud) : `\n${prefill}`);  // add last line
+    }
+
+    return prompt;
+}
+
+/**
+ * Generates a message using the provided prompt.
+ * If the prompt is an array of chat-style messages and not using chat completion, it will be converted to a text prompt.
+ * @typedef {object} GenerateRawParams
+ * @prop {string | object[]} [prompt] Prompt to generate a message from. Can be a string or an array of chat-style messages, i.e. [{role: '', content: ''}, ...]
+ * @prop {string} [api] API to use. Main API is used if not specified.
+ * @prop {boolean} [instructOverride] true to override instruct mode, false to use the default value
+ * @prop {boolean} [quietToLoud] true to generate a message in system mode, false to generate a message in character mode
+ * @prop {string} [systemPrompt] System prompt to use.
+ * @prop {number} [responseLength] Maximum response length. If unset, the global default value is used.
+ * @prop {boolean} [trimNames] Whether to allow trimming "{{user}}:" and "{{char}}:" from the response.
+ * @prop {string} [prefill] An optional prefill for the prompt.
+ * @prop {object} [jsonSchema] JSON schema to use for the structured generation. Usually requires a special instruction.
+ * @param {GenerateRawParams} params Parameters for generating a message
  * @returns {Promise<string>} Generated message
  */
-export async function generateRaw(prompt, api, instructOverride, quietToLoud, systemPrompt, responseLength, trimNames = true) {
+export async function generateRaw({ prompt = '', api = null, instructOverride = false, quietToLoud = false, systemPrompt = '', responseLength = null, trimNames = true, prefill = '', jsonSchema = null } = {}) {
+    if (arguments.length > 0 && typeof arguments[0] !== 'object') {
+        console.trace('generateRaw called with positional arguments. Please use an object instead.');
+        [prompt, api, instructOverride, quietToLoud, systemPrompt, responseLength, trimNames, prefill, jsonSchema] = arguments;
+    }
+
     if (!api) {
         api = main_api;
     }
 
     const abortController = new AbortController();
     const responseLengthCustomized = typeof responseLength === 'number' && responseLength > 0;
-    const isInstruct = power_user.instruct.enabled && api !== 'openai' && api !== 'novel' && !instructOverride;
-    const isQuiet = true;
     let eventHook = () => { };
 
-    if (systemPrompt) {
-        systemPrompt = substituteParams(systemPrompt);
-        systemPrompt = isInstruct ? formatInstructModeSystemPrompt(systemPrompt) : systemPrompt;
-        prompt = api === 'openai' ? prompt : `${systemPrompt}\n${prompt}`;
-    }
-
-    prompt = substituteParams(prompt);
-    prompt = api == 'novel' ? adjustNovelInstructionPrompt(prompt) : prompt;
-    prompt = isInstruct ? formatInstructModeChat(name1, prompt, false, true, '', name1, name2, false) : prompt;
-    prompt = isInstruct ? (prompt + formatInstructModePrompt(name2, false, '', name1, name2, isQuiet, quietToLoud)) : (prompt + '\n');
+    // construct final prompt from the input. Can either be a string or an array of chat-style messages.
+    prompt = createRawPrompt(prompt, api, instructOverride, quietToLoud, systemPrompt, prefill);
 
     try {
         if (responseLengthCustomized) {
@@ -3360,7 +3171,7 @@ export async function generateRaw(prompt, api, instructOverride, quietToLoud, sy
                 } else {
                     const isHorde = api === 'koboldhorde';
                     const koboldSettings = koboldai_settings[koboldai_setting_names[kai_settings.preset_settings]];
-                    generateData = getKoboldGenerationData(prompt, koboldSettings, amount_gen, max_context, isHorde, 'quiet');
+                    generateData = getKoboldGenerationData(prompt.toString(), koboldSettings, amount_gen, max_context, isHorde, 'quiet');
                 }
                 TempResponseLength.restore(api);
                 break;
@@ -3375,10 +3186,7 @@ export async function generateRaw(prompt, api, instructOverride, quietToLoud, sy
                 TempResponseLength.restore(api);
                 break;
             case 'openai': {
-                generateData = [{ role: 'user', content: prompt.trim() }];
-                if (systemPrompt) {
-                    generateData.unshift({ role: 'system', content: systemPrompt.trim() });
-                }
+                generateData = prompt;  // generateData is just the chat message object
                 eventHook = TempResponseLength.setupEventHook(api);
             } break;
         }
@@ -3386,9 +3194,9 @@ export async function generateRaw(prompt, api, instructOverride, quietToLoud, sy
         let data = {};
 
         if (api === 'koboldhorde') {
-            data = await generateHorde(prompt, generateData, abortController.signal, false);
+            data = await generateHorde(prompt.toString(), generateData, abortController.signal, false);
         } else if (api === 'openai') {
-            data = await sendOpenAIRequest('quiet', generateData, abortController.signal);
+            data = await sendOpenAIRequest('quiet', generateData, abortController.signal, { jsonSchema });
         } else {
             const generateUrl = getGenerateUrl(api);
             const response = await fetch(generateUrl, {
@@ -3411,6 +3219,10 @@ export async function generateRaw(prompt, api, instructOverride, quietToLoud, sy
         // they throw things instead
         if (data.error) {
             throw new Error(data.response);
+        }
+
+        if (jsonSchema) {
+            return extractJsonFromData(data, { mainApi: api });
         }
 
         // format result, exclude user prompt bias
@@ -3545,15 +3357,35 @@ function removeLastMessage() {
 }
 
 /**
+ * @typedef {object} JsonSchema
+ * @property {string} name Name of the schema.
+ * @property {object} value JSON schema value.
+ * @property {string} [description] Description of the schema.
+ * @property {boolean} [strict] If true, the schema will be used in strict mode, meaning that only the fields defined in the schema will be allowed.
+ *
+ * @typedef {object} GenerateOptions
+ * @property {boolean} [automatic_trigger] If the generation was triggered automatically (e.g. group auto mode).
+ * @property {boolean} [force_name2] If a char name should be forced to add to the prompt's last line (Text Completion, non-Instruct only).
+ * @property {string} [quiet_prompt] A system instruction to use for the quiet prompt.
+ * @property {boolean} [quietToLoud] Whether the system instruction should be sent in background (quiet) or a foreground (loud) mode.
+ * @property {boolean} [skipWIAN] Skip adding World Info and Author's Note to the prompt.
+ * @property {number} [force_chid] Force character ID to use for the generation. Only works in groups.
+ * @property {AbortSignal} [signal] Abort signal to cancel the generation. If not provided, will create a new AbortController.
+ * @property {string} [quietImage] Image URL to use for the quiet prompt (defaults to empty string)
+ * @property {string} [quietName] Name to use for the quiet prompt (defaults to "System:")
+ * @property {number} [depth] Recursion depth for the generation. Used to prevent infinite loops in tool calls.
+ * @property {JsonSchema} [jsonSchema] JSON schema to use for the structured generation. Usually requires a special instruction.
+ */
+
+/**
  * MARK:Generate()
  * Runs a generation using the current chat context.
  * @param {string} type Generation type
  * @param {GenerateOptions} options Generation options
  * @param {boolean} dryRun Whether to actually generate a message or just assemble the prompt
  * @returns {Promise<any>} Returns a promise that resolves when the text is done generating.
- * @typedef {{automatic_trigger?: boolean, force_name2?: boolean, quiet_prompt?: string, quietToLoud?: boolean, skipWIAN?: boolean, force_chid?: number, signal?: AbortSignal, quietImage?: string, quietName?: string, depth?: number }} GenerateOptions
  */
-export async function Generate(type, { automatic_trigger, force_name2, quiet_prompt, quietToLoud, skipWIAN, force_chid, signal, quietImage, quietName, depth = 0 } = {}, dryRun = false) {
+export async function Generate(type, { automatic_trigger, force_name2, quiet_prompt, quietToLoud, skipWIAN, force_chid, signal, quietImage, quietName, jsonSchema = null, depth = 0 } = {}, dryRun = false) {
     console.log('Generate entered');
     setGenerationProgress(0);
     generation_started = new Date();
@@ -3707,7 +3539,6 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
         'impersonate',
         'quiet',
         'continue',
-        'ask_command',
     ];
     //for normal messages sent from user..
     if ((textareaText != '' || (hasPendingFileAttachment() && !noAttachTypes.includes(type))) && !automatic_trigger && type !== 'quiet' && !dryRun) {
@@ -4547,7 +4378,6 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
                 cyclePrompt: cyclePrompt,
                 systemPromptOverride: system,
                 jailbreakPromptOverride: jailbreak,
-                personaDescription: persona,
                 messages: oaiMessages,
                 messageExamples: oaiMessageExamples,
             }, dryRun);
@@ -4695,7 +4525,7 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
                 });
             }
         } else {
-            return await sendGenerationRequest(type, generate_data);
+            return await sendGenerationRequest(type, generate_data, { jsonSchema });
         }
     }
 
@@ -4725,6 +4555,12 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
                 toastr.error(data.response, t`API Error`, { preventDuplicates: true });
             }
             throw new Error(data?.response);
+        }
+
+        if (jsonSchema) {
+            unblockGeneration(type);
+            generatedPromptCache = '';
+            return extractJsonFromData(data);
         }
 
         //const getData = await response.json();
@@ -5304,15 +5140,21 @@ function setInContextMessages(msgInContextCount, type) {
 }
 
 /**
+ * @typedef {object} AdditionalRequestOptions
+ * @property {JsonSchema} [jsonSchema]
+ */
+
+/**
  * Sends a non-streaming request to the API.
  * @param {string} type Generation type
  * @param {object} data Generation data
+ * @param {AdditionalRequestOptions} [options] Additional options for the generation request
  * @returns {Promise<object>} Response data from the API
  * @throws {Error|object}
  */
-export async function sendGenerationRequest(type, data) {
+export async function sendGenerationRequest(type, data, options = {}) {
     if (main_api === 'openai') {
-        return await sendOpenAIRequest(type, data.prompt, abortController.signal);
+        return await sendOpenAIRequest(type, data.prompt, abortController.signal, options);
     }
 
     if (main_api === 'koboldhorde') {
@@ -5338,16 +5180,17 @@ export async function sendGenerationRequest(type, data) {
  * Sends a streaming request to the API.
  * @param {string} type Generation type
  * @param {object} data Generation data
+ * @param {AdditionalRequestOptions} [options] Additional options for the generation request
  * @returns {Promise<any>} Streaming generator
  */
-export async function sendStreamingRequest(type, data) {
+export async function sendStreamingRequest(type, data, options = {}) {
     if (abortController?.signal?.aborted) {
         throw new Error('Generation was aborted.');
     }
 
     switch (main_api) {
         case 'openai':
-            return await sendOpenAIRequest(type, data.prompt, streamingProcessor.abortController.signal);
+            return await sendOpenAIRequest(type, data.prompt, streamingProcessor.abortController.signal, options);
         case 'textgenerationwebui':
             return await generateTextGenWithStreaming(data, streamingProcessor.abortController.signal);
         case 'novel':
@@ -5486,6 +5329,58 @@ export function extractMessageFromData(data, activeApi = null) {
         default:
             return '';
     }
+}
+
+/**
+ * Extracts JSON from the response data.
+ * @param {object} data Response data
+ * @returns {string} Extracted JSON string from the response data
+ */
+export function extractJsonFromData(data, { mainApi = null, chatCompletionSource = null } = {}) {
+    mainApi = mainApi ?? main_api;
+    chatCompletionSource = chatCompletionSource ?? oai_settings.chat_completion_source;
+
+    const tryParse = (/** @type {string} */ value) => {
+        try {
+            return JSON.parse(value);
+        } catch (e) {
+            console.debug('Failed to parse content as JSON.', e);
+        }
+    };
+
+    let result = {};
+
+    switch (mainApi) {
+        case 'openai': {
+            const text = extractMessageFromData(data, mainApi);
+            switch (chatCompletionSource) {
+                case chat_completion_sources.CLAUDE:
+                    result = data?.content?.find(x => x.type === 'tool_use')?.input;
+                    break;
+                case chat_completion_sources.PERPLEXITY:
+                    result = tryParse(removeReasoningFromString(text));
+                    break;
+                case chat_completion_sources.VERTEXAI:
+                case chat_completion_sources.MAKERSUITE:
+                case chat_completion_sources.DEEPSEEK:
+                case chat_completion_sources.AI21:
+                case chat_completion_sources.GROQ:
+                case chat_completion_sources.POLLINATIONS:
+                case chat_completion_sources.AIMLAPI:
+                case chat_completion_sources.OPENAI:
+                case chat_completion_sources.OPENROUTER:
+                case chat_completion_sources.MISTRALAI:
+                case chat_completion_sources.CUSTOM:
+                case chat_completion_sources.COHERE:
+                case chat_completion_sources.XAI:
+                default:
+                    result = tryParse(text);
+                    break;
+            }
+        } break;
+    }
+
+    return JSON.stringify(result ?? {});
 }
 
 /**
@@ -9430,7 +9325,7 @@ function addDebugFunctions() {
     registerDebugFunction('generationTest', 'Send a generation request', 'Generates text using the currently selected API.', async () => {
         const text = prompt('Input text:', 'Hello');
         toastr.info('Working on it...');
-        const message = await generateRaw(text, null, false, false);
+        const message = await generateRaw({ prompt: text });
         alert(message);
     });
     registerDebugFunction('toggleEventTracing', 'Toggle event tracing', 'Useful to see what triggered a certain event.', () => {
@@ -9994,7 +9889,8 @@ jQuery(async function () {
                 await doNewChat({ deleteCurrentChat: deleteCurrentChat });
             }
             if (!selected_group && this_chid === undefined && !is_send_press) {
-                await newAssistantChat({ temporary: true });
+                const alreadyInTempChat = this_chid === undefined && name2 === neutralCharacterName;
+                await newAssistantChat({ temporary: alreadyInTempChat });
             }
         }
 
@@ -10133,10 +10029,11 @@ jQuery(async function () {
         is_delete_mode = false;
     });
 
-    $('#main_api').on('change', function () {
+    $('#main_api').on('change', async function () {
         cancelStatusCheck('Canceled because main api changed');
         changeMainAPI();
         saveSettingsDebounced();
+        await eventSource.emit(event_types.MAIN_API_CHANGED, { apiId: main_api });
     });
 
     ////////////////// OPTIMIZED RANGE SLIDER LISTENERS////////////////

@@ -1314,7 +1314,7 @@
                                         <input class="neo-range-slider" type="range" id="epsilon_cutoff_textgenerationwebui" name="volume" min="0" max="9" step="0.01">
                                         <input class="neo-range-input" type="number" min="0" max="9" step="0.01" data-for="epsilon_cutoff_textgenerationwebui" id="epsilon_cutoff_counter_textgenerationwebui">
                                     </div>
-                                    <div data-tg-type="aphrodite,koboldcpp,llamacpp" class="alignitemscenter flex-container flexFlowColumn flexBasis30p flexGrow flexShrink gap0">
+                                    <div data-tg-type="ooba,aphrodite,koboldcpp,llamacpp" class="alignitemscenter flex-container flexFlowColumn flexBasis30p flexGrow flexShrink gap0">
                                         <small>
                                             <span data-i18n="Top nsigma">Top nsigma</span>
                                             <div class="fa-solid fa-circle-info opacity50p" title="A sampling method that filters logits based on their statistical properties. It keeps tokens within n standard deviations of the maximum logit value, providing a simpler alternative to top-p/top-k sampling while maintaining sampling stability across different temperatures."></div>
@@ -1811,6 +1811,7 @@
                                             <div data-name="temperature" draggable="true"><span>Temperature</span><small></small></div>
                                             <div data-name="dynamic_temperature" draggable="true"><span>Dynamic Temperature</span><small></small></div>
                                             <div data-name="quadratic_sampling" draggable="true"><span>Quadratic / Smooth Sampling</span><small></small></div>
+                                            <div data-name="top_n_sigma" draggable="true"><span>Top Nsigma</span><small></small></div>
                                             <div data-name="top_k" draggable="true"><span>Top K</span><small></small></div>
                                             <div data-name="top_p" draggable="true"><span>Top P</span><small></small></div>
                                             <div data-name="typical_p" draggable="true"><span>Typical P</span><small></small></div>
@@ -1969,7 +1970,7 @@
                                             </span>
                                         </div>
                                     </div>
-                                    <div class="range-block" data-source="makersuite,vertexai,aimlapi,openrouter,claude,xai">
+                                    <div class="range-block" data-source="makersuite,vertexai,aimlapi,openrouter,claude,xai,nanogpt">
                                         <label for="openai_enable_web_search" class="checkbox_label flexWrap widthFreeExpand">
                                             <input id="openai_enable_web_search" type="checkbox" />
                                             <span data-i18n="Enable web search">Enable web search</span>
@@ -2078,7 +2079,7 @@
                                             </span>
                                         </div>
                                     </div>
-                                    <div class="flex-container flexFlowColumn wide100p textAlignCenter marginTop10" data-source="openai,custom,claude,xai,makersuite,vertexai,aimlapi,openrouter,pollinations">
+                                    <div class="flex-container flexFlowColumn wide100p textAlignCenter marginTop10" data-source="openai,custom,claude,xai,makersuite,vertexai,aimlapi,openrouter,pollinations,perplexity">
                                         <div class="flex-container oneline-dropdown" title="Constrains effort on reasoning for reasoning models.&#10;Reducing reasoning effort can result in faster responses and fewer tokens used on reasoning in a response." data-i18n="[title]Constrains effort on reasoning for reasoning models.">
                                             <label for="openai_reasoning_effort">
                                                 <span data-i18n="Reasoning Effort">Reasoning Effort</span>
@@ -2092,7 +2093,7 @@
                                                 <option data-i18n="openai_reasoning_effort_high" value="high">High</option>
                                                 <option data-i18n="openai_reasoning_effort_maximum" value="max">Maximum</option>
                                             </select>
-                                            <div class="toggle-description justifyLeft marginBot5" data-source="openai,custom,xai,aimlapi,openrouter" data-i18n="OpenAI-style options: low, medium, high. Minimum and maximum are aliased to low and high. Auto does not send an effort level.">
+                                            <div class="toggle-description justifyLeft marginBot5" data-source="openai,custom,xai,aimlapi,openrouter,perplexity" data-i18n="OpenAI-style options: low, medium, high. Minimum and maximum are aliased to low and high. Auto does not send an effort level.">
                                                 OpenAI-style options: low, medium, high. Minimum and maximum are aliased to low and high. Auto does not send an effort level.
                                             </div>
                                             <div class="toggle-description justifyLeft marginBot5" data-source="claude" data-i18n="Allocates a portion of the response length for thinking (min: 1024 tokens, low: 10%, medium: 25%, high: 50%, max: 95%), but minimum 1024 tokens. Auto does not request thinking.">
@@ -3165,7 +3166,11 @@
                                         <option value="jamba-mini">jamba-mini</option>
                                         <option value="jamba-large">jamba-large</option>
                                     </optgroup>
-                                    <optgroup label="Jamba 1.6">
+                                    <optgroup label="Jamba 1.7">
+                                        <option value="jamba-1.7-mini">jamba-1.7-mini</option>
+                                        <option value="jamba-1.7-large">jamba-1.7-large</option>
+                                    </optgroup>
+                                    <optgroup label="Jamba 1.6 (Deprecated)">
                                         <option value="jamba-1.6-mini">jamba-1.6-mini</option>
                                         <option value="jamba-1.6-large">jamba-1.6-large</option>
                                     </optgroup>
@@ -3415,6 +3420,7 @@
                                         <option value="pixtral-12b-latest">pixtral-12b-latest</option>
                                         <option value="pixtral-large-latest">pixtral-large-latest</option>
                                         <option value="devstral-small-latest">devstral-small-latest</option>
+                                        <option value="devstral-medium-latest">devstral-medium-latest</option>
                                         <option value="magistral-small-latest">magistral-small-latest</option>
                                         <option value="magistral-medium-latest">magistral-medium-latest</option>
                                     </optgroup>
@@ -3430,6 +3436,7 @@
                                         <option value="mistral-small-2409">mistral-small-2409</option>
                                         <option value="mistral-small-2501">mistral-small-2501</option>
                                         <option value="mistral-small-2503">mistral-small-2503</option>
+                                        <option value="mistral-small-2506">mistral-small-2506</option>
                                         <option value="mistral-medium-2312">mistral-medium-2312</option>
                                         <option value="mistral-medium-2505">mistral-medium-2505</option>
                                         <option value="mistral-large-2402">mistral-large-2402</option>
@@ -3446,6 +3453,8 @@
                                         <option value="pixtral-12b-2409">pixtral-12b-2409</option>
                                         <option value="pixtral-large-2411">pixtral-large-2411</option>
                                         <option value="devstral-small-2505">devstral-small-2505</option>
+                                        <option value="devstral-small-2507">devstral-small-2507</option>
+                                        <option value="devstral-medium-2507">devstral-medium-2507</option>
                                         <option value="magistral-small-2506">magistral-small-2506</option>
                                         <option value="magistral-medium-2506">magistral-medium-2506</option>
                                     </optgroup>
@@ -3464,35 +3473,17 @@
                             </div>
                             <h4 data-i18n="Groq Model">Groq Model</h4>
                             <select id="model_groq_select">
-                                <optgroup label="Alibaba Cloud">
-                                    <option value="qwen-2.5-32b">qwen-2.5-32b</option>
-                                    <option value="qwen-2.5-coder-32b">qwen-2.5-coder-32b</option>
-                                </optgroup>
-                                <optgroup label="DeepSeek">
-                                    <option value="deepseek-r1-distill-qwen-32b">deepseek-r1-distill-qwen-32b</option>
-                                    <option value="deepseek-r1-distill-llama-70b">deepseek-r1-distill-llama-70b</option>
-                                </optgroup>
-                                <optgroup label="Google">
-                                    <option value="gemma2-9b-it">gemma2-9b-it</option>
-                                </optgroup>
-                                <optgroup label="Meta">
-                                    <option value="meta-llama/llama-4-scout-17b-16e-instruct">meta-llama/llama-4-scout-17b-16e-instruct</option>
-                                    <option value="meta-llama/llama-4-maverick-17b-128e-instruct">meta-llama/llama-4-maverick-17b-128e-instruct</option>
-                                    <option value="llama-3.1-8b-instant">llama-3.1-8b-instant</option>
-                                    <option value="llama-3.2-11b-vision-preview">llama-3.2-11b-vision-preview </option>
-                                    <option value="llama-3.2-1b-preview">llama-3.2-1b-preview </option>
-                                    <option value="llama-3.2-3b-preview">llama-3.2-3b-preview </option>
-                                    <option value="llama-3.2-90b-vision-preview">llama-3.2-90b-vision-preview </option>
-                                    <option value="llama-3.3-70b-specdec">llama-3.3-70b-specdec</option>
-                                    <option value="llama-3.3-70b-versatile">llama-3.3-70b-versatile </option>
-                                    <option value="llama-guard-3-8b">llama-guard-3-8b</option>
-                                    <option value="llama3-70b-8192">llama3-70b-8192</option>
-                                    <option value="llama3-8b-8192">llama3-8b-8192</option>
-                                </optgroup>
-                                <optgroup label="Mistral AI">
-                                    <option value="mistral-saba-24b">mistral-saba-24b</option>
-                                    <option value="mixtral-8x7b-32768">mixtral-8x7b-32768</option>
-                                </optgroup>
+                                <option value="qwen/qwen3-32b">qwen/qwen3-32b</option>
+                                <option value="deepseek-r1-distill-llama-70b">deepseek-r1-distill-llama-70b</option>
+                                <option value="gemma2-9b-it">gemma2-9b-it</option>
+                                <option value="meta-llama/llama-4-scout-17b-16e-instruct">meta-llama/llama-4-scout-17b-16e-instruct</option>
+                                <option value="meta-llama/llama-4-maverick-17b-128e-instruct">meta-llama/llama-4-maverick-17b-128e-instruct</option>
+                                <option value="llama-3.1-8b-instant">llama-3.1-8b-instant</option>
+                                <option value="llama-3.3-70b-versatile">llama-3.3-70b-versatile </option>
+                                <option value="llama-guard-3-8b">llama-guard-3-8b</option>
+                                <option value="llama3-70b-8192">llama3-70b-8192</option>
+                                <option value="llama3-8b-8192">llama3-8b-8192</option>
+                                <option value="mistral-saba-24b">mistral-saba-24b</option>
                             </select>
                         </div>
                         <div id="nanogpt_form" data-source="nanogpt">
@@ -3545,6 +3536,7 @@
                                     <option value="sonar-pro">sonar-pro</option>
                                     <option value="sonar-reasoning">sonar-reasoning</option>
                                     <option value="sonar-reasoning-pro">sonar-reasoning-pro</option>
+                                    <option value="sonar-deep-research">sonar-deep-research</option>
                                 </optgroup>
                                 <optgroup label="Offline Models">
                                     <option value="r1-1776">r1-1776</option>
@@ -3659,6 +3651,7 @@
                             </div>
                             <h4 data-i18n="xAI Model">xAI Model</h4>
                             <select id="model_xai_select">
+                                <option value="grok-4-0709">grok-4-0709</option>
                                 <option value="grok-3-beta">grok-3-beta</option>
                                 <option value="grok-3-fast-beta">grok-3-fast-beta</option>
                                 <option value="grok-3-mini-beta">grok-3-mini-beta</option>
@@ -6744,6 +6737,22 @@
                                     <option data-i18n="AI Assistant" value="assistant">AI Assistant</option>
                                 </select>
                                 <div class="text_muted" data-i18n="To whom this message will be attributed.">To whom this message will be attributed.</div>
+                            </div>
+                            <div class="completion_prompt_manager_popup_entry_form_control flex1">
+                                <label for="completion_prompt_manager_popup_entry_form_injection_trigger">
+                                    <span data-i18n="Triggers">Triggers</span>
+                                </label>
+                                <select id="completion_prompt_manager_popup_entry_form_injection_trigger" class="text_pole" name="injection_trigger" multiple>
+                                    <option data-i18n="Normal" value="normal">Normal</option>
+                                    <option data-i18n="Continue" value="continue">Continue</option>
+                                    <option data-i18n="Impersonate" value="impersonate">Impersonate</option>
+                                    <option data-i18n="Swipe" value="swipe">Swipe</option>
+                                    <option data-i18n="Regenerate" value="regenerate">Regenerate</option>
+                                    <option data-i18n="Quiet" value="quiet">Quiet</option>
+                                </select>
+                                <div class="text_muted" data-i18n="Filter to specific generation types.">
+                                    Filter to specific generation types.
+                                </div>
                             </div>
                         </div>
                         <div class="flex-container gap10px">
