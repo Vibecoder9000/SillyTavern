@@ -975,8 +975,10 @@ async function autoBackgroundCommand() {
     const options = backgroundSelector.images.map(img => ({ element: null, text: img.filename.replace(/\.[^/.]+$/, '') }));
     const list = options.map(option => `- ${option.text}`).join('\n');
     const prompt = stringFormat(autoBgPrompt, list);
-    const reply = await generateQuietPrompt(prompt, false, false);
-    const fuse = new Fuse(options, { keys: ['text'], threshold: 0.4 });
+
+    const reply = await generateQuietPrompt({ quietPrompt: prompt });
+    const fuse = new Fuse(options, { keys: ['text'], threshold: 0.25 });
+
     const bestMatch = fuse.search(reply, { limit: 1 });
     if (bestMatch.length === 0) {
         toastr.warning(translate('No match found.'));

@@ -213,6 +213,7 @@ function setupConnectAPIMap() {
 }
 
 export function initDefaultSlashCommands() {
+    eventSource.on(event_types.CHAT_CHANGED, processChatSlashCommands);
     setupConnectAPIMap();
 
     async function enableInstructCallback() {
@@ -1671,17 +1672,18 @@ export function initDefaultSlashCommands() {
         returns: 'generated text',
         namedArgumentList: [
             new SlashCommandNamedArgument(
-                'lock', 'lock user input during generation', [ARGUMENT_TYPE.BOOLEAN], false, false, null, commonEnumProviders.boolean('onOff')(),
+                'lock', 'lock user input during generation', [ARGUMENT_TYPE.BOOLEAN], false, false, 'off', commonEnumProviders.boolean('onOff')(),
             ),
             new SlashCommandNamedArgument(
                 'instruct', 'use instruct mode', [ARGUMENT_TYPE.BOOLEAN], false, false, 'on', commonEnumProviders.boolean('onOff')(),
             ),
             new SlashCommandNamedArgument(
-                'stop', 'one-time custom stop strings', [ARGUMENT_TYPE.LIST], false,
+                'stop', 'one-time custom stop strings', [ARGUMENT_TYPE.LIST], false, false, '[]',
             ),
             SlashCommandNamedArgument.fromProps({
                 name: 'as',
                 description: 'role of the output prompt',
+                defaultValue: 'system',
                 typeList: [ARGUMENT_TYPE.STRING],
                 enumList: [
                     new SlashCommandEnumValue('system', null, enumTypes.enum, enumIcons.assistant),
@@ -1689,10 +1691,16 @@ export function initDefaultSlashCommands() {
                 ],
             }),
             new SlashCommandNamedArgument(
-                'system', 'system prompt at the start', [ARGUMENT_TYPE.STRING], false,
+                'system', 'system prompt at the start', [ARGUMENT_TYPE.STRING, ARGUMENT_TYPE.VARIABLE_NAME], false,
             ),
             new SlashCommandNamedArgument(
-                'length', 'API response length in tokens', [ARGUMENT_TYPE.NUMBER], false,
+                'prefill', 'prefill prompt at the end', [ARGUMENT_TYPE.STRING, ARGUMENT_TYPE.VARIABLE_NAME], false,
+            ),
+            new SlashCommandNamedArgument(
+                'length', 'API response length in tokens', [ARGUMENT_TYPE.NUMBER, ARGUMENT_TYPE.VARIABLE_NAME], false,
+            ),
+            new SlashCommandNamedArgument(
+                'trim', 'trim {{user}} and {{char}} prefixes from the output', [ARGUMENT_TYPE.BOOLEAN], false, false, 'on', commonEnumProviders.boolean('onOff')(),
             ),
         ],
         unnamedArgumentList: [
@@ -2265,13 +2273,14 @@ export function initDefaultSlashCommands() {
     }));
     SlashCommandParser.addCommandObject(SlashCommand.fromProps({
         name: 'inject',
+        returns: 'injection ID',
         callback: injectCallback,
         namedArgumentList: [
             SlashCommandNamedArgument.fromProps({
                 name: 'id',
-                description: 'injection ID or variable name pointing to ID',
+                description: 'injection ID',
                 typeList: [ARGUMENT_TYPE.STRING],
-                isRequired: true,
+                isRequired: false,
                 enumProvider: commonEnumProviders.injects,
             }),
             new SlashCommandNamedArgument(
@@ -2310,7 +2319,7 @@ export function initDefaultSlashCommands() {
                 'text', [ARGUMENT_TYPE.STRING], false,
             ),
         ],
-        helpString: 'Injects a text into the LLM prompt for the current chat. Requires a unique injection ID. Positions: "before" main prompt, "after" main prompt, in-"chat", hidden with "none" (default: after). Depth: injection depth for the prompt (default: 4). Role: role for in-chat injections (default: system). Scan: include injection content into World Info scans (default: false). Hidden injects in "none" position are not inserted into the prompt but can be used for triggering WI entries.',
+        helpString: 'Injects a text into the LLM prompt for the current chat. Requires a unique injection ID (will be auto-generated if not provided). Positions: "before" main prompt, "after" main prompt, in-"chat", hidden with "none" (default: after). Depth: injection depth for the prompt (default: 4). Role: role for in-chat injections (default: system). Scan: include injection content into World Info scans (default: false). Hidden injects in "none" position are not inserted into the prompt but can be used for triggering WI entries. Returns the injection ID.',
     }));
     SlashCommandParser.addCommandObject(SlashCommand.fromProps({
         name: 'listinjects',
@@ -2986,23 +2995,17 @@ function injectCallback(args, value) {
         'assistant': extension_prompt_roles.ASSISTANT,
     };
 
-    const id = String(args?.id ?? '');
+    const id = String(args?.id ?? '') || Math.random().toString(36).substring(2);
     const ephemeral = isTrueBoolean(String(args?.ephemeral ?? ''));
-
-    if (!id) {
-        console.warn('WARN: No ID provided for /inject command');
-        toastr.warning('No ID provided for /inject command');
-        return '';
-    }
 
     const defaultPosition = 'after';
     const defaultDepth = 4;
     const positionValue = args?.position ?? defaultPosition;
     const position = positions[positionValue] ?? positions[defaultPosition];
-    const depthValue = Number(args?.depth) ?? defaultDepth;
+    const depthValue = Number(args?.depth ?? defaultDepth);
     const depth = isNaN(depthValue) ? defaultDepth : depthValue;
     const roleValue = typeof args?.role === 'string' ? args.role.toLowerCase().trim() : Number(args?.role ?? extension_prompt_roles.SYSTEM);
-    const role = roles[roleValue] ?? roles[extension_prompt_roles.SYSTEM];
+    const role = roles[roleValue] ?? extension_prompt_roles.SYSTEM;
     const scan = isTrueBoolean(String(args?.scan));
     const filter = args?.filter instanceof SlashCommandClosure ? args.filter.rawText : null;
     const filterFunction = args?.filter instanceof SlashCommandClosure ? closureToFilter(args.filter) : null;
@@ -3044,7 +3047,7 @@ function injectCallback(args, value) {
         eventSource.once(event_types.GENERATION_STOPPED, unsetInject);
     }
 
-    return '';
+    return id;
 }
 
 async function listInjectsCallback(args) {
@@ -3632,7 +3635,9 @@ async function generateRawCallback(args, value) {
     const as = args?.as || 'system';
     const quietToLoud = as === 'char';
     const systemPrompt = resolveVariable(args?.system) || '';
+    const prefillPrompt = resolveVariable(args?.prefill) || '';
     const length = Number(resolveVariable(args?.length) ?? 0) || 0;
+    const trimNames = !isFalseBoolean(args?.trim);
 
     try {
         if (lock) {
@@ -3640,7 +3645,17 @@ async function generateRawCallback(args, value) {
         }
 
         setEphemeralStopStrings(resolveVariable(args?.stop));
-        const result = await generateRaw(value, '', isFalseBoolean(args?.instruct), quietToLoud, systemPrompt, length);
+        /** @type {import('../script.js').GenerateRawParams} */
+        const params = {
+            prompt: value,
+            instructOverride: isFalseBoolean(args?.instruct),
+            quietToLoud: quietToLoud,
+            systemPrompt: systemPrompt,
+            responseLength: length,
+            trimNames: trimNames,
+            prefill: prefillPrompt,
+        };
+        const result = await generateRaw(params);
         return result;
     } catch (err) {
         console.error('Error on /genraw generation', err);
@@ -3676,7 +3691,14 @@ async function generateCallback(args, value) {
         setEphemeralStopStrings(resolveVariable(args?.stop));
         const name = args?.name;
         const char = findChar({ name: name });
-        const result = await generateQuietPrompt(value, quietToLoud, false, '', char?.name ?? name, length);
+        /** @type {import('../script.js').GenerateQuietPromptParams} */
+        const params = {
+            quietPrompt: value,
+            quietToLoud: quietToLoud,
+            quietName: char?.name ?? name,
+            responseLength: length,
+        };
+        const result = await generateQuietPrompt(params);
         return result;
     } catch (err) {
         console.error('Error on /gen generation', err);
@@ -3925,7 +3947,7 @@ async function askCharacter(args, text) {
     try {
         eventSource.once(event_types.MESSAGE_RECEIVED, restoreCharacter);
         toastr.info(`Asking ${name} something...`);
-        askResult = await Generate('ask_command');
+        askResult = await Generate('normal');
     } catch (error) {
         restoreCharacter();
         console.error('Error running /ask command', error);
@@ -4347,7 +4369,7 @@ export async function generateSystemMessage(_, prompt) {
 
     // Generate and regex the output if applicable
     toastr.info('Please wait', 'Generating...');
-    let message = await generateQuietPrompt(prompt, false, false);
+    let message = await generateQuietPrompt({ quietPrompt: prompt });
     message = getRegexedString(message, regex_placement.SLASH_COMMAND);
 
     sendNarratorMessage(_, message);
@@ -4604,7 +4626,7 @@ export async function promptQuietForLoudResponse(who, text) {
 
     //text = `${text}${power_user.instruct.enabled ? '' : '\n'}${(power_user.always_force_name2 && who != 'raw') ? characters[character_id].name + ":" : ""}`
 
-    let reply = await generateQuietPrompt(text, true, false);
+    let reply = await generateQuietPrompt({ quietPrompt: text, quietToLoud: true });
     text = await getRegexedString(reply, regex_placement.SLASH_COMMAND);
 
     const message = {

@@ -10,6 +10,8 @@ import {
     abortStatusCheck,
     startStatusLoading,
     setGenerationParamsFromPreset,
+    eventSource,
+    event_types,
 } from '../script.js';
 import { t } from './i18n.js';
 import { autoSelectInstructPreset } from './instruct-mode.js';
@@ -44,6 +46,7 @@ export const kai_settings = {
     seed: -1,
     api_server: '',
     preset_settings: 'gui',
+    extensions: {},
 };
 
 /**
@@ -130,6 +133,11 @@ export function loadKoboldSettings(data, preset, settings) {
 
 function loadKoboldSettingsFromPreset(preset) {
     for (const name of Object.keys(kai_settings)) {
+        if (name === 'extensions') {
+            kai_settings.extensions = preset.extensions || {};
+            continue;
+        }
+
         const value = preset[name] ?? defaultValues[name];
         const slider = sliders.find(x => x.name === name);
 
@@ -510,7 +518,7 @@ export function initKoboldSettings() {
         saveSettingsDebounced();
     });
 
-    $('#settings_preset').on('change', function () {
+    $('#settings_preset').on('change', async function () {
         if ($('#settings_preset').find(':selected').val() != 'gui') {
             kai_settings.preset_settings = $('#settings_preset').find(':selected').text();
             const preset = koboldai_settings[koboldai_setting_names[kai_settings.preset_settings]];
@@ -532,5 +540,6 @@ export function initKoboldSettings() {
                 .sortable('disable');
         }
         saveSettingsDebounced();
+        await eventSource.emit(event_types.PRESET_CHANGED, { apiId: 'kobold', name: kai_settings.preset_settings });
     });
 }
