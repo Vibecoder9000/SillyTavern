@@ -902,48 +902,54 @@ async function onRenameBackgroundClick(e) {
     // check if the item was selected before the rename operation
     const wasSelected = background_settings.name === bgNames.oldBg;
 
-    const response = await fetch('/api/backgrounds/rename', {
-        method: 'POST',
-        headers: getRequestHeaders(),
-        body: JSON.stringify({ old_bg: bgNames.oldBg, new_bg: bgNames.newBg }),
-    });
+    try {
+        const response = await fetch('/api/backgrounds/rename', {
+            method: 'POST',
+            headers: getRequestHeaders(),
+            body: JSON.stringify({ old_bg: bgNames.oldBg, new_bg: bgNames.newBg }),
+        });
 
-    if (response.ok) {
-        // get the filename from the server's response
+        if (!response.ok) {
+            throw new Error(`Failed to rename: ${await response.text()}`);
+        }
+
         const updatedImageData = await response.json();
-        const finalFilename = updatedImageData.filename;
 
-        // correctly update the starred list using the final filename
+        // Find the image in our master list
+        const imageIndex = backgroundSelector.images.findIndex(img => img.filename === bgNames.oldBg);
+        if (imageIndex !== -1) {
+            // Update the data in place
+            const imageToUpdate = backgroundSelector.images[imageIndex];
+            imageToUpdate.filename = updatedImageData.filename;
+            imageToUpdate.fullResUrl = getBackgroundPath(updatedImageData.filename);
+            imageToUpdate.thumbnailUrl = getThumbnailUrl(updatedImageData.filename);
+            // Copy over any other data that might have changed
+            Object.assign(imageToUpdate, updatedImageData);
+        }
+
+        // Update starred list if necessary
         if (isBackgroundStarred(bgNames.oldBg)) {
             starredBackgrounds.delete(bgNames.oldBg);
-            starredBackgrounds.add(finalFilename);
+            starredBackgrounds.add(updatedImageData.filename);
             await saveStarredBackgrounds();
         }
 
         // if the item was selected, update the global settings to preserve the selection state
         if (wasSelected) {
-            background_settings.name = finalFilename;
+            background_settings.name = updatedImageData.filename;
         }
 
-        // update the master data array in place
-        const imageIndex = backgroundSelector.images.findIndex(img => img.filename === bgNames.oldBg);
-        if (imageIndex !== -1) {
-            const imageToUpdate = backgroundSelector.images[imageIndex];
-            imageToUpdate.filename = finalFilename;
-            imageToUpdate.thumbnailUrl = getThumbnailUrl(finalFilename);
-            imageToUpdate.fullResUrl = getBackgroundPath(finalFilename);
-            imageToUpdate.aspectRatio = updatedImageData.aspectRatio;
-            imageToUpdate.isStarred = isBackgroundStarred(finalFilename);
+        // Re-run the current search/filter to update the UI instantly
+        backgroundSelector.search($('#bg-filter').val() || '');
+
+        // After the re-render, silently re-apply the selection highlight if it was selected
+        if (wasSelected) {
+            // Use a timeout to ensure the DOM has updated
+            setTimeout(() => highlightSelectedBackground(), 100);
         }
 
-        // trigger a re-render of the gallery with the updated data
-        const currentQuery = $('#bg-filter').val() || '';
-        backgroundSelector.search(currentQuery);
-
-        // after the re-render, silently re-apply the selection highlight if present
-        highlightSelectedBackground();
-
-    } else {
+    } catch (error) {
+        console.error(error);
         toastr.warning(translate('Failed to rename background'));
     }
 }

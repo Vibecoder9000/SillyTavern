@@ -99,48 +99,64 @@ router.post('/delete', getFileNameValidationFunction('bg'), async function (requ
  * @param {express.Response} response - The Express response object.
  */
 router.post('/rename', async function (request, response) {
-    if (!request.body) return response.sendStatus(400);
-
-    const oldFileName = path.join(request.user.directories.backgrounds, sanitize(request.body.old_bg));
-    const sanitizedNewName = sanitize(request.body.new_bg);
-    const fileExtension = path.extname(sanitizedNewName);
-    const baseName = path.basename(sanitizedNewName, fileExtension);
-
-    let finalNewName = sanitizedNewName;
-    let newFileName = path.join(request.user.directories.backgrounds, finalNewName);
-    let counter = 1;
-
-    // Loop as long as a file at the target path exists AND it's not the same as the source file.
-    while (fs.existsSync(newFileName) && newFileName !== oldFileName) {
-        finalNewName = `${baseName} (${counter})${fileExtension}`;
-        newFileName = path.join(request.user.directories.backgrounds, finalNewName);
-        counter++;
+    if (!request.body || !request.body.old_bg || !request.body.new_bg) {
+        return response.status(400).send('Old and new filenames are required.');
     }
 
-    // If the final name is the same as the old one, it's a no-op. Return success without file operations.
-    if (newFileName === oldFileName) {
-        const thumbnailResult = await generateThumbnail(request.user.directories, 'bg', request.body.old_bg, false, true);
-        return response.json({
-            filename: request.body.old_bg,
-            aspectRatio: thumbnailResult?.aspectRatio || null,
-        });
+    const oldFilename = sanitize(request.body.old_bg);
+    const newFilename = sanitize(request.body.new_bg);
+    const backgroundsJsonPath = path.join(request.user.directories.root, 'backgrounds.json');
+    const backgroundsFolderPath = request.user.directories.backgrounds;
+    const thumbnailsFolderPath = request.user.directories.thumbnailsBg;
+
+    if (oldFilename === newFilename) {
+        const rawData = await fsp.readFile(backgroundsJsonPath, 'utf8');
+        const metadata = JSON.parse(rawData);
+        return response.json({ filename: oldFilename, ...metadata.images[oldFilename] });
     }
 
-    if (!fs.existsSync(oldFileName)) {
-        console.error('BG file not found');
-        return response.sendStatus(400);
+    try {
+        const rawData = await fsp.readFile(backgroundsJsonPath, 'utf8');
+        const metadata = JSON.parse(rawData);
+
+        const oldMetadata = metadata.images[oldFilename];
+        if (!oldMetadata) {
+            return response.status(404).send(`Background '${oldFilename}' not found in metadata.`);
+        }
+
+        // 1. Rename the main background file.
+        const oldFilePath = path.join(backgroundsFolderPath, oldFilename);
+        const newFilePath = path.join(backgroundsFolderPath, newFilename);
+        await fsp.rename(oldFilePath, newFilePath);
+
+        // 2. Find and rename the corresponding thumbnail file.
+        const allThumbnails = await fsp.readdir(thumbnailsFolderPath);
+        const oldThumbFilename = allThumbnails.find(thumb => thumb.startsWith(oldFilename));
+
+        if (oldThumbFilename) {
+            const oldThumbPath = path.join(thumbnailsFolderPath, oldThumbFilename);
+            const newThumbFilename = oldThumbFilename.replace(oldFilename, newFilename);
+            const newThumbPath = path.join(thumbnailsFolderPath, newThumbFilename);
+            await fsp.rename(oldThumbPath, newThumbPath);
+        } else {
+            console.warn(`[Rename] No thumbnail found for ${oldFilename}. It will be regenerated on next access.`);
+        }
+
+        // 3. Update the metadata object in memory.
+        delete metadata.images[oldFilename];
+        metadata.images[newFilename] = oldMetadata;
+
+        // 4. Save the updated backgrounds.json.
+        const jsonString = JSON.stringify(metadata, null, 4);
+        await fsp.writeFile(backgroundsJsonPath, jsonString, 'utf8');
+
+        // 5. Send back the updated metadata object.
+        response.json({ filename: newFilename, ...oldMetadata });
+
+    } catch (error) {
+        console.error(`Failed to rename background from ${oldFilename} to ${newFilename}:`, error);
+        return response.status(500).send('Failed to rename background.');
     }
-
-    fs.copyFileSync(oldFileName, newFileName);
-    fs.unlinkSync(oldFileName);
-
-    invalidateThumbnail(request.user.directories, 'bg', request.body.old_bg);
-    const thumbnailResult = await generateThumbnail(request.user.directories, 'bg', finalNewName, true, false);
-
-    return response.json({
-        filename: finalNewName,
-        aspectRatio: thumbnailResult?.aspectRatio || null,
-    });
 });
 
 /**
