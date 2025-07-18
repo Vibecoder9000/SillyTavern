@@ -30,7 +30,6 @@
         "@popperjs/core": "^2.11.8",
         "@zeldafan0225/ai_horde": "^5.2.0",
         "archiver": "^7.0.1",
-        "better-sqlite3": "^12.2.0",
         "bing-translate-api": "^4.0.2",
         "body-parser": "^1.20.2",
         "bowser": "^2.11.0",
