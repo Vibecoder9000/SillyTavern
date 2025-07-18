@@ -295,39 +295,56 @@ function calculateImageSize(aspectRatio, rowHeight) {
  * @returns {HTMLElement} The created thumbnail element.
  */
 function createThumbnailElement(imageData, calculatedSize) {
+    // Get the reusable menu structure from the <template> tag in the HTML.
+    const menuTemplate = document.getElementById('thumbnail-menu-template');
+
+    // Create the main container div for the thumbnail.
     const thumbnail = document.createElement('div');
     thumbnail.className = 'thumbnail';
+
+    // Create the clipping wrapper
+    const clipper = document.createElement('div');
+    clipper.className = 'thumbnail-clipper';
+
+    // Assign data attributes
     thumbnail.dataset.bgfile = imageData.filename;
     thumbnail.dataset.url = imageData.fullResUrl;
-    thumbnail.title = imageData.filename;
     thumbnail.dataset.isStarred = String(imageData.isStarred);
+    clipper.dataset.isStarred = String(imageData.isStarred);
     thumbnail.dataset.isLocked = String(chat_metadata[BG_METADATA_KEY] === `url("${imageData.fullResUrl}")`);
-    thumbnail.style.width = `${calculatedSize.width}px`;
-    thumbnail.style.height = `${calculatedSize.height}px`;
-    if (imageData.isCustom) thumbnail.setAttribute('custom', 'true');
+
+    // The title attribute provides the native browser tooltip on hover
+    thumbnail.title = imageData.filename;
+
+    // Set CSS Custom Properties. The CSS will use these variables
+    thumbnail.style.setProperty('--thumb-width', `${calculatedSize.width}px`);
+    thumbnail.style.setProperty('--thumb-height', `${calculatedSize.height}px`);
+
+    if (imageData.isCustom) {
+        thumbnail.setAttribute('custom', 'true');
+    }
+
+    thumbnail.appendChild(clipper);
+
+    // Append the elements that need to be clipped
     const placeholder = document.createElement('div');
     placeholder.className = 'thumbnail-placeholder shimmer';
-    thumbnail.appendChild(placeholder);
+    clipper.appendChild(placeholder);
+
     const imgElement = new Image();
-    imgElement.style.opacity = '0';
-    imgElement.style.transition = 'opacity 0.4s ease';
     imgElement.dataset.src = imageData.thumbnailUrl;
     imgElement.src = PNG_PIXEL_B64;
-    thumbnail.appendChild(imgElement);
-    const menu = document.createElement('div');
-    menu.className = 'jg-menu';
-    menu.innerHTML = `
-        <div data-action="star" class="jg-button jg-star fa-fw pointer" title="${translate('Star Background')}"><i class="fa-solid fa-star"></i><i class="fa-regular fa-star"></i></div>
-        <div data-action="lock" class="jg-button jg-lock fa-solid fa-lock fa-fw pointer" title="${translate('Lock Background')}"></div>
-        <div data-action="unlock" class="jg-button jg-unlock fa-solid fa-unlock fa-fw pointer" title="${translate('Unlock Background')}"></div>
-        <div data-action="edit" class="jg-button jg-edit fa-solid fa-pen-to-square fa-fw pointer" title="${translate('Rename Background')}"></div>
-        <div data-action="delete" class="jg-button jg-delete fa-solid fa-trash-can fa-fw pointer" title="${translate('Delete Background')}"></div>
-    `;
-    thumbnail.appendChild(menu);
+    clipper.appendChild(imgElement);
+
     const titleDiv = document.createElement('div');
     titleDiv.className = 'BGSampleTitle';
     titleDiv.textContent = imageData.filename.substring(0, imageData.filename.lastIndexOf('.')) || imageData.filename;
-    thumbnail.appendChild(titleDiv);
+    clipper.appendChild(titleDiv);
+
+    // Append the menu to the main thumbnail
+    const menuFragment = menuTemplate.content.cloneNode(true);
+    thumbnail.appendChild(menuFragment.querySelector('.jg-menu'));
+
     return thumbnail;
 }
 
