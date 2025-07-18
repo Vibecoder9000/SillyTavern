@@ -829,15 +829,19 @@ function unsetCustomBackground() {
  * Highlights the currently selected background thumbnail in the gallery.
  */
 function highlightSelectedBackground() {
+    // Remove the 'selected' class from thumbnails
     document.querySelectorAll('.thumbnail.selected').forEach(thumb => {
         thumb.classList.remove('selected');
     });
+
     const selectedFilename = background_settings.name;
     if (selectedFilename) {
-        const selectedThumb = document.querySelector(`.thumbnail[data-bgfile="${selectedFilename}"]`);
-        if (selectedThumb) {
-            selectedThumb.classList.add('selected');
-        }
+        const selectedThumbs = document.querySelectorAll(`.thumbnail[data-bgfile="${selectedFilename}"]`);
+
+        // Apply the 'selected' class to every thumbnail
+        selectedThumbs.forEach(thumb => {
+            thumb.classList.add('selected');
+        });
     }
 }
 
