@@ -6,6 +6,7 @@ import sanitize from 'sanitize-filename';
 import { invalidateThumbnail, dimensions, generateThumbnail } from './thumbnails.js';
 import { getImages } from '../util.js';
 import { getFileNameValidationFunction } from '../middleware/validateFileName.js';
+import { generateSingleFileMetadata } from './backgrounds-manager.js';
 
 export const router = express.Router();
 
@@ -43,19 +44,53 @@ router.post('/all', async function (request, response) {
 
 /**
  * Handles the request to delete a background image.
- * @param {express.Request} request - The Express request object.
+ * @param {express.Request & { body: { bg: string }, user: any }} request - The Express request object.
+ *   - `request.body.bg` should contain the filename of the background to be deleted.
+ *   - `request.user` is middleware-provided and contains user-specific data and directories.
  * @param {express.Response} response - The Express response object.
+ * @returns {Promise<void>}
  */
-router.post('/delete', getFileNameValidationFunction('bg'), function (request, response) {
-    if (!request.body) return response.sendStatus(400);
-    const fileName = path.join(request.user.directories.backgrounds, request.body.bg);
-    if (!fs.existsSync(fileName)) {
-        console.error('BG file not found');
-        return response.sendStatus(400);
+router.post('/delete', getFileNameValidationFunction('bg'), async function (request, response) {
+    if (!request.body || !request.body.bg) {
+        return response.status(400).send('Background filename not provided.');
     }
-    fs.unlinkSync(fileName);
-    invalidateThumbnail(request.user.directories, 'bg', request.body.bg);
-    return response.send('ok');
+
+    const filename = request.body.bg;
+    const filePath = path.join(request.user.directories.backgrounds, filename);
+    const backgroundsJsonPath = path.join(request.user.directories.root, 'backgrounds.json');
+
+    try {
+        // 1. Delete the physical file if it exists.
+        try {
+            await fsp.unlink(filePath);
+        } catch (fileError) {
+            // Ignore "file not found" errors, but log others.
+            if (fileError.code !== 'ENOENT') {
+                console.warn(`Could not delete background file ${filename}:`, fileError);
+            }
+        }
+
+        // 2. Invalidate the associated thumbnail.
+        invalidateThumbnail(request.user.directories, 'bg', filename);
+
+        // 3. Read backgrounds.json, remove the entry, and save.
+        const rawData = await fsp.readFile(backgroundsJsonPath, 'utf8');
+        const metadata = JSON.parse(rawData);
+
+        // Check if the key exists before deleting
+        if (metadata.images[filename]) {
+            delete metadata.images[filename];
+            const jsonString = JSON.stringify(metadata, null, 4);
+            await fsp.writeFile(backgroundsJsonPath, jsonString, 'utf8');
+        }
+
+        // 4. Send a success response.
+        return response.status(200).send('ok');
+
+    } catch (error) {
+        console.error(`Failed to process delete request for ${filename}:`, error);
+        return response.status(500).send('Failed to delete background.');
+    }
 });
 
 /**
@@ -110,27 +145,62 @@ router.post('/rename', async function (request, response) {
 
 /**
  * Handles the upload of a new background image.
- * @param {express.Request} request - The Express request object.
+ * @param {express.Request & { file: import('multer').File, user: any }} request - The Express request object.
+ *   - `request.file` is provided by Multer and contains the uploaded file's details.
+ *   - `request.user` is middleware-provided and contains user-specific data and directories.
  * @param {express.Response} response - The Express response object.
+ * @returns {Promise<void>}
  */
 router.post('/upload', async function (request, response) {
-    if (!request.body || !request.file) return response.sendStatus(400);
+    if (!request.body || !request.file) {
+        return response.status(400).send('No file uploaded.');
+    }
 
-    const img_path = path.join(request.file.destination, request.file.filename);
+    const tempPath = request.file.path;
     const { originalname: filename } = request.file;
+    const userBgPath = path.join(request.user.directories.backgrounds, filename);
+    const backgroundsJsonPath = path.join(request.user.directories.root, 'backgrounds.json');
 
     try {
-        fs.copyFileSync(img_path, path.join(request.user.directories.backgrounds, filename));
-        fs.unlinkSync(img_path);
+        // Move the uploaded file from the temp location to the backgrounds folder
+        await fsp.rename(tempPath, userBgPath);
 
-        // Generate a thumbnail for static images
         await generateThumbnail(request.user.directories, 'bg', filename, true, false);
 
-        response.send(filename);
+        // Generate metadata for the newly uploaded file
+        const newMetadata = await generateSingleFileMetadata(userBgPath);
+
+        if (!newMetadata) {
+            // If metadata generation fails, clean up the uploaded file
+            await fsp.unlink(userBgPath);
+            throw new Error(`Failed to generate metadata for ${filename}.`);
+        }
+
+        // Read the existing backgrounds.json
+        let metadataFile;
+        try {
+            const rawData = await fsp.readFile(backgroundsJsonPath, 'utf8');
+            metadataFile = JSON.parse(rawData);
+        } catch (error) {
+            // If the file doesn't exist, create a fresh structure
+            metadataFile = { version: 1, images: {}, folders: [], tags: [] };
+        }
+
+        // Add the new image's metadata and save the file
+        metadataFile.images[filename] = newMetadata;
+        const jsonString = JSON.stringify(metadataFile, null, 4);
+        await fsp.writeFile(backgroundsJsonPath, jsonString, 'utf8');
+
+        // Send back the complete metadata for the new file to the client
+        response.json({ filename, ...newMetadata });
+
     } catch (err) {
-        console.error(err);
+        console.error('Background upload failed:', err);
+        // Clean up the temp file if it still exists on error
+        try { await fsp.unlink(tempPath); } catch { /* ignore */ }
+
         if (!response.headersSent) {
-            response.sendStatus(500);
+            response.status(500).send('Failed to process uploaded file.');
         }
     }
 });

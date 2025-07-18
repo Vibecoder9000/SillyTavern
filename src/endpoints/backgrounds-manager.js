@@ -32,7 +32,7 @@ function isAnimatedApng(buffer) {
  * @param {string} filePath - The full path to the background file.
  * @returns {Promise<object|null>} A metadata object or null if processing fails.
  */
-async function generateSingleFileMetadata(filePath) {
+export async function generateSingleFileMetadata(filePath) {
     try {
         const buffer = await fs.readFile(filePath);
 

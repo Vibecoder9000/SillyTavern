@@ -955,19 +955,46 @@ async function onRenameBackgroundClick(e) {
  */
 async function onDeleteBackgroundClick(e) {
     e.stopPropagation();
-    const bgToDelete = $(this).closest('.thumbnail');
+    const thumbnailElement = this.closest('.thumbnail');
+    const bgToDelete = $(thumbnailElement);
     const isCustom = bgToDelete.attr('custom') === 'true';
     const bg = bgToDelete.data('bgfile');
+
     const confirm = await Popup.show.confirm(t`Delete the background?`, null);
     if (!confirm) return;
-    if (!isCustom) {
-        await delBackground(bg);
+
+    try {
+        const response = await fetch('/api/backgrounds/delete', {
+            method: 'POST',
+            headers: getRequestHeaders(),
+            body: JSON.stringify({ bg }),
+        });
+
+        if (!response.ok) {
+            throw new Error(`Failed to delete background: ${await response.text()}`);
+        }
+
+        // On success, remove the image from the client-side data and re-render.
+        // Find the index of the image to delete.
+        const indexToDelete = backgroundSelector.images.findIndex(img => img.filename === bg);
+        if (indexToDelete !== -1) {
+            // Remove it from the main array.
+            backgroundSelector.images.splice(indexToDelete, 1);
+        }
+
+        // Remove from starred set if present
+        if (isBackgroundStarred(bg)) {
+            starredBackgrounds.delete(bg);
+            await saveStarredBackgrounds();
+        }
+
+        // Re-run the current search/filter to update the UI instantly.
+        backgroundSelector.search($('#bg-filter').val() || '');
+
+    } catch (error) {
+        console.error(error);
+        toastr.error('Failed to delete background.');
     }
-    if (isBackgroundStarred(bg)) {
-        starredBackgrounds.delete(bg);
-        await saveStarredBackgrounds();
-    }
-    await getBackgrounds(true);
 }
 
 const autoBgPrompt = 'Ignore previous instructions and choose an image ONLY from the provided list that is the most suitable for the current scene. Do not output any other text:\n{0}';
@@ -1043,9 +1070,60 @@ async function onBackgroundUploadSelected() {
     const form = document.getElementById('form_bg_upload');
     if (!(form instanceof HTMLFormElement)) return;
     const formData = new FormData(form);
-    await convertFileIfVideo(formData);
-    await uploadBackground(formData);
-    form.reset();
+
+    // Check if a file was actually selected
+    if (!formData.get('avatar') || formData.get('avatar').size === 0) {
+        form.reset();
+        return;
+    }
+
+    try {
+        const toast = toastr.info('Uploading background...', null, { timeOut: 0 });
+
+        const response = await fetch('/api/backgrounds/upload', {
+            method: 'POST',
+            headers: getRequestHeaders({ omitContentType: true }), // Important for FormData
+            body: formData,
+        });
+
+        toastr.remove(toast);
+
+        if (!response.ok) {
+            throw new Error(`Upload failed: ${await response.text()}`);
+        }
+
+        const newImageData = await response.json();
+
+        // Create the client-side representation of the new image
+        const newImageClientData = {
+            ...newImageData,
+            id: newImageData.filename,
+            thumbnailUrl: getThumbnailUrl(newImageData.filename),
+            fullResUrl: getBackgroundPath(newImageData.filename),
+            isCustom: false,
+        };
+
+        // Add the new image to the master data list and re-render
+        backgroundSelector.images.push(newImageClientData);
+        // Keep the master list sorted
+        backgroundSelector.images.sort((a,b) => a.filename.localeCompare(b.filename, undefined, { numeric: true }));
+        // Re-run the current search/filter to update the displayed list
+        backgroundSelector.search($('#bg-filter').val() || '');
+
+        // Use a timeout to ensure the DOM has updated before we try to find the new element
+        setTimeout(() => {
+            const newThumb = document.querySelector(`.thumbnail[data-bgfile="${newImageData.filename}"]`);
+            if (newThumb) {
+                highlightNewBackground(newThumb);
+            }
+        }, 100);
+
+    } catch (error) {
+        console.error('Error uploading background:', error);
+        toastr.error('Failed to upload background.');
+    } finally {
+        form.reset();
+    }
 }
 
 /**
@@ -1138,14 +1216,14 @@ async function uploadBackground(formData) {
 
 /**
  * Scrolls to and highlights a newly added background thumbnail.
- * @param {string} bg - The filename of the new background.
+ * @param {HTMLElement} newBgElement - The DOM element of the new background thumbnail.
  */
-function highlightNewBackground(bg) {
-    const newBg = $(`.thumbnail[data-bgfile="${bg}"]`);
-    if (newBg.length) {
-        newBg[0].scrollIntoView({ behavior: 'smooth', block: 'center' });
-        flashHighlight(newBg);
-        newBg.trigger('click');
+function highlightNewBackground(newBgElement) {
+    if (newBgElement) {
+        newBgElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        flashHighlight($(newBgElement));
+        // Simulate a click to select it
+        newBgElement.click();
     }
 }
 
