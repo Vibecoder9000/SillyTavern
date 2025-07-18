@@ -75,6 +75,7 @@ import { publicRouter as thumbnailPublicRouter } from './endpoints/thumbnails.js
 import { init as statsInit, onExit as statsOnExit } from './endpoints/stats.js';
 import { checkForNewContent } from './endpoints/content-manager.js';
 import { init as settingsInit } from './endpoints/settings.js';
+import { syncBackgroundsMetadata } from './endpoints/backgrounds-manager.js';
 import { redirectDeprecatedEndpoints, ServerStartup, setupPrivateEndpoints } from './server-startup.js';
 import { diskCache } from './endpoints/characters.js';
 import { migrateFlatSecrets } from './endpoints/secrets.js';
@@ -287,6 +288,15 @@ async function preSetupTasks() {
 
     const directories = await getUserDirectoriesList();
     await checkForNewContent(directories);
+
+    for (const userDirectories of directories) {
+        try {
+            await syncBackgroundsMetadata(userDirectories);
+        } catch (error) {
+            console.error(`Failed to sync background metadata for user at ${userDirectories.root}:`, error);
+        }
+    }
+
     await ensureThumbnailCache(directories);
     await diskCache.verify(directories);
     migrateFlatSecrets(directories);

@@ -53,6 +53,7 @@ export const CONTENT_TYPES = {
     QUICK_REPLIES: 'quick_replies',
     SYSPROMPT: 'sysprompt',
     REASONING: 'reasoning',
+    BACKGROUNDS_METADATA: 'backgrounds_metadata',
 };
 
 /**
@@ -148,7 +149,6 @@ async function seedContentForUser(contentIndex, directories, forceCategories) {
         contentLog.push(contentItem.filename);
 
         if (fs.existsSync(targetPath)) {
-            console.warn(`Content file ${contentItem.filename} already exists in ${contentTarget}`);
             continue;
         }
 
@@ -275,7 +275,6 @@ function getTargetByType(type, directories) {
         case CONTENT_TYPES.BACKGROUNDS_METADATA:
             return directories.root;
         case CONTENT_TYPES.CHARACTER:
-            return directories.characters;
         case CONTENT_TYPES.SPRITES:
             return directories.characters;
         case CONTENT_TYPES.BACKGROUND:

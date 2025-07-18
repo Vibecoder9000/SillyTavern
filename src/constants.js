@@ -55,7 +55,22 @@ export const USER_DIRECTORY_TEMPLATE = Object.freeze({
 export const CONTENT_TYPES = Object.freeze({
     SETTINGS: 'settings',
     CHARACTER: 'character',
+    SPRITES: 'sprites',
+    BACKGROUND: 'background',
+    WORLD: 'world',
+    AVATAR: 'avatar',
     THEME: 'theme',
+    WORKFLOW: 'workflow',
+    KOBOLD_PRESET: 'kobold_preset',
+    OPENAI_PRESET: 'openai_preset',
+    NOVEL_PRESET: 'novel_preset',
+    TEXTGEN_PRESET: 'textgen_preset',
+    INSTRUCT: 'instruct',
+    CONTEXT: 'context',
+    MOVING_UI: 'moving_ui',
+    QUICK_REPLIES: 'quick_replies',
+    SYSPROMPT: 'sysprompt',
+    REASONING: 'reasoning',
     BACKGROUNDS_METADATA: 'backgrounds_metadata',
 });
 
