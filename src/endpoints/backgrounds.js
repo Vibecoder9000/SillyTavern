@@ -6,6 +6,25 @@ import { invalidateThumbnail, dimensions, generateThumbnail } from './thumbnails
 import { getFileNameValidationFunction } from '../middleware/validateFileName.js';
 import { generateSingleFileMetadata } from './backgrounds-manager.js';
 
+class AsyncLock {
+    constructor() {
+        this.disable = false;
+        this.promise = Promise.resolve();
+    }
+
+    acquire() {
+        let release;
+        const newPromise = new Promise(resolve => {
+            release = resolve;
+        });
+        const prevPromise = this.promise;
+        this.promise = newPromise;
+        return prevPromise.then(() => release);
+    }
+}
+
+const fileLock = new AsyncLock();
+
 export const router = express.Router();
 
 /**
@@ -14,6 +33,7 @@ export const router = express.Router();
  * @param {express.Response} response - The Express response object.
  */
 router.post('/all', async function (request, response) {
+    const release = await fileLock.acquire();
     try {
         const backgroundsJsonPath = path.join(request.user.directories.root, 'backgrounds.json');
         const rawData = await fsp.readFile(backgroundsJsonPath, 'utf8');
@@ -27,16 +47,14 @@ router.post('/all', async function (request, response) {
 
         // Sort the images alphabetically by filename, with numeric sorting
         allImages.sort((a, b) => a.filename.localeCompare(b.filename, undefined, { numeric: true, sensitivity: 'base' }));
-
-        // Use the thumbnail dimensions already available in the module
         const config = { width: dimensions.bg[0], height: dimensions.bg[1] };
-
         response.json({ images: allImages, config });
 
     } catch (error) {
         console.error('Failed to read or parse backgrounds.json:', error);
-        // If the file doesn't exist or is corrupt, send an empty array to prevent frontend errors
         response.json({ images: [], config: { width: dimensions.bg[0], height: dimensions.bg[1] } });
+    } finally {
+        release();
     }
 });
 
@@ -53,41 +71,38 @@ router.post('/delete', getFileNameValidationFunction('bg'), async function (requ
         return response.status(400).send('Background filename not provided.');
     }
 
-    const filename = request.body.bg;
-    const filePath = path.join(request.user.directories.backgrounds, filename);
-    const backgroundsJsonPath = path.join(request.user.directories.root, 'backgrounds.json');
-
+    const release = await fileLock.acquire();
     try {
-        // 1. Delete the physical file if it exists.
+        const filename = request.body.bg;
+        const filePath = path.join(request.user.directories.backgrounds, filename);
+        const backgroundsJsonPath = path.join(request.user.directories.root, 'backgrounds.json');
+
         try {
             await fsp.unlink(filePath);
         } catch (fileError) {
-            // Ignore "file not found" errors, but log others.
             if (fileError.code !== 'ENOENT') {
                 console.warn(`Could not delete background file ${filename}:`, fileError);
             }
         }
 
-        // 2. Invalidate the associated thumbnail.
         invalidateThumbnail(request.user.directories, 'bg', filename);
 
-        // 3. Read backgrounds.json, remove the entry, and save.
         const rawData = await fsp.readFile(backgroundsJsonPath, 'utf8');
         const metadata = JSON.parse(rawData);
 
-        // Check if the key exists before deleting
         if (metadata.images[filename]) {
             delete metadata.images[filename];
             const jsonString = JSON.stringify(metadata, null, 4);
             await fsp.writeFile(backgroundsJsonPath, jsonString, 'utf8');
         }
 
-        // 4. Send a success response.
         return response.status(200).send('ok');
 
     } catch (error) {
-        console.error(`Failed to process delete request for ${filename}:`, error);
+        console.error(`Failed to process delete request for ${request.body.bg}:`, error);
         return response.status(500).send('Failed to delete background.');
+    } finally {
+        release();
     }
 });
 
@@ -101,19 +116,20 @@ router.post('/rename', async function (request, response) {
         return response.status(400).send('Old and new filenames are required.');
     }
 
-    const oldFilename = sanitize(request.body.old_bg);
-    const newFilename = sanitize(request.body.new_bg);
-    const backgroundsJsonPath = path.join(request.user.directories.root, 'backgrounds.json');
-    const backgroundsFolderPath = request.user.directories.backgrounds;
-    const thumbnailsFolderPath = request.user.directories.thumbnailsBg;
-
-    if (oldFilename === newFilename) {
-        const rawData = await fsp.readFile(backgroundsJsonPath, 'utf8');
-        const metadata = JSON.parse(rawData);
-        return response.json({ filename: oldFilename, ...metadata.images[oldFilename] });
-    }
-
+    const release = await fileLock.acquire();
     try {
+        const oldFilename = sanitize(request.body.old_bg);
+        const newFilename = sanitize(request.body.new_bg);
+        const backgroundsJsonPath = path.join(request.user.directories.root, 'backgrounds.json');
+        const backgroundsFolderPath = request.user.directories.backgrounds;
+        const thumbnailsFolderPath = request.user.directories.thumbnailsBg;
+
+        if (oldFilename === newFilename) {
+            const rawData = await fsp.readFile(backgroundsJsonPath, 'utf8');
+            const metadata = JSON.parse(rawData);
+            return response.json({ filename: oldFilename, ...metadata.images[oldFilename] });
+        }
+
         const rawData = await fsp.readFile(backgroundsJsonPath, 'utf8');
         const metadata = JSON.parse(rawData);
 
@@ -148,12 +164,13 @@ router.post('/rename', async function (request, response) {
         const jsonString = JSON.stringify(metadata, null, 4);
         await fsp.writeFile(backgroundsJsonPath, jsonString, 'utf8');
 
-        // 5. Send back the updated metadata object.
         response.json({ filename: newFilename, ...oldMetadata });
 
     } catch (error) {
-        console.error(`Failed to rename background from ${oldFilename} to ${newFilename}:`, error);
+        console.error(`Failed to rename background from ${request.body.old_bg} to ${request.body.new_bg}:`, error);
         return response.status(500).send('Failed to rename background.');
+    } finally {
+        release();
     }
 });
 
@@ -205,12 +222,13 @@ router.post('/upload', async function (request, response) {
         return response.status(400).send('No file uploaded.');
     }
 
-    const tempPath = request.file.path;
-    const backgroundsFolderPath = request.user.directories.backgrounds;
-    const backgroundsJsonPath = path.join(request.user.directories.root, 'backgrounds.json');
-
+    const release = await fileLock.acquire();
     try {
         // 1. Get a unique filename to prevent overwriting
+        const tempPath = request.file.path;
+        const backgroundsFolderPath = request.user.directories.backgrounds;
+        const backgroundsJsonPath = path.join(request.user.directories.root, 'backgrounds.json');
+
         const uniqueFilename = await getUniqueFilename(backgroundsFolderPath, request.file.originalname);
         const finalBgPath = path.join(backgroundsFolderPath, uniqueFilename);
 
@@ -244,11 +262,12 @@ router.post('/upload', async function (request, response) {
 
     } catch (err) {
         console.error('Background upload failed:', err);
-        try { await fsp.unlink(tempPath); } catch { /* ignore */ }
-
+        try { await fsp.unlink(request.file.path); } catch { /* ignore */ }
         if (!response.headersSent) {
             response.status(500).send('Failed to process uploaded file.');
         }
+    } finally {
+        release();
     }
 });
 
@@ -265,11 +284,12 @@ router.post('/star', async function (request, response) {
         return response.status(400).send('Filename and isStarred boolean are required.');
     }
 
-    const filename = sanitize(request.body.filename);
-    const { isStarred } = request.body;
-    const backgroundsJsonPath = path.join(request.user.directories.root, 'backgrounds.json');
-
+    const release = await fileLock.acquire();
     try {
+        const filename = sanitize(request.body.filename);
+        const { isStarred } = request.body;
+        const backgroundsJsonPath = path.join(request.user.directories.root, 'backgrounds.json');
+
         const rawData = await fsp.readFile(backgroundsJsonPath, 'utf8');
         const metadata = JSON.parse(rawData);
 
@@ -284,11 +304,12 @@ router.post('/star', async function (request, response) {
         const jsonString = JSON.stringify(metadata, null, 4);
         await fsp.writeFile(backgroundsJsonPath, jsonString, 'utf8');
 
-        // Send a success response
         return response.status(200).send('ok');
 
     } catch (error) {
-        console.error(`Failed to update star status for ${filename}:`, error);
+        console.error(`Failed to update star status for ${request.body.filename}:`, error);
         return response.status(500).send('Failed to update background metadata.');
+    } finally {
+        release();
     }
 });

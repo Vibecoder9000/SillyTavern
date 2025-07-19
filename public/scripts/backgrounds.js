@@ -17,7 +17,46 @@ const BG_METADATA_KEY = 'custom_background';
 const LIST_METADATA_KEY = 'chat_backgrounds';
 
 /**
+ * Creates the "Starred" folder button element, styled to look like a thumbnail placeholder.
+ * @returns {HTMLElement} The created container element for the folder.
+ */
+function createStarredFolderElement() {
+    const container = document.createElement('div');
+    container.id = 'starred-folder-container';
+
+    const button = document.createElement('div');
+    button.id = 'starred-folder-button';
+    button.className = 'thumbnail';
+    button.title = translate('View Starred Backgrounds');
+
+    const size = '110px';
+    button.style.setProperty('--thumb-width', size);
+    button.style.setProperty('--thumb-height', size);
+
+    const clipper = document.createElement('div');
+    clipper.className = 'thumbnail-clipper';
+
+    const placeholder = document.createElement('div');
+    placeholder.className = 'thumbnail-placeholder';
+
+    const iconOverlay = document.createElement('div');
+    iconOverlay.className = 'folder-icon-overlay';
+
+    const folderIcon = document.createElement('i');
+    folderIcon.className = 'fa-solid fa-folder';
+
+    iconOverlay.appendChild(folderIcon);
+    clipper.appendChild(placeholder);
+    clipper.appendChild(iconOverlay);
+    button.appendChild(clipper);
+    container.appendChild(button);
+
+    return container;
+}
+
+/**
  * Toggles the starred status of a background by calling the server API and then updates the UI.
+ * This version avoids a full re-render of the main list for better performance.
  * @param {string} filename - The filename of the background to toggle.
  * @returns {Promise<void>}
  */
@@ -39,17 +78,17 @@ async function toggleStarredBackground(filename) {
             throw new Error(`Server responded with ${response.status}: ${await response.text()}`);
         }
 
-        // 1. Update the master and filtered lists in memory
+        // 1. On success, update the client-side data model.
         imageInMasterList.isStarred = newStarredState;
         const imageInFilteredList = backgroundSelector.filteredImages.find(img => img.filename === filename);
         if (imageInFilteredList) {
             imageInFilteredList.isStarred = newStarredState;
         }
 
-        // 2. Update ALL matching thumbnails in the DOM (main gallery AND starred section)
-        // This is the fix for the visual bug. We use querySelectorAll.
-        const allThumbsInUI = document.querySelectorAll(`.thumbnail[data-bgfile="${filename}"]`);
-        allThumbsInUI.forEach(thumb => {
+        // 2. Perform a targeted DOM update instead of a full re-render.
+        // This finds the thumbnail in the main gallery AND the popup if it's open.
+        const thumbnailElements = document.querySelectorAll(`.thumbnail[data-bgfile="${filename}"]`);
+        thumbnailElements.forEach(thumb => {
             thumb.dataset.isStarred = String(newStarredState);
             const clipper = thumb.querySelector('.thumbnail-clipper');
             if (clipper) {
@@ -57,31 +96,16 @@ async function toggleStarredBackground(filename) {
             }
         });
 
-        // 3. Re-render the "Starred" section completely to handle additions/removals
-        const starredContainer = document.getElementById('starred-backgrounds-container');
-        const containerWidth = backgroundSelector.containerWidth;
-        const starredImages = backgroundSelector.filteredImages.filter(img => img.isStarred);
-        starredImages.sort((a, b) => a.filename.localeCompare(b.filename, undefined, { numeric: true }));
+        // 3. Handle the edge case of the "Starred" folder appearing or disappearing in the main gallery.
+        const hasAnyStarredInFilteredView = backgroundSelector.filteredImages.some(img => img.isStarred);
+        const folderElement = document.getElementById('starred-folder-container');
 
-        starredContainer.innerHTML = '';
-        if (starredImages.length > 0) {
-            const starredRows = calculateRowLayout(containerWidth, starredImages, true);
-            starredRows.forEach(rowData => {
-                const rowElement = createRowElement(rowData);
-                starredContainer.appendChild(rowElement);
-            });
-        }
-
-        // 4. Re-observe any newly created thumbnails in the starred section
-        const newThumbs = starredContainer.querySelectorAll('.thumbnail');
-        newThumbs.forEach(thumb => backgroundSelector.imageObserver.observe(thumb));
-
-        // 5. If a new thumbnail was just added, load it immediately
-        if (newStarredState && newThumbs.length > 0) {
-            const justAddedThumb = Array.from(newThumbs).find(thumb => thumb.dataset.bgfile === filename);
-            if (justAddedThumb) {
-                backgroundSelector.loadSingleThumbnail(justAddedThumb);
-            }
+        if (hasAnyStarredInFilteredView && !folderElement) {
+            // If there are now starred items but the folder isn't visible, add it.
+            backgroundSelector.container.prepend(createStarredFolderElement());
+        } else if (!hasAnyStarredInFilteredView && folderElement) {
+            // If there are no longer any starred items but the folder is visible, remove it.
+            folderElement.remove();
         }
 
     } catch (error) {
@@ -211,74 +235,6 @@ function createVideoThumbnail(videoFile, options) {
 }
 
 /**
- * Calculates the layout for a row of images to achieve a justified gallery effect.
- * @param {number} containerWidth - The width of the container.
- * @param {Array<object>} images - An array of image data objects.
- * @returns {Array<object>} An array of row data, each containing images and calculated height.
- */
-function calculateRowLayout(containerWidth, images, forceJustify = false) {
-    const rows = [];
-    if (!images || images.length === 0 || containerWidth <= 0) return rows;
-    const rowGap = 5;
-    const targetRowHeight = 110;
-    let currentRow = [];
-    let currentRowSummedAspectRatio = 0;
-
-    images.forEach(image => {
-        const aspectRatio = image.aspectRatio || 1.77;
-        const prospectiveTotalAspectRatio = currentRowSummedAspectRatio + aspectRatio;
-        const prospectiveWidth = (prospectiveTotalAspectRatio * targetRowHeight) + (currentRow.length * rowGap);
-
-        if (currentRow.length > 0 && prospectiveWidth > containerWidth) {
-            const totalGapWidth = (currentRow.length - 1) * rowGap;
-            const rowHeight = (containerWidth - totalGapWidth) / currentRowSummedAspectRatio;
-            rows.push({ images: currentRow, height: rowHeight });
-            currentRow = [image];
-            currentRowSummedAspectRatio = aspectRatio;
-        } else {
-            currentRow.push(image);
-            currentRowSummedAspectRatio += aspectRatio;
-        }
-    });
-
-    if (currentRow.length > 0) {
-        if (forceJustify && currentRow.length > 5) {
-            const totalGapWidth = (currentRow.length - 1) * rowGap;
-            const rowHeight = (containerWidth - totalGapWidth) / currentRowSummedAspectRatio;
-            rows.push({ images: currentRow, height: rowHeight });
-        } else {
-            rows.push({ images: currentRow, height: targetRowHeight });
-        }
-    }
-    return rows;
-}
-
-/**
- * Calculates the dimensions of an image based on its aspect ratio and target row height.
- * @param {number} aspectRatio - The aspect ratio of the image (width / height).
- * @param {number} rowHeight - The target height for the image within a row.
- * @returns {{width: number, height: number}} The calculated width and height.
- */
-function calculateImageSize(aspectRatio, rowHeight) {
-    const MIN_THUMB_WIDTH = 60;
-
-    let width = rowHeight * aspectRatio;
-    const height = rowHeight; // Height is sacred and must not change for a given row.
-
-    // If the ideal width is unreadably narrow, enforce a minimum width.
-    // This will cause a slight aspect ratio distortion for that specific thumbnail,
-    // which is the correct trade-off for usability.
-    if (width < MIN_THUMB_WIDTH) {
-        width = MIN_THUMB_WIDTH;
-    }
-
-    return {
-        width: Math.round(width),
-        height: Math.round(height),
-    };
-}
-
-/**
  * Creates a single thumbnail DOM element.
  * @param {object} imageData - Data for the image.
  * @param {object} calculatedSize - Calculated size for the thumbnail.
@@ -301,7 +257,6 @@ function createThumbnailElement(imageData, calculatedSize) {
     thumbnail.dataset.url = imageData.fullResUrl;
     thumbnail.dataset.isStarred = String(imageData.isStarred);
     clipper.dataset.isStarred = String(imageData.isStarred);
-    thumbnail.dataset.isLocked = String(chat_metadata[BG_METADATA_KEY] === `url("${imageData.fullResUrl}")`);
 
     // The title attribute provides the native browser tooltip on hover
     thumbnail.title = imageData.filename;
@@ -315,49 +270,23 @@ function createThumbnailElement(imageData, calculatedSize) {
     }
 
     thumbnail.appendChild(clipper);
-
-    // Append the elements that need to be clipped
     const placeholder = document.createElement('div');
     placeholder.className = 'thumbnail-placeholder shimmer';
-
     if (imageData.dominantColor) {
         placeholder.style.backgroundColor = imageData.dominantColor;
     }
-
     clipper.appendChild(placeholder);
-
     const imgElement = new Image();
     imgElement.dataset.src = imageData.thumbnailUrl;
     imgElement.src = PNG_PIXEL_B64;
     clipper.appendChild(imgElement);
-
     const titleDiv = document.createElement('div');
     titleDiv.className = 'BGSampleTitle';
     titleDiv.textContent = imageData.filename.substring(0, imageData.filename.lastIndexOf('.')) || imageData.filename;
     clipper.appendChild(titleDiv);
-
-    // Append the menu to the main thumbnail
     const menuFragment = menuTemplate.content.cloneNode(true);
     thumbnail.appendChild(menuFragment.querySelector('.jg-menu'));
-
     return thumbnail;
-}
-
-/**
- * Creates a row element containing multiple thumbnail elements.
- * @param {object} rowData - Data for the row, including images and height.
- * @returns {HTMLElement} The created row element.
- */
-function createRowElement(rowData) {
-    const rowElement = document.createElement('div');
-    rowElement.className = 'thumbnail-row';
-    rowData.images.forEach((imageData) => {
-        const aspectRatio = imageData.aspectRatio || 1.77;
-        const calculatedSize = calculateImageSize(aspectRatio, rowData.height);
-        const thumbnail = createThumbnailElement(imageData, calculatedSize);
-        rowElement.appendChild(thumbnail);
-    });
-    return rowElement;
 }
 
 /**
@@ -418,7 +347,6 @@ class BackgroundSelector {
                 return;
             }
             const newWidth = this.container.clientWidth;
-            // Re-render if the width has changed. this.containerWidth was set in the last render.
             if (newWidth > 0 && newWidth !== this.containerWidth) {
                 this.debouncedRender();
             }
@@ -456,39 +384,47 @@ class BackgroundSelector {
     }
 
     render(isInitial = false) {
-        if (!this.container || this.container.clientWidth === 0) return;
         this.isInitialRender = isInitial;
         this.containerWidth = this.container.clientWidth;
+        if (this.containerWidth === 0) return;
+
         this.imageObserver.disconnect();
         this.container.innerHTML = '';
+
         if (this.filteredImages.length === 0) {
             this.container.innerHTML = `<p>${translate('No backgrounds found.')}</p>`;
             return;
         }
-        const { starred, regular } = separateStarredImages(this.filteredImages);
-        const starredSection = createStarredSection();
+
+        const hasStarred = this.filteredImages.some(img => img.isStarred);
+        if (hasStarred) {
+            this.container.appendChild(createStarredFolderElement());
+        }
+
         const mainContainer = document.createElement('div');
         mainContainer.id = 'main-backgrounds-container';
         mainContainer.className = 'thumbnail-container';
-        this.container.appendChild(starredSection);
-        this.container.appendChild(mainContainer);
-        if (starred.length > 0) {
-            const starredContainer = starredSection.querySelector('#starred-backgrounds-container');
-            // Force the starred section to always justify its rows.
-            const starredRows = calculateRowLayout(this.containerWidth, starred, true);
-            starredRows.forEach(rowData => {
-                const rowElement = createRowElement(rowData);
-                starredContainer.appendChild(rowElement);
-            });
-        }
-        // The regular section should NOT force justification on its last row.
-        const regularRows = calculateRowLayout(this.containerWidth, regular, false);
-        regularRows.forEach(rowData => {
+
+        const isMobile = window.innerWidth <= 1000;
+        const targetRowHeight = isMobile ? 70 : 110;
+
+        const allRows = calculateRowLayout(
+            this.containerWidth,
+            this.filteredImages,
+            false,
+            targetRowHeight // Pass target height
+        );
+
+        allRows.forEach(rowData => {
             const rowElement = createRowElement(rowData);
             mainContainer.appendChild(rowElement);
         });
-        const allThumbs = this.container.querySelectorAll('.thumbnail');
-        allThumbs.forEach(thumb => this.imageObserver.observe(thumb));
+
+        mainContainer.querySelectorAll('.thumbnail').forEach(thumb =>
+            this.imageObserver.observe(thumb)
+        );
+
+        this.container.appendChild(mainContainer);
         setTimeout(() => { this.isInitialRender = false; }, 100);
     }
 
@@ -532,7 +468,7 @@ class BackgroundSelector {
     }
 
     setupScrollToTop() {
-        // Defer execution slightly to prevent a race condition.
+        // ... (this method is unchanged)
         setTimeout(() => {
             const scrollContainer = document.getElementById('bg-scrollable-content');
             const btn = document.getElementById('bg_scroll_top'); // This will find the *first* button
@@ -542,8 +478,6 @@ class BackgroundSelector {
                 console.error('Scroll-to-top dependencies not found.');
                 return;
             }
-
-            // --- Event Listeners ---
 
             // 1. Show/hide based on scroll position.
             scrollContainer.addEventListener('scroll', () => {
@@ -873,7 +807,21 @@ async function getNewBackgroundName(thumbnailElement) {
     if (!oldBg) return;
     const fileExtension = oldBg.split('.').pop();
     const oldBgExtensionless = oldBg.replace(`.${fileExtension}`, '');
+
+    const originalHandler = Popup.onKeyDown;
+    Popup.onKeyDown = (event) => {
+        if (event.key === 'Escape') {
+            event.stopPropagation();
+        }
+        if (originalHandler) {
+            originalHandler(event);
+        }
+    };
+
     const newBgExtensionless = await Popup.show.input(t`Enter new background name:`, null, oldBgExtensionless);
+
+    Popup.onKeyDown = originalHandler;
+
     if (!newBgExtensionless || oldBgExtensionless === newBgExtensionless) return;
     return { oldBg, newBg: `${newBgExtensionless}.${fileExtension}` };
 }
@@ -1209,6 +1157,235 @@ function onBackgroundFilterInput() {
 }
 
 /**
+ * Calculates the layout for a row of images to achieve a justified gallery effect.
+ * @param {number} containerWidth - The width of the container.
+ * @param {Array<object>} images - An array of image data objects.
+ * @param {boolean} forceJustify - If true, the last row will be stretched to fill the width.
+ * @returns {Array<object>} An array of row data, each containing images and calculated height.
+ */
+function calculateRowLayout(containerWidth, images, forceJustify = false, targetRowHeight = 110) {
+    const rows = [];
+    if (!images || images.length === 0 || containerWidth <= 0) return rows;
+    const rowGap = 5;
+    let currentRow = [];
+    let currentRowSummedAspectRatio = 0;
+
+    images.forEach(image => {
+        const aspectRatio = image.aspectRatio || 1.77;
+        const prospectiveTotalAspectRatio = currentRowSummedAspectRatio + aspectRatio;
+        const prospectiveWidth = (prospectiveTotalAspectRatio * targetRowHeight) + (currentRow.length * rowGap);
+
+        if (currentRow.length > 0 && prospectiveWidth > containerWidth) {
+            const totalGapWidth = (currentRow.length - 1) * rowGap;
+            const rowHeight = Math.floor((containerWidth - totalGapWidth) / currentRowSummedAspectRatio);
+            rows.push({ images: currentRow, height: rowHeight });
+            currentRow = [image];
+            currentRowSummedAspectRatio = aspectRatio;
+        } else {
+            currentRow.push(image);
+            currentRowSummedAspectRatio += aspectRatio;
+        }
+    });
+
+    if (currentRow.length > 0) {
+        if (forceJustify) {
+            const totalGapWidth = (currentRow.length - 1) * rowGap;
+            const rowHeight = Math.floor((containerWidth - totalGapWidth) / currentRowSummedAspectRatio);
+            rows.push({ images: currentRow, height: rowHeight });
+        } else {
+            rows.push({ images: currentRow, height: targetRowHeight });
+        }
+    }
+    return rows;
+}
+
+/**
+ * Calculates the dimensions of an image based on its aspect ratio and the calculated row height.
+ * @param {number} aspectRatio - The aspect ratio of the image (width / height).
+ * @param {number} rowHeight - The exact height for the image within its calculated row.
+ * @returns {{width: number, height: number}} The calculated width and height.
+ */
+function calculateImageSize(aspectRatio, rowHeight) {
+    // This calculation is simple and precise
+    const width = Math.round(rowHeight * aspectRatio);
+    const height = Math.round(rowHeight);
+    return { width, height };
+}
+
+/**
+ * Creates a row element containing multiple thumbnail elements.
+ * @param {object} rowData - Data for the row, including images and calculated height.
+ * @returns {HTMLElement} The created row element.
+ */
+function createRowElement(rowData) {
+    const rowElement = document.createElement('div');
+    rowElement.className = 'thumbnail-row';
+    rowData.images.forEach((imageData) => {
+        const aspectRatio = imageData.aspectRatio || 1.77;
+        const calculatedSize = calculateImageSize(aspectRatio, rowData.height);
+        const thumbnail = createThumbnailElement(imageData, calculatedSize);
+        rowElement.appendChild(thumbnail);
+    });
+    return rowElement;
+}
+
+/**
+ * Opens a modal popup gallery displaying only the starred backgrounds.
+ * The layout is calculated dynamically based on the panel's width.
+ */
+function openStarredPopup() {
+    const template = document.getElementById('starred-popup-template');
+    const popupFragment = template.content.cloneNode(true);
+    const popupOverlay = popupFragment.querySelector('.starred-popup-overlay');
+    const popupPanel = popupFragment.querySelector('.starred-popup-panel');
+    const contentArea = popupFragment.querySelector('.starred-popup-content');
+
+    let isClosing = false;
+    let observer;
+
+    /**
+     * Renders the content of the popup. It calculates the available width,
+     * generates the thumbnail layout, and sets up the lazy-loading observer.
+     */
+    const renderContent = () => {
+        const starredImages = backgroundSelector.images.filter(img => img.isStarred);
+        contentArea.innerHTML = ''; // Clear previous content
+
+        if (starredImages.length === 0) {
+            closePopup();
+            return;
+        }
+
+        // Measure the reliable parent panel and account for the content area's padding.
+        const style = getComputedStyle(contentArea);
+        const paddingX = parseFloat(style.paddingLeft) + parseFloat(style.paddingRight);
+        const usableWidth = popupPanel.clientWidth - paddingX;
+
+        // If width is somehow not yet available, try again on the next frame.
+        if (usableWidth <= 0) {
+            requestAnimationFrame(renderContent);
+            return;
+        }
+
+        const thumbnailContainer = document.createElement('div');
+        thumbnailContainer.className = 'thumbnail-container';
+
+        // Calculate and create the justified grid layout.
+        const rows = calculateRowLayout(usableWidth, starredImages, false);
+        rows.forEach(rowData => {
+            const rowElement = createRowElement(rowData);
+            thumbnailContainer.appendChild(rowElement);
+        });
+
+        contentArea.appendChild(thumbnailContainer);
+
+        // Set up IntersectionObserver for lazy-loading thumbnails.
+        if (observer) observer.disconnect();
+        observer = new IntersectionObserver((entries) => {
+            entries.forEach(entry => {
+                if (entry.isIntersecting) {
+                    const thumbElement = entry.target;
+                    observer.unobserve(thumbElement);
+                    backgroundSelector.loadSingleThumbnail(thumbElement);
+                }
+            });
+        }, { root: contentArea, rootMargin: '300px 0px' });
+
+        thumbnailContainer.querySelectorAll('.thumbnail').forEach(thumb => observer.observe(thumb));
+    };
+
+    /**
+     * Closes the popup, performs cleanup, and removes event listeners.
+     */
+    const closePopup = () => {
+        if (isClosing) return;
+        isClosing = true;
+
+        popupOverlay.removeEventListener('click', handlePopupClick, true);
+        document.removeEventListener('keydown', handleKeyDown, true);
+
+        if (observer) observer.disconnect();
+
+        popupOverlay.classList.remove('open');
+        // Wait for the fade-out animation to complete before removing from the DOM.
+        popupOverlay.addEventListener('transitionend', () => popupOverlay.remove(), { once: true });
+    };
+
+    /**
+     * Handles all clicks within the popup, delegating actions for closing,
+     * selecting, or using the thumbnail context menu.
+     * @param {MouseEvent} e - The click event.
+     */
+    const handlePopupClick = async (e) => {
+        // Prevent clicks on the panel from closing the popup.
+        if (e.target.closest('.starred-popup-panel') && e.target !== popupOverlay) {
+            e.stopPropagation();
+        }
+
+        const closeButton = e.target.closest('.popup-close-button');
+        const jgButton = e.target.closest('.jg-button');
+        const thumbnail = e.target.closest('.thumbnail');
+
+        if (closeButton || e.target === popupOverlay) {
+            closePopup();
+        }
+        else if (jgButton) {
+            e.stopPropagation(); // Prevent the thumbnail click from firing.
+            const action = jgButton.dataset.action;
+            const context = jgButton.closest('.thumbnail');
+            if (!context) return;
+
+            switch (action) {
+                case 'star':
+                    await toggleStarredBackground(context.dataset.bgfile);
+                    renderContent(); // Re-render to reflect the change.
+                    break;
+                case 'delete':
+                    await onDeleteBackgroundClick.call(jgButton, e);
+                    renderContent(); // Re-render after deletion.
+                    break;
+                case 'edit':
+                    await onRenameBackgroundClick.call(jgButton, e);
+                    renderContent(); // Re-render after rename.
+                    break;
+                default:
+                    const actionMap = { 'lock': onLockBackgroundClick, 'unlock': onUnlockBackgroundClick };
+                    if (actionMap[action]) actionMap[action].call(context, e);
+                    break;
+            }
+        }
+        else if (thumbnail) {
+            onSelectBackgroundClick.call(thumbnail);
+            // Optionally close the popup after selection.
+            // closePopup();
+        }
+    };
+
+    /**
+     * Handles the 'Escape' key to close the popup.
+     * @param {KeyboardEvent} e - The keydown event.
+     */
+    const handleKeyDown = (e) => {
+        if (e.key === 'Escape') {
+            e.stopImmediatePropagation();
+            closePopup();
+        }
+    };
+
+    popupOverlay.addEventListener('click', handlePopupClick, true);
+    document.addEventListener('keydown', handleKeyDown, true);
+
+    document.body.appendChild(popupOverlay);
+
+    // Use requestAnimationFrame to ensure the popup is in the DOM and has layout
+    // before we try to render its content and trigger the open animation.
+    requestAnimationFrame(() => {
+        popupOverlay.classList.add('open');
+        renderContent();
+    });
+}
+
+/**
  * Initializes the background gallery and sets up event listeners.
  * @returns {Promise<void>}
  */
@@ -1230,6 +1407,10 @@ export async function initBackgrounds() {
         new MutationObserver(checkVisibility).observe(drawerElement, { attributes: true, attributeFilter: ['class'] });
         checkVisibility();
     }
+
+    // Use event delegation for dynamically created elements.
+    $(document).off('click', '#starred-folder-button').on('click', '#starred-folder-button', openStarredPopup);
+
     $(document).off('click', '.jg-button').on('click', '.jg-button', function (e) {
         e.stopPropagation();
         const action = $(this).data('action');
