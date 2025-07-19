@@ -963,7 +963,6 @@ async function onDeleteBackgroundClick(e) {
     e.stopPropagation();
     const thumbnailElement = this.closest('.thumbnail');
     const bgToDelete = $(thumbnailElement);
-    const isCustom = bgToDelete.attr('custom') === 'true';
     const bg = bgToDelete.data('bgfile');
 
     const confirm = await Popup.show.confirm(t`Delete the background?`, null);
@@ -1045,27 +1044,6 @@ async function setBackground(bg, url) {
     background_settings.name = bg;
     background_settings.url = url;
     saveSettingsDebounced();
-}
-
-/**
- * Deletes a background image from the server.
- * @param {string} bg - The filename of the background to delete.
- * @returns {Promise<void>}
- */
-async function delBackground(bg) {
-    try {
-        const response = await fetch('/api/backgrounds/delete', {
-            method: 'POST',
-            headers: getRequestHeaders(),
-            body: JSON.stringify({ bg }),
-        });
-        if (!response.ok) {
-            toastr.error(translate('Failed to delete background.'));
-        }
-    } catch (error) {
-        console.error('Error deleting background:', error);
-        toastr.error(translate('Error deleting background.'));
-    }
 }
 
 /**
