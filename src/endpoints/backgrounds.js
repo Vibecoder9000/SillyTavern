@@ -251,3 +251,44 @@ router.post('/upload', async function (request, response) {
         }
     }
 });
+
+/**
+ * Handles the request to toggle the starred status of a background image.
+ * @param {express.Request & { body: { filename: string, isStarred: boolean }, user: any }} request - The Express request object.
+ *   - `request.body.filename` should contain the filename of the background.
+ *   - `request.body.isStarred` should contain the new boolean starred state.
+ * @param {express.Response} response - The Express response object.
+ * @returns {Promise<void>}
+ */
+router.post('/star', async function (request, response) {
+    if (!request.body || typeof request.body.filename !== 'string' || typeof request.body.isStarred !== 'boolean') {
+        return response.status(400).send('Filename and isStarred boolean are required.');
+    }
+
+    const filename = sanitize(request.body.filename);
+    const { isStarred } = request.body;
+    const backgroundsJsonPath = path.join(request.user.directories.root, 'backgrounds.json');
+
+    try {
+        const rawData = await fsp.readFile(backgroundsJsonPath, 'utf8');
+        const metadata = JSON.parse(rawData);
+
+        if (!metadata.images[filename]) {
+            return response.status(404).send(`Background '${filename}' not found in metadata.`);
+        }
+
+        // Update the isStarred property
+        metadata.images[filename].isStarred = isStarred;
+
+        // Save the updated backgrounds.json
+        const jsonString = JSON.stringify(metadata, null, 4);
+        await fsp.writeFile(backgroundsJsonPath, jsonString, 'utf8');
+
+        // Send a success response
+        return response.status(200).send('ok');
+
+    } catch (error) {
+        console.error(`Failed to update star status for ${filename}:`, error);
+        return response.status(500).send('Failed to update background metadata.');
+    }
+});

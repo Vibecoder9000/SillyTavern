@@ -9,7 +9,6 @@ import { t, translate } from './i18n.js';
 import { Popup } from './popup.js';
 
 const PNG_PIXEL_B64 = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
-const STARRED_BG_STORAGE = localforage.createInstance({ name: 'SillyTavern_StarredBackgrounds' });
 let starredBackgrounds = new Set();
 const SERVER_THUMBNAIL_CACHE = new Map();
 let THUMBNAIL_CONFIG = { width: 160, height: 90 };
@@ -20,83 +19,76 @@ const BG_METADATA_KEY = 'custom_background';
 const LIST_METADATA_KEY = 'chat_backgrounds';
 
 /**
- * Loads the list of starred backgrounds from local storage.
- * @returns {Promise<void>}
- */
-async function loadStarredBackgrounds() {
-    const stored = await STARRED_BG_STORAGE.getItem('starred_list');
-    starredBackgrounds = stored ? new Set(stored) : new Set();
-}
-
-/**
- * Saves the current list of starred backgrounds to local storage.
- * @returns {Promise<void>}
- */
-async function saveStarredBackgrounds() {
-    await STARRED_BG_STORAGE.setItem('starred_list', Array.from(starredBackgrounds));
-}
-
-/**
- * Checks if a background is starred.
- * @param {string} filename - The filename of the background.
- * @returns {boolean}
- */
-function isBackgroundStarred(filename) {
-    return starredBackgrounds.has(filename);
-}
-
-/**
- * Toggles the starred status of a background and updates the UI.
+ * Toggles the starred status of a background by calling the server API and then updates the UI.
  * @param {string} filename - The filename of the background to toggle.
  * @returns {Promise<void>}
  */
 async function toggleStarredBackground(filename) {
-    const isCurrentlyStarred = starredBackgrounds.has(filename);
-    if (isCurrentlyStarred) {
-        starredBackgrounds.delete(filename);
-    } else {
-        starredBackgrounds.add(filename);
-    }
-    await saveStarredBackgrounds();
-
-    const isNowStarred = !isCurrentlyStarred;
-
     const imageInMasterList = backgroundSelector.images.find(img => img.filename === filename);
-    if (imageInMasterList) {
-        imageInMasterList.isStarred = isNowStarred;
-    }
-    const imageInFilteredList = backgroundSelector.filteredImages.find(img => img.filename === filename);
-    if (imageInFilteredList) {
-        imageInFilteredList.isStarred = isNowStarred;
-    }
+    if (!imageInMasterList) return;
 
-    const mainGalleryThumb = document.querySelector(`#main-backgrounds-container .thumbnail[data-bgfile="${filename}"]`);
-    if (mainGalleryThumb) {
-        mainGalleryThumb.dataset.isStarred = String(isNowStarred);
-    }
+    const isCurrentlyStarred = imageInMasterList.isStarred;
+    const newStarredState = !isCurrentlyStarred;
 
-    const starredContainer = document.getElementById('starred-backgrounds-container');
-
-    // THE FIX: Use the authoritative width from the backgroundSelector instance.
-    // This is the same value the main render() function uses, guaranteeing consistency.
-    const containerWidth = backgroundSelector.containerWidth;
-    const starredImages = backgroundSelector.filteredImages.filter(img => img.isStarred);
-    starredImages.sort((a, b) => a.filename.localeCompare(b.filename, undefined, { numeric: true }));
-
-    starredContainer.innerHTML = '';
-    if (starredImages.length > 0) {
-        const starredRows = calculateRowLayout(containerWidth, starredImages, true);
-        starredRows.forEach(rowData => {
-            const rowElement = createRowElement(rowData);
-            starredContainer.appendChild(rowElement);
+    try {
+        const response = await fetch('/api/backgrounds/star', {
+            method: 'POST',
+            headers: getRequestHeaders(),
+            body: JSON.stringify({ filename, isStarred: newStarredState }),
         });
-    }
 
-    const newThumbs = starredContainer.querySelectorAll('.thumbnail');
-    newThumbs.forEach(thumb => backgroundSelector.imageObserver.observe(thumb));
+        if (!response.ok) {
+            throw new Error(`Server responded with ${response.status}: ${await response.text()}`);
+        }
 
-    if (isNowStarred && newThumbs.length === 1) {
-        backgroundSelector.loadSingleThumbnail(newThumbs[0]);
+        // 1. Update the master and filtered lists in memory
+        imageInMasterList.isStarred = newStarredState;
+        const imageInFilteredList = backgroundSelector.filteredImages.find(img => img.filename === filename);
+        if (imageInFilteredList) {
+            imageInFilteredList.isStarred = newStarredState;
+        }
+
+        // 2. Update ALL matching thumbnails in the DOM (main gallery AND starred section)
+        // This is the fix for the visual bug. We use querySelectorAll.
+        const allThumbsInUI = document.querySelectorAll(`.thumbnail[data-bgfile="${filename}"]`);
+        allThumbsInUI.forEach(thumb => {
+            thumb.dataset.isStarred = String(newStarredState);
+            const clipper = thumb.querySelector('.thumbnail-clipper');
+            if (clipper) {
+                clipper.dataset.isStarred = String(newStarredState);
+            }
+        });
+
+        // 3. Re-render the "Starred" section completely to handle additions/removals
+        const starredContainer = document.getElementById('starred-backgrounds-container');
+        const containerWidth = backgroundSelector.containerWidth;
+        const starredImages = backgroundSelector.filteredImages.filter(img => img.isStarred);
+        starredImages.sort((a, b) => a.filename.localeCompare(b.filename, undefined, { numeric: true }));
+
+        starredContainer.innerHTML = '';
+        if (starredImages.length > 0) {
+            const starredRows = calculateRowLayout(containerWidth, starredImages, true);
+            starredRows.forEach(rowData => {
+                const rowElement = createRowElement(rowData);
+                starredContainer.appendChild(rowElement);
+            });
+        }
+
+        // 4. Re-observe any newly created thumbnails in the starred section
+        const newThumbs = starredContainer.querySelectorAll('.thumbnail');
+        newThumbs.forEach(thumb => backgroundSelector.imageObserver.observe(thumb));
+
+        // 5. If a new thumbnail was just added, load it immediately
+        if (newStarredState && newThumbs.length > 0) {
+            const justAddedThumb = Array.from(newThumbs).find(thumb => thumb.dataset.bgfile === filename);
+            if (justAddedThumb) {
+                backgroundSelector.loadSingleThumbnail(justAddedThumb);
+            }
+        }
+
+    } catch (error) {
+        console.error(`Failed to toggle star for ${filename}:`, error);
+        toastr.error(translate('Failed to update starred status.'));
     }
 }
 
@@ -691,7 +683,7 @@ export async function getBackgrounds(force = false) {
         id: imgData.filename,
         thumbnailUrl: getThumbnailUrl(imgData.filename),
         fullResUrl: getBackgroundPath(imgData.filename),
-        isStarred: isBackgroundStarred(imgData.filename),
+        isStarred: !!imgData.isStarred,
         isCustom: false,
     }));
     if (backgroundSelector) {
@@ -923,15 +915,8 @@ async function onRenameBackgroundClick(e) {
             imageToUpdate.filename = updatedImageData.filename;
             imageToUpdate.fullResUrl = getBackgroundPath(updatedImageData.filename);
             imageToUpdate.thumbnailUrl = getThumbnailUrl(updatedImageData.filename);
-            // Copy over any other data that might have changed
+            // Copy over any other data that might have changed, including the `isStarred` flag
             Object.assign(imageToUpdate, updatedImageData);
-        }
-
-        // Update starred list if necessary
-        if (isBackgroundStarred(bgNames.oldBg)) {
-            starredBackgrounds.delete(bgNames.oldBg);
-            starredBackgrounds.add(updatedImageData.filename);
-            await saveStarredBackgrounds();
         }
 
         // if the item was selected, update the global settings to preserve the selection state
@@ -980,17 +965,9 @@ async function onDeleteBackgroundClick(e) {
         }
 
         // On success, remove the image from the client-side data and re-render.
-        // Find the index of the image to delete.
         const indexToDelete = backgroundSelector.images.findIndex(img => img.filename === bg);
         if (indexToDelete !== -1) {
-            // Remove it from the main array.
             backgroundSelector.images.splice(indexToDelete, 1);
-        }
-
-        // Remove from starred set if present
-        if (isBackgroundStarred(bg)) {
-            starredBackgrounds.delete(bg);
-            await saveStarredBackgrounds();
         }
 
         // Re-run the current search/filter to update the UI instantly.
@@ -1238,7 +1215,6 @@ function onBackgroundFilterInput() {
  * @returns {Promise<void>}
  */
 export async function initBackgrounds() {
-    await loadStarredBackgrounds();
     if (backgroundSelector) backgroundSelector.destroy();
     backgroundSelector = new BackgroundSelector('bg_menu_content');
     const drawerElement = document.getElementById('Backgrounds');
@@ -1265,8 +1241,8 @@ export async function initBackgrounds() {
             case 'star': if (filename) toggleStarredBackground(filename); break;
             case 'lock': onLockBackgroundClick.call(thumbnailContext, e); break;
             case 'unlock': onUnlockBackgroundClick.call(thumbnailContext, e); break;
-            case 'edit': onRenameBackgroundClick.call(thumbnailContext, e); break;
-            case 'delete': onDeleteBackgroundClick.call(thumbnailContext, e); break;
+            case 'edit': onRenameBackgroundClick.call(this, e); break; // Pass `this` context for closest()
+            case 'delete': onDeleteBackgroundClick.call(this, e); break; // Pass `this` context for closest()
         }
     });
     $(document).off('click', '.thumbnail').on('click', '.thumbnail', onSelectBackgroundClick);
