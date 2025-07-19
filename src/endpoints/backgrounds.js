@@ -160,6 +160,41 @@ router.post('/rename', async function (request, response) {
 });
 
 /**
+ * Checks if a file exists.
+ * @param {string} filePath - The full path to the file.
+ * @returns {Promise<boolean>} True if the file exists, false otherwise.
+ */
+async function fileExists(filePath) {
+    try {
+        await fsp.access(filePath);
+        return true;
+    } catch {
+        return false;
+    }
+}
+
+/**
+ * Generates a unique filename by appending (1), (2), etc. if a conflict is found.
+ * @param {string} directory - The directory where the file will be saved.
+ * @param {string} originalFilename - The original desired filename.
+ * @returns {Promise<string>} A unique filename.
+ */
+async function getUniqueFilename(directory, originalFilename) {
+    const fileExtension = path.extname(originalFilename);
+    const baseName = path.basename(originalFilename, fileExtension);
+
+    let newFilename = originalFilename;
+    let counter = 1;
+
+    while (await fileExists(path.join(directory, newFilename))) {
+        newFilename = `${baseName} (${counter})${fileExtension}`;
+        counter++;
+    }
+
+    return newFilename;
+}
+
+/**
  * Handles the upload of a new background image.
  * @param {express.Request & { file: import('multer').File, user: any }} request - The Express request object.
  *   - `request.file` is provided by Multer and contains the uploaded file's details.
@@ -173,46 +208,44 @@ router.post('/upload', async function (request, response) {
     }
 
     const tempPath = request.file.path;
-    const { originalname: filename } = request.file;
-    const userBgPath = path.join(request.user.directories.backgrounds, filename);
+    const backgroundsFolderPath = request.user.directories.backgrounds;
     const backgroundsJsonPath = path.join(request.user.directories.root, 'backgrounds.json');
 
     try {
-        // Move the uploaded file from the temp location to the backgrounds folder
-        await fsp.rename(tempPath, userBgPath);
+        // 1. Get a unique filename to prevent overwriting
+        const uniqueFilename = await getUniqueFilename(backgroundsFolderPath, request.file.originalname);
+        const finalBgPath = path.join(backgroundsFolderPath, uniqueFilename);
 
-        await generateThumbnail(request.user.directories, 'bg', filename, true, false);
+        // 2. Move the uploaded file to its final destination with the unique name
+        await fsp.rename(tempPath, finalBgPath);
 
-        // Generate metadata for the newly uploaded file
-        const newMetadata = await generateSingleFileMetadata(userBgPath);
+        // 3. Generate thumbnail and metadata for the file with its new unique name
+        await generateThumbnail(request.user.directories, 'bg', uniqueFilename, true, false);
+        const newMetadata = await generateSingleFileMetadata(finalBgPath);
 
         if (!newMetadata) {
-            // If metadata generation fails, clean up the uploaded file
-            await fsp.unlink(userBgPath);
-            throw new Error(`Failed to generate metadata for ${filename}.`);
+            await fsp.unlink(finalBgPath); // Clean up if metadata fails
+            throw new Error(`Failed to generate metadata for ${uniqueFilename}.`);
         }
 
-        // Read the existing backgrounds.json
+        // 4. Read, update, and write backgrounds.json
         let metadataFile;
         try {
             const rawData = await fsp.readFile(backgroundsJsonPath, 'utf8');
             metadataFile = JSON.parse(rawData);
-        } catch (error) {
-            // If the file doesn't exist, create a fresh structure
+        } catch {
             metadataFile = { version: 1, images: {}, folders: [], tags: [] };
         }
 
-        // Add the new image's metadata and save the file
-        metadataFile.images[filename] = newMetadata;
+        metadataFile.images[uniqueFilename] = newMetadata;
         const jsonString = JSON.stringify(metadataFile, null, 4);
         await fsp.writeFile(backgroundsJsonPath, jsonString, 'utf8');
 
-        // Send back the complete metadata for the new file to the client
-        response.json({ filename, ...newMetadata });
+        // 5. Send back the complete metadata including the FINAL unique filename
+        response.json({ filename: uniqueFilename, ...newMetadata });
 
     } catch (err) {
         console.error('Background upload failed:', err);
-        // Clean up the temp file if it still exists on error
         try { await fsp.unlink(tempPath); } catch { /* ignore */ }
 
         if (!response.headersSent) {

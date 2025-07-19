@@ -1084,18 +1084,16 @@ async function onBackgroundUploadSelected() {
     }
 
     try {
-        const toast = toastr.info('Uploading background...', null, { timeOut: 0 });
-
         const response = await fetch('/api/backgrounds/upload', {
             method: 'POST',
             headers: getRequestHeaders({ omitContentType: true }), // Important for FormData
             body: formData,
         });
 
-        toastr.remove(toast);
-
         if (!response.ok) {
-            throw new Error(`Upload failed: ${await response.text()}`);
+            const errorText = await response.text();
+            toastr.error(`Upload failed: ${errorText}`);
+            throw new Error(`Upload failed: ${errorText}`);
         }
 
         const newImageData = await response.json();
@@ -1126,7 +1124,11 @@ async function onBackgroundUploadSelected() {
 
     } catch (error) {
         console.error('Error uploading background:', error);
-        toastr.error('Failed to upload background.');
+        // If an error toast wasn't already shown, show a generic one.
+        const errorToast = document.querySelector('.toast-error');
+        if (!errorToast) {
+            toastr.error('Failed to upload background.');
+        }
     } finally {
         form.reset();
     }
