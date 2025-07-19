@@ -1,5 +1,4 @@
-
-import { Fuse, localforage } from '../lib.js';
+import { Fuse } from '../lib.js';
 import { chat_metadata, eventSource, generateQuietPrompt, getCurrentChatId, getRequestHeaders, saveSettingsDebounced } from '../script.js';
 import { openThirdPartyExtensionMenu, saveMetadataDebounced } from './extensions.js';
 import { SlashCommand } from './slash-commands/SlashCommand.js';
@@ -9,7 +8,6 @@ import { t, translate } from './i18n.js';
 import { Popup } from './popup.js';
 
 const PNG_PIXEL_B64 = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
-let starredBackgrounds = new Set();
 const SERVER_THUMBNAIL_CACHE = new Map();
 let THUMBNAIL_CONFIG = { width: 160, height: 90 };
 let backgroundSelector = null;
