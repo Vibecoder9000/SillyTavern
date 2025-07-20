@@ -808,19 +808,13 @@ async function getNewBackgroundName(thumbnailElement) {
     const fileExtension = oldBg.split('.').pop();
     const oldBgExtensionless = oldBg.replace(`.${fileExtension}`, '');
 
-    const originalHandler = Popup.onKeyDown;
-    Popup.onKeyDown = (event) => {
-        if (event.key === 'Escape') {
-            event.stopPropagation();
-        }
-        if (originalHandler) {
-            originalHandler(event);
-        }
-    };
+    // Set a global flag to tell other listeners to stand down.
+    window.isStCorePopupActive = true;
 
     const newBgExtensionless = await Popup.show.input(t`Enter new background name:`, null, oldBgExtensionless);
 
-    Popup.onKeyDown = originalHandler;
+    // Unset the flag now that the popup is closed.
+    window.isStCorePopupActive = false;
 
     if (!newBgExtensionless || oldBgExtensionless === newBgExtensionless) return;
     return { oldBg, newBg: `${newBgExtensionless}.${fileExtension}` };
@@ -1206,7 +1200,6 @@ function calculateRowLayout(containerWidth, images, forceJustify = false, target
  * @returns {{width: number, height: number}} The calculated width and height.
  */
 function calculateImageSize(aspectRatio, rowHeight) {
-    // This calculation is simple and precise
     const width = Math.round(rowHeight * aspectRatio);
     const height = Math.round(rowHeight);
     return { width, height };
@@ -1243,10 +1236,36 @@ function openStarredPopup() {
     let isClosing = false;
     let observer;
 
+    // A list of all events that could possibly trigger "click-outside" logic.
+    const SHIELD_EVENTS = ['mousedown', 'pointerdown', 'touchstart'];
+
+    const eventShield = (e) => {
+        // If the event started anywhere inside our popup's overlay, kill it immediately.
+        if (e.target.closest('.starred-popup-overlay')) {
+            e.stopImmediatePropagation();
+        }
+    };
+
     /**
-     * Renders the content of the popup. It calculates the available width,
-     * generates the thumbnail layout, and sets up the lazy-loading observer.
+     * Attaches the shield listeners.
      */
+    const activateShield = () => {
+        SHIELD_EVENTS.forEach(eventName => {
+            document.addEventListener(eventName, eventShield, true);
+        });
+        document.addEventListener('keydown', handleKeyDown, true);
+    };
+
+    /**
+     * Removes the shield listeners during cleanup.
+     */
+    const deactivateShield = () => {
+        SHIELD_EVENTS.forEach(eventName => {
+            document.removeEventListener(eventName, eventShield, true);
+        });
+        document.removeEventListener('keydown', handleKeyDown, true);
+    };
+
     const renderContent = () => {
         const starredImages = backgroundSelector.images.filter(img => img.isStarred);
         contentArea.innerHTML = ''; // Clear previous content
@@ -1261,7 +1280,7 @@ function openStarredPopup() {
         const paddingX = parseFloat(style.paddingLeft) + parseFloat(style.paddingRight);
         const usableWidth = popupPanel.clientWidth - paddingX;
 
-        // If width is somehow not yet available, try again on the next frame.
+        // If width is not yet available, try again on the next frame.
         if (usableWidth <= 0) {
             requestAnimationFrame(renderContent);
             return;
@@ -1301,52 +1320,49 @@ function openStarredPopup() {
         if (isClosing) return;
         isClosing = true;
 
-        popupOverlay.removeEventListener('click', handlePopupClick, true);
-        document.removeEventListener('keydown', handleKeyDown, true);
+        deactivateShield();
+        popupOverlay.removeEventListener('click', handlePopupClick)
 
         if (observer) observer.disconnect();
 
         popupOverlay.classList.remove('open');
+
         // Wait for the fade-out animation to complete before removing from the DOM.
         popupOverlay.addEventListener('transitionend', () => popupOverlay.remove(), { once: true });
     };
 
     /**
-     * Handles all clicks within the popup, delegating actions for closing,
-     * selecting, or using the thumbnail context menu.
+     * This function handles the logic of a click.
+     * The shield has already stopped the event from propagating.
      * @param {MouseEvent} e - The click event.
      */
     const handlePopupClick = async (e) => {
-        // Prevent clicks on the panel from closing the popup.
-        if (e.target.closest('.starred-popup-panel') && e.target !== popupOverlay) {
-            e.stopPropagation();
-        }
-
         const closeButton = e.target.closest('.popup-close-button');
         const jgButton = e.target.closest('.jg-button');
         const thumbnail = e.target.closest('.thumbnail');
 
-        if (closeButton || e.target === popupOverlay) {
+        if (closeButton || !e.target.closest('.starred-popup-panel')) {
             closePopup();
+            return;
         }
-        else if (jgButton) {
-            e.stopPropagation(); // Prevent the thumbnail click from firing.
+
+        if (jgButton) {
+            e.stopPropagation();
             const action = jgButton.dataset.action;
             const context = jgButton.closest('.thumbnail');
             if (!context) return;
-
             switch (action) {
                 case 'star':
                     await toggleStarredBackground(context.dataset.bgfile);
-                    renderContent(); // Re-render to reflect the change.
+                    renderContent();
                     break;
                 case 'delete':
                     await onDeleteBackgroundClick.call(jgButton, e);
-                    renderContent(); // Re-render after deletion.
+                    renderContent();
                     break;
                 case 'edit':
                     await onRenameBackgroundClick.call(jgButton, e);
-                    renderContent(); // Re-render after rename.
+                    renderContent();
                     break;
                 default:
                     const actionMap = { 'lock': onLockBackgroundClick, 'unlock': onUnlockBackgroundClick };
@@ -1367,18 +1383,23 @@ function openStarredPopup() {
      */
     const handleKeyDown = (e) => {
         if (e.key === 'Escape') {
+            if (window.isStCorePopupActive) {
+                return;
+            }
+
             e.stopImmediatePropagation();
             closePopup();
         }
     };
 
-    popupOverlay.addEventListener('click', handlePopupClick, true);
-    document.addEventListener('keydown', handleKeyDown, true);
+    // Activate the shield to block mousedown/pointerdown
+    activateShield();
+
+    popupOverlay.addEventListener('click', handlePopupClick);
 
     document.body.appendChild(popupOverlay);
 
-    // Use requestAnimationFrame to ensure the popup is in the DOM and has layout
-    // before we try to render its content and trigger the open animation.
+    // Use requestAnimationFrame to ensure the popup is in the DOM and has layout before we try to render its content and trigger the open animation.
     requestAnimationFrame(() => {
         popupOverlay.classList.add('open');
         renderContent();
