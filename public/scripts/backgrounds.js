@@ -1503,7 +1503,6 @@ function openStarredPopup() {
     const renderContent = () => {
         const starredImages = backgroundSelector.images.filter(img => img.isStarred);
         contentArea.innerHTML = '';
-        const popupPanel = popupFragment.querySelector('.popup-panel');
 
         if (starredImages.length === 0) {
             contentArea.innerHTML = `<p style="text-align: center; padding: 20px;">${translate('You have no starred backgrounds.')}</p>`;
