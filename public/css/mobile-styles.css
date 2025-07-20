@@ -476,6 +476,12 @@
         display: none;
     }
 
+	.blank-folder-button .BGSampleTitle,
+	#starred-folder-button .BGSampleTitle,
+	#add-folder-button .BGSampleTitle {
+		display: block;
+	}
+
     .tag.excluded:after {
         top: unset;
         bottom: unset;
