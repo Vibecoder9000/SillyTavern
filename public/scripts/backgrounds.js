@@ -1347,9 +1347,19 @@ async function uploadBackground(formData) {
             body: formData,
         });
         if (!response.ok) throw new Error(`Upload failed: ${await response.text()}`);
-        const bg = await response.text();
+
+        // 1. Get the filename string from the response.
+        const newBgFilename = await response.text();
+
+        // 2. Refresh the gallery. This will create the new thumbnail element in the DOM.
         await getBackgrounds(true);
-        setTimeout(() => highlightNewBackground(bg), 100);
+
+        // 3. Find the new element in the DOM and pass it to the highlight function.
+        setTimeout(() => {
+            const newBgElement = document.querySelector(`.thumbnail[data-bgfile="${newBgFilename}"]`);
+            highlightNewBackground(newBgElement); // Now passing the element, or null if not found.
+        }, 100);
+
     } catch (error) {
         console.error('Error uploading background:', error);
         toastr.error(translate('Failed to upload background.'));
