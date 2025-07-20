@@ -830,7 +830,7 @@ async function onRenameBackgroundClick(e) {
         }
         // Also update the filtered list if the item is present there
         if (filteredImageToUpdate) {
-             Object.assign(filteredImageToUpdate, {
+            Object.assign(filteredImageToUpdate, {
                 ...updatedImageData,
                 id: updatedImageData.filename,
                 thumbnailUrl: getThumbnailUrl(updatedImageData.filename),
@@ -1308,7 +1308,7 @@ function openStarredPopup() {
         isClosing = true;
 
         deactivateShield();
-        popupOverlay.removeEventListener('click', handlePopupClick)
+        popupOverlay.removeEventListener('click', handlePopupClick);
 
         if (observer) observer.disconnect();
 
@@ -1350,12 +1350,11 @@ function openStarredPopup() {
                 case 'edit':
                     await onRenameBackgroundClick.call(jgButton, e);
                     break;
-                default:
+                default: {
                     const actionMap = { 'lock': onLockBackgroundClick, 'unlock': onUnlockBackgroundClick };
-                    if (actionMap[action]) {
-                         actionMap[action].call(context, e);
-                    }
+                    if (actionMap[action]) actionMap[action].call(context, e);
                     break;
+                }
             }
         }
         else if (thumbnail) {
