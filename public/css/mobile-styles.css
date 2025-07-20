@@ -360,12 +360,37 @@
         width: unset;
     }
 
-    #Backgrounds .flex-container.align-items-baseline {
+    #bg-header-fixed > .flex-container {
         flex-wrap: wrap;
         row-gap: 10px;
     }
 
-    #add_background_button_top {
+    #bg-header-fixed > .flex-container > h3,
+    #bg-header-fixed > .flex-container > #background_fitting,
+    #bg-header-fixed > .flex-container > #auto_background,
+    #bg-header-fixed > .flex-container > #bg_lock_button {
+        order: 1;
+    }
+
+    #bg-header-fixed > .flex-container::after {
+        content: '';
+        order: 1;
+        flex-basis: 100%;
+        height: 0;
+    }
+
+    #bg-header-fixed > .flex-container > #bg-filter {
+        order: 2;
+        flex-grow: 1;
+        min-width: 0;
+    }
+    #bg-header-fixed > .flex-container > #bg-sort-order {
+        order: 2;
+        flex-shrink: 0;
+    }
+
+    #bg-header-fixed > .flex-container > #add_background_button_top {
+        order: 3;
         width: 100%;
         height: auto;
         text-align: center;
@@ -373,38 +398,12 @@
         padding-bottom: 0.8rem;
         font-size: 1.1em;
     }
-    
+
     #Backgrounds.drawer-content.openDrawer.bg-drawer-layout {
-        width: 100dvw !important;
-        max-width: 100dvw !important;
+        width: 100dvw;
+        max-width: 100dvw;
     }
 
-	#bg-header-fixed > .flex-container {
-		flex-wrap: wrap;
-		row-gap: 10px;
-	}
-
-	#bg-filter {
-		flex-basis: 100%;
-		order: 2;
-	}
-
-	#add_background_button_top {
-		order: 3;
-		width: 100%;
-		height: auto;
-		text-align: center;
-		padding-top: 0.8rem;
-		padding-bottom: 0.8rem;
-		font-size: 1.1em;
-	}
-
-	#bg-header-fixed > .flex-container > h3,
-	#background_fitting,
-	#auto_background,
-	#bg_lock_button {
-		order: 1;
-	}
 }
 
 /*landscape mode phones and ipads*/

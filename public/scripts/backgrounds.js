@@ -59,22 +59,6 @@ async function toggleStarredBackground(filename) {
             }
         });
 
-        // 3. Handle the edge case of the "Starred" folder appearing or disappearing.
-        const hasAnyStarredInFilteredView = backgroundSelector.filteredImages.some(img => img.isStarred);
-        const foldersContainer = document.getElementById('folders-container');
-        const starredFolderElement = document.getElementById('starred-folder-container');
-
-        if (hasAnyStarredInFilteredView && !starredFolderElement && foldersContainer) {
-            // If there are now starred items but the starred folder isn't visible, add it before the add button
-            const addFolderElement = document.getElementById('add-folder-container');
-            if (addFolderElement) {
-                foldersContainer.insertBefore(createStarredFolderElement(), addFolderElement);
-            }
-        } else if (!hasAnyStarredInFilteredView && starredFolderElement) {
-            // If there are no longer any starred items but the folder is visible, remove it
-            starredFolderElement.remove();
-        }
-
     } catch (error) {
         console.error(`Failed to toggle star for ${filename}:`, error);
         toastr.error(translate('Failed to update starred status.'));
@@ -275,6 +259,7 @@ class BackgroundSelector {
         this.imageObserver = null;
         this.resizeObserver = null;
         this.isInitialRender = true;
+        this.sortOrder = 'alpha';
         this.debouncedRender = debounce(() => this.render(false), 150);
         this.setupImageObserver();
         this.setupResizeObserver();
@@ -323,7 +308,35 @@ class BackgroundSelector {
         } else {
             this.filteredImages = [...this.images];
         }
+
+        // Apply sorting to the filtered list before rendering
+        this._sortImages(this.filteredImages);
+
         this.render(true);
+    }
+
+    /**
+     * Sorts an array of image data based on the current sortOrder.
+     * @param {Array<object>} images - The array of images to sort in-place.
+     */
+    _sortImages(images) {
+        if (this.sortOrder === 'date') {
+            images.sort((a, b) => {
+                // Default to 0 if timestamp is missing, ensuring they go to the end
+                const timeA = a.addedTimestamp || 0;
+                const timeB = b.addedTimestamp || 0;
+
+                // Sort by timestamp descending (newest first)
+                if (timeB !== timeA) {
+                    return timeB - timeA;
+                }
+
+                // Fallback to alphabetical for stability if timestamps are equal
+                return a.filename.localeCompare(b.filename, undefined, { numeric: true });
+            });
+        } else { // Default to 'alpha'
+            images.sort((a, b) => a.filename.localeCompare(b.filename, undefined, { numeric: true }));
+        }
     }
 
     /**
@@ -340,12 +353,8 @@ class BackgroundSelector {
         // Clear only the folder container's content.
         foldersContainer.innerHTML = '';
 
-        const hasStarred = this.images.some(img => img.isStarred);
-
-        // 1. "Starred" folder is always first, if applicable.
-        if (hasStarred) {
-            foldersContainer.appendChild(createStarredFolderElement());
-        }
+        // 1. "Starred" folder is always first.
+        foldersContainer.appendChild(createStarredFolderElement());
 
         // 2. Render all the user-created "blank" folders from our data array.
         this.folderLists.forEach((folder) => { // Pass the whole object
@@ -1501,10 +1510,12 @@ function openStarredPopup() {
             return;
         }
 
+        // Sort the popup's images according to the global sort setting
+        backgroundSelector._sortImages(starredImages);
+
         // Measure the reliable parent panel and account for the content area's padding.
         const style = getComputedStyle(contentArea);
         const paddingX = parseFloat(style.paddingLeft) + parseFloat(style.paddingRight);
-        const usableWidth = popupPanel.clientWidth - paddingX;
 
         // If width is not yet available, try again on the next frame.
         if (usableWidth <= 0) {
@@ -1665,6 +1676,9 @@ function openCustomFolderPopup(folderId) {
             contentArea.innerHTML = `<p style="text-align: center; padding: 20px;">${translate('This folder is empty.')}</p>`;
             return;
         }
+
+        // Sort the popup's images according to the global sort setting
+        backgroundSelector._sortImages(folderImages);
 
         const style = getComputedStyle(contentArea);
         const paddingX = parseFloat(style.paddingLeft) + parseFloat(style.paddingRight);
@@ -1969,6 +1983,13 @@ export async function initBackgrounds() {
     $('#auto_background').on('click', autoBackgroundCommand);
     $('#add_bg_button').on('change', onBackgroundUploadSelected);
     $('#bg-filter').on('input', onBackgroundFilterInput);
+    $('#bg-sort-order').on('input', function () {
+        if (backgroundSelector) {
+            backgroundSelector.sortOrder = $(this).val();
+            // Re-run the search to apply the new sort order to the current view
+            backgroundSelector.search($('#bg-filter').val() || '');
+        }
+    });
     $('#background_fitting').on('input', function () {
         background_settings.fitting = String($(this).val());
         setFittingClass(background_settings.fitting);

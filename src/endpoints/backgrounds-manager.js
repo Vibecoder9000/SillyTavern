@@ -71,6 +71,7 @@ export async function generateSingleFileMetadata(filePath) {
             tags: [],
             folderIds: [],
             lastUsedTimestamp: null,
+            addedTimestamp: Date.now(),
         };
     } catch (error) {
         console.error(`[Metadata Gen] Failed to process file ${path.basename(filePath)}:`, error.message);
@@ -116,17 +117,29 @@ export async function syncBackgroundsMetadata(userDirectories) {
     let hasChanges = false;
     let newFiles = 0;
     let deletedFiles = 0;
+    let updatedFiles = 0;
 
-    // Find and process new files
+    // Find and process new files, and backfill timestamps for existing ones
     for (const filename of imageFilesOnDisk) {
+        const filePath = path.join(backgroundsFolderPath, filename);
         if (!metadata.images[filename]) {
-            const filePath = path.join(backgroundsFolderPath, filename);
             const newMetadata = await generateSingleFileMetadata(filePath);
 
             if (newMetadata) {
                 metadata.images[filename] = newMetadata;
                 hasChanges = true;
                 newFiles++;
+            }
+        } else if (metadata.images[filename].addedTimestamp === undefined) {
+            // Backfill timestamp for existing files that don't have one
+            try {
+                const stats = await fs.stat(filePath);
+                metadata.images[filename].addedTimestamp = Math.floor(stats.birthtimeMs || stats.mtimeMs);
+                hasChanges = true;
+                updatedFiles++;
+            } catch (err) {
+                console.warn(`[Background Sync] Could not stat file ${filename} to add timestamp, assigning current time.`, err);
+                metadata.images[filename].addedTimestamp = Date.now();
             }
         }
     }
@@ -142,12 +155,19 @@ export async function syncBackgroundsMetadata(userDirectories) {
 
     // Save the updated metadata and log a summary if changes were made
     if (hasChanges) {
-        console.log(`[Background Sync] Found ${newFiles} new and ${deletedFiles} deleted backgrounds. Saving changes...`);
-        try {
-            const jsonString = JSON.stringify(metadata, null, 4);
-            await writeFileAtomic(backgroundsJsonPath, jsonString, 'utf8');
-        } catch (error) {
-            console.error('[Background Sync] Failed to save backgrounds.json:', error);
+        const logParts = [];
+        if (newFiles > 0) logParts.push(`found ${newFiles} new`);
+        if (deletedFiles > 0) logParts.push(`removed ${deletedFiles} deleted`);
+        if (updatedFiles > 0) logParts.push(`updated ${updatedFiles} existing with timestamps`);
+
+        if (logParts.length > 0) {
+            console.log(`[Background Sync] ${logParts.join(', ')}. Saving changes...`);
+            try {
+                const jsonString = JSON.stringify(metadata, null, 4);
+                await writeFileAtomic(backgroundsJsonPath, jsonString, 'utf8');
+            } catch (error) {
+                console.error('[Background Sync] Failed to save backgrounds.json:', error);
+            }
         }
     }
 }
