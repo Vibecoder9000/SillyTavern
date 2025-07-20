@@ -84,18 +84,6 @@ function generateUrlParameter(bg, isCustom) {
     return isCustom ? `url("${encodeURI(bg)}")` : `url("${getBackgroundPath(bg)}")`;
 }
 
-/**
- * Extracts the URL parameter from a thumbnail element.
- * @param {HTMLElement} element - The thumbnail DOM element.
- * @returns {string}
- */
-function getUrlParameter(element) {
-    const $this = $(element);
-    const isCustom = $this.attr('custom') === 'true';
-    const url = $this.data('url');
-    return generateUrlParameter(url, isCustom);
-}  // todo: get sd image gen working
-
 export let background_settings = {
     name: '__transparent.png',
     url: generateUrlParameter('__transparent.png', false),
@@ -1481,7 +1469,6 @@ function openStarredPopup() {
     const template = document.getElementById('starred-popup-template');
     const popupFragment = template.content.cloneNode(true);
     const popupOverlay = popupFragment.querySelector('.popup-overlay');
-    const popupPanel = popupFragment.querySelector('.popup-panel');
     const contentArea = popupFragment.querySelector('.popup-content');
 
     let isClosing = false;
@@ -1504,6 +1491,7 @@ function openStarredPopup() {
     const renderContent = () => {
         const starredImages = backgroundSelector.images.filter(img => img.isStarred);
         contentArea.innerHTML = '';
+        const popupPanel = popupFragment.querySelector('.popup-panel');
 
         if (starredImages.length === 0) {
             contentArea.innerHTML = `<p style="text-align: center; padding: 20px;">${translate('You have no starred backgrounds.')}</p>`;
@@ -1516,6 +1504,7 @@ function openStarredPopup() {
         // Measure the reliable parent panel and account for the content area's padding.
         const style = getComputedStyle(contentArea);
         const paddingX = parseFloat(style.paddingLeft) + parseFloat(style.paddingRight);
+        const usableWidth = popupPanel.clientWidth - paddingX;
 
         // If width is not yet available, try again on the next frame.
         if (usableWidth <= 0) {
