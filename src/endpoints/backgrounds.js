@@ -46,7 +46,6 @@ router.post('/all', async function (request, response) {
             ...data,
         }));
 
-        allImages.sort((a, b) => a.filename.localeCompare(b.filename, undefined, { numeric: true, sensitivity: 'base' }));
         const config = { width: dimensions.bg[0], height: dimensions.bg[1] };
         const folders = metadata.folders || []; // Get folders from metadata
 

@@ -147,35 +147,48 @@ async function processSingleImage(file, originalFolder, thumbnailFolder) {
     const timings = { filename: file, read: 0, resize: 0, buffer: 0, write: 0, total: 0 };
     const totalStartTime = performance.now();
     let stepStartTime;
+
     try {
         stepStartTime = performance.now();
         const fileBuffer = fs.readFileSync(pathToOriginalFile);
         const image = await Jimp.read(fileBuffer);
         timings.read = performance.now() - stepStartTime;
+
         const aspectRatio = (image.bitmap.height > 0) ? (image.bitmap.width / image.bitmap.height) : 1.0;
         stepStartTime = performance.now();
         const thumbImage = image.clone();
+
         const targetPixelArea = thumbnailResolution;
         const safeAspectRatio = aspectRatio > 0 ? aspectRatio : 1;
+
         let newHeight = Math.round(Math.sqrt(targetPixelArea / safeAspectRatio));
         let newWidth = Math.round(newHeight * safeAspectRatio);
+
         if (newWidth === 0 || newHeight === 0) {
-            const fallbackAspectRatio = 1;
+            // Fallback for corrupted images with zero dimensions
+            console.warn(`[Thumbnails] Image ${file} has zero width/height. Using fallback dimensions.`);
+            const fallbackAspectRatio = 1; // Use a square aspect ratio as a safe default
             const h = Math.round(Math.sqrt(targetPixelArea / fallbackAspectRatio));
             const w = Math.round(h * fallbackAspectRatio);
-            thumbImage.cover({ w, h });
+
+            thumbImage.scaleToFit({ w, h, mode: Jimp.RESIZE_BILINEAR });
         } else {
+            // Main processing path
             thumbImage.scaleToFit({ w: newWidth, h: newHeight, mode: Jimp.RESIZE_BILINEAR });
         }
+
         timings.resize = performance.now() - stepStartTime;
+
         stepStartTime = performance.now();
         const buffer = pngFormat
             ? await thumbImage.getBuffer(JimpMime.png)
             : await thumbImage.getBuffer(JimpMime.jpeg, { quality: quality, jpegColorSpace: 'ycbcr' });
         timings.buffer = performance.now() - stepStartTime;
+
         stepStartTime = performance.now();
         writeFileAtomicSync(pathToCachedFile, buffer);
         timings.write = performance.now() - stepStartTime;
+
         timings.total = performance.now() - totalStartTime;
         return { success: true, timings };
     } catch (error) {
