@@ -273,7 +273,7 @@ div#add-folder-button .thumbnail-placeholder {
 }
 
 .popup-panel {
-    width: calc(var(--sheldWidth, 800px) * 0.9);
+    width: calc(var(--sheldWidth, 800px) * 0.98);
     background-color: var(--SmartThemeBlurTintColor, #3a3e44);
     color: var(--text-color, #f0f0f0);
     border: 1px solid var(--SmartThemeBorderColor, #444);
