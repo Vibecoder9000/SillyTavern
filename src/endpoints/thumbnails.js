@@ -120,15 +120,7 @@ export async function generateThumbnail(directories, type, file, forceGenerate =
     const result = await processSingleImage(file, originalFolder, thumbnailFolder);
 
     if (result.success) {
-        try {
-            const buffer = fs.readFileSync(pathToCachedFile);
-            const dimensions = sizeOf(buffer);
-            const ratio = (dimensions.height > 0) ? (dimensions.width / dimensions.height) : 1.0;
-            return { path: pathToCachedFile, aspectRatio: ratio };
-        } catch (e) {
-            console.error(`[generateThumbnail] Failed to read dimensions of newly generated thumbnail ${pathToCachedFile}:`, e);
-            return { path: pathToCachedFile, aspectRatio: 1.77 };
-        }
+        return { path: pathToCachedFile, aspectRatio: result.aspectRatio };
     } else {
         return { path: null, aspectRatio: null };
     }
@@ -190,7 +182,7 @@ async function processSingleImage(file, originalFolder, thumbnailFolder) {
         timings.write = performance.now() - stepStartTime;
 
         timings.total = performance.now() - totalStartTime;
-        return { success: true, timings };
+        return { success: true, timings, aspectRatio };
     } catch (error) {
         console.warn(`[Thumbnails] Failed to process image ${file}:`, error.message);
         return { success: false, filename: file, error: error.message };
