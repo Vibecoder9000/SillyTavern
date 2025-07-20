@@ -782,12 +782,13 @@ function highlightLockedBackground() {
     const lockedBackgroundUrl = chat_metadata[BG_METADATA_KEY];
 
     if (lockedBackgroundUrl) {
-        // Find thumbnails that match the locked URL
-        const allThumbs = document.querySelectorAll('.thumbnail');
-        for (const thumb of allThumbs) {
-            const thumbUrl = `url("${thumb.dataset.url}")`;
-            if (thumbUrl === lockedBackgroundUrl) {
-                thumb.dataset.isChatLocked = 'true';
+        // A bit of regex to extract the raw filename
+        const match = lockedBackgroundUrl.match(/backgrounds\/(.+)\"\)$/);
+        if (match && match[1]) {
+            const lockedFilename = decodeURIComponent(match[1]);
+            const lockedThumb = document.querySelector(`.thumbnail[data-bgfile="${lockedFilename}"]`);
+            if (lockedThumb) {
+                lockedThumb.dataset.isChatLocked = 'true';
             }
         }
     }
