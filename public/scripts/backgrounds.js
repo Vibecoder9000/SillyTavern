@@ -290,37 +290,6 @@ function createThumbnailElement(imageData, calculatedSize) {
 }
 
 /**
- * Creates the section for starred backgrounds.
- * @returns {HTMLElement} The created starred section element.
- */
-function createStarredSection() {
-    const starredSection = document.createElement('div');
-    starredSection.id = 'starred-backgrounds-section';
-    starredSection.className = 'starred-section';
-    const starredTitle = document.createElement('h3');
-    starredTitle.className = 'starred-title';
-    starredTitle.textContent = translate('Starred Backgrounds');
-    const starredContainer = document.createElement('div');
-    starredContainer.id = 'starred-backgrounds-container';
-    starredContainer.className = 'thumbnail-container';
-    starredSection.appendChild(starredTitle);
-    starredSection.appendChild(starredContainer);
-    return starredSection;
-}
-
-/**
- * Separates a list of images into starred and regular categories.
- * @param {Array<object>} allImages - The complete list of image data.
- * @returns {{starred: Array<object>, regular: Array<object>}} An object containing separated lists.
- */
-function separateStarredImages(allImages) {
-    const starred = allImages.filter(img => img.isStarred);
-    const regular = allImages;
-    starred.sort((a, b) => a.filename.localeCompare(b.filename, undefined, { numeric: true }));
-    return { starred, regular };
-}
-
-/**
  * Manages the background image gallery, including rendering, filtering, and lazy loading.
  */
 class BackgroundSelector {
@@ -412,7 +381,7 @@ class BackgroundSelector {
             this.containerWidth,
             this.filteredImages,
             false,
-            targetRowHeight // Pass target height
+            targetRowHeight, // Pass target height
         );
 
         allRows.forEach(rowData => {
@@ -421,7 +390,7 @@ class BackgroundSelector {
         });
 
         mainContainer.querySelectorAll('.thumbnail').forEach(thumb =>
-            this.imageObserver.observe(thumb)
+            this.imageObserver.observe(thumb),
         );
 
         this.container.appendChild(mainContainer);
