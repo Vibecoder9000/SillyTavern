@@ -109,6 +109,7 @@ router.post('/delete', getFileNameValidationFunction('bg'), async function (requ
 
 /**
  * Handles the request to rename a background image.
+ * If the new name conflicts with an existing file, it will append a number.
  * @param {express.Request} request - The Express request object.
  * @param {express.Response} response - The Express response object.
  */
@@ -120,12 +121,15 @@ router.post('/rename', async function (request, response) {
     const release = await fileLock.acquire();
     try {
         const oldFilename = sanitize(request.body.old_bg);
-        const newFilename = sanitize(request.body.new_bg);
+        // The original desired name from the user
+        const desiredNewFilename = sanitize(request.body.new_bg);
+
         const backgroundsJsonPath = path.join(request.user.directories.root, 'backgrounds.json');
         const backgroundsFolderPath = request.user.directories.backgrounds;
         const thumbnailsFolderPath = request.user.directories.thumbnailsBg;
 
-        if (oldFilename === newFilename) {
+        // If the names are the same, it's a no-op. Return the existing data.
+        if (oldFilename === desiredNewFilename) {
             const rawData = await fsp.readFile(backgroundsJsonPath, 'utf8');
             const metadata = JSON.parse(rawData);
             return response.json({ filename: oldFilename, ...metadata.images[oldFilename] });
@@ -139,35 +143,38 @@ router.post('/rename', async function (request, response) {
             return response.status(404).send(`Background '${oldFilename}' not found in metadata.`);
         }
 
-        // 1. Rename the main background file.
+        // Determine the unique filename to use, handling potential conflicts.
+        const finalNewFilename = await getUniqueFilename(backgroundsFolderPath, desiredNewFilename);
+
+        // 1. Rename the main background file using the final unique name.
         const oldFilePath = path.join(backgroundsFolderPath, oldFilename);
-        const newFilePath = path.join(backgroundsFolderPath, newFilename);
+        const newFilePath = path.join(backgroundsFolderPath, finalNewFilename);
         await fsp.rename(oldFilePath, newFilePath);
 
-        // 2. Rename the corresponding thumbnail file.
+        // 2. Rename the corresponding thumbnail file using the final unique name.
         const oldThumbPath = path.join(thumbnailsFolderPath, oldFilename);
-        const newThumbPath = path.join(thumbnailsFolderPath, newFilename);
+        const newThumbPath = path.join(thumbnailsFolderPath, finalNewFilename);
 
         try {
             await fsp.access(oldThumbPath); // Check for existence
             await fsp.rename(oldThumbPath, newThumbPath);
         } catch (thumbError) {
             // If the thumbnail doesn't exist (ENOENT), it's not a critical error.
-            // It will be regenerated on the next request.
             if (thumbError.code !== 'ENOENT') {
                 console.warn(`[Rename] Could not rename thumbnail for ${oldFilename}:`, thumbError);
             }
         }
 
-        // 3. Update the metadata object in memory.
+        // 3. Update the metadata object in memory using the final unique name.
         delete metadata.images[oldFilename];
-        metadata.images[newFilename] = oldMetadata;
+        metadata.images[finalNewFilename] = oldMetadata;
 
         // 4. Save the updated backgrounds.json.
         const jsonString = JSON.stringify(metadata, null, 4);
         await fsp.writeFile(backgroundsJsonPath, jsonString, 'utf8');
 
-        response.json({ filename: newFilename, ...oldMetadata });
+        // 5. Respond with the final unique name and its metadata.
+        response.json({ filename: finalNewFilename, ...oldMetadata });
 
     } catch (error) {
         console.error(`Failed to rename background from ${request.body.old_bg} to ${request.body.new_bg}:`, error);
