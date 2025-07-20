@@ -100,18 +100,6 @@ function generateUrlParameter(bg, isCustom) {
     return isCustom ? `url("${encodeURI(bg)}")` : `url("${getBackgroundPath(bg)}")`;
 }
 
-/**
- * Extracts the URL parameter from a thumbnail element.
- * @param {HTMLElement} element - The thumbnail DOM element.
- * @returns {string}
- */
-function getUrlParameter(element) {
-    const $this = $(element);
-    const isCustom = $this.attr('custom') === 'true';
-    const url = $this.data('url');
-    return generateUrlParameter(url, isCustom);
-}
-
 export let background_settings = {
     name: '__transparent.png',
     url: generateUrlParameter('__transparent.png', false),
@@ -660,12 +648,12 @@ function updateLockButtonState() {
         icon.removeClass('fa-lock').addClass('fa-unlock');
         text.text(translate('Unlock')).attr('data-i18n', 'Unlock');
         lockButton.attr('title', translate('Unlock background for this chat'))
-                  .attr('data-i18n', '[title]Unlock background for this chat');
+            .attr('data-i18n', '[title]Unlock background for this chat');
     } else {
         icon.removeClass('fa-unlock').addClass('fa-lock');
         text.text(translate('Lock')).attr('data-i18n', 'Lock');
         lockButton.attr('title', translate('Lock selected background for this chat'))
-                  .attr('data-i18n', '[title]Lock selected background for this chat');
+            .attr('data-i18n', '[title]Lock selected background for this chat');
     }
 }
 
