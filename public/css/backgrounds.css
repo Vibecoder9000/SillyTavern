@@ -48,12 +48,12 @@
 /* This container will grow to fill available space and handle its own scrolling. */
 #bg-scrollable-content {
     flex-grow: 1;
-    overflow-y: auto; /* Enable vertical scrolling for content */
+    overflow-y: auto;
     overflow-x: hidden;
     padding: 0 5px;
     width: 100%;
     box-sizing: border-box;
-    min-height: 0; /* Crucial for flex items with overflow */
+    min-height: 0;
     position: relative;
     scrollbar-gutter: stable;
 }
@@ -78,8 +78,8 @@
 
 #bg_menu_content {
     display: flex;
-    flex-direction: column; /* Stack Starred and Main sections vertically */
-    gap: 20px; /* Creates space between the two sections */
+    flex-direction: column;
+    gap: 20px;
 }
 
 
@@ -575,6 +575,28 @@ div#starred-folder-button .thumbnail-placeholder {
     margin: 0;
     padding: 0;
     line-height: 1;
+}
+
+
+/* Lock indicator on thumbnails */
+
+.thumbnail-lock-indicator {
+    display: none;
+    position: absolute;
+    bottom: 5px;
+    right: 5px;
+    z-index: 4;
+    color: white;
+    background-color: rgba(0, 0, 0, 0.6);
+    backdrop-filter: blur(2px);
+    padding: 4px 6px;
+    border-radius: 4px;
+    font-size: 0.8em;
+    pointer-events: none;
+}
+
+.thumbnail[data-is-chat-locked="true"] .thumbnail-lock-indicator {
+    display: block;
 }
 
 

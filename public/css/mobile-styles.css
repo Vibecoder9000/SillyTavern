@@ -153,14 +153,12 @@
         width: 100dvw;
     }
 
-    #bg1,
-    #bg_custom {
+    #bg1 {
         height: 100vh !important;
         height: 100dvh !important;
         width: 100vw !important;
         width: 100dvw !important;
         background-position: center;
-
     }
 
 
@@ -282,10 +280,6 @@
         font-size: calc(var(--mainFontSize) - .1rem);
     }
 
-    /*     .avatar_div {
-        margin-top: 5px;
-    } */
-
     #character_popup {
         width: 100%;
         border-radius: 0 0 20px 20px;
@@ -385,10 +379,32 @@
         max-width: 100dvw !important;
     }
 
-    #bg-header-fixed > .flex-container {
-        flex-wrap: wrap;
-        row-gap: 10px;
-    }
+	#bg-header-fixed > .flex-container {
+		flex-wrap: wrap;
+		row-gap: 10px;
+	}
+
+	#bg-filter {
+		flex-basis: 100%;
+		order: 2;
+	}
+
+	#add_background_button_top {
+		order: 3;
+		width: 100%;
+		height: auto;
+		text-align: center;
+		padding-top: 0.8rem;
+		padding-bottom: 0.8rem;
+		font-size: 1.1em;
+	}
+
+	#bg-header-fixed > .flex-container > h3,
+	#background_fitting,
+	#auto_background,
+	#bg_lock_button {
+		order: 1;
+	}
 }
 
 /*landscape mode phones and ipads*/
