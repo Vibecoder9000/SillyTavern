@@ -144,17 +144,19 @@ router.post('/rename', async function (request, response) {
         const newFilePath = path.join(backgroundsFolderPath, newFilename);
         await fsp.rename(oldFilePath, newFilePath);
 
-        // 2. Find and rename the corresponding thumbnail file.
-        const allThumbnails = await fsp.readdir(thumbnailsFolderPath);
-        const oldThumbFilename = allThumbnails.find(thumb => thumb.startsWith(oldFilename));
+        // 2. Rename the corresponding thumbnail file.
+        const oldThumbPath = path.join(thumbnailsFolderPath, oldFilename);
+        const newThumbPath = path.join(thumbnailsFolderPath, newFilename);
 
-        if (oldThumbFilename) {
-            const oldThumbPath = path.join(thumbnailsFolderPath, oldThumbFilename);
-            const newThumbFilename = oldThumbFilename.replace(oldFilename, newFilename);
-            const newThumbPath = path.join(thumbnailsFolderPath, newThumbFilename);
+        try {
+            await fsp.access(oldThumbPath); // Check for existence
             await fsp.rename(oldThumbPath, newThumbPath);
-        } else {
-            console.warn(`[Rename] No thumbnail found for ${oldFilename}. It will be regenerated on next access.`);
+        } catch (thumbError) {
+            // If the thumbnail doesn't exist (ENOENT), it's not a critical error.
+            // It will be regenerated on the next request.
+            if (thumbError.code !== 'ENOENT') {
+                console.warn(`[Rename] Could not rename thumbnail for ${oldFilename}:`, thumbError);
+            }
         }
 
         // 3. Update the metadata object in memory.
