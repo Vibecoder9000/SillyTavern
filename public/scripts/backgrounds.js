@@ -779,8 +779,8 @@ function highlightSelectedBackground() {
  */
 function onSelectBackgroundClick() {
     const $this = $(this);
-    const bgFile = $this.data('bgfile');
-    const fullResUrl = $this.data('url');
+    const bgFile = $this.attr('data-bgfile');
+    const fullResUrl = $this.attr('data-url');
     const isCustom = $this.attr('custom') === 'true';
     if (!bgFile || !fullResUrl) return;
     background_settings.name = bgFile;
@@ -803,7 +803,7 @@ function onSelectBackgroundClick() {
  * @returns {Promise<{oldBg: string, newBg: string}|null>} An object with old and new filenames, or null if cancelled/invalid.
  */
 async function getNewBackgroundName(thumbnailElement) {
-    const oldBg = $(thumbnailElement).data('bgfile');
+    const oldBg = $(thumbnailElement).attr('data-bgfile');
     if (!oldBg) return;
     const fileExtension = oldBg.split('.').pop();
     const oldBgExtensionless = oldBg.replace(`.${fileExtension}`, '');
@@ -847,30 +847,48 @@ async function onRenameBackgroundClick(e) {
 
         const updatedImageData = await response.json();
 
-        // Find the image in our master list
-        const imageIndex = backgroundSelector.images.findIndex(img => img.filename === bgNames.oldBg);
-        if (imageIndex !== -1) {
-            // Update the data in place
-            const imageToUpdate = backgroundSelector.images[imageIndex];
-            imageToUpdate.filename = updatedImageData.filename;
-            imageToUpdate.fullResUrl = getBackgroundPath(updatedImageData.filename);
-            imageToUpdate.thumbnailUrl = getThumbnailUrl(updatedImageData.filename);
-            // Copy over any other data that might have changed, including the `isStarred` flag
-            Object.assign(imageToUpdate, updatedImageData);
+        // Update the client-side data model in-place.
+        const imageToUpdate = backgroundSelector.images.find(img => img.filename === bgNames.oldBg);
+        const filteredImageToUpdate = backgroundSelector.filteredImages.find(img => img.filename === bgNames.oldBg);
+
+        if (imageToUpdate) {
+            Object.assign(imageToUpdate, {
+                ...updatedImageData, // Get fresh data from server
+                id: updatedImageData.filename,
+                thumbnailUrl: getThumbnailUrl(updatedImageData.filename),
+                fullResUrl: getBackgroundPath(updatedImageData.filename),
+            });
+        }
+        // Also update the filtered list if the item is present there
+        if (filteredImageToUpdate) {
+             Object.assign(filteredImageToUpdate, {
+                ...updatedImageData,
+                id: updatedImageData.filename,
+                thumbnailUrl: getThumbnailUrl(updatedImageData.filename),
+                fullResUrl: getBackgroundPath(updatedImageData.filename),
+            });
         }
 
-        // if the item was selected, update the global settings to preserve the selection state
+        // Perform a targeted DOM update.
+        const thumbnailElements = document.querySelectorAll(`.thumbnail[data-bgfile="${bgNames.oldBg}"]`);
+        thumbnailElements.forEach(thumb => {
+            const newFilenameWithoutExt = updatedImageData.filename.substring(0, updatedImageData.filename.lastIndexOf('.')) || updatedImageData.filename;
+
+            const $thumb = $(thumb);
+            $thumb.attr('data-bgfile', updatedImageData.filename);
+            $thumb.attr('data-url', getBackgroundPath(updatedImageData.filename));
+            $thumb.attr('title', updatedImageData.filename);
+
+            const titleDiv = thumb.querySelector('.BGSampleTitle');
+            if (titleDiv) {
+                titleDiv.textContent = newFilenameWithoutExt;
+            }
+        });
+
+
+        // If the renamed item was the selected one, update global settings.
         if (wasSelected) {
             background_settings.name = updatedImageData.filename;
-        }
-
-        // Re-run the current search/filter to update the UI instantly
-        backgroundSelector.search($('#bg-filter').val() || '');
-
-        // After the re-render, silently re-apply the selection highlight if it was selected
-        if (wasSelected) {
-            // Use a timeout to ensure the DOM has updated
-            setTimeout(() => highlightSelectedBackground(), 100);
         }
 
     } catch (error) {
@@ -1362,11 +1380,12 @@ function openStarredPopup() {
                     break;
                 case 'edit':
                     await onRenameBackgroundClick.call(jgButton, e);
-                    renderContent();
                     break;
                 default:
                     const actionMap = { 'lock': onLockBackgroundClick, 'unlock': onUnlockBackgroundClick };
-                    if (actionMap[action]) actionMap[action].call(context, e);
+                    if (actionMap[action]) {
+                         actionMap[action].call(context, e);
+                    }
                     break;
             }
         }
