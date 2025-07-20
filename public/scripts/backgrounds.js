@@ -1348,8 +1348,8 @@ async function uploadBackground(formData) {
         });
         if (!response.ok) throw new Error(`Upload failed: ${await response.text()}`);
 
-        // 1. Get the filename string from the response.
-        const newBgFilename = await response.text();
+        const newImageData = await response.json();
+        const newBgFilename = newImageData.filename;
 
         // 2. Refresh the gallery. This will create the new thumbnail element in the DOM.
         await getBackgrounds(true);
@@ -1892,6 +1892,7 @@ function openFolderChooserPopup(filename) {
 
 /**
  * Initializes the background gallery and sets up event listeners.
+ * This function is idempotent and can be safely called multiple times.
  * @returns {Promise<void>}
  */
 export async function initBackgrounds() {
@@ -1913,62 +1914,52 @@ export async function initBackgrounds() {
         checkVisibility();
     }
 
-    // Use event delegation for dynamically created elements.
-    $(document).off('click', '#starred-folder-button').on('click', '#starred-folder-button', (e) => {
-        e.stopPropagation(); // Prevent click from bubbling to other listeners
-        openStarredPopup();
-    });
-    $(document).off('click', '#add-folder-button').on('click', '#add-folder-button', async (e) => {
-        e.stopPropagation();
-
-        if (backgroundSelector && backgroundSelector.folderLists.length < FOLDER_LIMIT) {
-            const defaultName = `New Folder ${backgroundSelector.folderLists.length + 1}`;
-
-            try {
-                const response = await fetch('/api/backgrounds/folders/create', {
-                    method: 'POST',
-                    headers: getRequestHeaders(),
-                    body: JSON.stringify({ name: defaultName }),
-                });
-
-                if (!response.ok) {
-                    throw new Error(`Server responded with ${response.status}`);
+    $(document)
+        .off('click', '#starred-folder-button').on('click', '#starred-folder-button', (e) => {
+            e.stopPropagation();
+            openStarredPopup();
+        })
+        .off('click', '#add-folder-button').on('click', '#add-folder-button', async (e) => {
+            e.stopPropagation();
+            if (backgroundSelector && backgroundSelector.folderLists.length < FOLDER_LIMIT) {
+                const defaultName = `New Folder ${backgroundSelector.folderLists.length + 1}`;
+                try {
+                    const response = await fetch('/api/backgrounds/folders/create', {
+                        method: 'POST',
+                        headers: getRequestHeaders(),
+                        body: JSON.stringify({ name: defaultName }),
+                    });
+                    if (!response.ok) throw new Error(`Server responded with ${response.status}`);
+                    const newFolder = await response.json();
+                    backgroundSelector.folderLists.push(newFolder);
+                    backgroundSelector.renderFolders();
+                } catch (error) {
+                    console.error('Failed to create folder:', error);
+                    toastr.error('Could not create folder.');
                 }
-
-                const newFolder = await response.json();
-                backgroundSelector.folderLists.push(newFolder);
-                backgroundSelector.renderFolders();
-
-            } catch (error) {
-                console.error('Failed to create folder:', error);
-                toastr.error('Could not create folder.');
             }
-        }
-    });
-    $(document).off('click', '.blank-folder-button').on('click', '.blank-folder-button', function(e) {
-        e.stopPropagation();
-        const folderId = this.dataset.folderId;
-        if (folderId) {
-            openCustomFolderPopup(folderId);
-        }
-    });
-    $(document).off('click', '.jg-button').on('click', '.jg-button', function (e) {
-        e.stopPropagation();
-        const action = $(this).data('action');
-        const thumbnailContext = $(this).closest('.thumbnail')[0];
-        if (!thumbnailContext) return;
-        const filename = thumbnailContext.dataset.bgfile;
-        switch (action) {
-            case 'star': if (filename) toggleStarredBackground(filename); break;
-            case 'add-to-folder': openFolderChooserPopup(filename); break;
-            case 'rename-folder':
-                onRenameFolderClick.call(this, e);
-                break;
-            case 'delete-folder': onDeleteFolderClick.call(this, e); break;
-            case 'edit': onRenameBackgroundClick.call(this, e); break;
-            case 'delete': onDeleteBackgroundClick.call(this, e); break;
-        }
-    });
+        })
+        .off('click', '.blank-folder-button').on('click', '.blank-folder-button', function(e) {
+            e.stopPropagation();
+            const folderId = this.dataset.folderId;
+            if (folderId) openCustomFolderPopup(folderId);
+        })
+        .off('click', '.jg-button').on('click', '.jg-button', function (e) {
+            e.stopPropagation();
+            const action = $(this).data('action');
+            const thumbnailContext = $(this).closest('.thumbnail')[0];
+            if (!thumbnailContext) return;
+            const filename = thumbnailContext.dataset.bgfile;
+            switch (action) {
+                case 'star': if (filename) toggleStarredBackground(filename); break;
+                case 'add-to-folder': openFolderChooserPopup(filename); break;
+                case 'rename-folder': onRenameFolderClick.call(this, e); break;
+                case 'delete-folder': onDeleteFolderClick.call(this, e); break;
+                case 'edit': onRenameBackgroundClick.call(this, e); break;
+                case 'delete': onDeleteBackgroundClick.call(this, e); break;
+            }
+        })
+        .off('click', '.thumbnail').on('click', '.thumbnail', onSelectBackgroundClick);
 
     $('#bg_lock_button').off('click').on('click', function () {
         if (hasCustomBackground()) {
@@ -1978,23 +1969,24 @@ export async function initBackgrounds() {
         }
     });
 
-    $(document).off('click', '.thumbnail').on('click', '.thumbnail', onSelectBackgroundClick);
-    $('#auto_background').on('click', autoBackgroundCommand);
-    $('#add_bg_button').on('change', onBackgroundUploadSelected);
-    $('#bg-filter').on('input', onBackgroundFilterInput);
-    $('#bg-sort-order').on('input', function () {
+    $('#auto_background').off('click').on('click', autoBackgroundCommand);
+    $('#add_bg_button').off('change').on('change', onBackgroundUploadSelected);
+    $('#bg-filter').off('input').on('input', onBackgroundFilterInput);
+
+    $('#bg-sort-order').off('input').on('input', function () {
         if (backgroundSelector) {
             backgroundSelector.sortOrder = $(this).val();
-            // Re-run the search to apply the new sort order to the current view
             backgroundSelector.search($('#bg-filter').val() || '');
         }
     });
-    $('#background_fitting').on('input', function () {
+
+    $('#background_fitting').off('input').on('input', function () {
         background_settings.fitting = String($(this).val());
         setFittingClass(background_settings.fitting);
         saveSettingsDebounced();
     });
-    $('#background_thumbnails_animation').on('change', function () {
+
+    $('#background_thumbnails_animation').off('change').on('change', function () {
         const isEnabled = $(this).prop('checked');
         background_settings.animation = isEnabled;
         saveSettingsDebounced();
@@ -2006,6 +1998,7 @@ export async function initBackgrounds() {
             }
         }
     });
+
     const commands = [
         { name: 'lockbg', callback: onLockBackgroundClick, aliases: ['bglock'], help: 'Locks the selected background for the current chat.' },
         { name: 'unlockbg', callback: onUnlockBackgroundClick, aliases: ['bgunlock'], help: 'Unlocks the background for the current chat.' },
