@@ -1480,6 +1480,7 @@ function openStarredPopup() {
     const template = document.getElementById('starred-popup-template');
     const popupFragment = template.content.cloneNode(true);
     const popupOverlay = popupFragment.querySelector('.popup-overlay');
+    const popupPanel = popupFragment.querySelector('.popup-panel');
     const contentArea = popupFragment.querySelector('.popup-content');
 
     let isClosing = false;
