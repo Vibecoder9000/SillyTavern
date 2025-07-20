@@ -5273,20 +5273,35 @@
                             <i class="fa-solid fa-star"></i>
                             <i class="fa-regular fa-star"></i>
                         </div>
+                        <div data-action="add-to-folder" class="jg-button jg-add-to-folder fa-solid fa-folder-plus fa-fw pointer" data-i18n="[title]Add to Folder" title="Add to Folder"></div>
                         <div data-action="edit" class="jg-button jg-edit fa-solid fa-pen-to-square fa-fw pointer" data-i18n="[title]Rename Background" title="Rename Background"></div>
                         <div data-action="delete" class="jg-button jg-delete fa-solid fa-trash-can fa-fw pointer" data-i18n="[title]Delete Background" title="Delete Background"></div>
                     </div>
                 </template>
                 <template id="starred-popup-template">
-                    <div class="starred-popup-overlay">
-                        <div class="starred-popup-panel">
-                            <div class="starred-popup-header">
+                    <div class="popup-overlay">
+                        <div class="popup-panel">
+                            <div class="popup-header">
                                 <h3 data-i18n="Starred Backgrounds">Starred Backgrounds</h3>
                                 <div class="popup-close-button" data-i18n="[title]Close" title="Close">
                                     <i class="fa-solid fa-xmark"></i>
                                 </div>
                             </div>
-                            <div class="starred-popup-content">
+                            <div class="popup-content">
+                            </div>
+                        </div>
+                    </div>
+                </template>
+                <template id="folder-chooser-popup-template">
+                    <div class="popup-overlay">
+                        <div class="popup-panel">
+                            <div class="popup-header">
+                                <h3 data-i18n="Add to Folder">Add to Folder</h3>
+                                <div class="popup-close-button" data-i18n="[title]Close" title="Close">
+                                    <i class="fa-solid fa-xmark"></i>
+                                </div>
+                            </div>
+                            <div class="popup-content" id="folder-chooser-content">
                             </div>
                         </div>
                     </div>

@@ -69,7 +69,7 @@ export async function generateSingleFileMetadata(filePath) {
             dominantColor: hexColor,
             isStarred: false,
             tags: [],
-            folderId: null,
+            folderIds: [],
             lastUsedTimestamp: null,
         };
     } catch (error) {
@@ -92,7 +92,7 @@ export async function syncBackgroundsMetadata(userDirectories) {
         const rawData = await fs.readFile(backgroundsJsonPath, 'utf8');
         metadata = JSON.parse(rawData);
     } catch (error) {
-        console.warn('Creating new metadata.json');
+        console.warn('Processing Backgrounds...');
         metadata = { version: 1, images: {}, folders: [], tags: [] };
     }
 

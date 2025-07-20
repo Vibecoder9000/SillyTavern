@@ -8,6 +8,7 @@ import { t, translate } from './i18n.js';
 import { Popup } from './popup.js';
 
 const PNG_PIXEL_B64 = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
+const FOLDER_LIMIT = 100;
 const SERVER_THUMBNAIL_CACHE = new Map();
 let THUMBNAIL_CONFIG = { width: 160, height: 90 };
 let backgroundSelector = null;
@@ -15,44 +16,6 @@ let hasGalleryLoaded = false;
 let galleryLoadInProgress = false;
 const BG_METADATA_KEY = 'custom_background';
 const LIST_METADATA_KEY = 'chat_backgrounds';
-
-/**
- * Creates the "Starred" folder button element, styled to look like a thumbnail placeholder.
- * @returns {HTMLElement} The created container element for the folder.
- */
-function createStarredFolderElement() {
-    const container = document.createElement('div');
-    container.id = 'starred-folder-container';
-
-    const button = document.createElement('div');
-    button.id = 'starred-folder-button';
-    button.className = 'thumbnail';
-    button.title = translate('View Starred Backgrounds');
-
-    const size = '110px';
-    button.style.setProperty('--thumb-width', size);
-    button.style.setProperty('--thumb-height', size);
-
-    const clipper = document.createElement('div');
-    clipper.className = 'thumbnail-clipper';
-
-    const placeholder = document.createElement('div');
-    placeholder.className = 'thumbnail-placeholder';
-
-    const iconOverlay = document.createElement('div');
-    iconOverlay.className = 'folder-icon-overlay';
-
-    const folderIcon = document.createElement('i');
-    folderIcon.className = 'fa-solid fa-folder';
-
-    iconOverlay.appendChild(folderIcon);
-    clipper.appendChild(placeholder);
-    clipper.appendChild(iconOverlay);
-    button.appendChild(clipper);
-    container.appendChild(button);
-
-    return container;
-}
 
 /**
  * Toggles the starred status of a background by calling the server API and then updates the UI.
@@ -96,16 +59,20 @@ async function toggleStarredBackground(filename) {
             }
         });
 
-        // 3. Handle the edge case of the "Starred" folder appearing or disappearing in the main gallery.
+        // 3. Handle the edge case of the "Starred" folder appearing or disappearing.
         const hasAnyStarredInFilteredView = backgroundSelector.filteredImages.some(img => img.isStarred);
-        const folderElement = document.getElementById('starred-folder-container');
+        const foldersContainer = document.getElementById('folders-container');
+        const starredFolderElement = document.getElementById('starred-folder-container');
 
-        if (hasAnyStarredInFilteredView && !folderElement) {
-            // If there are now starred items but the folder isn't visible, add it.
-            backgroundSelector.container.prepend(createStarredFolderElement());
-        } else if (!hasAnyStarredInFilteredView && folderElement) {
-            // If there are no longer any starred items but the folder is visible, remove it.
-            folderElement.remove();
+        if (hasAnyStarredInFilteredView && !starredFolderElement && foldersContainer) {
+            // If there are now starred items but the starred folder isn't visible, add it before the add button
+            const addFolderElement = document.getElementById('add-folder-container');
+            if (addFolderElement) {
+                foldersContainer.insertBefore(createStarredFolderElement(), addFolderElement);
+            }
+        } else if (!hasAnyStarredInFilteredView && starredFolderElement) {
+            // If there are no longer any starred items but the folder is visible, remove it
+            starredFolderElement.remove();
         }
 
     } catch (error) {
@@ -303,6 +270,7 @@ class BackgroundSelector {
         this.container = document.getElementById(containerId);
         this.images = [];
         this.filteredImages = [];
+        this.folderLists = [];
         this.containerWidth = 0;
         this.imageObserver = null;
         this.resizeObserver = null;
@@ -358,6 +326,38 @@ class BackgroundSelector {
         this.render(true);
     }
 
+    /**
+     * Renders only the folder section of the background panel.
+     */
+    renderFolders() {
+        const foldersContainer = document.getElementById('folders-container');
+        if (!foldersContainer) {
+            // If the container doesn't exist, fall back to a full render.
+            this.render();
+            return;
+        }
+
+        // Clear only the folder container's content.
+        foldersContainer.innerHTML = '';
+
+        const hasStarred = this.images.some(img => img.isStarred);
+
+        // 1. "Starred" folder is always first, if applicable.
+        if (hasStarred) {
+            foldersContainer.appendChild(createStarredFolderElement());
+        }
+
+        // 2. Render all the user-created "blank" folders from our data array.
+        this.folderLists.forEach((folder) => { // Pass the whole object
+            foldersContainer.appendChild(createBlankFolderElement(folder));
+        });
+
+        // 3. The "Add" button is last, but only if we're under the limit.
+        if (this.folderLists.length < FOLDER_LIMIT) {
+            foldersContainer.appendChild(createAddFolderElement());
+        }
+    }
+
     render(isInitial = false) {
         this.isInitialRender = isInitial;
         this.containerWidth = this.container.clientWidth;
@@ -371,10 +371,11 @@ class BackgroundSelector {
             return;
         }
 
-        const hasStarred = this.filteredImages.some(img => img.isStarred);
-        if (hasStarred) {
-            this.container.appendChild(createStarredFolderElement());
-        }
+        // Create a placeholder for the folders and render them.
+        const foldersContainer = document.createElement('div');
+        foldersContainer.id = 'folders-container';
+        this.container.appendChild(foldersContainer);
+        this.renderFolders();
 
         const mainContainer = document.createElement('div');
         mainContainer.id = 'main-backgrounds-container';
@@ -484,6 +485,7 @@ class BackgroundSelector {
     destroy() {
         if (this.imageObserver) this.imageObserver.disconnect();
         if (this.resizeObserver) this.resizeObserver.disconnect();
+        this.folderLists = [];
         const scrollToTopButton = document.getElementById('bg_scroll_top');
         if (scrollToTopButton) {
             scrollToTopButton.style.display = 'none';
@@ -582,7 +584,7 @@ export async function getBackgrounds(force = false) {
     });
     if (!response.ok) throw new Error(`Fetch failed: ${response.statusText}`);
     const data = await response.json();
-    const { images: imagesFromServer = [], config } = data;
+    const { images: imagesFromServer = [], config, folders = [] } = data; // Destructure folders
     if (config) Object.assign(THUMBNAIL_CONFIG, config);
 
     let imageDataList = imagesFromServer.map(imgData => ({
@@ -593,8 +595,11 @@ export async function getBackgrounds(force = false) {
         isStarred: !!imgData.isStarred,
         isCustom: false,
     }));
+
     if (backgroundSelector) {
         backgroundSelector.setData(imageDataList);
+        backgroundSelector.folderLists = folders; // Populate the folder list from the server
+        backgroundSelector.renderFolders(); // Re-render folders with the new data
         updateStateFromChatMetadata();
         highlightSelectedBackground();
     }
@@ -622,7 +627,6 @@ export function loadBackgroundSettings(settings) {
     $('#background_thumbnails_animation').prop('checked', background_settings.animation);
 }
 
-
 /**
  * Handles chat change events, updating background display based on chat metadata.
  */
@@ -642,7 +646,6 @@ async function onChatChanged() {
     highlightLockedBackground();
     updateLockButtonState();
 }
-
 
 /**
  * Updates the top bar lock/unlock button's appearance and text
@@ -793,7 +796,210 @@ function highlightLockedBackground() {
     }
 }
 
+/**
+ * Creates a blank folder element, representing a user-created background list.
+ * @param {number} index The index of the folder in the array.
+ * @returns {HTMLElement} The created container element for the blank folder.
+ */
+function createBlankFolderElement(folder) {
+    const button = document.createElement('div');
+    button.className = 'thumbnail blank-folder-button';
+    button.title = folder.name;
+    button.dataset.folderId = folder.id;
 
+    const clipper = document.createElement('div');
+    clipper.className = 'thumbnail-clipper';
+
+    const placeholder = document.createElement('div');
+    placeholder.className = 'thumbnail-placeholder';
+
+    const iconOverlay = document.createElement('div');
+    iconOverlay.className = 'folder-icon-overlay dark-folder-overlay';
+
+    const folderIcon = document.createElement('i');
+    folderIcon.className = 'fa-solid fa-folder';
+
+    const titleDiv = document.createElement('div');
+    titleDiv.className = 'BGSampleTitle';
+    titleDiv.textContent = folder.name;
+
+    // Create the hover menu
+    const menu = document.createElement('div');
+    menu.className = 'jg-menu';
+
+    const renameButton = document.createElement('div');
+    renameButton.dataset.action = 'rename-folder';
+    renameButton.className = 'jg-button jg-edit fa-solid fa-pen-to-square fa-fw pointer';
+    renameButton.title = 'Rename Folder';
+    renameButton.setAttribute('data-i18n', '[title]Rename Folder');
+
+    const deleteButton = document.createElement('div');
+    deleteButton.dataset.action = 'delete-folder';
+    deleteButton.className = 'jg-button jg-delete fa-solid fa-trash-can fa-fw pointer';
+    deleteButton.title = 'Delete Folder';
+    deleteButton.setAttribute('data-i18n', '[title]Delete Folder');
+
+    menu.appendChild(deleteButton);
+    menu.appendChild(renameButton);
+
+    iconOverlay.appendChild(folderIcon);
+    clipper.appendChild(placeholder);
+    clipper.appendChild(iconOverlay);
+    clipper.appendChild(titleDiv);
+    button.appendChild(clipper);
+    button.appendChild(menu);
+
+    return button;
+}
+
+/**
+ * Creates the "Starred" folder button element.
+ * @returns {HTMLElement} The created container element for the folder.
+ */
+function createStarredFolderElement() {
+    const button = document.createElement('div');
+    button.id = 'starred-folder-button';
+    button.className = 'thumbnail';
+    button.title = translate('View Starred Backgrounds');
+
+    const clipper = document.createElement('div');
+    clipper.className = 'thumbnail-clipper';
+
+    const placeholder = document.createElement('div');
+    placeholder.className = 'thumbnail-placeholder';
+
+    const iconOverlay = document.createElement('div');
+    iconOverlay.className = 'folder-icon-overlay';
+
+    const folderIcon = document.createElement('i');
+    folderIcon.className = 'fa-solid fa-folder';
+
+    iconOverlay.appendChild(folderIcon);
+    clipper.appendChild(placeholder);
+    clipper.appendChild(iconOverlay);
+    button.appendChild(clipper);
+
+    return button; // Return the button directly
+}
+
+/**
+ * Creates the "Add" folder button element, styled to look like a thumbnail placeholder.
+ * @returns {HTMLElement} The created container element for the add folder.
+ */
+function createAddFolderElement() {
+    const button = document.createElement('div');
+    button.id = 'add-folder-button';
+    button.className = 'thumbnail';
+    button.title = translate('Add Background Folder');
+
+    const clipper = document.createElement('div');
+    clipper.className = 'thumbnail-clipper';
+
+    const placeholder = document.createElement('div');
+    placeholder.className = 'thumbnail-placeholder';
+
+    const iconOverlay = document.createElement('div');
+    iconOverlay.className = 'add-icon-overlay';
+
+    const addIcon = document.createElement('i');
+    addIcon.className = 'fa-solid fa-plus';
+
+    iconOverlay.appendChild(addIcon);
+    clipper.appendChild(placeholder);
+    clipper.appendChild(iconOverlay);
+    button.appendChild(clipper);
+
+    return button; // Return the button directly
+}
+
+/**
+ * Handles deleting a custom folder after confirmation.
+ * @param {Event} e - The click event.
+ * @returns {Promise<void>}
+ */
+async function onDeleteFolderClick(e) {
+    e.stopPropagation();
+    const folderButton = this.closest('.blank-folder-button');
+    const folderId = folderButton.dataset.folderId;
+    const folder = backgroundSelector.folderLists.find(f => f.id === folderId);
+
+    if (!folder) return;
+
+    const confirm = await Popup.show.confirm(translate(`Delete the folder "${folder.name}"? This cannot be undone.`));
+    if (!confirm) return;
+
+    try {
+        const response = await fetch('/api/backgrounds/folders/delete', {
+            method: 'POST',
+            headers: getRequestHeaders(),
+            body: JSON.stringify({ folderId }),
+        });
+
+        if (!response.ok) {
+            throw new Error(`Server responded with ${response.status}`);
+        }
+
+        // On success, update the client-side data to match
+        // 1. Remove the folder from the list
+        backgroundSelector.folderLists = backgroundSelector.folderLists.filter(f => f.id !== folderId);
+
+        // 2. Remove this folder's ID from any images that have it
+        backgroundSelector.images.forEach(image => {
+            if (Array.isArray(image.folderIds) && image.folderIds.includes(folderId)) {
+                image.folderIds = image.folderIds.filter(id => id !== folderId);
+            }
+        });
+
+        // 3. Re-render the folders UI
+        backgroundSelector.renderFolders();
+        toastr.success(`Folder "${folder.name}" deleted.`);
+
+    } catch (error) {
+        console.error('Failed to delete folder:', error);
+        toastr.error('Could not delete folder.');
+    }
+}
+
+/**
+ * Handles renaming a custom folder.
+ * @param {Event} e - The click event.
+ * @returns {Promise<void>}
+ */
+async function onRenameFolderClick(e) {
+    e.stopPropagation();
+    const folderButton = this.closest('.blank-folder-button');
+    const folderId = folderButton.dataset.folderId;
+    const folder = backgroundSelector.folderLists.find(f => f.id === folderId);
+
+    if (!folder) return;
+
+    const newName = await Popup.show.input(translate('Enter new folder name:'), null, folder.name);
+
+    if (!newName || newName.trim() === '' || newName === folder.name) {
+        return; // User cancelled or entered the same/empty name
+    }
+
+    try {
+        const response = await fetch('/api/backgrounds/folders/rename', {
+            method: 'POST',
+            headers: getRequestHeaders(),
+            body: JSON.stringify({ folderId, newName }),
+        });
+
+        if (!response.ok) {
+            throw new Error(`Server responded with ${response.status}`);
+        }
+
+        // On success, update the client-side data and UI
+        folder.name = newName;
+        backgroundSelector.renderFolders();
+        toastr.success('Folder renamed.');
+
+    } catch (error) {
+        console.error('Failed to rename folder:', error);
+        toastr.error('Could not rename folder.');
+    }
+}
 
 /**
  * Highlights the currently selected background thumbnail in the gallery.
@@ -1265,49 +1471,33 @@ function createRowElement(rowData) {
 function openStarredPopup() {
     const template = document.getElementById('starred-popup-template');
     const popupFragment = template.content.cloneNode(true);
-    const popupOverlay = popupFragment.querySelector('.starred-popup-overlay');
-    const popupPanel = popupFragment.querySelector('.starred-popup-panel');
-    const contentArea = popupFragment.querySelector('.starred-popup-content');
+    const popupOverlay = popupFragment.querySelector('.popup-overlay');
+    const popupPanel = popupFragment.querySelector('.popup-panel');
+    const contentArea = popupFragment.querySelector('.popup-content');
 
     let isClosing = false;
     let observer;
-
-    // A list of all events that could possibly trigger "click-outside" logic.
     const SHIELD_EVENTS = ['mousedown', 'pointerdown', 'touchstart'];
 
-    const eventShield = (e) => {
-        // If the event started anywhere inside our popup's overlay, kill it immediately.
-        if (e.target.closest('.starred-popup-overlay')) {
-            e.stopImmediatePropagation();
-        }
-    };
-
     /**
-     * Attaches the shield listeners.
-     */
+    * Attaches the shield listeners.
+    */
+    const eventShield = (e) => { if (e.target.closest('.popup-overlay')) e.stopImmediatePropagation(); };
     const activateShield = () => {
-        SHIELD_EVENTS.forEach(eventName => {
-            document.addEventListener(eventName, eventShield, true);
-        });
+        SHIELD_EVENTS.forEach(eventName => document.addEventListener(eventName, eventShield, true));
         document.addEventListener('keydown', handleKeyDown, true);
     };
-
-    /**
-     * Removes the shield listeners during cleanup.
-     */
     const deactivateShield = () => {
-        SHIELD_EVENTS.forEach(eventName => {
-            document.removeEventListener(eventName, eventShield, true);
-        });
+        SHIELD_EVENTS.forEach(eventName => document.removeEventListener(eventName, eventShield, true));
         document.removeEventListener('keydown', handleKeyDown, true);
     };
 
     const renderContent = () => {
         const starredImages = backgroundSelector.images.filter(img => img.isStarred);
-        contentArea.innerHTML = ''; // Clear previous content
+        contentArea.innerHTML = '';
 
         if (starredImages.length === 0) {
-            closePopup();
+            contentArea.innerHTML = `<p style="text-align: center; padding: 20px;">${translate('You have no starred backgrounds.')}</p>`;
             return;
         }
 
@@ -1325,13 +1515,8 @@ function openStarredPopup() {
         const thumbnailContainer = document.createElement('div');
         thumbnailContainer.className = 'thumbnail-container';
 
-        // Calculate and create the justified grid layout.
         const rows = calculateRowLayout(usableWidth, starredImages, false);
-        rows.forEach(rowData => {
-            const rowElement = createRowElement(rowData);
-            thumbnailContainer.appendChild(rowElement);
-        });
-
+        rows.forEach(rowData => thumbnailContainer.appendChild(createRowElement(rowData)));
         contentArea.appendChild(thumbnailContainer);
 
         // Set up IntersectionObserver for lazy-loading thumbnails.
@@ -1339,9 +1524,8 @@ function openStarredPopup() {
         observer = new IntersectionObserver((entries) => {
             entries.forEach(entry => {
                 if (entry.isIntersecting) {
-                    const thumbElement = entry.target;
-                    observer.unobserve(thumbElement);
-                    backgroundSelector.loadSingleThumbnail(thumbElement);
+                    observer.unobserve(entry.target);
+                    backgroundSelector.loadSingleThumbnail(entry.target);
                 }
             });
         }, { root: contentArea, rootMargin: '300px 0px' });
@@ -1351,8 +1535,8 @@ function openStarredPopup() {
     };
 
     /**
-     * Closes the popup, performs cleanup, and removes event listeners.
-     */
+    * Closes the popup, performs cleanup, and removes event listeners.
+    */
     const closePopup = () => {
         if (isClosing) return;
         isClosing = true;
@@ -1369,16 +1553,16 @@ function openStarredPopup() {
     };
 
     /**
-     * This function handles the logic of a click.
-     * The shield has already stopped the event from propagating.
-     * @param {MouseEvent} e - The click event.
-     */
+    * This function handles the logic of a click.
+    * The shield has already stopped the event from propagating.
+    * @param {MouseEvent} e - The click event.
+    */
     const handlePopupClick = async (e) => {
         const closeButton = e.target.closest('.popup-close-button');
         const jgButton = e.target.closest('.jg-button');
         const thumbnail = e.target.closest('.thumbnail');
 
-        if (closeButton || !e.target.closest('.starred-popup-panel')) {
+        if (closeButton || !e.target.closest('.popup-panel')) {
             closePopup();
             return;
         }
@@ -1388,10 +1572,15 @@ function openStarredPopup() {
             const action = jgButton.dataset.action;
             const context = jgButton.closest('.thumbnail');
             if (!context) return;
+            const filename = context.dataset.bgfile;
+
             switch (action) {
                 case 'star':
-                    await toggleStarredBackground(context.dataset.bgfile);
-                    renderContent();
+                    await toggleStarredBackground(filename);
+                    renderContent(); // Re-render to show changes
+                    break;
+                case 'add-to-folder':
+                    openFolderChooserPopup(filename);
                     break;
                 case 'delete':
                     await onDeleteBackgroundClick.call(jgButton, e);
@@ -1399,48 +1588,293 @@ function openStarredPopup() {
                     break;
                 case 'edit':
                     await onRenameBackgroundClick.call(jgButton, e);
+                    renderContent();
                     break;
-                default: {
-                    const actionMap = { 'lock': onLockBackgroundClick, 'unlock': onUnlockBackgroundClick };
-                    if (actionMap[action]) actionMap[action].call(context, e);
-                    break;
-                }
             }
-        }
-        else if (thumbnail) {
+        } else if (thumbnail) {
             onSelectBackgroundClick.call(thumbnail);
-            // Optionally close the popup after selection.
-            // closePopup();
+            closePopup();
         }
     };
 
     /**
-     * Handles the 'Escape' key to close the popup.
-     * @param {KeyboardEvent} e - The keydown event.
-     */
+    * Handles the 'Escape' key to close the popup.
+    * @param {KeyboardEvent} e - The keydown event.
+    */
     const handleKeyDown = (e) => {
-        if (e.key === 'Escape') {
-            if (window.isStCorePopupActive) {
-                return;
-            }
-
+        if (e.key === 'Escape' && !window.isStCorePopupActive) {
             e.stopImmediatePropagation();
             closePopup();
         }
     };
 
-    // Activate the shield to block mousedown/pointerdown
     activateShield();
 
     popupOverlay.addEventListener('click', handlePopupClick);
 
     document.body.appendChild(popupOverlay);
 
-    // Use requestAnimationFrame to ensure the popup is in the DOM and has layout before we try to render its content and trigger the open animation.
+    // Use requestAnimationFrame to ensure the popup is in the DOM and has layout
     requestAnimationFrame(() => {
         popupOverlay.classList.add('open');
         renderContent();
     });
+}
+
+/**
+ * Opens a modal popup gallery displaying backgrounds from a specific custom folder.
+ * @param {string} folderId - The ID of the folder to display.
+ */
+function openCustomFolderPopup(folderId) {
+    const folder = backgroundSelector.folderLists.find(f => f.id === folderId);
+    if (!folder) {
+        console.error(`Folder with ID ${folderId} not found.`);
+        return;
+    }
+
+    const template = document.getElementById('starred-popup-template');
+    const popupFragment = template.content.cloneNode(true);
+    const popupOverlay = popupFragment.querySelector('.popup-overlay');
+    const popupPanel = popupFragment.querySelector('.popup-panel');
+    const contentArea = popupFragment.querySelector('.popup-content');
+    const headerTitle = popupFragment.querySelector('h3');
+
+    // Set the title to the folder's name
+    headerTitle.textContent = folder.name;
+    headerTitle.removeAttribute('data-i18n');
+
+    let isClosing = false;
+    let observer;
+    const SHIELD_EVENTS = ['mousedown', 'pointerdown', 'touchstart'];
+
+    const eventShield = (e) => { if (e.target.closest('.popup-overlay')) e.stopImmediatePropagation(); };
+    const activateShield = () => {
+        SHIELD_EVENTS.forEach(eventName => document.addEventListener(eventName, eventShield, true));
+        document.addEventListener('keydown', handleKeyDown, true);
+    };
+    const deactivateShield = () => {
+        SHIELD_EVENTS.forEach(eventName => document.removeEventListener(eventName, eventShield, true));
+        document.removeEventListener('keydown', handleKeyDown, true);
+    };
+
+    const renderContent = () => {
+        const folderImages = backgroundSelector.images.filter(img => Array.isArray(img.folderIds) && img.folderIds.includes(folderId));
+        contentArea.innerHTML = '';
+
+        if (folderImages.length === 0) {
+            contentArea.innerHTML = `<p style="text-align: center; padding: 20px;">${translate('This folder is empty.')}</p>`;
+            return;
+        }
+
+        const style = getComputedStyle(contentArea);
+        const paddingX = parseFloat(style.paddingLeft) + parseFloat(style.paddingRight);
+        const usableWidth = popupPanel.clientWidth - paddingX;
+
+        if (usableWidth <= 0) {
+            requestAnimationFrame(renderContent);
+            return;
+        }
+
+        const thumbnailContainer = document.createElement('div');
+        thumbnailContainer.className = 'thumbnail-container';
+        const rows = calculateRowLayout(usableWidth, folderImages, false);
+        rows.forEach(rowData => thumbnailContainer.appendChild(createRowElement(rowData)));
+        contentArea.appendChild(thumbnailContainer);
+
+        if (observer) observer.disconnect();
+        observer = new IntersectionObserver((entries) => {
+            entries.forEach(entry => {
+                if (entry.isIntersecting) {
+                    observer.unobserve(entry.target);
+                    backgroundSelector.loadSingleThumbnail(entry.target);
+                }
+            });
+        }, { root: contentArea, rootMargin: '300px 0px' });
+
+        thumbnailContainer.querySelectorAll('.thumbnail').forEach(thumb => observer.observe(thumb));
+        highlightLockedBackground();
+    };
+
+    const closePopup = () => {
+        if (isClosing) return;
+        isClosing = true;
+        deactivateShield();
+        popupOverlay.removeEventListener('click', handlePopupClick);
+        if (observer) observer.disconnect();
+        popupOverlay.classList.remove('open');
+        popupOverlay.addEventListener('transitionend', () => popupOverlay.remove(), { once: true });
+    };
+
+    const handlePopupClick = async (e) => {
+        const closeButton = e.target.closest('.popup-close-button');
+        const jgButton = e.target.closest('.jg-button');
+        const thumbnail = e.target.closest('.thumbnail');
+
+        if (closeButton || !e.target.closest('.popup-panel')) {
+            closePopup();
+            return;
+        }
+
+        if (jgButton) {
+            e.stopPropagation();
+            const action = jgButton.dataset.action;
+            const context = jgButton.closest('.thumbnail');
+            if (!context) return;
+            const filename = context.dataset.bgfile;
+
+            switch (action) {
+                case 'star':
+                    await toggleStarredBackground(filename);
+                    break;
+                case 'add-to-folder':
+                    openFolderChooserPopup(filename);
+                    break;
+                case 'delete':
+                    await onDeleteBackgroundClick.call(jgButton, e);
+                    renderContent(); // Re-render the popup after deletion
+                    break;
+                case 'edit':
+                    await onRenameBackgroundClick.call(jgButton, e);
+                    renderContent(); // Re-render the popup after rename
+                    break;
+            }
+        } else if (thumbnail) {
+            onSelectBackgroundClick.call(thumbnail);
+            closePopup();
+        }
+    };
+
+    const handleKeyDown = (e) => {
+        if (e.key === 'Escape' && !window.isStCorePopupActive) {
+            e.stopImmediatePropagation();
+            closePopup();
+        }
+    };
+
+    activateShield();
+    popupOverlay.addEventListener('click', handlePopupClick);
+    document.body.appendChild(popupOverlay);
+    requestAnimationFrame(() => {
+        popupOverlay.classList.add('open');
+        renderContent();
+    });
+}
+
+/**
+ * Opens a popup to let the user choose a folder to add a background to.
+ * @param {string} filename - The filename of the background being added.
+ */
+function openFolderChooserPopup(filename) {
+    const template = document.getElementById('folder-chooser-popup-template');
+    const popupFragment = template.content.cloneNode(true);
+    const popupOverlay = popupFragment.querySelector('.popup-overlay');
+    const contentArea = popupFragment.querySelector('#folder-chooser-content');
+
+    let isClosing = false;
+    const SHIELD_EVENTS = ['mousedown', 'pointerdown', 'touchstart'];
+
+    // If there are no folders to choose from, don't open the popup.
+    if (backgroundSelector.folderLists.length === 0) {
+        toastr.info(translate('Create a new folder first by clicking the "+" icon.'));
+        return;
+    }
+
+    // The shield stops clicks from "leaking" out and being handled by other listeners.
+    const eventShield = (e) => {
+        if (e.target.closest('.popup-overlay')) {
+            e.stopImmediatePropagation();
+        }
+    };
+
+    const activateShield = () => {
+        SHIELD_EVENTS.forEach(eventName => document.addEventListener(eventName, eventShield, true));
+        document.addEventListener('keydown', handleKeyDown, true);
+    };
+
+    const deactivateShield = () => {
+        SHIELD_EVENTS.forEach(eventName => document.removeEventListener(eventName, eventShield, true));
+        document.removeEventListener('keydown', handleKeyDown, true);
+    };
+
+    const closePopup = () => {
+        if (isClosing) return;
+        isClosing = true;
+        deactivateShield();
+        popupOverlay.removeEventListener('click', handlePopupClick);
+        popupOverlay.classList.remove('open');
+        popupOverlay.addEventListener('transitionend', () => popupOverlay.remove(), { once: true });
+    };
+
+    const handlePopupClick = async (e) => {
+        const folderChoice = e.target.closest('.blank-folder-button');
+        const closeButton = e.target.closest('.popup-close-button');
+
+        if (closeButton || !e.target.closest('.popup-panel')) {
+            closePopup();
+            return;
+        }
+
+        if (folderChoice) {
+            e.stopPropagation();
+            const folderId = folderChoice.dataset.folderId;
+            const imageToUpdate = backgroundSelector.images.find(img => img.filename === filename);
+
+            if (imageToUpdate) {
+                if (!Array.isArray(imageToUpdate.folderIds)) {
+                    imageToUpdate.folderIds = [];
+                }
+
+                if (!imageToUpdate.folderIds.includes(folderId)) {
+                    imageToUpdate.folderIds.push(folderId); // Optimistic update
+
+                    try {
+                        const response = await fetch('/api/backgrounds/update-folders', {
+                            method: 'POST',
+                            headers: getRequestHeaders(),
+                            body: JSON.stringify({
+                                filename: imageToUpdate.filename,
+                                folderIds: imageToUpdate.folderIds,
+                            }),
+                        });
+
+                        if (!response.ok) throw new Error(`Server error: ${response.status}`);
+                        toastr.success(`'${filename}' added to folder.`);
+
+                    } catch (error) {
+                        console.error('Failed to save folder update:', error);
+                        toastr.error('Failed to update folder. Reverting change.');
+                        imageToUpdate.folderIds.pop(); // Roll back on failure
+                    }
+                } else {
+                    toastr.info(`'${filename}' is already in that folder.`);
+                }
+                closePopup();
+            }
+        }
+    };
+
+    // Handles the Escape key properly, stopping it from closing other UI elements.
+    const handleKeyDown = (e) => {
+        if (e.key === 'Escape') {
+            // This check prevents closing if a text input popup is open on top of this one.
+            if (window.isStCorePopupActive) {
+                return;
+            }
+            e.stopImmediatePropagation();
+            closePopup();
+        }
+    };
+
+    // Populate the popup with folder choices
+    backgroundSelector.folderLists.forEach((folder) => {
+        const folderElement = createBlankFolderElement(folder);
+        contentArea.appendChild(folderElement);
+    });
+
+    activateShield();
+    popupOverlay.addEventListener('click', handlePopupClick);
+    document.body.appendChild(popupOverlay);
+    requestAnimationFrame(() => popupOverlay.classList.add('open'));
 }
 
 /**
@@ -1467,8 +1901,44 @@ export async function initBackgrounds() {
     }
 
     // Use event delegation for dynamically created elements.
-    $(document).off('click', '#starred-folder-button').on('click', '#starred-folder-button', openStarredPopup);
+    $(document).off('click', '#starred-folder-button').on('click', '#starred-folder-button', (e) => {
+        e.stopPropagation(); // Prevent click from bubbling to other listeners
+        openStarredPopup();
+    });
+    $(document).off('click', '#add-folder-button').on('click', '#add-folder-button', async (e) => {
+        e.stopPropagation();
 
+        if (backgroundSelector && backgroundSelector.folderLists.length < FOLDER_LIMIT) {
+            const defaultName = `New Folder ${backgroundSelector.folderLists.length + 1}`;
+
+            try {
+                const response = await fetch('/api/backgrounds/folders/create', {
+                    method: 'POST',
+                    headers: getRequestHeaders(),
+                    body: JSON.stringify({ name: defaultName }),
+                });
+
+                if (!response.ok) {
+                    throw new Error(`Server responded with ${response.status}`);
+                }
+
+                const newFolder = await response.json();
+                backgroundSelector.folderLists.push(newFolder);
+                backgroundSelector.renderFolders();
+
+            } catch (error) {
+                console.error('Failed to create folder:', error);
+                toastr.error('Could not create folder.');
+            }
+        }
+    });
+    $(document).off('click', '.blank-folder-button').on('click', '.blank-folder-button', function(e) {
+        e.stopPropagation();
+        const folderId = this.dataset.folderId;
+        if (folderId) {
+            openCustomFolderPopup(folderId);
+        }
+    });
     $(document).off('click', '.jg-button').on('click', '.jg-button', function (e) {
         e.stopPropagation();
         const action = $(this).data('action');
@@ -1477,6 +1947,11 @@ export async function initBackgrounds() {
         const filename = thumbnailContext.dataset.bgfile;
         switch (action) {
             case 'star': if (filename) toggleStarredBackground(filename); break;
+            case 'add-to-folder': openFolderChooserPopup(filename); break;
+            case 'rename-folder':
+                onRenameFolderClick.call(this, e);
+                break;
+            case 'delete-folder': onDeleteFolderClick.call(this, e); break;
             case 'edit': onRenameBackgroundClick.call(this, e); break;
             case 'delete': onDeleteBackgroundClick.call(this, e); break;
         }
