@@ -210,7 +210,12 @@ function createThumbnailElement(imageData, calculatedSize) {
 
     thumbnail.appendChild(clipper);
     const placeholder = document.createElement('div');
-    placeholder.className = 'thumbnail-placeholder shimmer';
+    const filenameLower = imageData.filename.toLowerCase();
+    const isAnimatedFormat = filenameLower.endsWith('.webp') || filenameLower.endsWith('.gif');
+
+    // Conditionally add the 'shimmer' class which contains the animation
+    placeholder.className = 'thumbnail-placeholder' + (isAnimatedFormat ? ' shimmer' : '');
+
     if (imageData.dominantColor) {
         placeholder.style.backgroundColor = imageData.dominantColor;
     }
@@ -808,9 +813,6 @@ function createBlankFolderElement(folder) {
     const clipper = document.createElement('div');
     clipper.className = 'thumbnail-clipper';
 
-    const placeholder = document.createElement('div');
-    placeholder.className = 'thumbnail-placeholder';
-
     const iconOverlay = document.createElement('div');
     iconOverlay.className = 'folder-icon-overlay dark-folder-overlay';
 
@@ -841,7 +843,6 @@ function createBlankFolderElement(folder) {
     menu.appendChild(renameButton);
 
     iconOverlay.appendChild(folderIcon);
-    clipper.appendChild(placeholder);
     clipper.appendChild(iconOverlay);
     clipper.appendChild(titleDiv);
     button.appendChild(clipper);
@@ -863,9 +864,6 @@ function createStarredFolderElement() {
     const clipper = document.createElement('div');
     clipper.className = 'thumbnail-clipper';
 
-    const placeholder = document.createElement('div');
-    placeholder.className = 'thumbnail-placeholder';
-
     const iconOverlay = document.createElement('div');
     iconOverlay.className = 'folder-icon-overlay';
 
@@ -873,7 +871,6 @@ function createStarredFolderElement() {
     folderIcon.className = 'fa-solid fa-folder';
 
     iconOverlay.appendChild(folderIcon);
-    clipper.appendChild(placeholder);
     clipper.appendChild(iconOverlay);
     button.appendChild(clipper);
 
@@ -893,9 +890,6 @@ function createAddFolderElement() {
     const clipper = document.createElement('div');
     clipper.className = 'thumbnail-clipper';
 
-    const placeholder = document.createElement('div');
-    placeholder.className = 'thumbnail-placeholder';
-
     const iconOverlay = document.createElement('div');
     iconOverlay.className = 'add-icon-overlay';
 
@@ -903,7 +897,6 @@ function createAddFolderElement() {
     addIcon.className = 'fa-solid fa-plus';
 
     iconOverlay.appendChild(addIcon);
-    clipper.appendChild(placeholder);
     clipper.appendChild(iconOverlay);
     button.appendChild(clipper);
 

@@ -88,8 +88,9 @@
 }
 
 
-/* Folders */
+/* Folders & Folder Buttons */
 
+/* Container for the top row of folder buttons */
 #folders-container {
     display: flex;
     flex-wrap: wrap;
@@ -97,11 +98,10 @@
     gap: 10px;
     position: relative;
     width: 100%;
-    padding-bottom: 0px;
-    margin-bottom: 0px;
     margin-top: 10px;
 }
 
+/* Common styling for all folder buttons */
 #starred-folder-button.thumbnail,
 #add-folder-button.thumbnail,
 .blank-folder-button.thumbnail {
@@ -116,37 +116,8 @@
     box-shadow: 0 0 10px rgba(255, 255, 255, 0.2);
 }
 
-div#starred-folder-button .thumbnail-placeholder,
-div#add-folder-button .thumbnail-placeholder,
-.blank-folder-button .thumbnail-placeholder {
-    animation: none !important;
-}
-
-.blank-folder-button .jg-menu {
-    right: auto;
-    left: 4px;
-	width: fit-content;
-}
-
-.folder-icon-overlay {
-    position: absolute;
-    top: 0;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    z-index: 2;
-    background-color: rgba(100, 100, 0, 0.4);
-}
-
-.folder-icon-overlay .fa-folder {
-    font-size: 48px;
-    color: rgba(255, 215, 0, 0.7);
-    filter: drop-shadow(0 1px 2px rgba(0,0,0,0.5));
-}
-
+/* Base layout for all folder/icon overlays */
+.folder-icon-overlay,
 .add-icon-overlay {
     position: absolute;
     top: 0;
@@ -157,23 +128,39 @@ div#add-folder-button .thumbnail-placeholder,
     align-items: center;
     justify-content: center;
     z-index: 2;
-    background-color: rgba(0, 0, 0, 0.4);
 }
 
-.add-icon-overlay .fa-plus {
+/* --- Starred Folder --- */
+#starred-folder-button .folder-icon-overlay {
+    background-color: rgba(100, 100, 0, 0.4);
+}
+#starred-folder-button .fa-folder {
+    font-size: 48px;
+    color: rgba(255, 215, 0, 0.7);
+    filter: drop-shadow(0 1px 2px rgba(0,0,0,0.5));
+}
+
+/* --- Add Folder Button --- */
+#add-folder-button .add-icon-overlay {
+    background-color: rgba(0, 0, 0, 0.2);
+}
+#add-folder-button .fa-plus {
     font-size: 48px;
     color: rgba(255, 255, 255, 0.8);
     filter: drop-shadow(0 1px 2px rgba(0,0,0,0.5));
 }
 
-.folder-icon-overlay.dark-folder-overlay {
+/* --- Blank/Custom Folders --- */
+.blank-folder-button .folder-icon-overlay {
     background-color: rgba(0, 0, 0, 0.4);
 }
-
-.folder-icon-overlay.dark-folder-overlay .fa-folder {
+.blank-folder-button .fa-folder {
+    font-size: 48px;
     color: rgba(255, 255, 255, 0.6);
+    filter: drop-shadow(0 1px 2px rgba(0,0,0,0.5));
 }
 
+/* Ensure titles are always visible on folder buttons */
 .blank-folder-button .BGSampleTitle,
 #add-folder-button .BGSampleTitle,
 #starred-folder-button .BGSampleTitle {
@@ -182,73 +169,19 @@ div#add-folder-button .thumbnail-placeholder,
     transition: none !important;
 }
 
-
-/* Thumbnail button styling */
-
-#starred-folder-button.thumbnail,
-#add-folder-button.thumbnail {
-    cursor: pointer;
-    transition: transform 0.2s ease, box-shadow 0.2s ease;
-    flex-grow: 0;
-    width: 110px;
-    height: 110px;
+/* Specific menu position for blank folders */
+.blank-folder-button .jg-menu {
+    right: auto;
+    left: 4px;
+    width: fit-content;
 }
 
-#starred-folder-button.thumbnail:hover,
-#add-folder-button.thumbnail:hover {
-    transform: scale(1.03);
-    box-shadow: 0 0 10px rgba(255, 255, 255, 0.2);
-}
-
+/* Disable placeholder animations on folder buttons (as they have no placeholder) */
 div#starred-folder-button .thumbnail-placeholder,
-div#add-folder-button .thumbnail-placeholder {
+div#add-folder-button .thumbnail-placeholder,
+.blank-folder-button .thumbnail-placeholder {
     animation: none !important;
 }
-
-
-/* Starred Folder Icon Overlay */
-
-.folder-icon-overlay {
-    position: absolute;
-    top: 0;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    z-index: 2;
-    background-color: rgba(100, 100, 0, 0.4);
-}
-
-.folder-icon-overlay .fa-folder {
-    font-size: 48px;
-    color: rgba(255, 215, 0, 0.7);
-    filter: drop-shadow(0 1px 2px rgba(0,0,0,0.5));
-}
-
-
-/* Folder Icon Overlay */
-
-.add-icon-overlay {
-    position: absolute;
-    top: 0;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    z-index: 2;
-    background-color: rgba(0, 0, 0, 0.4);
-}
-
-.add-icon-overlay .fa-plus {
-    font-size: 48px;
-    color: rgba(255, 255, 255, 0.8);
-    filter: drop-shadow(0 1px 2px rgba(0,0,0,0.5));
-}
-
 
 /* Popup Styles */
 
@@ -385,7 +318,7 @@ div#add-folder-button .thumbnail-placeholder {
     overflow: hidden;
     position: relative;
     z-index: 1;
-    border: 1px solid rgba(255, 255, 255, 0.5);
+    border: 1px solid var(--SmartThemeBorderColor);
     box-sizing: border-box;
 }
 
@@ -424,16 +357,14 @@ div#add-folder-button .thumbnail-placeholder {
     position: absolute;
     top: 0;
     left: 0;
+    transition: opacity 0.3s ease;
+    filter: saturate(50%);
+}
+
+.thumbnail .thumbnail-placeholder.shimmer {
     opacity: 0;
     animation: placeholderPulse 1.5s infinite;
     animation-delay: 0.5s;
-    transition: opacity 0.3s ease;
-}
-
-.thumbnail .thumbnail-placeholder::after {
-    content: "🖼️";
-    opacity: 0.3;
-    font-size: 24px;
 }
 
 .thumbnail.loaded .thumbnail-placeholder {
@@ -471,8 +402,9 @@ div#add-folder-button .thumbnail-placeholder {
     left: 0;
     right: 0;
     background: linear-gradient(transparent, rgba(0, 0, 0, 0.8));
-    color: white;
+    color: var(--SmartThemeBodyColor);
     font-size: 0.85em;
+    font-weight: 600;
     padding: 8px 6px 0px;
     text-align: center;
     white-space: nowrap;
@@ -592,25 +524,6 @@ div#add-folder-button .thumbnail-placeholder {
 
 div#starred-folder-button .thumbnail-placeholder {
     animation: none !important;
-}
-
-.folder-icon-overlay {
-    position: absolute;
-    top: 0;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    z-index: 2;
-    background-color: rgba(100, 100, 0, 0.4);
-}
-
-.folder-icon-overlay .fa-folder {
-    font-size: 48px;
-    color: rgba(255, 215, 0, 0.7);
-    filter: drop-shadow(0 1px 2px rgba(0,0,0,0.5));
 }
 
 
