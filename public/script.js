@@ -2185,6 +2185,12 @@ export function messageFormatting(mes, ch_name, isSystem, isUser, messageId, san
         mes = mes.slice(replacedPromptBias.length);
     }
 
+    // THE ONLY CHANGE.
+    // Make it so that the description is not considered a system message.
+    if (document.getElementById('description_textarea') === mesForShowdownParse) {
+        isSystem = false;
+    }
+
     if (!isSystem) {
         function getRegexPlacement() {
             try {
