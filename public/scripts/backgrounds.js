@@ -209,21 +209,29 @@ function createThumbnailElement(imageData, calculatedSize) {
     }
 
     thumbnail.appendChild(clipper);
-    const placeholder = document.createElement('div');
-    const filenameLower = imageData.filename.toLowerCase();
-    const isAnimatedFormat = filenameLower.endsWith('.webp') || filenameLower.endsWith('.gif');
 
-    // Conditionally add the 'shimmer' class which contains the animation
-    placeholder.className = 'thumbnail-placeholder' + (isAnimatedFormat ? ' shimmer' : '');
+    const useAnimation = document.getElementById('background_thumbnails_animation').checked;
+    const finalUrl = `${imageData.thumbnailUrl}&animated=${useAnimation}`;
+    const isCached = SERVER_THUMBNAIL_CACHE.has(finalUrl);
 
-    if (imageData.dominantColor) {
-        placeholder.style.backgroundColor = imageData.dominantColor;
+    // We only create a placeholder if the image is not in client-side cache.
+    if (!isCached) {
+        const placeholder = document.createElement('div');
+        const filenameLower = imageData.filename.toLowerCase();
+        const isAnimatedFormat = filenameLower.endsWith('.webp') || filenameLower.endsWith('.gif');
+        placeholder.className = 'thumbnail-placeholder' + (isAnimatedFormat ? ' shimmer' : '');
+
+        if (imageData.dominantColor) {
+            placeholder.style.backgroundColor = imageData.dominantColor;
+        }
+        clipper.appendChild(placeholder);
     }
-    clipper.appendChild(placeholder);
+
     const imgElement = new Image();
     imgElement.dataset.src = imageData.thumbnailUrl;
     imgElement.src = PNG_PIXEL_B64;
     clipper.appendChild(imgElement);
+
     const titleDiv = document.createElement('div');
     titleDiv.className = 'BGSampleTitle';
     titleDiv.textContent = imageData.filename.substring(0, imageData.filename.lastIndexOf('.')) || imageData.filename;
@@ -410,15 +418,27 @@ class BackgroundSelector {
         const img = thumbElement.querySelector('img');
         const placeholder = thumbElement.querySelector('.thumbnail-placeholder');
         if (!img || !img.dataset.src) return;
+
         const baseUrl = img.dataset.src;
         const useAnimation = document.getElementById('background_thumbnails_animation').checked;
         const finalUrl = `${baseUrl}&animated=${useAnimation}`;
+
         const src = await getCachedServerThumbnail(finalUrl);
         delete img.dataset.src;
+
         img.onload = () => {
-            img.style.opacity = '1';
-            placeholder?.remove();
+            // If a placeholder exists, set up a listener to remove it
+            if (placeholder) {
+                img.addEventListener('transitionend', () => {
+                    placeholder.remove();
+                }, { once: true }); // cleanup
+            }
+
+            requestAnimationFrame(() => {
+                img.style.opacity = '1';
+            });
         };
+
         img.src = src;
     }
 
