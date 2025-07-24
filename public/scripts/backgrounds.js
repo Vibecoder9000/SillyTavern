@@ -788,7 +788,7 @@ function highlightLockedBackground() {
 
     if (lockedBackgroundUrl) {
         // A bit of regex to extract the raw filename
-        const match = lockedBackgroundUrl.match(/backgrounds\/(.+)\"\)$/);
+        const match = lockedBackgroundUrl.match(/backgrounds\/(.+)"\)$/);
         if (match && match[1]) {
             const lockedFilename = decodeURIComponent(match[1]);
             const lockedThumb = document.querySelector(`.thumbnail[data-bgfile="${lockedFilename}"]`);
