@@ -198,7 +198,7 @@ div#add-folder-button .thumbnail-placeholder,
     align-items: center;
     justify-content: center;
     opacity: 0;
-    transition: opacity 0.2s ease-in-out;
+    transition: opacity 0.1s ease-in-out;
 }
 
 .popup-overlay.open {
