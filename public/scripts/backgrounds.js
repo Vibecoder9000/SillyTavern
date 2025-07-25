@@ -1565,15 +1565,21 @@ function openStarredPopup() {
         if (isClosing) return;
         isClosing = true;
 
-        deactivateShield();
-        popupOverlay.removeEventListener('click', handlePopupClick);
-
+        // Disconnect the observer immediately as it's tied to scrolling, not clicks.
         if (observer) observer.disconnect();
 
+        // Start the closing animation.
         popupOverlay.classList.remove('open');
 
-        // Wait for the fade-out animation to complete before removing from the DOM.
-        popupOverlay.addEventListener('transitionend', () => popupOverlay.remove(), { once: true });
+        // Wait for the fade-out animation to complete BEFORE cleaning up and removing the element.
+        popupOverlay.addEventListener('transitionend', () => {
+            // Now that the popup is invisible, it's safe to remove the shield and listeners.
+            deactivateShield();
+            popupOverlay.removeEventListener('click', handlePopupClick);
+
+            // Finally, remove the element from the DOM.
+            popupOverlay.remove();
+        }, { once: true });
     };
 
     /**
@@ -1725,11 +1731,19 @@ function openCustomFolderPopup(folderId) {
     const closePopup = () => {
         if (isClosing) return;
         isClosing = true;
-        deactivateShield();
-        popupOverlay.removeEventListener('click', handlePopupClick);
+
+        // Disconnect the observer immediately.
         if (observer) observer.disconnect();
+
+        // Start the closing animation.
         popupOverlay.classList.remove('open');
-        popupOverlay.addEventListener('transitionend', () => popupOverlay.remove(), { once: true });
+
+        // Wait for the animation to finish before cleaning up listeners and the shield.
+        popupOverlay.addEventListener('transitionend', () => {
+            deactivateShield();
+            popupOverlay.removeEventListener('click', handlePopupClick);
+            popupOverlay.remove();
+        }, { once: true });
     };
 
     const handlePopupClick = async (e) => {
@@ -1826,10 +1840,16 @@ function openFolderChooserPopup(filename) {
     const closePopup = () => {
         if (isClosing) return;
         isClosing = true;
-        deactivateShield();
-        popupOverlay.removeEventListener('click', handlePopupClick);
+
+        // Start the closing animation.
         popupOverlay.classList.remove('open');
-        popupOverlay.addEventListener('transitionend', () => popupOverlay.remove(), { once: true });
+
+        // Wait for the animation to finish before cleaning up listeners and the shield.
+        popupOverlay.addEventListener('transitionend', () => {
+            deactivateShield();
+            popupOverlay.removeEventListener('click', handlePopupClick);
+            popupOverlay.remove();
+        }, { once: true });
     };
 
     const handlePopupClick = async (e) => {
