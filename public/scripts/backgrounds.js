@@ -550,28 +550,38 @@ class BackgroundSelector {
 }
 
 /**
- * Initiates the process of updating missing aspect ratios for images and uploading static thumbnails.
- * @param {Array<object>} imageDataList - The list of image data objects.
- * @returns {Promise<void>}
+ * Checks for animated backgrounds that are missing a static thumbnail and attempts to generate one.
+ * @param {Array<object>} imageDataList - The list of all background image data.
  */
-async function updateMissingAspectRatios(imageDataList) {
-    const unknownImages = imageDataList.filter(img => img.aspectRatio === null);
-    if (unknownImages.length === 0) return;
-    const useAnimation = document.getElementById('background_thumbnails_animation').checked;
-    if (!useAnimation) {
+async function ensureStaticThumbnailsExist(imageDataList) {
+    const imagesToProcess = imageDataList.filter(img => img.isAnimated && !img.staticThumbnailFailed);
+
+    if (imagesToProcess.length === 0) {
         return;
     }
-    processAndUploadStaticThumbnails(unknownImages);
+
+    processAndUploadStaticThumbnails(imagesToProcess);
 }
 
 /**
- * Orchestrates the client-side thumbnail generation for existing files and uploads them.
- * @param {Array<object>} imagesToProcess - The list of image data objects needing a static thumbnail.
+ * Orchestrates the client-side thumbnail generation for existing animated files and uploads them.
+ * @param {Array<object>} imagesToProcess - The list of image data objects (typically all animated images) to check.
  * @returns {Promise<void>}
  */
 async function processAndUploadStaticThumbnails(imagesToProcess) {
     const promises = imagesToProcess.map(async (imageData) => {
         const logPrefix = `[ProcessThumb] ${imageData.filename}:`;
+
+        try {
+            const staticThumbUrl = `${imageData.thumbnailUrl}&animated=false`;
+            const checkResponse = await fetch(staticThumbUrl, { method: 'HEAD' });
+            if (checkResponse.ok) {
+                return;
+            }
+        } catch (error) {
+            console.warn(`${logPrefix} HEAD check failed, proceeding with generation.`, error.message);
+        }
+
         try {
             const response = await fetch(`${imageData.thumbnailUrl}&animated=true`);
             if (!response.ok) {
@@ -594,8 +604,8 @@ async function processAndUploadStaticThumbnails(imagesToProcess) {
 
             const staticThumbnailBlob = await (await fetch(thumbnailDataUrl)).blob();
             const thumbFormData = new FormData();
-            thumbFormData.append('thumbnail', staticThumbnailBlob, imageData.filename);
 
+            thumbFormData.append('avatar', staticThumbnailBlob, imageData.filename);
             const uploadUrl = `/api/thumbnails/upload-generated?originalFilename=${encodeURIComponent(imageData.filename)}`;
 
             const uploadResponse = await fetch(uploadUrl, {
@@ -609,10 +619,20 @@ async function processAndUploadStaticThumbnails(imagesToProcess) {
             }
         } catch (error) {
             console.error(`${logPrefix} FAILED.`, error);
+
+            try {
+                await fetch('/api/backgrounds/mark-thumbnail-fail', {
+                    method: 'POST',
+                    headers: getRequestHeaders(),
+                    body: JSON.stringify({ filename: imageData.filename }),
+                });
+            } catch (reportError) {
+                console.error(`${logPrefix} Could not report failure to the server.`, reportError);
+            }
         }
     });
+
     await Promise.allSettled(promises);
-    await getBackgrounds(true);
 }
 
 /**
@@ -657,7 +677,7 @@ export async function getBackgrounds(force = false) {
         updateStateFromChatMetadata();
         highlightSelectedBackground();
     }
-    updateMissingAspectRatios(imageDataList);
+    ensureStaticThumbnailsExist(imageDataList);
 }
 
 /**

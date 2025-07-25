@@ -282,6 +282,46 @@ router.post('/upload', async function (request, response) {
 });
 
 /**
+ * Handles a report from the client that client-side thumbnail generation has failed for a file.
+ * This sets a flag in the metadata to prevent the client from retrying.
+ * @param {express.Request & { body: { filename: string }, user: any }} request
+ * @param {express.Response} response
+ */
+router.post('/mark-thumbnail-fail', async function (request, response) {
+    if (!request.body || typeof request.body.filename !== 'string') {
+        return response.status(400).send('Filename is required.');
+    }
+
+    const release = await fileLock.acquire();
+    try {
+        const filename = sanitize(request.body.filename);
+        const backgroundsJsonPath = path.join(request.user.directories.root, 'backgrounds.json');
+
+        const rawData = await fsp.readFile(backgroundsJsonPath, 'utf8');
+        const metadata = JSON.parse(rawData);
+
+        if (!metadata.images[filename]) {
+            return response.status(404).send(`Background '${filename}' not found in metadata.`);
+        }
+
+        // Set the failure flag
+        metadata.images[filename].staticThumbnailFailed = true;
+
+        // Save the updated backgrounds.json
+        const jsonString = JSON.stringify(metadata, null, 4);
+        await fsp.writeFile(backgroundsJsonPath, jsonString, 'utf8');
+
+        return response.status(200).send('ok');
+
+    } catch (error) {
+        console.error(`Failed to mark thumbnail generation as failed for ${request.body.filename}:`, error);
+        return response.status(500).send('Failed to update background metadata.');
+    } finally {
+        release();
+    }
+});
+
+/**
  * Handles the request to toggle the starred status of a background image.
  * @param {express.Request & { body: { filename: string, isStarred: boolean }, user: any }} request - The Express request object.
  *   - `request.body.filename` should contain the filename of the background.
