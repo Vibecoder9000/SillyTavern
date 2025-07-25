@@ -171,8 +171,8 @@
 
 /* Specific menu position for blank folders */
 .blank-folder-button .jg-menu {
-    right: auto;
-    left: 4px;
+    right: 4px;
+    left: auto;
     width: fit-content;
 }
 
