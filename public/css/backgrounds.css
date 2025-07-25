@@ -439,6 +439,10 @@ div#add-folder-button .thumbnail-placeholder,
 
 /* Thumbnail Menu & Buttons */
 
+.mobile-only-menu-toggle {
+    display: none;
+}
+
 .thumbnail .jg-menu {
     display: none;
     position: absolute;

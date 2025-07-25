@@ -30,6 +30,38 @@
         min-height: 30px !important;
     }
 
+    .thumbnail:hover .jg-menu {
+        display: none;
+    }
+
+    .thumbnail.mobile-menu-open .jg-menu {
+        display: flex;
+        z-index: 4;
+    }
+
+    .mobile-only-menu-toggle {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        position: absolute;
+        top: 2px;
+        right: 2px;
+        width: 28px;
+        height: 28px;
+        background-color: rgba(0, 0, 0, 0.6);
+        color: white;
+        border-radius: 6px;
+        z-index: 3;
+        cursor: pointer;
+        backdrop-filter: blur(2px);
+    }
+
+	.blank-folder-button .jg-menu {
+		right: 4px;
+		left: auto;
+		width: fit-content;
+	}
+
     #extensions_settings,
     #extensions_settings2 {
         width: 100% !important;

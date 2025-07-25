@@ -244,6 +244,12 @@ function createThumbnailElement(imageData, calculatedSize) {
 
     const menuFragment = menuTemplate.content.cloneNode(true);
     thumbnail.appendChild(menuFragment.querySelector('.jg-menu'));
+
+    const mobileMenuToggle = document.createElement('div');
+    mobileMenuToggle.className = 'mobile-only-menu-toggle';
+    mobileMenuToggle.innerHTML = '<i class="fa-solid fa-ellipsis-vertical"></i>';
+    thumbnail.appendChild(mobileMenuToggle);
+
     return thumbnail;
 }
 
@@ -785,6 +791,8 @@ function removeBackgroundMetadata() {
  * Event handler for selecting a background thumbnail.
  */
 function onSelectBackgroundClick() {
+    $('.thumbnail.mobile-menu-open').removeClass('mobile-menu-open');
+
     const $this = $(this);
     const bgFile = $this.data('bgfile');
     const fullResUrl = $this.data('url');
@@ -803,7 +811,6 @@ function onSelectBackgroundClick() {
     // Update UI highlights to reflect the changes.
     highlightLockedBackground();
 }
-
 
 /**
  * Updates the UI state of thumbnails (e.g., custom, locked) based on chat metadata.
@@ -893,6 +900,11 @@ function createBlankFolderElement(folder) {
     clipper.appendChild(titleDiv);
     button.appendChild(clipper);
     button.appendChild(menu);
+
+    const mobileMenuToggle = document.createElement('div');
+    mobileMenuToggle.className = 'mobile-only-menu-toggle';
+    mobileMenuToggle.innerHTML = '<i class="fa-solid fa-ellipsis-vertical"></i>';
+    button.appendChild(mobileMenuToggle);
 
     return button;
 }
@@ -2022,6 +2034,17 @@ export async function initBackgrounds() {
             e.stopPropagation();
             const folderId = this.dataset.folderId;
             if (folderId) openCustomFolderPopup(folderId);
+        })
+        .off('click', '.mobile-only-menu-toggle').on('click', '.mobile-only-menu-toggle', function(e) {
+            e.stopPropagation();
+            const $thumbnail = $(this).closest('.thumbnail');
+            const wasOpen = $thumbnail.hasClass('mobile-menu-open');
+            // Close all menus first
+            $('.thumbnail.mobile-menu-open').removeClass('mobile-menu-open');
+            // If the one we clicked wasn't already open, open it.
+            if (!wasOpen) {
+                $thumbnail.addClass('mobile-menu-open');
+            }
         })
         .off('click', '.jg-button').on('click', '.jg-button', function (e) {
             e.stopPropagation();
