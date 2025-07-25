@@ -195,19 +195,6 @@ div#add-folder-button .thumbnail-placeholder,
     pointer-events: none;
 }
 
-/* Delete fadeout */
-
-.thumbnail.deleting {
-    transition: opacity 0.3s ease-out, transform 0.3s ease-out, max-height 0.3s ease-out;
-    transform: scale(0.9);
-    opacity: 0;
-    max-height: 0;
-    padding: 0;
-    margin: 0;
-    overflow: hidden;
-    border: none;
-}
-
 
 /* Popup Styles */
 
