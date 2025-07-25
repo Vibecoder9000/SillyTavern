@@ -1140,21 +1140,12 @@ async function onRenameBackgroundClick(e) {
 
         const updatedImageData = await response.json();
 
-        // Update the client-side data model in-place.
+        // Find the image object in the single source of truth: the master list.
         const imageToUpdate = backgroundSelector.images.find(img => img.filename === bgNames.oldBg);
-        const filteredImageToUpdate = backgroundSelector.filteredImages.find(img => img.filename === bgNames.oldBg);
 
+        // If found, update it in-place.
         if (imageToUpdate) {
             Object.assign(imageToUpdate, {
-                ...updatedImageData, // Get fresh data from server
-                id: updatedImageData.filename,
-                thumbnailUrl: getThumbnailUrl(updatedImageData.filename),
-                fullResUrl: getBackgroundPath(updatedImageData.filename),
-            });
-        }
-        // Also update the filtered list if the item is present there
-        if (filteredImageToUpdate) {
-            Object.assign(filteredImageToUpdate, {
                 ...updatedImageData,
                 id: updatedImageData.filename,
                 thumbnailUrl: getThumbnailUrl(updatedImageData.filename),
@@ -1177,7 +1168,6 @@ async function onRenameBackgroundClick(e) {
                 titleDiv.textContent = newFilenameWithoutExt;
             }
         });
-
 
         // If the renamed item was the selected one, update global settings.
         if (wasSelected) {
