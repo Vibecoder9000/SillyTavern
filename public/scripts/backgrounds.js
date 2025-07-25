@@ -1166,35 +1166,58 @@ async function onRenameBackgroundClick(e) {
 async function onDeleteBackgroundClick(e) {
     e.stopPropagation();
     const thumbnailElement = this.closest('.thumbnail');
-    const bgToDelete = $(thumbnailElement);
-    const bg = bgToDelete.data('bgfile');
+    const bgFile = thumbnailElement?.dataset?.bgfile;
+    if (!bgFile) return;
 
     const confirm = await Popup.show.confirm(t`Delete the background?`, null);
     if (!confirm) return;
+
+    // 1. Find all DOM elements for this background (main gallery + any popups)
+    const thumbnailElements = document.querySelectorAll(`.thumbnail[data-bgfile="${bgFile}"]`);
+
+    // 2. Optimistically apply the 'deleting' class to start the fade-out animation.
+    thumbnailElements.forEach(thumb => thumb.classList.add('deleting'));
 
     try {
         const response = await fetch('/api/backgrounds/delete', {
             method: 'POST',
             headers: getRequestHeaders(),
-            body: JSON.stringify({ bg }),
+            body: JSON.stringify({ bg: bgFile }),
         });
 
         if (!response.ok) {
             throw new Error(`Failed to delete background: ${await response.text()}`);
         }
 
-        // On success, remove the image from the client-side data and re-render.
-        const indexToDelete = backgroundSelector.images.findIndex(img => img.filename === bg);
-        if (indexToDelete !== -1) {
-            backgroundSelector.images.splice(indexToDelete, 1);
-        }
+        // 3. On success, wait for the animation to finish, then remove the element and sync the client-side data.
+        thumbnailElements[0]?.addEventListener('transitionend', () => {
+            thumbnailElements.forEach(thumb => {
+                const row = thumb.parentElement;
+                thumb.remove();
+                // If the row becomes empty, remove it to prevent layout gaps.
+                if (row && row.classList.contains('thumbnail-row') && row.children.length === 0) {
+                    row.remove();
+                }
+            });
 
-        // Re-run the current search/filter to update the UI instantly.
-        backgroundSelector.search($('#bg-filter').val() || '');
+            // Sync the data arrays silently without a re-render.
+            const indexToDelete = backgroundSelector.images.findIndex(img => img.filename === bgFile);
+            if (indexToDelete > -1) {
+                backgroundSelector.images.splice(indexToDelete, 1);
+            }
+            const filteredIndexToDelete = backgroundSelector.filteredImages.findIndex(img => img.filename === bgFile);
+            if (filteredIndexToDelete > -1) {
+                backgroundSelector.filteredImages.splice(filteredIndexToDelete, 1);
+            }
+
+        }, { once: true });
 
     } catch (error) {
         console.error(error);
         toastr.error('Failed to delete background.');
+
+        // 4. On failure, revert the optimistic UI change.
+        thumbnailElements.forEach(thumb => thumb.classList.remove('deleting'));
     }
 }
 
