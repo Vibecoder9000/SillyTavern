@@ -182,7 +182,7 @@ async function processSingleImage(file, originalFolder, thumbnailFolder) {
         timings.write = performance.now() - stepStartTime;
 
         timings.total = performance.now() - totalStartTime;
-        return { success: true, timings, aspectRatio };
+        return { success: true, timings, aspectRatio, resolution: targetPixelArea };
     } catch (error) {
         console.warn(`[Thumbnails] Failed to process image ${file}:`, error.message);
         return { success: false, filename: file, error: error.message };

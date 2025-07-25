@@ -4,6 +4,8 @@ import crypto from 'node:crypto';
 import { imageSize } from 'image-size';
 import writeFileAtomic from 'write-file-atomic';
 import { getAverageColor } from 'fast-average-color-node';
+import { invalidateThumbnail, generateThumbnail } from './thumbnails.js';
+import { getConfigValue } from '../util.js';
 
 import { MEDIA_EXTENSIONS } from '../constants.js';
 
@@ -81,12 +83,16 @@ export async function generateSingleFileMetadata(filePath) {
 
 /**
  * Synchronizes the backgrounds.json metadata file with the files on disk.
- * It adds new files, removes deleted ones, and generates necessary metadata.
+ * It adds new files, removes deleted ones, and regenerates thumbnails if the configured resolution has changed.
+ * This function performs a one-time check at startup and logs only a summary of changes made.
  * @param {import('../users.js').UserDirectoryList} userDirectories The directories for a single user.
  */
 export async function syncBackgroundsMetadata(userDirectories) {
     const backgroundsJsonPath = path.join(userDirectories.root, 'backgrounds.json');
     const backgroundsFolderPath = userDirectories.backgrounds;
+
+    // Get the current thumbnail resolution from the config file.
+    const currentResolution = getConfigValue('thumbnails.resolution', 15000);
 
     let metadata;
     try {
@@ -101,12 +107,10 @@ export async function syncBackgroundsMetadata(userDirectories) {
     try {
         const allFilesOnDisk = await fs.readdir(backgroundsFolderPath);
         const supportedExtensions = new Set(MEDIA_EXTENSIONS);
-
         imageFilesOnDisk = allFilesOnDisk.filter(filename => {
             const ext = path.extname(filename).substring(1).toLowerCase();
             return supportedExtensions.has(ext);
         });
-
     } catch (error) {
         console.error(`Could not read backgrounds directory for user at ${userDirectories.root}. Aborting sync.`, error);
         return;
@@ -118,20 +122,38 @@ export async function syncBackgroundsMetadata(userDirectories) {
     let newFiles = 0;
     let deletedFiles = 0;
     let updatedFiles = 0;
+    let regeneratedThumbs = 0;
 
-    // Find and process new files, and backfill timestamps for existing ones
+    // Invalidate and remove thumbnails with outdated resolution
+    for (const filename of metadataImageKeys) {
+        const imageMeta = metadata.images[filename];
+        const storedResolution = imageMeta.thumbnailResolution;
+
+        if (storedResolution && storedResolution !== currentResolution) {
+            invalidateThumbnail(userDirectories, 'bg', filename);
+            delete imageMeta.thumbnailResolution;
+            regeneratedThumbs++;
+            hasChanges = true;
+        }
+    }
+
+    if (regeneratedThumbs > 0) {
+        console.log(`[Background Sync] Invalidated ${regeneratedThumbs} outdated thumbnails that will be regenerated.`);
+    }
+
+    // Process new files and regenerate invalidated thumbnails
     for (const filename of imageFilesOnDisk) {
         const filePath = path.join(backgroundsFolderPath, filename);
+
         if (!metadata.images[filename]) {
             const newMetadata = await generateSingleFileMetadata(filePath);
-
             if (newMetadata) {
                 metadata.images[filename] = newMetadata;
                 hasChanges = true;
                 newFiles++;
             }
-        } else if (metadata.images[filename].addedTimestamp === undefined) {
-            // Backfill timestamp for existing files that don't have one
+        }
+        else if (metadata.images[filename].addedTimestamp === undefined) {
             try {
                 const stats = await fs.stat(filePath);
                 metadata.images[filename].addedTimestamp = Math.floor(stats.birthtimeMs || stats.mtimeMs);
@@ -142,9 +164,17 @@ export async function syncBackgroundsMetadata(userDirectories) {
                 metadata.images[filename].addedTimestamp = Date.now();
             }
         }
+
+        if (metadata.images[filename] && metadata.images[filename].thumbnailResolution === undefined) {
+            const thumbResult = await generateThumbnail(userDirectories, 'bg', filename, true, false);
+            if (thumbResult.path && thumbResult.resolution) {
+                metadata.images[filename].thumbnailResolution = thumbResult.resolution;
+                hasChanges = true;
+            }
+        }
     }
 
-    // Find and remove deleted files
+    // Find and remove files from metadata that are no longer on disk
     for (const filename of metadataImageKeys) {
         if (!filesOnDiskSet.has(filename)) {
             delete metadata.images[filename];
@@ -153,15 +183,14 @@ export async function syncBackgroundsMetadata(userDirectories) {
         }
     }
 
-    // Save the updated metadata and log a summary if changes were made
+    // Final Save and Log
     if (hasChanges) {
         const logParts = [];
         if (newFiles > 0) logParts.push(`found ${newFiles} new`);
         if (deletedFiles > 0) logParts.push(`removed ${deletedFiles} deleted`);
-        if (updatedFiles > 0) logParts.push(`updated ${updatedFiles} existing with timestamps`);
-
+        if (updatedFiles > 0) logParts.push(`updated ${updatedFiles} existing`);
         if (logParts.length > 0) {
-            console.log(`[Background Sync] ${logParts.join(', ')}. Saving changes...`);
+            console.log(`[Background Sync] ${logParts.join(', ')}. Saving changes to backgrounds.json...`);
             try {
                 const jsonString = JSON.stringify(metadata, null, 4);
                 await writeFileAtomic(backgroundsJsonPath, jsonString, 'utf8');

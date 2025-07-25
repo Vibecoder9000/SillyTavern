@@ -246,12 +246,17 @@ router.post('/upload', async function (request, response) {
         await fsp.rename(tempPath, finalBgPath);
 
         // 3. Generate thumbnail and metadata for the file with its new unique name
-        await generateThumbnail(request.user.directories, 'bg', uniqueFilename, true, false);
+        const thumbResult = await generateThumbnail(request.user.directories, 'bg', uniqueFilename, true, false);
         const newMetadata = await generateSingleFileMetadata(finalBgPath);
 
         if (!newMetadata) {
             await fsp.unlink(finalBgPath); // Clean up if metadata fails
             throw new Error(`Failed to generate metadata for ${uniqueFilename}.`);
+        }
+
+        // Add the thumbnail resolution to the metadata if it was successfully generated
+        if (thumbResult && thumbResult.resolution) {
+            newMetadata.thumbnailResolution = thumbResult.resolution;
         }
 
         // 4. Read, update, and write backgrounds.json
