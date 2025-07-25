@@ -183,6 +183,19 @@ div#add-folder-button .thumbnail-placeholder,
     animation: none !important;
 }
 
+
+/* Re-Render fadein/out */
+
+#bg_menu_content {
+    transition: opacity 0.15s ease-in-out;
+}
+
+#bg_menu_content.fading-out {
+    opacity: 0;
+    pointer-events: none;
+}
+
+
 /* Popup Styles */
 
 .popup-overlay {

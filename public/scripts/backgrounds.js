@@ -302,7 +302,7 @@ class BackgroundSelector {
         this.search(currentQuery);
     }
 
-    search(query) {
+    search(query, newFilename = null) {
         const lowerQuery = query.toLowerCase().trim();
         if (lowerQuery) {
             this.filteredImages = this.images.filter(img => img.filename.toLowerCase().includes(lowerQuery));
@@ -313,7 +313,7 @@ class BackgroundSelector {
         // Apply sorting to the filtered list before rendering
         this._sortImages(this.filteredImages);
 
-        this.render(true);
+        this.render(true, newFilename);
     }
 
     /**
@@ -368,11 +368,28 @@ class BackgroundSelector {
         }
     }
 
-    render(isInitial = false) {
+    render(isInitial = false, newFilename = null) {
         this.isInitialRender = isInitial;
         this.containerWidth = this.container.clientWidth;
         if (this.containerWidth === 0) return;
 
+        // Smooth Fade Transition
+        const oldContent = this.container.children;
+        if (oldContent.length > 0) {
+            // Fade out existing content before replacing it.
+            this.container.classList.add('fading-out');
+            this.container.addEventListener('transitionend', () => {
+                this._performRender(newFilename);
+                // Fade the new content in
+                this.container.classList.remove('fading-out');
+            }, { once: true });
+        } else {
+            // If there's no old content, render immediately.
+            this._performRender(newFilename);
+        }
+    }
+
+    _performRender(newFilename = null) {
         this.imageObserver.disconnect();
         this.container.innerHTML = '';
 
@@ -398,7 +415,7 @@ class BackgroundSelector {
             this.containerWidth,
             this.filteredImages,
             false,
-            targetRowHeight, // Pass target height
+            targetRowHeight,
         );
 
         allRows.forEach(rowData => {
@@ -411,6 +428,15 @@ class BackgroundSelector {
         );
 
         this.container.appendChild(mainContainer);
+
+        // If a new filename was provided, find and highlight it now.
+        if (newFilename) {
+            const newThumb = document.querySelector(`.thumbnail[data-bgfile="${newFilename}"]`);
+            if (newThumb) {
+                highlightNewBackground(newThumb);
+            }
+        }
+
         setTimeout(() => { this.isInitialRender = false; }, 100);
     }
 
@@ -1259,16 +1285,9 @@ async function onBackgroundUploadSelected() {
         backgroundSelector.images.push(newImageClientData);
         // Keep the master list sorted
         backgroundSelector.images.sort((a,b) => a.filename.localeCompare(b.filename, undefined, { numeric: true }));
-        // Re-run the current search/filter to update the displayed list
-        backgroundSelector.search($('#bg-filter').val() || '');
 
-        // Use a timeout to ensure the DOM has updated before we try to find the new element
-        setTimeout(() => {
-            const newThumb = document.querySelector(`.thumbnail[data-bgfile="${newImageData.filename}"]`);
-            if (newThumb) {
-                highlightNewBackground(newThumb);
-            }
-        }, 100);
+        // Pass the new filename directly
+        backgroundSelector.search($('#bg-filter').val() || '', newImageData.filename);
 
     } catch (error) {
         console.error('Error uploading background:', error);
@@ -1365,14 +1384,17 @@ async function uploadBackground(formData) {
         const newImageData = await response.json();
         const newBgFilename = newImageData.filename;
 
-        // 2. Refresh the gallery. This will create the new thumbnail element in the DOM.
-        await getBackgrounds(true);
+        const newImageClientData = {
+            ...newImageData,
+            id: newImageData.filename,
+            thumbnailUrl: getThumbnailUrl(newImageData.filename),
+            fullResUrl: getBackgroundPath(newImageData.filename),
+            isCustom: false,
+        };
 
-        // 3. Find the new element in the DOM and pass it to the highlight function.
-        setTimeout(() => {
-            const newBgElement = document.querySelector(`.thumbnail[data-bgfile="${newBgFilename}"]`);
-            highlightNewBackground(newBgElement); // Now passing the element, or null if not found.
-        }, 100);
+        backgroundSelector.images.push(newImageClientData);
+        backgroundSelector.images.sort((a,b) => a.filename.localeCompare(b.filename, undefined, { numeric: true }));
+        backgroundSelector.search($('#bg-filter').val() || '', newBgFilename);
 
     } catch (error) {
         console.error('Error uploading background:', error);
