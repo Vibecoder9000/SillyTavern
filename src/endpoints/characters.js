@@ -22,6 +22,8 @@ import { invalidateThumbnail, generateThumbnail } from './thumbnails.js';
 import { importRisuSprites } from './sprites.js';
 import { getUserDirectories } from '../users.js';
 import { getChatInfo } from './chats.js';
+import { ByafParser } from '../byaf.js';
+import cacheBuster from '../middleware/cacheBuster.js';
 
 // With 100 MB limit it would take roughly 3000 characters to reach this limit
 const memoryCacheCapacity = getConfigValue('performance.memoryCacheCapacity', '100mb');
@@ -707,6 +709,7 @@ function convertWorldInfoToCharacterBook(name, entries) {
                 match_character_depth_prompt: entry.matchCharacterDepthPrompt ?? false,
                 match_scenario: entry.matchScenario ?? false,
                 match_creator_notes: entry.matchCreatorNotes ?? false,
+                triggers: entry.triggers ?? [],
             },
         };
 
@@ -802,6 +805,18 @@ async function importFromCharX(uploadPath, { request }, preservedFileName) {
         await generateThumbnail(request.user.directories, 'avatar', `${fileName}.png`, true, false);
     }
 
+    return result ? fileName : '';
+}
+
+async function importFromByaf(uploadPath, { request }, preservedFileName) {
+    const data = (await fsPromises.readFile(uploadPath)).buffer;
+    await fsPromises.unlink(uploadPath);
+    console.info('Importing from BYAF');
+
+    const byafData = await new ByafParser(data).parse();
+    const card = readFromV2(byafData.card);
+    const fileName = preservedFileName || getPngName(card.name, request.user.directories);
+    const result = await writeCharacterData(byafData.image, JSON.stringify(card), fileName, request);
     return result ? fileName : '';
 }
 
@@ -1070,7 +1085,7 @@ router.post('/edit', validateAvatarUrlMiddleware, async function (request, respo
             await generateThumbnail(request.user.directories, 'avatar', request.body.avatar_url, true, false);
 
             // Bust cache to reload the new avatar
-            response.setHeader('Clear-Site-Data', '"cache"');
+            cacheBuster.bust(request, response);
         }
 
         return response.sendStatus(200);
@@ -1327,6 +1342,7 @@ router.post('/import', async function (request, response) {
         'json': importFromJson,
         'png': importFromPng,
         'charx': importFromCharX,
+        'byaf': importFromByaf,
     };
 
     try {
