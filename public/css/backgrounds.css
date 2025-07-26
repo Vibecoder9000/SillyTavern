@@ -287,6 +287,10 @@ div#add-folder-button .thumbnail-placeholder,
     justify-content: center;
 }
 
+#Backgrounds dialog.popup {
+    z-index: 5000;
+}
+
 
 /* Thumbnail Containers & Rows */
 
