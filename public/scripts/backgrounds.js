@@ -459,16 +459,16 @@ class BackgroundSelector {
         delete img.dataset.src;
 
         img.onload = () => {
-            // If a placeholder exists, set up a listener to remove it
-            if (placeholder) {
-                img.addEventListener('transitionend', () => {
-                    placeholder.remove();
-                }, { once: true }); // cleanup
-            }
+            // we add the 'loaded' class to the parent thumbnail element
+            thumbElement.classList.add('loaded');
 
-            requestAnimationFrame(() => {
-                img.style.opacity = '1';
-            });
+            // we check if a placeholder exists
+            if (placeholder) {
+                // we listen for the placeholder's own fade-out transition to finish, then remove it from the DOM
+                placeholder.addEventListener('transitionend', () => {
+                    placeholder.remove();
+                }, { once: true });
+            }
         };
 
         img.src = src;
