@@ -377,40 +377,50 @@ class BackgroundSelector {
         this.containerWidth = this.container.clientWidth;
         if (this.containerWidth === 0) return;
 
-        // Smooth Fade Transition
-        const oldContent = this.container.children;
-        if (oldContent.length > 0) {
+        // Target only the container for the main thumbnails for the fade animation.
+        const mainContainer = this.container.querySelector('#main-backgrounds-container');
+
+        if (mainContainer && mainContainer.children.length > 0) {
             // Fade out existing content before replacing it.
-            this.container.classList.add('fading-out');
-            this.container.addEventListener('transitionend', () => {
+            mainContainer.classList.add('fading-out');
+            mainContainer.addEventListener('transitionend', () => {
                 this._performRender(newFilename);
-                // Fade the new content in
-                this.container.classList.remove('fading-out');
+                // Fade the new content in by removing the class. The new content is already there.
+                mainContainer.classList.remove('fading-out');
             }, { once: true });
         } else {
-            // If there's no old content, render immediately.
+            // If there's no content to fade, render immediately.
             this._performRender(newFilename);
         }
     }
 
     _performRender(newFilename = null) {
         this.imageObserver.disconnect();
-        this.container.innerHTML = '';
 
-        if (this.filteredImages.length === 0) {
-            this.container.innerHTML = `<p>${translate('No backgrounds found.')}</p>`;
-            return;
+        // Ensure the primary containers exist. This only runs on the very first render.
+        let foldersContainer = this.container.querySelector('#folders-container');
+        if (!foldersContainer) {
+            foldersContainer = document.createElement('div');
+            foldersContainer.id = 'folders-container';
+            this.container.appendChild(foldersContainer);
+            this.renderFolders(); // Populate folders only when the container is first created.
         }
 
-        // Create a placeholder for the folders and render them.
-        const foldersContainer = document.createElement('div');
-        foldersContainer.id = 'folders-container';
-        this.container.appendChild(foldersContainer);
-        this.renderFolders();
+        let mainContainer = this.container.querySelector('#main-backgrounds-container');
+        if (!mainContainer) {
+            mainContainer = document.createElement('div');
+            mainContainer.id = 'main-backgrounds-container';
+            this.container.appendChild(mainContainer);
+        }
 
-        const mainContainer = document.createElement('div');
-        mainContainer.id = 'main-backgrounds-container';
-        mainContainer.className = 'thumbnail-container';
+        // Clear only the main thumbnail container, leaving the folders untouched.
+        mainContainer.innerHTML = '';
+        mainContainer.className = 'thumbnail-container'; // Reset class in case it was modified
+
+        if (this.filteredImages.length === 0) {
+            mainContainer.innerHTML = `<p>${translate('No backgrounds found.')}</p>`;
+            return;
+        }
 
         const isMobile = window.innerWidth <= 1000;
         const targetRowHeight = isMobile ? 70 : 110;
@@ -430,8 +440,6 @@ class BackgroundSelector {
         mainContainer.querySelectorAll('.thumbnail').forEach(thumb =>
             this.imageObserver.observe(thumb),
         );
-
-        this.container.appendChild(mainContainer);
 
         // If a new filename was provided, find and highlight it now.
         if (newFilename) {

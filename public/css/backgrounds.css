@@ -198,11 +198,11 @@ div#add-folder-button.folder-button .thumbnail-placeholder,
 
 /* Re-Render fadein/out */
 
-#bg_menu_content {
+#main-backgrounds-container {
     transition: opacity 0.15s ease-in-out;
 }
 
-#bg_menu_content.fading-out {
+#main-backgrounds-container.fading-out {
     opacity: 0;
     pointer-events: none;
 }
