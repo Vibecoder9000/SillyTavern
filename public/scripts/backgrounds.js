@@ -217,7 +217,6 @@ function createThumbnailElement(imageData, calculatedSize) {
     // We only create a placeholder if the image is not in client-side cache.
     if (!isCached) {
         const placeholder = document.createElement('div');
-        const filenameLower = imageData.filename.toLowerCase();
         placeholder.className = 'thumbnail-placeholder';
 
         if (imageData.dominantColor) {
