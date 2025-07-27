@@ -349,6 +349,7 @@ async function postSetupTasks(result) {
                     'firefox': apps.firefox,
                     'chrome': apps.chrome,
                     'edge': apps.edge,
+                    'brave': apps.brave,
                 };
             }
 
