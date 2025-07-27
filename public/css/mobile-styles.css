@@ -407,6 +407,10 @@
         row-gap: 0px;
     }
 
+	#bg-header-fixed > .flex-container > h3 {
+		flex-grow: 1;
+	}
+
     #bg-header-fixed > .flex-container > h3,
     #bg-header-fixed > .flex-container > #background_fitting,
     #bg-header-fixed > .flex-container > #auto_background,
