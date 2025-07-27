@@ -208,6 +208,16 @@ div#add-folder-button.folder-button .thumbnail-placeholder,
 }
 
 
+/* Not Found Message */
+
+.no-bgs-found-message {
+    text-align: center;
+    margin-top: 2em;
+    padding: 1em;
+    opacity: 0.8;
+}
+
+
 /* Popup Styles */
 
 .popup-overlay {

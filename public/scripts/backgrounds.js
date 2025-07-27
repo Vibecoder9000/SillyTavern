@@ -418,7 +418,7 @@ class BackgroundSelector {
         mainContainer.className = 'thumbnail-container'; // Reset class in case it was modified
 
         if (this.filteredImages.length === 0) {
-            mainContainer.innerHTML = `<p>${translate('No backgrounds found.')}</p>`;
+            mainContainer.innerHTML = `<p class="no-bgs-found-message">${translate('No backgrounds found.')}</p>`;
             return;
         }
 
