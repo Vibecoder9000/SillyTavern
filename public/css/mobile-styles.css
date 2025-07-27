@@ -404,7 +404,7 @@
 
     #bg-header-fixed > .flex-container {
         flex-wrap: wrap;
-        row-gap: 10px;
+        row-gap: 0px;
     }
 
     #bg-header-fixed > .flex-container > h3,
