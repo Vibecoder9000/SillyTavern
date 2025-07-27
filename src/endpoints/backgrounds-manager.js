@@ -7,8 +7,6 @@ import { getAverageColor } from 'fast-average-color-node';
 import { invalidateThumbnail, generateThumbnail } from './thumbnails.js';
 import { getConfigValue } from '../util.js';
 
-import { MEDIA_EXTENSIONS } from '../constants.js';
-
 /**
  * Checks if a buffer contains an animated WebP by looking for the 'ANIM' chunk.
  * @param {Buffer} buffer The file buffer.
@@ -76,7 +74,9 @@ export async function generateSingleFileMetadata(filePath) {
             addedTimestamp: Date.now(),
         };
     } catch (error) {
-        console.error(`[Metadata Gen] Failed to process file ${path.basename(filePath)}:`, error.message);
+        if (error.code === 'ENAMETOOLONG') {
+            console.log(`Too long filename:\n${path.basename(filePath)}`);
+        }
         return null;
     }
 }
@@ -91,7 +91,8 @@ export async function syncBackgroundsMetadata(userDirectories) {
     const backgroundsJsonPath = path.join(userDirectories.root, 'backgrounds.json');
     const backgroundsFolderPath = userDirectories.backgrounds;
 
-    // Get the current thumbnail resolution from the config file.
+    const VIDEO_EXTENSIONS = ['mp4', 'avi', 'mov', 'wmv', 'flv', 'webm', '3gp', 'mkv', 'mpg'];
+
     const currentResolution = getConfigValue('thumbnails.resolution', 15000);
 
     let metadata;
@@ -106,10 +107,12 @@ export async function syncBackgroundsMetadata(userDirectories) {
     let imageFilesOnDisk;
     try {
         const allFilesOnDisk = await fs.readdir(backgroundsFolderPath);
-        const supportedExtensions = new Set(MEDIA_EXTENSIONS);
+        // Create a set of video extensions to easily check against
+        const videoExtensions = new Set(VIDEO_EXTENSIONS);
         imageFilesOnDisk = allFilesOnDisk.filter(filename => {
             const ext = path.extname(filename).substring(1).toLowerCase();
-            return supportedExtensions.has(ext);
+            // Process the file only if its extension is not in the list
+            return !videoExtensions.has(ext);
         });
     } catch (error) {
         console.error(`Could not read backgrounds directory for user at ${userDirectories.root}. Aborting sync.`, error);
@@ -166,7 +169,8 @@ export async function syncBackgroundsMetadata(userDirectories) {
         }
 
         if (metadata.images[filename] && metadata.images[filename].thumbnailResolution === undefined) {
-            const thumbResult = await generateThumbnail(userDirectories, 'bg', filename, true, false);
+            // Do not force thumbnail generation unless necessary
+            const thumbResult = await generateThumbnail(userDirectories, 'bg', filename, false, false);
             if (thumbResult.path && thumbResult.resolution) {
                 metadata.images[filename].thumbnailResolution = thumbResult.resolution;
                 hasChanges = true;
@@ -183,7 +187,7 @@ export async function syncBackgroundsMetadata(userDirectories) {
         }
     }
 
-    // Final Save and Log
+    // Save and log the final results
     if (hasChanges) {
         const logParts = [];
         if (newFiles > 0) logParts.push(`found ${newFiles} new`);

@@ -104,25 +104,25 @@ export async function generateThumbnail(directories, type, file, forceGenerate =
     }
 
     if (checkOnly && !forceGenerate) {
-        return { path: null, aspectRatio: null };
+        return { path: null, aspectRatio: null, resolution: null };
     }
 
     const pathToOriginalFile = path.join(originalFolder, file);
     if (!fs.existsSync(pathToOriginalFile)) {
         console.error(`[generateThumbnail] Cannot generate thumbnail, original file not found: ${pathToOriginalFile}`);
-        return { path: null, aspectRatio: null };
+        return { path: null, aspectRatio: null, resolution: null };
     }
 
     if (SKIPPED_EXTENSIONS_FOR_JIMP.includes(path.extname(file).toLowerCase())) {
-        return { path: null, aspectRatio: null };
+        return { path: null, aspectRatio: null, resolution: null };
     }
 
     const result = await processSingleImage(file, originalFolder, thumbnailFolder);
 
     if (result.success) {
-        return { path: pathToCachedFile, aspectRatio: result.aspectRatio };
+        return { path: pathToCachedFile, aspectRatio: result.aspectRatio, resolution: result.resolution };
     } else {
-        return { path: null, aspectRatio: null };
+        return { path: null, aspectRatio: null, resolution: null };
     }
 }
 
