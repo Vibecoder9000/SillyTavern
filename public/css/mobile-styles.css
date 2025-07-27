@@ -305,6 +305,10 @@
         font-size: calc(var(--mainFontSize) - .1rem);
     }
 
+    /*     .avatar_div {
+        margin-top: 5px;
+    } */
+
     #character_popup {
         width: 100%;
         border-radius: 0 0 20px 20px;
