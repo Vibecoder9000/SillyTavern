@@ -21,6 +21,11 @@ const thumbnailsEnabled = !!getConfigValue('thumbnails.enabled', true, 'boolean'
 const quality = Math.min(100, Math.max(1, parseInt(getConfigValue('thumbnails.quality', 95, 'number'))));
 const pngFormat = String(getConfigValue('thumbnails.format', 'jpg')).toLowerCase().trim() === 'png';
 
+/**
+ * @typedef {'bg' | 'avatar' | 'persona'} ThumbnailType
+ */
+
+/** @type {Record<string, number[]>} */
 export const dimensions = {
     'bg': getConfigValue('thumbnails.dimensions.bg', [160, 90]),
     'avatar': getConfigValue('thumbnails.dimensions.avatar', [96, 144]),
@@ -28,42 +33,54 @@ export const dimensions = {
 };
 
 /**
- * Gets the appropriate thumbnail folder path based on type.
- * @param {object} directories - User's directory configuration.
- * @param {string} type - Type of thumbnail ('bg', 'avatar', 'persona').
- * @returns {string|undefined} The path to the thumbnail folder.
+ * Gets a path to thumbnail folder based on the type.
+ * @param {import('../users.js').UserDirectoryList} directories User directories
+ * @param {ThumbnailType} type Thumbnail type
+ * @returns {string} Path to the thumbnails folder
  */
 function getThumbnailFolder(directories, type) {
     let thumbnailFolder;
     switch (type) {
-        case 'bg': thumbnailFolder = directories.thumbnailsBg; break;
-        case 'avatar': thumbnailFolder = directories.thumbnailsAvatar; break;
-        case 'persona': thumbnailFolder = directories.thumbnailsPersona; break;
+        case 'bg':
+            thumbnailFolder = directories.thumbnailsBg;
+            break;
+        case 'avatar':
+            thumbnailFolder = directories.thumbnailsAvatar;
+            break;
+        case 'persona':
+            thumbnailFolder = directories.thumbnailsPersona;
+            break;
     }
     return thumbnailFolder;
 }
 
 /**
- * Gets the appropriate original image folder path based on type.
- * @param {object} directories - User's directory configuration.
- * @param {string} type - Type of image ('bg', 'avatar', 'persona').
- * @returns {string|undefined} The path to the original image folder.
+ * Gets a path to the original images folder based on the type.
+ * @param {import('../users.js').UserDirectoryList} directories User directories
+ * @param {ThumbnailType} type Thumbnail type
+ * @returns {string} Path to the original images folder
  */
 function getOriginalFolder(directories, type) {
     let originalFolder;
     switch (type) {
-        case 'bg': originalFolder = directories.backgrounds; break;
-        case 'avatar': originalFolder = directories.characters; break;
-        case 'persona': originalFolder = directories.avatars; break;
+        case 'bg':
+            originalFolder = directories.backgrounds;
+            break;
+        case 'avatar':
+            originalFolder = directories.characters;
+            break;
+        case 'persona':
+            originalFolder = directories.avatars;
+            break;
     }
     return originalFolder;
 }
 
 /**
- * Deletes a cached thumbnail file.
- * @param {object} directories - User's directory configuration.
- * @param {string} type - Type of thumbnail ('bg', 'avatar', 'persona').
- * @param {string} file - The filename of the thumbnail to invalidate.
+ * Removes the generated thumbnail from the disk.
+ * @param {import('../users.js').UserDirectoryList} directories User directories
+ * @param {ThumbnailType} type Type of the thumbnail
+ * @param {string} file Name of the file
  */
 export function invalidateThumbnail(directories, type, file) {
     const folder = getThumbnailFolder(directories, type);
@@ -80,8 +97,8 @@ export function invalidateThumbnail(directories, type, file) {
 
 /**
  * Generates or retrieves a thumbnail for a given file.
- * @param {object} directories - User's directory configuration.
- * @param {string} type - Type of thumbnail ('bg', 'avatar', 'persona').
+ * @param {import('../users.js').UserDirectoryList} directories - User's directory configuration.
+ * @param {ThumbnailType} type - Type of thumbnail ('bg', 'avatar', 'persona').
  * @param {string} file - The filename of the image.
  * @param {boolean} [forceGenerate=false] - Whether to force generation even if a thumbnail exists.
  * @param {boolean} [checkOnly=true] - Whether to only check for existence without generating.
@@ -280,7 +297,9 @@ publicRouter.get('/', async function (request, response) {
     try {
         const { file: rawFile, type, animated } = request.query;
         if (typeof rawFile !== 'string' || typeof type !== 'string') return response.sendStatus(400);
-        if (!(type === 'bg' || type === 'avatar' || type === 'persona')) return response.sendStatus(400);
+        if (!(type === 'bg' || type === 'avatar' || type === 'persona')) {
+            return response.sendStatus(400);
+        }
 
         const file = sanitize(rawFile);
         if (file !== rawFile) return response.sendStatus(403);
@@ -307,6 +326,11 @@ publicRouter.get('/', async function (request, response) {
 
         const thumbnailFolder = getThumbnailFolder(request.user.directories, type);
         const pathToCachedFile = path.join(thumbnailFolder, file);
+
+        // This is the critical new logic from the patch
+        if (!fs.existsSync(pathToCachedFile)) {
+            await generateThumbnail(request.user.directories, type, file, false, false);
+        }
 
         if (fs.existsSync(pathToCachedFile)) {
             return response.sendFile(path.resolve(pathToCachedFile));
