@@ -1102,7 +1102,7 @@ async function getNewBackgroundName(thumbnailElement) {
     // Set a global flag to tell other listeners to stand down.
     window.isStCorePopupActive = true;
 
-    const newBgExtensionless = await Popup.show.input(t`Enter new background name:`, null, oldBgExtensionless);
+    const newBgExtensionless = await Popup.show.input(t`Enter new background name:`, null, oldBgExtensionless, { maxLength: 100 });
 
     // Unset the flag now that the popup is closed.
     window.isStCorePopupActive = false;

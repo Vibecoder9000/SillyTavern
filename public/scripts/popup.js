@@ -40,6 +40,7 @@ export const POPUP_RESULT = {
  * @property {string|boolean?} [okButton=null] - Custom text for the OK button, or `true` to use the default (If set, the button will always be displayed, no matter the type of popup)
  * @property {string|boolean?} [cancelButton=null] - Custom text for the Cancel button, or `true` to use the default (If set, the button will always be displayed, no matter the type of popup)
  * @property {number?} [rows=1] - The number of rows for the input field
+ * @property {number?} [maxLength=null] - The maximum number of characters for the input field.
  * @property {boolean?} [wide=false] - Whether to display the popup in wide mode (wide screen, 1/1 aspect ratio)
  * @property {boolean?} [wider=false] - Whether to display the popup in wider mode (just wider, no height scaling)
  * @property {boolean?} [large=false] - Whether to display the popup in large mode (90% of screen)
@@ -177,7 +178,7 @@ export class Popup {
      * @param {string} [inputValue=''] - The initial value of the input field
      * @param {PopupOptions} [options={}] - Additional options for the popup
      */
-    constructor(content, type, inputValue = '', { okButton = null, cancelButton = null, rows = 1, wide = false, wider = false, large = false, transparent = false, allowHorizontalScrolling = false, allowVerticalScrolling = false, leftAlign = false, animation = 'fast', defaultResult = POPUP_RESULT.AFFIRMATIVE, customButtons = null, customInputs = null, onClosing = null, onClose = null, onOpen = null, cropAspect = null, cropImage = null } = {}) {
+    constructor(content, type, inputValue = '', { okButton = null, cancelButton = null, rows = 1, wide = false, wider = false, large = false, transparent = false, allowHorizontalScrolling = false, allowVerticalScrolling = false, leftAlign = false, animation = 'fast', defaultResult = POPUP_RESULT.AFFIRMATIVE, customButtons = null, customInputs = null, onClosing = null, onClose = null, onOpen = null, cropAspect = null, cropImage = null, maxLength = null } = {}) {
         Popup.util.popups.push(this);
 
         // Make this popup uniquely identifiable
@@ -369,6 +370,9 @@ export class Popup {
 
         this.mainInput.value = inputValue;
         this.mainInput.rows = rows ?? 1;
+        if (maxLength) {
+            this.mainInput.maxLength = maxLength;
+        }
 
         this.content.innerHTML = '';
         if (content instanceof jQuery) {
