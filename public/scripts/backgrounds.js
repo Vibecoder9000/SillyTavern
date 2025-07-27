@@ -1153,8 +1153,8 @@ async function onRenameBackgroundClick(e) {
 
         // Perform a targeted DOM update.
         const thumbnailElements = document.querySelectorAll(`.thumbnail[data-bgfile="${bgNames.oldBg}"]`);
+        const newFilenameWithoutExt = updatedImageData.filename.substring(0, updatedImageData.filename.lastIndexOf('.')) || updatedImageData.filename;
         thumbnailElements.forEach(thumb => {
-            const newFilenameWithoutExt = updatedImageData.filename.substring(0, updatedImageData.filename.lastIndexOf('.')) || updatedImageData.filename;
 
             const $thumb = $(thumb);
             $thumb.attr('data-bgfile', updatedImageData.filename);
@@ -1171,6 +1171,9 @@ async function onRenameBackgroundClick(e) {
         if (wasSelected) {
             background_settings.name = updatedImageData.filename;
         }
+
+        // Display a notification to the user showing the final filename.
+        toastr.success(stringFormat(translate('Renamed to "{0}"'), [updatedImageData.filename]));
 
     } catch (error) {
         console.error(error);
