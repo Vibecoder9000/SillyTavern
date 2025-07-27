@@ -879,7 +879,7 @@ function highlightLockedBackground() {
  */
 function createBlankFolderElement(folder) {
     const button = document.createElement('div');
-    button.className = 'thumbnail blank-folder-button';
+    button.className = 'folder-button blank-folder-button';
     button.title = folder.name;
     button.dataset.folderId = folder.id;
 
@@ -936,7 +936,7 @@ function createBlankFolderElement(folder) {
 function createStarredFolderElement() {
     const button = document.createElement('div');
     button.id = 'starred-folder-button';
-    button.className = 'thumbnail';
+    button.className = 'folder-button';
     button.title = translate('View Starred Backgrounds');
 
     const clipper = document.createElement('div');
@@ -962,7 +962,7 @@ function createStarredFolderElement() {
 function createAddFolderElement() {
     const button = document.createElement('div');
     button.id = 'add-folder-button';
-    button.className = 'thumbnail';
+    button.className = 'folder-button';
     button.title = translate('Add Background Folder');
 
     const clipper = document.createElement('div');
@@ -2047,28 +2047,49 @@ export async function initBackgrounds() {
         })
         .off('click', '.mobile-only-menu-toggle').on('click', '.mobile-only-menu-toggle', function(e) {
             e.stopPropagation();
-            const $thumbnail = $(this).closest('.thumbnail');
-            const wasOpen = $thumbnail.hasClass('mobile-menu-open');
-            // Close all menus first
-            $('.thumbnail.mobile-menu-open').removeClass('mobile-menu-open');
-            // If the one we clicked wasn't already open, open it.
+            // we find the parent context, which can be a thumbnail or a folder button
+            const $context = $(this).closest('.thumbnail, .folder-button');
+            const wasOpen = $context.hasClass('mobile-menu-open');
+            // we close all currently open menus (on both thumbnails and folders)
+            $('.thumbnail.mobile-menu-open, .folder-button.mobile-menu-open').removeClass('mobile-menu-open');
+            // we open the menu on the clicked item if it wasn't already open
             if (!wasOpen) {
-                $thumbnail.addClass('mobile-menu-open');
+                $context.addClass('mobile-menu-open');
             }
         })
         .off('click', '.jg-button').on('click', '.jg-button', function (e) {
             e.stopPropagation();
             const action = $(this).data('action');
-            const thumbnailContext = $(this).closest('.thumbnail')[0];
-            if (!thumbnailContext) return;
-            const filename = thumbnailContext.dataset.bgfile;
+            // we find the parent context, which can be either a thumbnail or a folder button
+            const contextElement = $(this).closest('.thumbnail, .folder-button')[0];
+            if (!contextElement) return;
+
+            // we handle actions that are specific to folders first
+            if (action === 'rename-folder') {
+                onRenameFolderClick.call(this, e);
+                return;
+            }
+            if (action === 'delete-folder') {
+                onDeleteFolderClick.call(this, e);
+                return;
+            }
+
+            const filename = contextElement.dataset.bgfile;
+            if (!filename) return;
+
             switch (action) {
-                case 'star': if (filename) toggleStarredBackground(filename); break;
-                case 'add-to-folder': openFolderChooserPopup(filename); break;
-                case 'rename-folder': onRenameFolderClick.call(this, e); break;
-                case 'delete-folder': onDeleteFolderClick.call(this, e); break;
-                case 'edit': onRenameBackgroundClick.call(this, e); break;
-                case 'delete': onDeleteBackgroundClick.call(this, e); break;
+                case 'star':
+                    toggleStarredBackground(filename);
+                    break;
+                case 'add-to-folder':
+                    openFolderChooserPopup(filename);
+                    break;
+                case 'edit':
+                    onRenameBackgroundClick.call(this, e);
+                    break;
+                case 'delete':
+                    onDeleteBackgroundClick.call(this, e);
+                    break;
             }
         })
         .off('click', '.thumbnail').on('click', '.thumbnail', onSelectBackgroundClick);

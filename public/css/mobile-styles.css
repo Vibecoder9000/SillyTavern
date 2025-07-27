@@ -30,14 +30,16 @@
         min-height: 30px !important;
     }
 
-    .thumbnail:hover .jg-menu {
-        display: none;
-    }
+	.thumbnail:hover .jg-menu,
+	.folder-button:hover .jg-menu {
+		display: none;
+	}
 
-    .thumbnail.mobile-menu-open .jg-menu {
-        display: flex;
-        z-index: 4;
-    }
+	.thumbnail.mobile-menu-open .jg-menu,
+	.folder-button.mobile-menu-open .jg-menu {
+		display: flex;
+		z-index: 4;
+	}
 
     .mobile-only-menu-toggle {
         display: flex;
@@ -56,7 +58,7 @@
         backdrop-filter: blur(2px);
     }
 
-	.blank-folder-button .jg-menu {
+	.blank-folder-button.folder-button .jg-menu {
 		right: 4px;
 		left: auto;
 		width: fit-content;

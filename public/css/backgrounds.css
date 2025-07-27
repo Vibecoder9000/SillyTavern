@@ -102,16 +102,18 @@
 }
 
 /* Common styling for all folder buttons */
-#starred-folder-button.thumbnail,
-#add-folder-button.thumbnail,
-.blank-folder-button.thumbnail {
+.folder-button {
     cursor: pointer;
     transition: transform 0.2s ease, box-shadow 0.2s ease;
     width: 110px;
     aspect-ratio: 1 / 1;
+    border-radius: 8px;
+    position: relative;
+    flex-shrink: 0;
 }
 
-#folders-container > .thumbnail:hover {
+#folders-container > .thumbnail:hover,
+#folders-container > .folder-button:hover {
     transform: scale(1.03);
     box-shadow: 0 0 10px rgba(255, 255, 255, 0.2);
 }
@@ -160,26 +162,36 @@
     filter: drop-shadow(0 1px 2px rgba(0,0,0,0.5));
 }
 
-/* Ensure titles are always visible on folder buttons */
-.blank-folder-button .BGSampleTitle,
-#add-folder-button .BGSampleTitle,
-#starred-folder-button .BGSampleTitle {
-    opacity: 1 !important;
-    transform: translateY(0) !important;
-    transition: none !important;
+.folder-button .BGSampleTitle {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    background: linear-gradient(transparent, rgba(0, 0, 0, 0.8));
+    color: var(--SmartThemeBodyColor);
+    font-size: 0.85em;
+    font-weight: 600;
+    padding: 8px 6px 0px;
+    text-align: center;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    pointer-events: none;
+    opacity: 1;
+    transform: translateY(1px);
 }
 
 /* Specific menu position for blank folders */
-.blank-folder-button .jg-menu {
+.blank-folder-button.folder-button .jg-menu {
     right: 4px;
     left: auto;
     width: fit-content;
 }
 
 /* Disable placeholder animations on folder buttons (as they have no placeholder) */
-div#starred-folder-button .thumbnail-placeholder,
-div#add-folder-button .thumbnail-placeholder,
-.blank-folder-button .thumbnail-placeholder {
+div#starred-folder-button.folder-button .thumbnail-placeholder,
+div#add-folder-button.folder-button .thumbnail-placeholder,
+.blank-folder-button.folder-button .thumbnail-placeholder {
     animation: none !important;
 }
 
@@ -447,7 +459,8 @@ div#add-folder-button .thumbnail-placeholder,
     display: none;
 }
 
-.thumbnail .jg-menu {
+.thumbnail .jg-menu,
+.folder-button .jg-menu {
     display: none;
     position: absolute;
     top: 4px;
@@ -460,12 +473,14 @@ div#add-folder-button .thumbnail-placeholder,
     backdrop-filter: blur(4px);
 }
 
-.thumbnail:hover .jg-menu {
+.thumbnail:hover .jg-menu,
+.folder-button:hover .jg-menu {
     display: flex;
     animation: fadeInMenu 0.2s ease-out;
 }
 
-.thumbnail .jg-button {
+.thumbnail .jg-button,
+.folder-button .jg-button {
     display: flex;
     align-items: center;
     justify-content: center;
@@ -476,7 +491,8 @@ div#add-folder-button .thumbnail-placeholder,
     transition: background-color 0.15s ease;
 }
 
-.thumbnail .jg-button:hover {
+.thumbnail .jg-button:hover,
+.folder-button .jg-button:hover {
     background-color: rgba(255, 255, 255, 0.2);
 }
 
