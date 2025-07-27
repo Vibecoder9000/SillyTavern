@@ -391,12 +391,6 @@ div#add-folder-button.folder-button .thumbnail-placeholder,
     opacity: 0.5;
 }
 
-.thumbnail .thumbnail-placeholder.shimmer {
-    opacity: 0;
-    animation: placeholderPulse 1.5s infinite;
-    animation-delay: 0.5s;
-}
-
 .thumbnail.loaded .thumbnail-placeholder {
     opacity: 0;
 }
@@ -756,13 +750,6 @@ div#starred-folder-button .thumbnail-placeholder {
 @keyframes rowLoading {
     0% { opacity: 0.5; transform: translateY(10px); }
     100% { opacity: 1; transform: translateY(0); }
-}
-
-@keyframes placeholderPulse {
-    0% { opacity: 0; }
-    33% { opacity: 0.5; }
-    66% { opacity: 0.3; }
-    100% { opacity: 0.5; }
 }
 
 @keyframes fadeInMenu {

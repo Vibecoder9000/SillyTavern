@@ -218,8 +218,7 @@ function createThumbnailElement(imageData, calculatedSize) {
     if (!isCached) {
         const placeholder = document.createElement('div');
         const filenameLower = imageData.filename.toLowerCase();
-        const isAnimatedFormat = filenameLower.endsWith('.webp') || filenameLower.endsWith('.gif');
-        placeholder.className = 'thumbnail-placeholder' + (isAnimatedFormat ? ' shimmer' : '');
+        placeholder.className = 'thumbnail-placeholder';
 
         if (imageData.dominantColor) {
             placeholder.style.backgroundColor = imageData.dominantColor;
