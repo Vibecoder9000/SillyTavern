@@ -423,7 +423,7 @@ class BackgroundSelector {
         }
 
         const isMobile = window.innerWidth <= 1000;
-        const targetRowHeight = isMobile ? 70 : 110;
+        const targetRowHeight = isMobile ? 80 : 110; // mobile size : desktop size
 
         const allRows = calculateRowLayout(
             this.containerWidth,
