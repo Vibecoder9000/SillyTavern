@@ -186,6 +186,7 @@ function createThumbnailElement(imageData, calculatedSize) {
     // Create the main container div for the thumbnail.
     const thumbnail = document.createElement('div');
     thumbnail.className = 'thumbnail';
+    thumbnail.draggable = true;
 
     // Create the clipping wrapper
     const clipper = document.createElement('div');
@@ -483,12 +484,35 @@ class BackgroundSelector {
     setupDropToUpload() {
         const dropZone = this.container.closest('#Backgrounds');
         if (!dropZone) return;
+
         ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
             dropZone.addEventListener(eventName, e => { e.preventDefault(); e.stopPropagation(); });
         });
-        ['dragenter', 'dragover'].forEach(eventName => dropZone.addEventListener(eventName, () => dropZone.classList.add('drag-over')));
-        ['dragleave', 'drop'].forEach(eventName => dropZone.addEventListener(eventName, () => dropZone.classList.remove('drag-over')));
+
+        // Show the upload overlay only for external files.
+        ['dragenter', 'dragover'].forEach(eventName => {
+            dropZone.addEventListener(eventName, (e) => {
+                if (window.isDraggingInternalThumbnail) {
+                    // Indicate that a drop is not allowed here.
+                    e.dataTransfer.dropEffect = 'none';
+                    return;
+                }
+                dropZone.classList.add('drag-over');
+            });
+        });
+
+        // Hide the overlay when dragging leaves or on drop.
+        ['dragleave', 'drop'].forEach(eventName => {
+            dropZone.addEventListener(eventName, () => dropZone.classList.remove('drag-over'));
+        });
+
+        // Handle the actual file drop.
         dropZone.addEventListener('drop', async (e) => {
+            // If it's an internal thumbnail, do nothing.
+            if (window.isDraggingInternalThumbnail) {
+                return;
+            }
+
             const files = Array.from(e.dataTransfer.files).filter(file => file.type.startsWith('image/') || file.type.startsWith('video/'));
             if (files.length === 0) return;
             for (const file of files) {
@@ -504,7 +528,6 @@ class BackgroundSelector {
     }
 
     setupScrollToTop() {
-        // ... (this method is unchanged)
         setTimeout(() => {
             const scrollContainer = document.getElementById('bg-scrollable-content');
             const btn = document.getElementById('bg_scroll_top'); // This will find the *first* button
@@ -2109,7 +2132,13 @@ export async function initBackgrounds() {
                     break;
             }
         })
-        .off('click', '.thumbnail').on('click', '.thumbnail', onSelectBackgroundClick);
+        .off('click', '.thumbnail').on('click', '.thumbnail', onSelectBackgroundClick)
+        .off('dragstart', '.thumbnail').on('dragstart', '.thumbnail', function() {
+            window.isDraggingInternalThumbnail = true;
+        })
+        .off('dragend', '.thumbnail').on('dragend', '.thumbnail', function() {
+            window.isDraggingInternalThumbnail = false;
+        });
 
     $('#bg_lock_button').off('click').on('click', function () {
         if (hasCustomBackground()) {
