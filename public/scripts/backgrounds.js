@@ -1885,6 +1885,7 @@ function openFolderChooserPopup(filename) {
     const template = document.getElementById('folder-chooser-popup-template');
     const popupFragment = template.content.cloneNode(true);
     const popupOverlay = popupFragment.querySelector('.popup-overlay');
+    popupOverlay.classList.add('folder-chooser-overlay');
     const contentArea = popupFragment.querySelector('#folder-chooser-content');
 
     let isClosing = false;

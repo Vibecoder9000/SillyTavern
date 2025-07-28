@@ -236,6 +236,10 @@ div#add-folder-button.folder-button .thumbnail-placeholder,
     transition: opacity 0.1s ease-in-out;
 }
 
+.popup-overlay.folder-chooser-overlay {
+    z-index: 4001;
+}
+
 .popup-overlay.open {
     opacity: 1;
 }
