@@ -113,7 +113,8 @@
 }
 
 #folders-container > .thumbnail:hover,
-#folders-container > .folder-button:hover {
+#folders-container > .folder-button:hover,
+#folder-chooser-content .folder-button:hover {
     transform: scale(1.03);
     box-shadow: 0 0 10px rgba(255, 255, 255, 0.2);
 }
