@@ -14,7 +14,7 @@ export const publicRouter = express.Router();
 export const apiRouter = express.Router();
 
 const CONCURRENCY_LIMIT = 8;
-const SKIPPED_EXTENSIONS_FOR_JIMP = ['.apng', '.mp4', '.webm', '.avi', '.mkv', '.flv', '.webp', '.gif'];
+export const SKIPPED_EXTENSIONS_FOR_JIMP = ['.apng', '.mp4', '.webm', '.avi', '.mkv', '.flv', '.webp', '.gif'];
 
 const thumbnailResolution = getConfigValue('thumbnails.resolution', 15000);
 const thumbnailsEnabled = !!getConfigValue('thumbnails.enabled', true, 'boolean');

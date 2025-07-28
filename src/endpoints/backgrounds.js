@@ -3,7 +3,7 @@ import path from 'node:path';
 import express from 'express';
 import sanitize from 'sanitize-filename';
 import crypto from 'node:crypto';
-import { invalidateThumbnail, dimensions, generateThumbnail } from './thumbnails.js';
+import { invalidateThumbnail, dimensions, generateThumbnail, SKIPPED_EXTENSIONS_FOR_JIMP } from './thumbnails.js';
 import { getFileNameValidationFunction } from '../middleware/validateFileName.js';
 import { generateSingleFileMetadata } from './backgrounds-manager.js';
 
@@ -246,7 +246,16 @@ router.post('/upload', async function (request, response) {
         await fsp.rename(tempPath, finalBgPath);
 
         // 3. Generate thumbnail and metadata for the file with its new unique name
-        const thumbResult = await generateThumbnail(request.user.directories, 'bg', uniqueFilename, true, false);
+        const fileExtension = path.extname(uniqueFilename).toLowerCase();
+        const isSkippedFormat = SKIPPED_EXTENSIONS_FOR_JIMP.includes(fileExtension);
+
+        const thumbResult = await generateThumbnail(
+            request.user.directories,
+            'bg',
+            uniqueFilename,
+            !isSkippedFormat, // forceGenerate should be true only if it's NOT a skipped format
+            false,
+        );
         const newMetadata = await generateSingleFileMetadata(finalBgPath);
 
         if (!newMetadata) {

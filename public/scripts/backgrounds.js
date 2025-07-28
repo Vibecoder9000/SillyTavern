@@ -1316,6 +1316,9 @@ async function onBackgroundUploadSelected() {
     }
 
     try {
+        // This will convert video to webp and upload the static thumb
+        await convertFileIfVideo(formData);
+
         const response = await fetch('/api/backgrounds/upload', {
             method: 'POST',
             headers: getRequestHeaders({ omitContentType: true }), // Important for FormData
