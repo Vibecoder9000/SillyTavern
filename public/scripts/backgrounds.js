@@ -880,10 +880,12 @@ function highlightLockedBackground() {
 
 /**
  * Creates a blank folder element, representing a user-created background list.
- * @param {number} index The index of the folder in the array.
+ * @param {object} folder - The folder data object.
+ * @param {object} [options] - Optional configuration.
+ * @param {boolean} [options.withMenu=true] - Whether to include the hover/mobile menus.
  * @returns {HTMLElement} The created container element for the blank folder.
  */
-function createBlankFolderElement(folder) {
+function createBlankFolderElement(folder, options = { withMenu: true }) {
     const button = document.createElement('div');
     button.className = 'folder-button blank-folder-button';
     button.title = folder.name;
@@ -902,35 +904,37 @@ function createBlankFolderElement(folder) {
     titleDiv.className = 'BGSampleTitle';
     titleDiv.textContent = folder.name;
 
-    // Create the hover menu
-    const menu = document.createElement('div');
-    menu.className = 'jg-menu';
-
-    const renameButton = document.createElement('div');
-    renameButton.dataset.action = 'rename-folder';
-    renameButton.className = 'jg-button jg-edit fa-solid fa-pen-to-square fa-fw pointer';
-    renameButton.title = 'Rename Folder';
-    renameButton.setAttribute('data-i18n', '[title]Rename Folder');
-
-    const deleteButton = document.createElement('div');
-    deleteButton.dataset.action = 'delete-folder';
-    deleteButton.className = 'jg-button jg-delete fa-solid fa-trash-can fa-fw pointer';
-    deleteButton.title = 'Delete Folder';
-    deleteButton.setAttribute('data-i18n', '[title]Delete Folder');
-
-    menu.appendChild(deleteButton);
-    menu.appendChild(renameButton);
-
     iconOverlay.appendChild(folderIcon);
     clipper.appendChild(iconOverlay);
     clipper.appendChild(titleDiv);
     button.appendChild(clipper);
-    button.appendChild(menu);
 
-    const mobileMenuToggle = document.createElement('div');
-    mobileMenuToggle.className = 'mobile-only-menu-toggle';
-    mobileMenuToggle.innerHTML = '<i class="fa-solid fa-ellipsis-vertical"></i>';
-    button.appendChild(mobileMenuToggle);
+    if (options.withMenu) {
+        // Create the hover menu
+        const menu = document.createElement('div');
+        menu.className = 'jg-menu';
+
+        const renameButton = document.createElement('div');
+        renameButton.dataset.action = 'rename-folder';
+        renameButton.className = 'jg-button jg-edit fa-solid fa-pen-to-square fa-fw pointer';
+        renameButton.title = 'Rename Folder';
+        renameButton.setAttribute('data-i18n', '[title]Rename Folder');
+
+        const deleteButton = document.createElement('div');
+        deleteButton.dataset.action = 'delete-folder';
+        deleteButton.className = 'jg-button jg-delete fa-solid fa-trash-can fa-fw pointer';
+        deleteButton.title = 'Delete Folder';
+        deleteButton.setAttribute('data-i18n', '[title]Delete Folder');
+
+        menu.appendChild(deleteButton);
+        menu.appendChild(renameButton);
+        button.appendChild(menu);
+
+        const mobileMenuToggle = document.createElement('div');
+        mobileMenuToggle.className = 'mobile-only-menu-toggle';
+        mobileMenuToggle.innerHTML = '<i class="fa-solid fa-ellipsis-vertical"></i>';
+        button.appendChild(mobileMenuToggle);
+    }
 
     return button;
 }
@@ -1991,7 +1995,7 @@ function openFolderChooserPopup(filename) {
 
     // Populate the popup with folder choices
     backgroundSelector.folderLists.forEach((folder) => {
-        const folderElement = createBlankFolderElement(folder);
+        const folderElement = createBlankFolderElement(folder, { withMenu: false });
         contentArea.appendChild(folderElement);
     });
 
