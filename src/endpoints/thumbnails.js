@@ -16,11 +16,6 @@ export const apiRouter = express.Router();
 const CONCURRENCY_LIMIT = 8;
 export const SKIPPED_EXTENSIONS_FOR_JIMP = ['.apng', '.mp4', '.webm', '.avi', '.mkv', '.flv', '.webp', '.gif'];
 
-const thumbnailResolution = getConfigValue('thumbnails.resolution', 15000);
-const thumbnailsEnabled = !!getConfigValue('thumbnails.enabled', true, 'boolean');
-const quality = Math.min(100, Math.max(1, parseInt(getConfigValue('thumbnails.quality', 95, 'number'))));
-const pngFormat = String(getConfigValue('thumbnails.format', 'jpg')).toLowerCase().trim() === 'png';
-
 /**
  * @typedef {'bg' | 'avatar' | 'persona'} ThumbnailType
  */
@@ -151,6 +146,9 @@ export async function generateThumbnail(directories, type, file, forceGenerate =
  * @returns {Promise<{success: boolean, timings?: object, filename?: string, error?: string}>} Result of the processing.
  */
 async function processSingleImage(file, originalFolder, thumbnailFolder) {
+    const thumbnailResolution = getConfigValue('thumbnails.resolution', 15000);
+    const quality = Math.min(100, Math.max(1, parseInt(getConfigValue('thumbnails.quality', 95, 'number'))));
+    const pngFormat = String(getConfigValue('thumbnails.format', 'jpg')).toLowerCase().trim() === 'png';
     const pathToOriginalFile = path.join(originalFolder, file);
     const pathToCachedFile = path.join(thumbnailFolder, file);
     const timings = { filename: file, read: 0, resize: 0, buffer: 0, write: 0, total: 0 };
@@ -163,28 +161,29 @@ async function processSingleImage(file, originalFolder, thumbnailFolder) {
         const image = await Jimp.read(fileBuffer);
         timings.read = performance.now() - stepStartTime;
 
-        const aspectRatio = (image.bitmap.height > 0) ? (image.bitmap.width / image.bitmap.height) : 1.0;
+        // Calculate aspect ratio from original image dimensions
+        const originalWidth = image.bitmap.width;
+        const originalHeight = image.bitmap.height;
+        const aspectRatio = (originalHeight > 0) ? (originalWidth / originalHeight) : 1.0;
+
         stepStartTime = performance.now();
         const thumbImage = image.clone();
 
+        // Calculate new dimensions based on target pixel area
         const targetPixelArea = thumbnailResolution;
         const safeAspectRatio = aspectRatio > 0 ? aspectRatio : 1;
-
         let newHeight = Math.round(Math.sqrt(targetPixelArea / safeAspectRatio));
         let newWidth = Math.round(newHeight * safeAspectRatio);
 
-        if (newWidth === 0 || newHeight === 0) {
-            // Fallback for corrupted images with zero dimensions
-            console.warn(`[Thumbnails] Image ${file} has zero width/height. Using fallback dimensions.`);
-            const fallbackAspectRatio = 1; // Use a square aspect ratio as a safe default
-            const h = Math.round(Math.sqrt(targetPixelArea / fallbackAspectRatio));
-            const w = Math.round(h * fallbackAspectRatio);
+        // Ensure minimum dimensions
+        newWidth = Math.max(newWidth, 1);
+        newHeight = Math.max(newHeight, 1);
 
-            thumbImage.scaleToFit({ w, h, mode: Jimp.RESIZE_BILINEAR });
-        } else {
-            // Main processing path
-            thumbImage.scaleToFit({ w: newWidth, h: newHeight, mode: Jimp.RESIZE_BILINEAR });
-        }
+        // Log the dimensions for debugging
+        console.log(`[Thumbnails] Processing ${file}: original dimensions ${originalWidth}x${originalHeight}, aspect ratio ${aspectRatio}, new dimensions ${newWidth}x${newHeight}`);
+
+        // Always use the calculated dimensions based on the original aspect ratio
+        thumbImage.scaleToFit(newWidth, newHeight, Jimp.RESIZE_BILINEAR);
 
         timings.resize = performance.now() - stepStartTime;
 
@@ -199,6 +198,7 @@ async function processSingleImage(file, originalFolder, thumbnailFolder) {
         timings.write = performance.now() - stepStartTime;
 
         timings.total = performance.now() - totalStartTime;
+
         return { success: true, timings, aspectRatio, resolution: targetPixelArea };
     } catch (error) {
         console.warn(`[Thumbnails] Failed to process image ${file}:`, error);
@@ -295,6 +295,7 @@ apiRouter.post('/upload-generated', async function(request, response) {
  */
 publicRouter.get('/', async function (request, response) {
     try {
+        const thumbnailsEnabled = !!getConfigValue('thumbnails.enabled', true, 'boolean');
         const { file: rawFile, type, animated } = request.query;
         if (typeof rawFile !== 'string' || typeof type !== 'string') return response.sendStatus(400);
         if (!(type === 'bg' || type === 'avatar' || type === 'persona')) {
