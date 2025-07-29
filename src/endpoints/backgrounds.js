@@ -46,14 +46,36 @@ router.post('/all', async function (request, response) {
             ...data,
         }));
 
-        const config = { width: dimensions.bg[0], height: dimensions.bg[1] };
-        const folders = metadata.folders || []; // Get folders from metadata
-
-        response.json({ images: allImages, config, folders }); // Add folders to the response
+        response.json({ images: allImages });
 
     } catch (error) {
         console.error('Failed to read or parse backgrounds.json:', error);
-        response.json({ images: [], config: { width: dimensions.bg[0], height: dimensions.bg[1] }, folders: [] });
+        response.json({ images: [] });
+    } finally {
+        release();
+    }
+});
+
+/**
+ * Handles the request to get only the background folders and config.
+ * @param {express.Request} request - The Express request object.
+ * @param {express.Response} response - The Express response object.
+ */
+router.post('/folders', async function (request, response) {
+    const release = await fileLock.acquire();
+    try {
+        const backgroundsJsonPath = path.join(request.user.directories.root, 'backgrounds.json');
+        const rawData = await fsp.readFile(backgroundsJsonPath, 'utf8');
+        const metadata = JSON.parse(rawData);
+
+        const config = { width: dimensions.bg[0], height: dimensions.bg[1] };
+        const folders = metadata.folders || [];
+
+        response.json({ config, folders });
+
+    } catch (error) {
+        console.error('Failed to read or parse backgrounds.json for folders:', error);
+        response.json({ config: { width: dimensions.bg[0], height: dimensions.bg[1] }, folders: [] });
     } finally {
         release();
     }

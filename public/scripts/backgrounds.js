@@ -349,11 +349,14 @@ class BackgroundSelector {
      * Renders only the folder section of the background panel.
      */
     renderFolders() {
-        const foldersContainer = document.getElementById('folders-container');
+        const foldersContainerId = 'folders-container';
+        let foldersContainer = this.container.querySelector(`#${foldersContainerId}`);
+
+        // If the container doesn't exist, create it. This prevents a premature full render.
         if (!foldersContainer) {
-            // If the container doesn't exist, fall back to a full render.
-            this.render();
-            return;
+            foldersContainer = document.createElement('div');
+            foldersContainer.id = foldersContainerId;
+            this.container.appendChild(foldersContainer);
         }
 
         // Clear only the folder container's content.
@@ -675,39 +678,56 @@ function getHeadersForFormData() {
 }
 
 /**
- * Fetches background images from the server and updates the gallery.
- * @param {boolean} force - Whether to force a refresh of the data.
+ * Fetches background data in two stages: folders first, then images.
  * @returns {Promise<void>}
  */
-export async function getBackgrounds(force = false) {
-    const response = await fetch('/api/backgrounds/all', {
-        method: 'POST',
-        headers: getRequestHeaders(),
-        body: JSON.stringify({}),
-    });
-    if (!response.ok) throw new Error(`Fetch failed: ${response.statusText}`);
-    const data = await response.json();
-    const { images: imagesFromServer = [], config, folders = [] } = data; // Destructure folders
-    if (config) Object.assign(THUMBNAIL_CONFIG, config);
+export async function getBackgrounds() {
+    try {
+        // Stage 1: Fetch folders and config immediately. This is fast.
+        const folderResponse = await fetch('/api/backgrounds/folders', {
+            method: 'POST',
+            headers: getRequestHeaders(),
+            body: JSON.stringify({}),
+        });
+        if (!folderResponse.ok) throw new Error(`Folder fetch failed: ${folderResponse.statusText}`);
+        const { config, folders = [] } = await folderResponse.json();
 
-    let imageDataList = imagesFromServer.map(imgData => ({
-        ...imgData,
-        id: imgData.filename,
-        thumbnailUrl: getThumbnailUrl(imgData.filename),
-        fullResUrl: getBackgroundPath(imgData.filename),
-        isStarred: !!imgData.isStarred,
-        isCustom: false,
-    }));
+        if (config) Object.assign(THUMBNAIL_CONFIG, config);
 
-    if (backgroundSelector) {
-        backgroundSelector.folderLists = folders; // Populate the folder list from the server
-        backgroundSelector.renderFolders(); // Re-render folders with the new data
+        if (backgroundSelector) {
+            backgroundSelector.folderLists = folders;
+            backgroundSelector.renderFolders();
+        }
 
-        backgroundSelector.setData(imageDataList);
-        updateStateFromChatMetadata();
-        highlightSelectedBackground();
+        // Stage 2: Fetch the larger image list.
+        const imageResponse = await fetch('/api/backgrounds/all', {
+            method: 'POST',
+            headers: getRequestHeaders(),
+            body: JSON.stringify({}),
+        });
+        if (!imageResponse.ok) throw new Error(`Image fetch failed: ${imageResponse.statusText}`);
+        const { images: imagesFromServer = [] } = await imageResponse.json();
+
+        const imageDataList = imagesFromServer.map(imgData => ({
+            ...imgData,
+            id: imgData.filename,
+            thumbnailUrl: getThumbnailUrl(imgData.filename),
+            fullResUrl: getBackgroundPath(imgData.filename),
+            isStarred: !!imgData.isStarred,
+            isCustom: false,
+        }));
+
+        if (backgroundSelector) {
+            backgroundSelector.setData(imageDataList);
+            updateStateFromChatMetadata();
+            highlightSelectedBackground();
+        }
+        ensureStaticThumbnailsExist(imageDataList);
+
+    } catch (error) {
+        console.error('Failed to get background data:', error);
+        toastr.error('Could not load backgrounds.');
     }
-    ensureStaticThumbnailsExist(imageDataList);
 }
 
 /**
