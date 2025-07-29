@@ -2117,6 +2117,7 @@ function openFolderChooserPopup(filename) {
 export async function initBackgrounds() {
     if (backgroundSelector) backgroundSelector.destroy();
     backgroundSelector = new BackgroundSelector('bg_menu_content');
+    backgroundSelector.sortOrder = $('#bg-sort-order').val();
     const drawerElement = document.getElementById('Backgrounds');
     if (drawerElement) {
         const checkVisibility = () => {
