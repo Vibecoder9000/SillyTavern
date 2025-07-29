@@ -104,36 +104,47 @@ export async function generateThumbnail(directories, type, file, forceGenerate =
     const originalFolder = getOriginalFolder(directories, type);
     const pathToCachedFile = path.join(thumbnailFolder, file);
 
-    if (!forceGenerate && fs.existsSync(pathToCachedFile)) {
-        try {
-            const buffer = fs.readFileSync(pathToCachedFile);
-            const dimensions = sizeOf(buffer);
-            const ratio = (dimensions.height > 0) ? (dimensions.width / dimensions.height) : 1.0;
-            return { path: pathToCachedFile, aspectRatio: ratio };
-        } catch (e) {
-            console.warn(`[Thumbnails] Could not read dimensions for ${file}. It might be corrupted.`, e);
+    try {
+        // Check if thumbnail already exists and return it if not forcing regeneration
+        if (!forceGenerate && fs.existsSync(pathToCachedFile)) {
+            try {
+                const buffer = fs.readFileSync(pathToCachedFile);
+                const dimensions = sizeOf(buffer);
+                const ratio = (dimensions.height > 0) ? (dimensions.width / dimensions.height) : 1.0;
+                return { path: pathToCachedFile, aspectRatio: ratio };
+            } catch (e) {
+                console.warn(`[Thumbnails] Could not read dimensions for ${file}. It might be corrupted.`, e);
+                // If we can't read the existing thumbnail, we'll try to regenerate it
+                forceGenerate = true;
+            }
         }
-    }
 
-    if (checkOnly && !forceGenerate) {
-        return { path: null, aspectRatio: null, resolution: null };
-    }
+        // If we're only checking and not forcing generation, return null
+        if (checkOnly && !forceGenerate) {
+            return { path: null, aspectRatio: null, resolution: null };
+        }
 
-    const pathToOriginalFile = path.join(originalFolder, file);
-    if (!fs.existsSync(pathToOriginalFile)) {
-        console.error(`[generateThumbnail] Cannot generate thumbnail, original file not found: ${pathToOriginalFile}`);
-        return { path: null, aspectRatio: null, resolution: null };
-    }
+        const pathToOriginalFile = path.join(originalFolder, file);
+        if (!fs.existsSync(pathToOriginalFile)) {
+            console.error(`[generateThumbnail] Cannot generate thumbnail, original file not found: ${pathToOriginalFile}`);
+            return { path: null, aspectRatio: null, resolution: null };
+        }
 
-    if (SKIPPED_EXTENSIONS_FOR_JIMP.includes(path.extname(file).toLowerCase())) {
-        return { path: null, aspectRatio: null, resolution: null };
-    }
+        // Skip processing for formats that Jimp doesn't handle
+        if (SKIPPED_EXTENSIONS_FOR_JIMP.includes(path.extname(file).toLowerCase())) {
+            return { path: null, aspectRatio: null, resolution: null };
+        }
 
-    const result = await processSingleImage(file, originalFolder, thumbnailFolder);
-
-    if (result.success) {
-        return { path: pathToCachedFile, aspectRatio: result.aspectRatio, resolution: result.resolution };
-    } else {
+        // Process the image to generate thumbnail
+        const result = await processSingleImage(file, originalFolder, thumbnailFolder);
+        if (result.success) {
+            return { path: pathToCachedFile, aspectRatio: result.aspectRatio, resolution: result.resolution };
+        } else {
+            console.error(`[generateThumbnail] Failed to process image ${file}:`, result.error);
+            return { path: null, aspectRatio: null, resolution: null };
+        }
+    } catch (error) {
+        console.error(`[generateThumbnail] Unexpected error processing ${file}:`, error);
         return { path: null, aspectRatio: null, resolution: null };
     }
 }
