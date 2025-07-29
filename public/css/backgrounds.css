@@ -238,7 +238,7 @@ div#add-folder-button.folder-button .thumbnail-placeholder,
 }
 
 .popup-overlay.folder-chooser-overlay {
-    z-index: 4001;
+    z-index: 4015;
 }
 
 .popup-overlay.open {
