@@ -307,7 +307,8 @@ router.post('/upload', async function (request, response) {
         response.json({ filename: uniqueFilename, ...newMetadata });
 
     } catch (err) {
-        console.error('Background upload failed:', err);
+        const originalFilename = request.file?.originalname ?? 'unknown file';
+        console.error(`Background upload failed for ${originalFilename}:`, err);
         try { await fsp.unlink(request.file.path); } catch { /* ignore */ }
         if (!response.headersSent) {
             response.status(500).send('Failed to process uploaded file.');

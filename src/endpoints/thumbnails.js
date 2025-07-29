@@ -201,7 +201,7 @@ async function processSingleImage(file, originalFolder, thumbnailFolder) {
         timings.total = performance.now() - totalStartTime;
         return { success: true, timings, aspectRatio, resolution: targetPixelArea };
     } catch (error) {
-        console.warn(`[Thumbnails] Failed to process image ${file}:`, error.message);
+        console.warn(`[Thumbnails] Failed to process image ${file}:`, error);
         return { success: false, filename: file, error: error.message };
     }
 }
@@ -227,7 +227,7 @@ export async function ensureThumbnailCache(directoriesList) {
         if (filesToProcess.length === 0) {
             continue;
         }
-        console.info(`[Thumbnails] Found ${filesToProcess.length} new images. Starting processing in batches of ${CONCURRENCY_LIMIT}...`);
+        console.info(`[Thumbnails] Processing ${filesToProcess.length} new images...`);
         const startTime = performance.now();
         const allResults = [];
         for (let i = 0; i < filesToProcess.length; i += CONCURRENCY_LIMIT) {

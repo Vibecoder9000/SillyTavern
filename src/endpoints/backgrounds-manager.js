@@ -75,7 +75,9 @@ export async function generateSingleFileMetadata(filePath) {
         };
     } catch (error) {
         if (error.code === 'ENAMETOOLONG') {
-            console.log(`Too long filename:\n${path.basename(filePath)}`);
+            console.log(`[Backgrounds] Skipped file with excessively long name: ${path.basename(filePath)}`);
+        } else {
+            console.warn(`[Backgrounds] Failed to generate metadata for ${path.basename(filePath)}:`, error);
         }
         return null;
     }
@@ -100,7 +102,7 @@ export async function syncBackgroundsMetadata(userDirectories) {
         const rawData = await fs.readFile(backgroundsJsonPath, 'utf8');
         metadata = JSON.parse(rawData);
     } catch (error) {
-        console.warn('Processing Backgrounds...');
+        console.info('[Background Sync] backgrounds.json not found. A new file will be created.');
         metadata = { version: 1, images: {}, folders: [], tags: [] };
     }
 
