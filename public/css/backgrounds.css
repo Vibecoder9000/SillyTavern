@@ -331,9 +331,11 @@ div#add-folder-button.folder-button .thumbnail-placeholder,
 
 .thumbnail-row {
     display: flex;
-    gap: 5px;
+    justify-content: space-around;
+    width: 100%;
 }
 
+.thumbnail-container > .thumbnail-row:last-child,
 .thumbnail-row:last-child {
     justify-content: flex-start;
 }
