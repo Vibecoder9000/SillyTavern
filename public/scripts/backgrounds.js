@@ -177,9 +177,11 @@ function createVideoThumbnail(videoFile, options) {
  * Creates a single thumbnail DOM element.
  * @param {object} imageData - Data for the image.
  * @param {object} calculatedSize - Calculated size for the thumbnail.
+ * @param {object} [options] - Optional parameters for context-specific rendering.
+ * @param {string} [options.currentFolderId] - The ID of the folder being viewed, if any.
  * @returns {HTMLElement} The created thumbnail element.
  */
-function createThumbnailElement(imageData, calculatedSize) {
+function createThumbnailElement(imageData, calculatedSize, options = {}) {
     // Get the reusable menu structure from the <template> tag in the HTML.
     const menuTemplate = document.getElementById('thumbnail-menu-template');
 
@@ -243,6 +245,19 @@ function createThumbnailElement(imageData, calculatedSize) {
 
     const menuFragment = menuTemplate.content.cloneNode(true);
     thumbnail.appendChild(menuFragment.querySelector('.jg-menu'));
+
+    // If we're inside a folder context, modify the "add to folder" button.
+    if (options.currentFolderId) {
+        const folderButton = thumbnail.querySelector('[data-action="add-to-folder"]');
+        if (folderButton) {
+            folderButton.dataset.action = 'remove-from-folder';
+            folderButton.dataset.folderId = options.currentFolderId; // Store folderId for the click handler
+            folderButton.title = translate('Remove from Folder');
+            folderButton.setAttribute('data-i18n', '[title]Remove from Folder');
+            folderButton.classList.remove('fa-folder-plus');
+            folderButton.classList.add('fa-folder-minus');
+        }
+    }
 
     const mobileMenuToggle = document.createElement('div');
     mobileMenuToggle.className = 'mobile-only-menu-toggle';
@@ -1598,15 +1613,16 @@ function calculateImageSize(aspectRatio, rowHeight) {
 /**
  * Creates a row element containing multiple thumbnail elements.
  * @param {object} rowData - Data for the row, including images and calculated height.
+ * @param {object} [options] - Optional parameters for context-specific rendering.
  * @returns {HTMLElement} The created row element.
  */
-function createRowElement(rowData) {
+function createRowElement(rowData, options = {}) {
     const rowElement = document.createElement('div');
     rowElement.className = 'thumbnail-row';
     rowData.images.forEach((imageData) => {
         const aspectRatio = imageData.aspectRatio || 1.77;
         const calculatedSize = calculateImageSize(aspectRatio, rowData.height);
-        const thumbnail = createThumbnailElement(imageData, calculatedSize);
+        const thumbnail = createThumbnailElement(imageData, calculatedSize, options);
         rowElement.appendChild(thumbnail);
     });
     return rowElement;
@@ -1838,7 +1854,7 @@ function openCustomFolderPopup(folderId) {
         const thumbnailContainer = document.createElement('div');
         thumbnailContainer.className = 'thumbnail-container';
         const rows = calculateRowLayout(usableWidth, folderImages, false);
-        rows.forEach(rowData => thumbnailContainer.appendChild(createRowElement(rowData)));
+        rows.forEach(rowData => thumbnailContainer.appendChild(createRowElement(rowData, { currentFolderId: folderId })));
         contentArea.appendChild(thumbnailContainer);
 
         if (observer) observer.disconnect();
@@ -1897,6 +1913,9 @@ function openCustomFolderPopup(folderId) {
                 case 'add-to-folder':
                     openFolderChooserPopup(filename);
                     break;
+                case 'remove-from-folder':
+                    await onRemoveFromFolderClick(filename, folderId, renderContent);
+                    break;
                 case 'delete':
                     await onDeleteBackgroundClick.call(jgButton, e);
                     renderContent(); // Re-render the popup after deletion
@@ -1926,6 +1945,44 @@ function openCustomFolderPopup(folderId) {
         popupOverlay.classList.add('open');
         renderContent();
     });
+}
+
+/**
+ * Removes a background from a specific folder.
+ * @param {string} filename - The filename of the background to remove.
+ * @param {string} folderId - The ID of the folder to remove from.
+ * @param {Function} renderCallback - A function to call to re-render the UI on success.
+ */
+async function onRemoveFromFolderClick(filename, folderId, renderCallback) {
+    const imageToUpdate = backgroundSelector.images.find(img => img.filename === filename);
+    if (!imageToUpdate || !Array.isArray(imageToUpdate.folderIds)) return;
+
+    const originalFolderIds = [...imageToUpdate.folderIds];
+    const newFolderIds = imageToUpdate.folderIds.filter(id => id !== folderId);
+
+    // Optimistically update the client-side data
+    imageToUpdate.folderIds = newFolderIds;
+
+    try {
+        const response = await fetch('/api/backgrounds/update-folders', {
+            method: 'POST',
+            headers: getRequestHeaders(),
+            body: JSON.stringify({
+                filename: imageToUpdate.filename,
+                folderIds: newFolderIds,
+            }),
+        });
+
+        if (!response.ok) throw new Error(`Server error: ${response.status}`);
+        toastr.success(`'${filename}' removed from folder.`);
+        renderCallback(); // Re-render the popup to reflect the removal
+
+    } catch (error) {
+        console.error('Failed to save folder update:', error);
+        toastr.error('Failed to update folder. Reverting change.');
+        // Roll back on failure
+        imageToUpdate.folderIds = originalFolderIds;
+    }
 }
 
 /**
