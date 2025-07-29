@@ -146,38 +146,55 @@ export async function syncBackgroundsMetadata(userDirectories) {
         console.log(`[Background Sync] Invalidated ${regeneratedThumbs} outdated thumbnails that will be regenerated.`);
     }
 
-    // Process new files and regenerate invalidated thumbnails
-    for (const filename of imageFilesOnDisk) {
-        const filePath = path.join(backgroundsFolderPath, filename);
+    const totalFiles = imageFilesOnDisk.length;
+    if (totalFiles > 0) {
+        const startTime = performance.now();
+        let processedCount = 0;
 
-        if (!metadata.images[filename]) {
-            const newMetadata = await generateSingleFileMetadata(filePath);
-            if (newMetadata) {
-                metadata.images[filename] = newMetadata;
-                hasChanges = true;
-                newFiles++;
-            }
-        }
-        else if (metadata.images[filename].addedTimestamp === undefined) {
-            try {
-                const stats = await fs.stat(filePath);
-                metadata.images[filename].addedTimestamp = Math.floor(stats.birthtimeMs || stats.mtimeMs);
-                hasChanges = true;
-                updatedFiles++;
-            } catch (err) {
-                console.warn(`[Background Sync] Could not stat file ${filename} to add timestamp, assigning current time.`, err);
-                metadata.images[filename].addedTimestamp = Date.now();
-            }
-        }
+        const renderProgressBar = () => {
+            const percentage = Math.floor((processedCount / totalFiles) * 100);
+            const progress = Math.floor((percentage / 100) * 20);
+            const bar = '█'.repeat(progress) + '-'.repeat(20 - progress);
+            const elapsedTime = (performance.now() - startTime) / 1000;
+            const imagesPerSecond = (processedCount / elapsedTime).toFixed(1);
+            const eta = elapsedTime > 0 ? Math.round(((totalFiles - processedCount) * elapsedTime) / processedCount) : 0;
+            process.stdout.write(`Syncing metadata: [${bar}] ${percentage}% | ${processedCount}/${totalFiles} | ${imagesPerSecond} img/s | ETA: ${eta}s\r`);
+        };
 
-        if (metadata.images[filename] && metadata.images[filename].thumbnailResolution === undefined) {
-            // Generate thumbnail if missing to get resolution metadata. (forceGenerate: false, checkOnly: false)
-            const thumbResult = await generateThumbnail(userDirectories, 'bg', filename, false, false);
-            if (thumbResult.path && thumbResult.resolution) {
-                metadata.images[filename].thumbnailResolution = thumbResult.resolution;
-                hasChanges = true;
+        renderProgressBar();
+
+        for (const filename of imageFilesOnDisk) {
+            const filePath = path.join(backgroundsFolderPath, filename);
+
+            if (!metadata.images[filename]) {
+                const newMetadata = await generateSingleFileMetadata(filePath);
+                if (newMetadata) {
+                    metadata.images[filename] = newMetadata;
+                    hasChanges = true;
+                    newFiles++;
+                }
+            } else if (metadata.images[filename].addedTimestamp === undefined) {
+                try {
+                    const stats = await fs.stat(filePath);
+                    metadata.images[filename].addedTimestamp = Math.floor(stats.birthtimeMs || stats.mtimeMs);
+                    hasChanges = true;
+                    updatedFiles++;
+                } catch (err) {
+                    metadata.images[filename].addedTimestamp = Date.now();
+                }
             }
+
+            if (metadata.images[filename] && metadata.images[filename].thumbnailResolution === undefined) {
+                const thumbResult = await generateThumbnail(userDirectories, 'bg', filename, false, false);
+                if (thumbResult.path && thumbResult.resolution) {
+                    metadata.images[filename].thumbnailResolution = thumbResult.resolution;
+                    hasChanges = true;
+                }
+            }
+            processedCount++;
+            renderProgressBar();
         }
+        process.stdout.write('\n');
     }
 
     // Find and remove files from metadata that are no longer on disk

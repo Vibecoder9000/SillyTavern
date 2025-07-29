@@ -179,9 +179,6 @@ async function processSingleImage(file, originalFolder, thumbnailFolder) {
         newWidth = Math.max(newWidth, 1);
         newHeight = Math.max(newHeight, 1);
 
-        // Log the dimensions for debugging
-        console.log(`[Thumbnails] Processing ${file}: original dimensions ${originalWidth}x${originalHeight}, aspect ratio ${aspectRatio}, new dimensions ${newWidth}x${newHeight}`);
-
         thumbImage.resize({ w: newWidth, h: newHeight, mode: Jimp.RESIZE_BILINEAR });
 
         timings.resize = performance.now() - stepStartTime;
@@ -223,16 +220,36 @@ export async function ensureThumbnailCache(directoriesList) {
             const pathToCachedFile = path.join(thumbnailFolder, file);
             return !fs.existsSync(pathToCachedFile);
         });
+
         if (filesToProcess.length === 0) {
             continue;
         }
-        console.info(`[Thumbnails] Processing ${filesToProcess.length} new images...`);
+
+        const totalFiles = filesToProcess.length;
+        let processedCount = 0;
         const startTime = performance.now();
+
+        const renderProgressBar = () => {
+            const percentage = Math.floor((processedCount / totalFiles) * 100);
+            const progress = Math.floor((percentage / 100) * 20);
+            const bar = '█'.repeat(progress) + '-'.repeat(20 - progress);
+            const elapsedTime = (performance.now() - startTime) / 1000;
+            const imagesPerSecond = (processedCount / elapsedTime).toFixed(1);
+            const eta = elapsedTime > 0 ? Math.round(((totalFiles - processedCount) * elapsedTime) / processedCount) : 0;
+            process.stdout.write(`Thumbnailing: [${bar}] ${percentage}% | ${processedCount}/${totalFiles} | ${imagesPerSecond} img/s | ETA: ${eta}s\r`);
+        };
+
+        renderProgressBar();
+
         const allResults = [];
-        for (let i = 0; i < filesToProcess.length; i += CONCURRENCY_LIMIT) {
+        for (let i = 0; i < totalFiles; i += CONCURRENCY_LIMIT) {
             const batchFiles = filesToProcess.slice(i, i + CONCURRENCY_LIMIT);
             const tasks = batchFiles.map(file => processSingleImage(file, originalFolder, thumbnailFolder));
             const batchResults = await Promise.allSettled(tasks);
+
+            processedCount += batchFiles.length;
+            renderProgressBar();
+
             batchResults.forEach(r => {
                 if (r.status === 'fulfilled') {
                     allResults.push(r.value);
@@ -241,14 +258,17 @@ export async function ensureThumbnailCache(directoriesList) {
                 }
             });
         }
+
+        process.stdout.write('\n');
         const duration = (performance.now() - startTime) / 1000;
-        const timings = allResults.filter(r => r.success).map(r => r.timings);
-        const errors = allResults.filter(r => !r.success);
-        if (timings.length > 0) {
-            console.info(`[Thumbnails] Processed ${timings.length} new images in ${duration.toFixed(2)} seconds.`);
+        const successfulCount = allResults.filter(r => r.success).length;
+        const errorCount = allResults.filter(r => !r.success).length;
+
+        if (successfulCount > 0) {
+            console.info(`[Thumbnails] Processed ${successfulCount} new images in ${duration.toFixed(2)} seconds.`);
         }
-        if (errors.length > 0) {
-            console.warn(`[Thumbnails] Failed to process ${errors.length} images. Check logs above for details.`);
+        if (errorCount > 0) {
+            console.warn(`[Thumbnails] Failed to process ${errorCount} images. Check logs above for details.`);
         }
     }
 }
