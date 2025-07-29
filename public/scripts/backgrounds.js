@@ -1638,7 +1638,6 @@ function openStarredPopup() {
     const popupOverlay = popupFragment.querySelector('.popup-overlay');
     const popupPanel = popupFragment.querySelector('.popup-panel');
     const contentArea = popupFragment.querySelector('.popup-content');
-
     let isClosing = false;
     let observer;
     const SHIELD_EVENTS = ['mousedown', 'pointerdown', 'touchstart'];
@@ -1659,33 +1658,26 @@ function openStarredPopup() {
     const renderContent = () => {
         const starredImages = backgroundSelector.images.filter(img => img.isStarred);
         contentArea.innerHTML = '';
-
         if (starredImages.length === 0) {
             contentArea.innerHTML = `<p style="text-align: center; padding: 20px;">${translate('You have no starred backgrounds.')}</p>`;
             return;
         }
-
         // Sort the popup's images according to the global sort setting
         backgroundSelector._sortImages(starredImages);
-
         // Measure the reliable parent panel and account for the content area's padding.
         const style = getComputedStyle(contentArea);
         const paddingX = parseFloat(style.paddingLeft) + parseFloat(style.paddingRight);
         const usableWidth = popupPanel.clientWidth - paddingX;
-
         // If width is not yet available, try again on the next frame.
         if (usableWidth <= 0) {
             requestAnimationFrame(renderContent);
             return;
         }
-
         const thumbnailContainer = document.createElement('div');
         thumbnailContainer.className = 'thumbnail-container';
-
         const rows = calculateRowLayout(usableWidth, starredImages, false);
         rows.forEach(rowData => thumbnailContainer.appendChild(createRowElement(rowData)));
         contentArea.appendChild(thumbnailContainer);
-
         // Set up IntersectionObserver for lazy-loading thumbnails.
         if (observer) observer.disconnect();
         observer = new IntersectionObserver((entries) => {
@@ -1696,7 +1688,6 @@ function openStarredPopup() {
                 }
             });
         }, { root: contentArea, rootMargin: '300px 0px' });
-
         thumbnailContainer.querySelectorAll('.thumbnail').forEach(thumb => observer.observe(thumb));
         highlightLockedBackground();
     };
@@ -1707,19 +1698,15 @@ function openStarredPopup() {
     const closePopup = () => {
         if (isClosing) return;
         isClosing = true;
-
         // Disconnect the observer immediately as it's tied to scrolling, not clicks.
         if (observer) observer.disconnect();
-
         // Start the closing animation.
         popupOverlay.classList.remove('open');
-
         // Wait for the fade-out animation to complete BEFORE cleaning up and removing the element.
         popupOverlay.addEventListener('transitionend', () => {
             // Now that the popup is invisible, it's safe to remove the shield and listeners.
             deactivateShield();
             popupOverlay.removeEventListener('click', handlePopupClick);
-
             // Finally, remove the element from the DOM.
             popupOverlay.remove();
         }, { once: true });
@@ -1734,19 +1721,16 @@ function openStarredPopup() {
         const closeButton = e.target.closest('.popup-close-button');
         const jgButton = e.target.closest('.jg-button');
         const thumbnail = e.target.closest('.thumbnail');
-
         if (closeButton || !e.target.closest('.popup-panel')) {
             closePopup();
             return;
         }
-
         if (jgButton) {
             e.stopPropagation();
             const action = jgButton.dataset.action;
             const context = jgButton.closest('.thumbnail');
             if (!context) return;
             const filename = context.dataset.bgfile;
-
             switch (action) {
                 case 'star':
                     await toggleStarredBackground(filename);
@@ -1781,17 +1765,24 @@ function openStarredPopup() {
         }
     };
 
-    activateShield();
-
-    popupOverlay.addEventListener('click', handlePopupClick);
-
-    document.body.appendChild(popupOverlay);
-
-    // Use requestAnimationFrame to ensure the popup is in the DOM and has layout
-    requestAnimationFrame(() => {
-        popupOverlay.classList.add('open');
-        renderContent();
-    });
+    try {
+        activateShield();
+        popupOverlay.addEventListener('click', handlePopupClick);
+        document.body.appendChild(popupOverlay);
+        // Use requestAnimationFrame to ensure the popup is in the DOM and has layout
+        requestAnimationFrame(() => {
+            popupOverlay.classList.add('open');
+            renderContent();
+        });
+    } catch (error) {
+        console.error('Error opening starred popup:', error);
+        // Ensure cleanup happens even if an error occurs during initialization
+        deactivateShield();
+        popupOverlay.removeEventListener('click', handlePopupClick);
+        if (popupOverlay.parentNode) {
+            popupOverlay.remove();
+        }
+    }
 }
 
 /**
@@ -1804,18 +1795,15 @@ function openCustomFolderPopup(folderId) {
         console.error(`Folder with ID ${folderId} not found.`);
         return;
     }
-
     const template = document.getElementById('starred-popup-template');
     const popupFragment = template.content.cloneNode(true);
     const popupOverlay = popupFragment.querySelector('.popup-overlay');
     const popupPanel = popupFragment.querySelector('.popup-panel');
     const contentArea = popupFragment.querySelector('.popup-content');
     const headerTitle = popupFragment.querySelector('h3');
-
     // Set the title to the folder's name
     headerTitle.textContent = folder.name;
     headerTitle.removeAttribute('data-i18n');
-
     let isClosing = false;
     let observer;
     const SHIELD_EVENTS = ['mousedown', 'pointerdown', 'touchstart'];
@@ -1833,30 +1821,24 @@ function openCustomFolderPopup(folderId) {
     const renderContent = () => {
         const folderImages = backgroundSelector.images.filter(img => Array.isArray(img.folderIds) && img.folderIds.includes(folderId));
         contentArea.innerHTML = '';
-
         if (folderImages.length === 0) {
             contentArea.innerHTML = `<p style="text-align: center; padding: 20px;">${translate('This folder is empty.')}</p>`;
             return;
         }
-
         // Sort the popup's images according to the global sort setting
         backgroundSelector._sortImages(folderImages);
-
         const style = getComputedStyle(contentArea);
         const paddingX = parseFloat(style.paddingLeft) + parseFloat(style.paddingRight);
         const usableWidth = popupPanel.clientWidth - paddingX;
-
         if (usableWidth <= 0) {
             requestAnimationFrame(renderContent);
             return;
         }
-
         const thumbnailContainer = document.createElement('div');
         thumbnailContainer.className = 'thumbnail-container';
         const rows = calculateRowLayout(usableWidth, folderImages, false);
         rows.forEach(rowData => thumbnailContainer.appendChild(createRowElement(rowData, { currentFolderId: folderId })));
         contentArea.appendChild(thumbnailContainer);
-
         if (observer) observer.disconnect();
         observer = new IntersectionObserver((entries) => {
             entries.forEach(entry => {
@@ -1866,7 +1848,6 @@ function openCustomFolderPopup(folderId) {
                 }
             });
         }, { root: contentArea, rootMargin: '300px 0px' });
-
         thumbnailContainer.querySelectorAll('.thumbnail').forEach(thumb => observer.observe(thumb));
         highlightLockedBackground();
     };
@@ -1874,13 +1855,10 @@ function openCustomFolderPopup(folderId) {
     const closePopup = () => {
         if (isClosing) return;
         isClosing = true;
-
         // Disconnect the observer immediately.
         if (observer) observer.disconnect();
-
         // Start the closing animation.
         popupOverlay.classList.remove('open');
-
         // Wait for the animation to finish before cleaning up listeners and the shield.
         popupOverlay.addEventListener('transitionend', () => {
             deactivateShield();
@@ -1893,19 +1871,16 @@ function openCustomFolderPopup(folderId) {
         const closeButton = e.target.closest('.popup-close-button');
         const jgButton = e.target.closest('.jg-button');
         const thumbnail = e.target.closest('.thumbnail');
-
         if (closeButton || !e.target.closest('.popup-panel')) {
             closePopup();
             return;
         }
-
         if (jgButton) {
             e.stopPropagation();
             const action = jgButton.dataset.action;
             const context = jgButton.closest('.thumbnail');
             if (!context) return;
             const filename = context.dataset.bgfile;
-
             switch (action) {
                 case 'star':
                     await toggleStarredBackground(filename);
@@ -1938,13 +1913,23 @@ function openCustomFolderPopup(folderId) {
         }
     };
 
-    activateShield();
-    popupOverlay.addEventListener('click', handlePopupClick);
-    document.body.appendChild(popupOverlay);
-    requestAnimationFrame(() => {
-        popupOverlay.classList.add('open');
-        renderContent();
-    });
+    try {
+        activateShield();
+        popupOverlay.addEventListener('click', handlePopupClick);
+        document.body.appendChild(popupOverlay);
+        requestAnimationFrame(() => {
+            popupOverlay.classList.add('open');
+            renderContent();
+        });
+    } catch (error) {
+        console.error('Error opening custom folder popup:', error);
+        // Ensure cleanup happens even if an error occurs during initialization
+        deactivateShield();
+        popupOverlay.removeEventListener('click', handlePopupClick);
+        if (popupOverlay.parentNode) {
+            popupOverlay.remove();
+        }
+    }
 }
 
 /**
