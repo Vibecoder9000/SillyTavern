@@ -22,6 +22,8 @@
     width: var(--sheldWidth);
     max-width: var(--sheldWidth);
     padding: 0;
+    border-top-left-radius: 0;
+    border-top-right-radius: 0;
 }
 
 #bg-header-fixed {
@@ -55,7 +57,7 @@
     flex-grow: 1;
     overflow-y: auto;
     overflow-x: hidden;
-    padding: 0 5px;
+    padding: 0 5px 5px;
     width: 100%;
     box-sizing: border-box;
     min-height: 0;
