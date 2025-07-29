@@ -171,7 +171,7 @@ export async function syncBackgroundsMetadata(userDirectories) {
         }
 
         if (metadata.images[filename] && metadata.images[filename].thumbnailResolution === undefined) {
-            // Do not force thumbnail generation unless necessary
+            // Generate thumbnail if missing to get resolution metadata. (forceGenerate: false, checkOnly: false)
             const thumbResult = await generateThumbnail(userDirectories, 'bg', filename, false, false);
             if (thumbResult.path && thumbResult.resolution) {
                 metadata.images[filename].thumbnailResolution = thumbResult.resolution;

@@ -7,6 +7,10 @@ import { invalidateThumbnail, dimensions, generateThumbnail, SKIPPED_EXTENSIONS_
 import { getFileNameValidationFunction } from '../middleware/validateFileName.js';
 import { generateSingleFileMetadata } from './backgrounds-manager.js';
 
+/**
+ * A simple async lock to prevent race conditions when modifying files.
+ * Ensures that operations on `backgrounds.json` are serialized to prevent data corruption.
+ */
 class AsyncLock {
     constructor() {
         this.disable = false;

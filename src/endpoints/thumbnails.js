@@ -327,8 +327,8 @@ publicRouter.get('/', async function (request, response) {
         const thumbnailFolder = getThumbnailFolder(request.user.directories, type);
         const pathToCachedFile = path.join(thumbnailFolder, file);
 
-        // This is the critical new logic from the patch
         if (!fs.existsSync(pathToCachedFile)) {
+            // Generate thumbnail if it's missing. (forceGenerate: false, checkOnly: false)
             await generateThumbnail(request.user.directories, type, file, false, false);
         }
 
