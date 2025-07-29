@@ -4,7 +4,7 @@ import crypto from 'node:crypto';
 import { imageSize } from 'image-size';
 import writeFileAtomic from 'write-file-atomic';
 import { getAverageColor } from 'fast-average-color-node';
-import { invalidateThumbnail, generateThumbnail } from './thumbnails.js';
+import { invalidateThumbnail, generateThumbnail, SKIPPED_EXTENSIONS_FOR_JIMP } from './thumbnails.js';
 import { getConfigValue } from '../util.js';
 
 /**
@@ -35,15 +35,12 @@ function isAnimatedApng(buffer) {
 export async function generateSingleFileMetadata(filePath) {
     try {
         const buffer = await fs.readFile(filePath);
-
         const hash = crypto.createHash('sha256').update(buffer).digest('hex');
-
         const dimensions = imageSize(buffer);
         if (!dimensions || !dimensions.width || !dimensions.height) {
             throw new Error('Could not determine image dimensions.');
         }
         const aspectRatio = dimensions.width / dimensions.height;
-
         let isAnimated = false;
         switch (dimensions.type) {
             case 'gif':
@@ -58,10 +55,8 @@ export async function generateSingleFileMetadata(filePath) {
             default:
                 isAnimated = false;
         }
-
         const color = await getAverageColor(buffer);
         const hexColor = color.hex;
-
         return {
             hash,
             aspectRatio: parseFloat(aspectRatio.toFixed(4)),
@@ -92,9 +87,7 @@ export async function generateSingleFileMetadata(filePath) {
 export async function syncBackgroundsMetadata(userDirectories) {
     const backgroundsJsonPath = path.join(userDirectories.root, 'backgrounds.json');
     const backgroundsFolderPath = userDirectories.backgrounds;
-
-    const VIDEO_EXTENSIONS = ['mp4', 'avi', 'mov', 'wmv', 'flv', 'webm', '3gp', 'mkv', 'mpg'];
-
+    const ALLOWED_IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.tif', '.tiff']);
     const currentResolution = getConfigValue('thumbnails.resolution', 15000);
 
     let metadata;
@@ -102,19 +95,16 @@ export async function syncBackgroundsMetadata(userDirectories) {
         const rawData = await fs.readFile(backgroundsJsonPath, 'utf8');
         metadata = JSON.parse(rawData);
     } catch (error) {
-        console.info('[Background Sync] backgrounds.json not found. A new file will be created.');
+        // Silently create a new metadata object if the file doesn't exist.
         metadata = { version: 1, images: {}, folders: [], tags: [] };
     }
 
     let imageFilesOnDisk;
     try {
         const allFilesOnDisk = await fs.readdir(backgroundsFolderPath);
-        // Create a set of video extensions to easily check against
-        const videoExtensions = new Set(VIDEO_EXTENSIONS);
         imageFilesOnDisk = allFilesOnDisk.filter(filename => {
-            const ext = path.extname(filename).substring(1).toLowerCase();
-            // Process the file only if its extension is not in the list
-            return !videoExtensions.has(ext);
+            const ext = path.extname(filename).toLowerCase();
+            return ALLOWED_IMAGE_EXTENSIONS.has(ext);
         });
     } catch (error) {
         console.error(`Could not read backgrounds directory for user at ${userDirectories.root}. Aborting sync.`, error);
@@ -123,103 +113,96 @@ export async function syncBackgroundsMetadata(userDirectories) {
 
     const filesOnDiskSet = new Set(imageFilesOnDisk);
     const metadataImageKeys = Object.keys(metadata.images);
-    let hasChanges = false;
-    let newFiles = 0;
-    let deletedFiles = 0;
-    let updatedFiles = 0;
-    let regeneratedThumbs = 0;
+    const filesToProcess = [];
 
-    // Invalidate and remove thumbnails with outdated resolution
+    // Phase 1: Identify all necessary work without modifying data yet.
+    const needsThumbRegen = new Set();
     for (const filename of metadataImageKeys) {
         const imageMeta = metadata.images[filename];
-        const storedResolution = imageMeta.thumbnailResolution;
-
-        if (storedResolution && storedResolution !== currentResolution) {
-            invalidateThumbnail(userDirectories, 'bg', filename);
-            delete imageMeta.thumbnailResolution;
-            regeneratedThumbs++;
-            hasChanges = true;
+        if (imageMeta?.thumbnailResolution && imageMeta.thumbnailResolution !== currentResolution) {
+            needsThumbRegen.add(filename);
         }
     }
 
-    if (regeneratedThumbs > 0) {
-        console.log(`[Background Sync] Invalidated ${regeneratedThumbs} outdated thumbnails that will be regenerated.`);
+    for (const filename of imageFilesOnDisk) {
+        const imageMeta = metadata.images[filename];
+        const isNew = !imageMeta;
+        const fileExtension = path.extname(filename).toLowerCase();
+        const isSkippedFormat = SKIPPED_EXTENSIONS_FOR_JIMP.includes(fileExtension);
+
+        const needsUpdate = imageMeta && (
+            imageMeta.addedTimestamp === undefined ||
+            needsThumbRegen.has(filename) ||
+            (imageMeta.thumbnailResolution === undefined && !isSkippedFormat)
+        );
+
+        if (isNew || needsUpdate) {
+            filesToProcess.push(filename);
+        }
     }
 
-    const totalFiles = imageFilesOnDisk.length;
-    if (totalFiles > 0) {
-        const startTime = performance.now();
-        let processedCount = 0;
+    const filesToDelete = metadataImageKeys.filter(filename => !filesOnDiskSet.has(filename));
+    const hasChanges = filesToProcess.length > 0 || filesToDelete.length > 0 || needsThumbRegen.size > 0;
 
-        const renderProgressBar = () => {
-            const percentage = Math.floor((processedCount / totalFiles) * 100);
-            const progress = Math.floor((percentage / 100) * 20);
-            const bar = '█'.repeat(progress) + '-'.repeat(20 - progress);
-            const elapsedTime = (performance.now() - startTime) / 1000;
-            const imagesPerSecond = (processedCount / elapsedTime).toFixed(1);
-            const eta = elapsedTime > 0 ? Math.round(((totalFiles - processedCount) * elapsedTime) / processedCount) : 0;
-            process.stdout.write(`Syncing metadata: [${bar}] ${percentage}% | ${processedCount}/${totalFiles} | ${imagesPerSecond} img/s | ETA: ${eta}s\r`);
-        };
+    // Phase 2: Execute the work only if changes were identified.
+    if (!hasChanges) {
+        return;
+    }
 
-        renderProgressBar();
+    if (needsThumbRegen.size > 0) {
+        for (const filename of needsThumbRegen) {
+            invalidateThumbnail(userDirectories, 'bg', filename);
+            if (metadata.images[filename]) {
+                delete metadata.images[filename].thumbnailResolution;
+            }
+        }
+    }
 
-        for (const filename of imageFilesOnDisk) {
+    if (filesToProcess.length > 0) {
+        for (const filename of filesToProcess) {
             const filePath = path.join(backgroundsFolderPath, filename);
-
             if (!metadata.images[filename]) {
                 const newMetadata = await generateSingleFileMetadata(filePath);
-                if (newMetadata) {
-                    metadata.images[filename] = newMetadata;
-                    hasChanges = true;
-                    newFiles++;
-                }
+                if (newMetadata) metadata.images[filename] = newMetadata;
             } else if (metadata.images[filename].addedTimestamp === undefined) {
                 try {
                     const stats = await fs.stat(filePath);
                     metadata.images[filename].addedTimestamp = Math.floor(stats.birthtimeMs || stats.mtimeMs);
-                    hasChanges = true;
-                    updatedFiles++;
-                } catch (err) {
+                } catch {
                     metadata.images[filename].addedTimestamp = Date.now();
                 }
             }
 
-            if (metadata.images[filename] && metadata.images[filename].thumbnailResolution === undefined) {
-                const thumbResult = await generateThumbnail(userDirectories, 'bg', filename, false, false);
-                if (thumbResult.path && thumbResult.resolution) {
-                    metadata.images[filename].thumbnailResolution = thumbResult.resolution;
-                    hasChanges = true;
+            const fileExtension = path.extname(filename).toLowerCase();
+            if (metadata.images[filename] && metadata.images[filename].thumbnailResolution === undefined && !SKIPPED_EXTENSIONS_FOR_JIMP.includes(fileExtension)) {
+                const thumbnailPath = path.join(userDirectories.thumbnailsBg, filename);
+                let thumbnailExists = false;
+                try {
+                    await fs.access(thumbnailPath);
+                    thumbnailExists = true;
+                } catch { /* file doesn't exist */ }
+
+                if (thumbnailExists) {
+                    metadata.images[filename].thumbnailResolution = currentResolution;
+                } else {
+                    const thumbResult = await generateThumbnail(userDirectories, 'bg', filename, false, false);
+                    if (thumbResult.path && thumbResult.resolution) {
+                        metadata.images[filename].thumbnailResolution = thumbResult.resolution;
+                    }
                 }
             }
-            processedCount++;
-            renderProgressBar();
-        }
-        process.stdout.write('\n');
-    }
-
-    // Find and remove files from metadata that are no longer on disk
-    for (const filename of metadataImageKeys) {
-        if (!filesOnDiskSet.has(filename)) {
-            delete metadata.images[filename];
-            hasChanges = true;
-            deletedFiles++;
         }
     }
 
-    // Save and log the final results
-    if (hasChanges) {
-        const logParts = [];
-        if (newFiles > 0) logParts.push(`found ${newFiles} new`);
-        if (deletedFiles > 0) logParts.push(`removed ${deletedFiles} deleted`);
-        if (updatedFiles > 0) logParts.push(`updated ${updatedFiles} existing`);
-        if (logParts.length > 0) {
-            console.log(`[Background Sync] ${logParts.join(', ')}. Saving changes to backgrounds.json...`);
-            try {
-                const jsonString = JSON.stringify(metadata, null, 4);
-                await writeFileAtomic(backgroundsJsonPath, jsonString, 'utf8');
-            } catch (error) {
-                console.error('[Background Sync] Failed to save backgrounds.json:', error);
-            }
-        }
+    for (const filename of filesToDelete) {
+        delete metadata.images[filename];
+    }
+
+    // Phase 3: Save changes silently.
+    try {
+        const jsonString = JSON.stringify(metadata, null, 4);
+        await writeFileAtomic(backgroundsJsonPath, jsonString, 'utf8');
+    } catch (error) {
+        console.error('[Background Sync] Failed to save backgrounds.json:', error);
     }
 }

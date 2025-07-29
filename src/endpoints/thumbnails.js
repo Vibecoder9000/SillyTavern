@@ -230,13 +230,15 @@ export async function ensureThumbnailCache(directoriesList) {
         const startTime = performance.now();
 
         const renderProgressBar = () => {
+            process.stdout.clearLine(0);
+            process.stdout.cursorTo(0);
             const percentage = Math.floor((processedCount / totalFiles) * 100);
             const progress = Math.floor((percentage / 100) * 20);
             const bar = '█'.repeat(progress) + '-'.repeat(20 - progress);
             const elapsedTime = (performance.now() - startTime) / 1000;
-            const imagesPerSecond = (processedCount / elapsedTime).toFixed(1);
-            const eta = elapsedTime > 0 ? Math.round(((totalFiles - processedCount) * elapsedTime) / processedCount) : 0;
-            process.stdout.write(`Thumbnailing: [${bar}] ${percentage}% | ${processedCount}/${totalFiles} | ${imagesPerSecond} img/s | ETA: ${eta}s\r`);
+            const imagesPerSecond = elapsedTime > 0 ? (processedCount / elapsedTime).toFixed(1) : '...';
+            const eta = elapsedTime > 0 && processedCount > 0 ? Math.round(((totalFiles - processedCount) * elapsedTime) / processedCount) : 0;
+            process.stdout.write(`Thumbnailing: [${bar}] ${percentage}% | ${processedCount}/${totalFiles} | ${imagesPerSecond} img/s | ETA: ${eta}s`);
         };
 
         renderProgressBar();
