@@ -700,9 +700,10 @@ export async function getBackgrounds(force = false) {
     }));
 
     if (backgroundSelector) {
-        backgroundSelector.setData(imageDataList);
         backgroundSelector.folderLists = folders; // Populate the folder list from the server
         backgroundSelector.renderFolders(); // Re-render folders with the new data
+
+        backgroundSelector.setData(imageDataList);
         updateStateFromChatMetadata();
         highlightSelectedBackground();
     }
