@@ -355,8 +355,8 @@ div#add-folder-button.folder-button .thumbnail-placeholder,
     height: var(--thumb-height);
 
     border-radius: 8px;
-    position: relative;
-    transition: transform 0.2s ease-out, box-shadow 0.2s ease-out, outline 0.2s ease-out;
+    transition: transform 0.15s ease-out;
+    will-change: transform;
 }
 
 .thumbnail-clipper {
@@ -370,8 +370,9 @@ div#add-folder-button.folder-button .thumbnail-placeholder,
     box-sizing: border-box;
 }
 
-.thumbnail:hover {
+.thumbnail:hover { /* Just use Firefox, chrome is slightly more laggy */
     transform: translateY(-3px);
+    transition: box-shadow 0.2s ease-out;
     box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
     z-index: 10;
 }
