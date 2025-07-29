@@ -182,8 +182,7 @@ async function processSingleImage(file, originalFolder, thumbnailFolder) {
         // Log the dimensions for debugging
         console.log(`[Thumbnails] Processing ${file}: original dimensions ${originalWidth}x${originalHeight}, aspect ratio ${aspectRatio}, new dimensions ${newWidth}x${newHeight}`);
 
-        // Always use the calculated dimensions based on the original aspect ratio
-        thumbImage.scaleToFit(newWidth, newHeight, Jimp.RESIZE_BILINEAR);
+        thumbImage.resize({ w: newWidth, h: newHeight, mode: Jimp.RESIZE_BILINEAR });
 
         timings.resize = performance.now() - stepStartTime;
 
