@@ -101,7 +101,7 @@ async function getCachedServerThumbnail(thumbnailUrl) {
         return SERVER_THUMBNAIL_CACHE.get(thumbnailUrl);
     }
     try {
-        const response = await fetch(thumbnailUrl, { cache: 'force-cache' });
+        const response = await fetch(thumbnailUrl, { cache: 'no-cache' });
         if (!response.ok) return PNG_PIXEL_B64;
         const blob = await response.blob();
         const blobUrl = URL.createObjectURL(blob);
@@ -444,17 +444,25 @@ class BackgroundSelector {
         const isMobile = window.innerWidth <= 1000;
         const targetRowHeight = isMobile ? 80 : 110; // mobile size : desktop size
 
-        const allRows = calculateRowLayout(
-            this.containerWidth,
-            this.filteredImages,
-            false,
-            targetRowHeight,
-        );
+        try {
+            const allRows = calculateRowLayout(
+                this.containerWidth,
+                this.filteredImages,
+                false,
+                targetRowHeight,
+            );
 
-        allRows.forEach(rowData => {
-            const rowElement = createRowElement(rowData);
-            mainContainer.appendChild(rowElement);
-        });
+            allRows.forEach(rowData => {
+                const rowElement = createRowElement(rowData);
+                mainContainer.appendChild(rowElement);
+            });
+        } catch (error) {
+            console.error('Failed to render background layout:', error);
+            toastr.error('A background has corrupted data and could not be displayed. Check console for details.');
+            mainContainer.innerHTML = `<p class="no-bgs-found-message">${translate('Error displaying backgrounds. See console (F12).')}</p>`;
+            return;
+        }
+
 
         mainContainer.querySelectorAll('.thumbnail').forEach(thumb =>
             this.imageObserver.observe(thumb),
@@ -601,7 +609,13 @@ class BackgroundSelector {
  * @param {Array<object>} imageDataList - The list of all background image data.
  */
 async function ensureStaticThumbnailsExist(imageDataList) {
-    const imagesToProcess = imageDataList.filter(img => img.isAnimated && !img.staticThumbnailFailed);
+    const imagesToProcess = imageDataList.filter(img => {
+        if (!img.isAnimated || img.staticThumbnailFailed) {
+            return false;
+        }
+        const lowerFilename = img.filename.toLowerCase();
+        return lowerFilename.endsWith('.webp');
+    });
 
     if (imagesToProcess.length === 0) {
         return;
@@ -611,8 +625,8 @@ async function ensureStaticThumbnailsExist(imageDataList) {
 }
 
 /**
- * Orchestrates the client-side thumbnail generation for existing animated files and uploads them.
- * @param {Array<object>} imagesToProcess - The list of image data objects (typically all animated images) to check.
+ * Orchestrates the client-side thumbnail generation for existing animated WebP files and uploads them.
+ * @param {Array<object>} imagesToProcess - The list of image data objects to check.
  * @returns {Promise<void>}
  */
 async function processAndUploadStaticThumbnails(imagesToProcess) {
@@ -620,8 +634,10 @@ async function processAndUploadStaticThumbnails(imagesToProcess) {
         const logPrefix = `[ProcessThumb] ${imageData.filename}:`;
 
         try {
+            // Check if a static thumbnail already exists on the server.
             const staticThumbUrl = `${imageData.thumbnailUrl}&animated=false`;
             const checkResponse = await fetch(staticThumbUrl, { method: 'HEAD' });
+            // If it exists (200 OK), our job is done for this image.
             if (checkResponse.ok) {
                 return;
             }
@@ -630,6 +646,7 @@ async function processAndUploadStaticThumbnails(imagesToProcess) {
         }
 
         try {
+            // Fetch the full original animated image.
             const response = await fetch(`${imageData.thumbnailUrl}&animated=true`);
             if (!response.ok) {
                 throw new Error(`Failed to fetch original file. Server responded with ${response.status} ${response.statusText}`);
@@ -638,7 +655,6 @@ async function processAndUploadStaticThumbnails(imagesToProcess) {
             const file = new File([blob], imageData.filename, { type: blob.type });
 
             // The createThumbnail utility requires a base64 data URL, not a File object.
-            // First, convert the file to a data URL.
             const fileDataUrl = await getBase64Async(file);
 
             // Now, create the static thumbnail from the data URL.
@@ -652,6 +668,7 @@ async function processAndUploadStaticThumbnails(imagesToProcess) {
             const staticThumbnailBlob = await (await fetch(thumbnailDataUrl)).blob();
             const thumbFormData = new FormData();
 
+            // Append the blob with the original filename, the server will handle the rest.
             thumbFormData.append('avatar', staticThumbnailBlob, imageData.filename);
             const uploadUrl = `/api/thumbnails/upload-generated?originalFilename=${encodeURIComponent(imageData.filename)}`;
 
@@ -667,6 +684,7 @@ async function processAndUploadStaticThumbnails(imagesToProcess) {
         } catch (error) {
             console.error(`${logPrefix} FAILED.`, error);
 
+            // Report the failure to the server so we don't try again repeatedly.
             try {
                 await fetch('/api/backgrounds/mark-thumbnail-fail', {
                     method: 'POST',
@@ -1570,7 +1588,13 @@ function calculateRowLayout(containerWidth, images, forceJustify = false, target
     let currentRowSummedAspectRatio = 0;
 
     images.forEach(image => {
-        const aspectRatio = image.aspectRatio || 1.77;
+        const aspectRatio = image.aspectRatio;
+        if (!aspectRatio || typeof aspectRatio !== 'number' || aspectRatio <= 0) {
+            const err = new Error(`Invalid or missing aspectRatio for image: ${image.filename}. Check backgrounds.json.`);
+            console.error(err.stack);
+            throw err;
+        }
+
         const prospectiveTotalAspectRatio = currentRowSummedAspectRatio + aspectRatio;
         const prospectiveWidth = (prospectiveTotalAspectRatio * targetRowHeight) + (currentRow.length * rowGap);
 
@@ -2104,15 +2128,29 @@ export async function initBackgrounds() {
     backgroundSelector = new BackgroundSelector('bg_menu_content');
     backgroundSelector.sortOrder = $('#bg-sort-order').val();
     const drawerElement = document.getElementById('Backgrounds');
+
     if (drawerElement) {
         const checkVisibility = () => {
             const isNowOpen = drawerElement.classList.contains('openDrawer');
             if (isNowOpen && !hasGalleryLoaded && !galleryLoadInProgress) {
                 galleryLoadInProgress = true;
-                getBackgrounds().finally(() => {
-                    hasGalleryLoaded = true;
-                    galleryLoadInProgress = false;
-                });
+
+                const pollServerStatus = setInterval(async () => {
+                    try {
+                        const response = await fetch('/api/backgrounds/status');
+                        const status = await response.json();
+                        if (status.ready) {
+                            clearInterval(pollServerStatus);
+                            console.log('[Backgrounds] Server is ready. Loading gallery data.');
+                            getBackgrounds().finally(() => {
+                                hasGalleryLoaded = true;
+                                galleryLoadInProgress = false;
+                            });
+                        }
+                    } catch (error) {
+                        console.error('[Backgrounds] Failed to poll server status, retrying...', error);
+                    }
+                }, 1000);
             }
         };
         new MutationObserver(checkVisibility).observe(drawerElement, { attributes: true, attributeFilter: ['class'] });

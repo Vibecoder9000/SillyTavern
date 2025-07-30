@@ -5,7 +5,14 @@ import sanitize from 'sanitize-filename';
 import crypto from 'node:crypto';
 import { invalidateThumbnail, dimensions, generateThumbnail, SKIPPED_EXTENSIONS_FOR_JIMP } from './thumbnails.js';
 import { getFileNameValidationFunction } from '../middleware/validateFileName.js';
-import { generateSingleFileMetadata } from './backgrounds-manager.js';
+import { generateSingleFileMetadata, syncPromise } from './backgrounds-manager.js';
+
+let isSyncComplete = false;
+
+// When the main sync promise resolves, we flip the flag to true.
+syncPromise.then(() => {
+    isSyncComplete = true;
+});
 
 /**
  * A simple async lock to prevent race conditions when modifying files.
@@ -31,6 +38,25 @@ class AsyncLock {
 const fileLock = new AsyncLock();
 
 export const router = express.Router();
+
+/**
+ * Prevents the client from requesting data
+ * until the server's initial synchronization is fully complete.
+ */
+router.get('/status', (req, res) => {
+    res.json({ ready: isSyncComplete });
+});
+
+
+/**
+ * Apply the sync lock to every route in this file. This ensures that no background API requests
+ * are processed until the initial startup synchronization is complete, preventing race conditions
+ * where the frontend might read or write an outdated/incomplete backgrounds.json file.
+ */
+router.use(async (req, res, next) => {
+    await syncPromise;
+    next();
+});
 
 /**
  * Handles the request to get all background images and their metadata.
@@ -300,7 +326,7 @@ router.post('/upload', async function (request, response) {
             const rawData = await fsp.readFile(backgroundsJsonPath, 'utf8');
             metadataFile = JSON.parse(rawData);
         } catch {
-            metadataFile = { version: 1, images: {}, folders: [], tags: [] };
+            metadataFile = { version: 1, images: {}, folders: [], tags: [], thumbnailSystemVersion: 2 };
         }
 
         metadataFile.images[uniqueFilename] = newMetadata;
