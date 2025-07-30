@@ -646,8 +646,8 @@ async function processAndUploadStaticThumbnails(imagesToProcess) {
         }
 
         try {
-            // Fetch the full original animated image.
-            const response = await fetch(`${imageData.thumbnailUrl}&animated=true`);
+            // Fetch the original file using the fullResUrl.
+            const response = await fetch(imageData.fullResUrl);
             if (!response.ok) {
                 throw new Error(`Failed to fetch original file. Server responded with ${response.status} ${response.statusText}`);
             }
@@ -2135,6 +2135,7 @@ export async function initBackgrounds() {
             if (isNowOpen && !hasGalleryLoaded && !galleryLoadInProgress) {
                 galleryLoadInProgress = true;
 
+                // Poll the server until it's ready, then load data.
                 const pollServerStatus = setInterval(async () => {
                     try {
                         const response = await fetch('/api/backgrounds/status');

@@ -14,7 +14,7 @@ export const publicRouter = express.Router();
 export const apiRouter = express.Router();
 
 export const CONCURRENCY_LIMIT = 8;
-export const SKIPPED_EXTENSIONS_FOR_JIMP = ['.apng', '.mp4', '.webm', '.avi', '.mkv', '.flv', '.webp', '.gif'];
+export const SKIPPED_EXTENSIONS_FOR_JIMP = ['.apng', '.mp4', '.webm', '.avi', '.mkv', '.flv', '.gif'];
 
 /**
  * @typedef {'bg' | 'avatar' | 'persona'} ThumbnailType
@@ -363,6 +363,8 @@ publicRouter.get('/', async function (request, response) {
         const pathToCachedFile = path.join(thumbnailFolder, file);
 
         if (!fs.existsSync(pathToCachedFile)) {
+            // Note: This generateThumbnail call here will only create static thumbnails for formats Jimp supports.
+            // Animated formats (like .webp, .apng, .gif) will be skipped by Jimp and handled client-side if needed.
             // Generate thumbnail if it's missing. (forceGenerate: false, checkOnly: false)
             await generateThumbnail(request.user.directories, type, file, false, false);
         }

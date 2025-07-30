@@ -8,21 +8,15 @@ import { getAverageColor } from 'fast-average-color-node';
 import { invalidateThumbnail, generateThumbnail, SKIPPED_EXTENSIONS_FOR_JIMP, CONCURRENCY_LIMIT } from './thumbnails.js';
 import { getConfigValue } from '../util.js';
 
+/**
+ * We create a promise that acts as a "lock".
+ * It will only be resolved when the initial, critical sync is complete.
+ * All other API endpoints that access backgrounds.json must await this promise.
+ */
 let resolveSync;
 export const syncPromise = new Promise(resolve => {
     resolveSync = resolve;
 });
-
-/**
- * Checks if a buffer contains an animated WebP by looking for the 'ANIM' chunk.
- * @param {Buffer} buffer The file buffer.
- * @returns {boolean}
- */
-function isAnimatedWebP(buffer) {
-    const webpHeader = buffer.toString('ascii', 8, 12);
-    if (webpHeader !== 'WEBP') return false;
-    return buffer.subarray(0, 100).includes('ANIM');
-}
 
 /**
  * Checks if a buffer contains an animated PNG (APNG) by looking for the 'acTL' chunk.
@@ -36,7 +30,7 @@ function isAnimatedApng(buffer) {
 /**
  * Generates all necessary metadata for a single background file.
  * @param {string} filePath - The full path to the background file.
- * @returns {Promise<object|null>} A metadata object or null if processing fails.
+ * @returns {Promise<object>} A metadata object. Throws an error if processing fails.
  */
 export async function generateSingleFileMetadata(filePath) {
     try {
@@ -48,19 +42,25 @@ export async function generateSingleFileMetadata(filePath) {
         }
         const aspectRatio = dimensions.width / dimensions.height;
         let isAnimated = false;
+
+        // Read a small portion of the buffer to check for animation indicators efficiently.
+        const headerBuffer = buffer.length > 200 ? buffer.subarray(0, 200) : buffer;
+
         switch (dimensions.type) {
             case 'gif':
-                isAnimated = dimensions.images && dimensions.images > 1;
+                isAnimated = true; // GIFs are generally treated as animated.
                 break;
             case 'png':
                 isAnimated = isAnimatedApng(buffer);
                 break;
             case 'webp':
-                isAnimated = isAnimatedWebP(buffer);
+                // Check for 'ANIM' or 'ANMF' chunks in the header for animated WebP.
+                isAnimated = headerBuffer.includes('ANIM') || headerBuffer.includes('ANMF');
                 break;
             default:
                 isAnimated = false;
         }
+
         const color = await getAverageColor(buffer);
         const hexColor = color.hex;
         return {
@@ -77,10 +77,9 @@ export async function generateSingleFileMetadata(filePath) {
     } catch (error) {
         if (error.code === 'ENAMETOOLONG') {
             console.log(`[Backgrounds] Skipped file with excessively long name: ${path.basename(filePath)}`);
-        } else {
-            console.warn(`[Backgrounds] Failed to generate metadata for ${path.basename(filePath)}:`, error);
         }
-        return null;
+        // Re-throw the error to ensure metadata generation failures are propagated.
+        throw error;
     }
 }
 
@@ -194,6 +193,7 @@ export async function syncBackgroundsMetadata(userDirectories) {
         const hasChanges = filesToProcess.length > 0 || filesToDelete.length > 0 || needsThumbRegen.size > 0;
 
         if (!hasChanges) {
+            console.log('[Background Sync] No changes detected.');
             return; // Nothing to do.
         }
 
@@ -214,6 +214,7 @@ export async function syncBackgroundsMetadata(userDirectories) {
             let processedCount = 0;
             const startTime = performance.now();
 
+            // Server-side console progress bar for initial thumbnail generation.
             const renderProgressBar = () => {
                 process.stdout.clearLine(0);
                 process.stdout.cursorTo(0);

@@ -57,7 +57,6 @@ import {
     getConfigValue,
 } from './util.js';
 import { UPLOADS_DIRECTORY } from './constants.js';
-import { ensureThumbnailCache } from './endpoints/thumbnails.js';
 
 // Routers
 import { router as usersPublicRouter } from './endpoints/users-public.js';
@@ -283,7 +282,6 @@ async function preSetupTasks() {
         }
     }
 
-    await ensureThumbnailCache(directories);
     await diskCache.verify(directories);
     migrateFlatSecrets(directories);
     cleanUploads();
