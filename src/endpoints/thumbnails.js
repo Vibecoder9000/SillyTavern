@@ -13,7 +13,7 @@ import { getImages, getConfigValue } from '../util.js';
 export const publicRouter = express.Router();
 export const apiRouter = express.Router();
 
-const CONCURRENCY_LIMIT = 8;
+export const CONCURRENCY_LIMIT = 8;
 export const SKIPPED_EXTENSIONS_FOR_JIMP = ['.apng', '.mp4', '.webm', '.avi', '.mkv', '.flv', '.webp', '.gif'];
 
 /**
