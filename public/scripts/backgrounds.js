@@ -625,79 +625,90 @@ async function ensureStaticThumbnailsExist(imageDataList) {
 }
 
 /**
+ * Processes a single animated background: generates a static thumbnail and uploads it.
+ * @param {object} imageData - The metadata for the image to process.
+ * @returns {Promise<void>}
+ */
+async function processSingleAnimatedThumbnail(imageData) {
+    const logPrefix = `[ProcessThumb] ${imageData.filename}:`;
+
+    try {
+        // Check if a static thumbnail already exists on the server.
+        const staticThumbUrl = `${imageData.thumbnailUrl}&animated=false`;
+        const checkResponse = await fetch(staticThumbUrl, { method: 'HEAD' });
+        // If it exists (200 OK), our job is done for this image.
+        if (checkResponse.ok) {
+            return;
+        }
+    } catch (error) {
+        console.warn(`${logPrefix} HEAD check failed, proceeding with generation.`, error.message);
+    }
+
+    try {
+        // Fetch the original file using the fullResUrl.
+        const response = await fetch(imageData.fullResUrl);
+        if (!response.ok) {
+            throw new Error(`Failed to fetch original file. Server responded with ${response.status} ${response.statusText}`);
+        }
+        const blob = await response.blob();
+        const file = new File([blob], imageData.filename, { type: blob.type });
+
+        // The createThumbnail utility requires a base64 data URL, not a File object.
+        const fileDataUrl = await getBase64Async(file);
+
+        // Now, create the static thumbnail from the data URL.
+        const thumbnailDataUrl = await createThumbnail(
+            fileDataUrl,
+            THUMBNAIL_CONFIG.width,
+            THUMBNAIL_CONFIG.height,
+            'image/jpeg',
+        );
+
+        const staticThumbnailBlob = await (await fetch(thumbnailDataUrl)).blob();
+        const thumbFormData = new FormData();
+
+        // Append the blob with the original filename, the server will handle the rest.
+        thumbFormData.append('avatar', staticThumbnailBlob, imageData.filename);
+        const uploadUrl = `/api/thumbnails/upload-generated?originalFilename=${encodeURIComponent(imageData.filename)}`;
+
+        const uploadResponse = await fetch(uploadUrl, {
+            method: 'POST',
+            headers: getHeadersForFormData(),
+            body: thumbFormData,
+        });
+
+        if (!uploadResponse.ok) {
+            throw new Error(`Upload failed. Server responded with ${uploadResponse.status} ${uploadResponse.statusText}`);
+        }
+    } catch (error) {
+        console.error(`${logPrefix} FAILED.`, error);
+
+        // Report the failure to the server so we don't try again repeatedly.
+        try {
+            await fetch('/api/backgrounds/mark-thumbnail-fail', {
+                method: 'POST',
+                headers: getRequestHeaders(),
+                body: JSON.stringify({ filename: imageData.filename }),
+            });
+        } catch (reportError) {
+            console.error(`${logPrefix} Could not report failure to the server.`, reportError);
+        }
+    }
+}
+
+/**
  * Orchestrates the client-side thumbnail generation for existing animated WebP files and uploads them.
  * @param {Array<object>} imagesToProcess - The list of image data objects to check.
  * @returns {Promise<void>}
  */
 async function processAndUploadStaticThumbnails(imagesToProcess) {
-    const promises = imagesToProcess.map(async (imageData) => {
-        const logPrefix = `[ProcessThumb] ${imageData.filename}:`;
+    const CHUNK_SIZE = 4; // Process 4 images at a time to avoid browser overload.
 
-        try {
-            // Check if a static thumbnail already exists on the server.
-            const staticThumbUrl = `${imageData.thumbnailUrl}&animated=false`;
-            const checkResponse = await fetch(staticThumbUrl, { method: 'HEAD' });
-            // If it exists (200 OK), our job is done for this image.
-            if (checkResponse.ok) {
-                return;
-            }
-        } catch (error) {
-            console.warn(`${logPrefix} HEAD check failed, proceeding with generation.`, error.message);
-        }
-
-        try {
-            // Fetch the original file using the fullResUrl.
-            const response = await fetch(imageData.fullResUrl);
-            if (!response.ok) {
-                throw new Error(`Failed to fetch original file. Server responded with ${response.status} ${response.statusText}`);
-            }
-            const blob = await response.blob();
-            const file = new File([blob], imageData.filename, { type: blob.type });
-
-            // The createThumbnail utility requires a base64 data URL, not a File object.
-            const fileDataUrl = await getBase64Async(file);
-
-            // Now, create the static thumbnail from the data URL.
-            const thumbnailDataUrl = await createThumbnail(
-                fileDataUrl,
-                THUMBNAIL_CONFIG.width,
-                THUMBNAIL_CONFIG.height,
-                'image/jpeg',
-            );
-
-            const staticThumbnailBlob = await (await fetch(thumbnailDataUrl)).blob();
-            const thumbFormData = new FormData();
-
-            // Append the blob with the original filename, the server will handle the rest.
-            thumbFormData.append('avatar', staticThumbnailBlob, imageData.filename);
-            const uploadUrl = `/api/thumbnails/upload-generated?originalFilename=${encodeURIComponent(imageData.filename)}`;
-
-            const uploadResponse = await fetch(uploadUrl, {
-                method: 'POST',
-                headers: getHeadersForFormData(),
-                body: thumbFormData,
-            });
-
-            if (!uploadResponse.ok) {
-                throw new Error(`Upload failed. Server responded with ${uploadResponse.status} ${uploadResponse.statusText}`);
-            }
-        } catch (error) {
-            console.error(`${logPrefix} FAILED.`, error);
-
-            // Report the failure to the server so we don't try again repeatedly.
-            try {
-                await fetch('/api/backgrounds/mark-thumbnail-fail', {
-                    method: 'POST',
-                    headers: getRequestHeaders(),
-                    body: JSON.stringify({ filename: imageData.filename }),
-                });
-            } catch (reportError) {
-                console.error(`${logPrefix} Could not report failure to the server.`, reportError);
-            }
-        }
-    });
-
-    await Promise.allSettled(promises);
+    for (let i = 0; i < imagesToProcess.length; i += CHUNK_SIZE) {
+        const chunk = imagesToProcess.slice(i, i + CHUNK_SIZE);
+        const promises = chunk.map(imageData => processSingleAnimatedThumbnail(imageData));
+        await Promise.allSettled(promises);
+    }
 }
 
 /**

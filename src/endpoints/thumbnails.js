@@ -132,8 +132,22 @@ export async function generateThumbnail(directories, type, file, forceGenerate =
             return { path: null, aspectRatio: null, resolution: null };
         }
 
-        // Skip processing for formats that Jimp doesn't handle
-        if (SKIPPED_EXTENSIONS_FOR_JIMP.includes(path.extname(file).toLowerCase())) {
+        const fileExtension = path.extname(file).toLowerCase();
+
+        // For WebP files, we must check if they are animated, as Jimp cannot process them.
+        if (fileExtension === '.webp') {
+            const buffer = fs.readFileSync(pathToOriginalFile);
+            // Check for 'ANIM' or 'ANMF' chunks in the header, which indicate an animated WebP.
+            const isAnimatedWebP = buffer.includes('ANIM') || buffer.includes('ANMF');
+            if (isAnimatedWebP) {
+                // Return null to indicate that the server cannot generate this thumbnail.
+                // The client is expected to handle it.
+                return { path: null, aspectRatio: null, resolution: null };
+            }
+        }
+
+        // Skip processing for other formats that Jimp doesn't handle
+        if (SKIPPED_EXTENSIONS_FOR_JIMP.includes(fileExtension)) {
             return { path: null, aspectRatio: null, resolution: null };
         }
 
