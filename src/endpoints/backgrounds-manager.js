@@ -120,15 +120,19 @@ export async function syncBackgroundsMetadata(userDirectories) {
             const rawData = await fs.readFile(backgroundsJsonPath, 'utf8');
             metadata = JSON.parse(rawData);
 
-            // Data-integrity based migration check. If any image that needs a thumbnail is missing
-            // the resolution property, we assume the whole system is in a legacy state.
-            const needsMigration = Object.entries(metadata.images).some(([filename, img]) => {
+            // Data-integrity based migration check.
+            const migrationTrigger = Object.entries(metadata.images).find(([filename, img]) => {
                 const fileExtension = path.extname(filename).toLowerCase();
+                // An animated WebP's static thumbnail is generated client-side.
+                if (fileExtension === '.webp' && img.isAnimated) {
+                    return false;
+                }
                 return !img.thumbnailResolution && !SKIPPED_EXTENSIONS_FOR_JIMP.includes(fileExtension);
             });
 
-            if (needsMigration) {
-                console.log('[Background Sync] Incomplete or legacy metadata detected. Forcing full thumbnail migration...');
+            if (migrationTrigger) {
+                const [triggerFilename] = migrationTrigger;
+                console.log(`[Background Sync] Incomplete or legacy metadata detected ("${triggerFilename}" is missing thumbnail data). Forcing full thumbnail migration...`);
                 await purgeThumbnailCache(thumbnailsBgPath);
                 // Invalidate all in-memory metadata to force regeneration.
                 for (const key in metadata.images) {
@@ -177,11 +181,12 @@ export async function syncBackgroundsMetadata(userDirectories) {
             const isNew = !imageMeta;
             const fileExtension = path.extname(filename).toLowerCase();
             const isSkippedFormat = SKIPPED_EXTENSIONS_FOR_JIMP.includes(fileExtension);
+            const isAnimatedWebp = imageMeta && fileExtension === '.webp' && imageMeta.isAnimated;
 
             const needsUpdate = imageMeta && (
                 imageMeta.addedTimestamp === undefined ||
                 needsThumbRegen.has(filename) ||
-                (imageMeta.thumbnailResolution === undefined && !isSkippedFormat)
+                (imageMeta.thumbnailResolution === undefined && !isSkippedFormat && !isAnimatedWebp)
             );
 
             if (isNew || needsUpdate) {
@@ -193,7 +198,6 @@ export async function syncBackgroundsMetadata(userDirectories) {
         const hasChanges = filesToProcess.length > 0 || filesToDelete.length > 0 || needsThumbRegen.size > 0;
 
         if (!hasChanges) {
-            console.log('[Background Sync] No changes detected.');
             return; // Nothing to do.
         }
 
@@ -263,6 +267,23 @@ export async function syncBackgroundsMetadata(userDirectories) {
                 batchResults.forEach(result => {
                     if (result.status === 'fulfilled' && result.value) {
                         const { filename, newMetadata, addedTimestamp, thumbnailResolution } = result.value;
+                        const fileExtension = path.extname(filename).toLowerCase();
+                        const isSkippedFormat = SKIPPED_EXTENSIONS_FOR_JIMP.includes(fileExtension);
+
+                        // Check if a thumbnail was expected but not generated in this run.
+                        const originalImageMeta = metadata.images[filename];
+                        const wasNew = !originalImageMeta;
+                        const neededThumb = originalImageMeta && originalImageMeta.thumbnailResolution === undefined;
+
+                        // Get the full metadata record, whether it's new or was pre-existing.
+                        const imageRecord = newMetadata || originalImageMeta;
+                        const isAnimatedWebp = imageRecord && fileExtension === '.webp' && imageRecord.isAnimated;
+
+                        // Only warn if it's not a skipped format AND it's not an animated WebP that the client handles.
+                        if (!isSkippedFormat && !isAnimatedWebp && (wasNew || neededThumb) && !thumbnailResolution) {
+                            console.log(`\n[Background Sync] Warning: Thumbnail for "${filename}" was not generated. The file may be corrupted or an unsupported variation.`);
+                        }
+
                         if (newMetadata) {
                             metadata.images[filename] = newMetadata;
                         }
@@ -302,7 +323,6 @@ export async function syncBackgroundsMetadata(userDirectories) {
     } finally {
         // This is the crucial step: whether the sync succeeded or failed,
         // we resolve the promise to unlock the API for subsequent requests.
-        console.log('[Background Sync] Startup sync process finished. API is now available.');
         resolveSync();
     }
 }
