@@ -1,10 +1,11 @@
+import { performance } from 'node:perf_hooks';
 import * as fs from 'node:fs/promises';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { imageSize } from 'image-size';
 import writeFileAtomic from 'write-file-atomic';
 import { getAverageColor } from 'fast-average-color-node';
-import { invalidateThumbnail, generateThumbnail, SKIPPED_EXTENSIONS_FOR_JIMP } from './thumbnails.js';
+import { invalidateThumbnail, generateThumbnail, SKIPPED_EXTENSIONS_FOR_JIMP, CONCURRENCY_LIMIT } from './thumbnails.js';
 import { getConfigValue } from '../util.js';
 
 /**
@@ -129,7 +130,6 @@ export async function syncBackgroundsMetadata(userDirectories) {
         const isNew = !imageMeta;
         const fileExtension = path.extname(filename).toLowerCase();
         const isSkippedFormat = SKIPPED_EXTENSIONS_FOR_JIMP.includes(fileExtension);
-
         const needsUpdate = imageMeta && (
             imageMeta.addedTimestamp === undefined ||
             needsThumbRegen.has(filename) ||
@@ -150,6 +150,7 @@ export async function syncBackgroundsMetadata(userDirectories) {
     }
 
     if (needsThumbRegen.size > 0) {
+        console.log(`[Background Sync] Invalidating ${needsThumbRegen.size} thumbnails due to resolution change.`);
         for (const filename of needsThumbRegen) {
             invalidateThumbnail(userDirectories, 'bg', filename);
             if (metadata.images[filename]) {
@@ -159,49 +160,99 @@ export async function syncBackgroundsMetadata(userDirectories) {
     }
 
     if (filesToProcess.length > 0) {
-        for (const filename of filesToProcess) {
-            const filePath = path.join(backgroundsFolderPath, filename);
-            if (!metadata.images[filename]) {
-                const newMetadata = await generateSingleFileMetadata(filePath);
-                if (newMetadata) metadata.images[filename] = newMetadata;
-            } else if (metadata.images[filename].addedTimestamp === undefined) {
-                try {
-                    const stats = await fs.stat(filePath);
-                    metadata.images[filename].addedTimestamp = Math.floor(stats.birthtimeMs || stats.mtimeMs);
-                } catch {
-                    metadata.images[filename].addedTimestamp = Date.now();
-                }
-            }
+        console.log(`[Background Sync] Found ${filesToProcess.length} images needing processing.`);
+        const totalFiles = filesToProcess.length;
+        let processedCount = 0;
+        const startTime = performance.now();
 
-            const fileExtension = path.extname(filename).toLowerCase();
-            if (metadata.images[filename] && metadata.images[filename].thumbnailResolution === undefined && !SKIPPED_EXTENSIONS_FOR_JIMP.includes(fileExtension)) {
-                const thumbnailPath = path.join(userDirectories.thumbnailsBg, filename);
-                let thumbnailExists = false;
-                try {
-                    await fs.access(thumbnailPath);
-                    thumbnailExists = true;
-                } catch { /* file doesn't exist */ }
+        // This is the progress bar rendering function
+        const renderProgressBar = () => {
+            process.stdout.clearLine(0);
+            process.stdout.cursorTo(0);
+            const percentage = Math.floor((processedCount / totalFiles) * 100);
+            const progress = Math.floor((percentage / 100) * 20);
+            const bar = '█'.repeat(progress) + '-'.repeat(20 - progress);
+            const elapsedTime = (performance.now() - startTime) / 1000;
+            const imagesPerSecond = elapsedTime > 0 ? (processedCount / elapsedTime).toFixed(1) : '...';
+            const eta = elapsedTime > 0 && processedCount > 0 ? Math.round(((totalFiles - processedCount) * elapsedTime) / processedCount) : 0;
+            process.stdout.write(`Syncing Backgrounds: [${bar}] ${percentage}% | ${processedCount}/${totalFiles} | ${imagesPerSecond} img/s | ETA: ${eta}s`);
+        };
 
-                if (thumbnailExists) {
-                    metadata.images[filename].thumbnailResolution = currentResolution;
-                } else {
-                    const thumbResult = await generateThumbnail(userDirectories, 'bg', filename, false, false);
-                    if (thumbResult.path && thumbResult.resolution) {
-                        metadata.images[filename].thumbnailResolution = thumbResult.resolution;
+        renderProgressBar();
+
+        for (let i = 0; i < totalFiles; i += CONCURRENCY_LIMIT) {
+            const batchFiles = filesToProcess.slice(i, i + CONCURRENCY_LIMIT);
+            const tasks = batchFiles.map(filename => (async () => {
+                // This async function performs all the work for a single file and returns the results
+                // without directly modifying the shared `metadata` object, to prevent race conditions.
+                const filePath = path.join(backgroundsFolderPath, filename);
+                let updatePayload = {};
+
+                if (!metadata.images[filename]) {
+                    const newMetadata = await generateSingleFileMetadata(filePath);
+                    if (newMetadata) updatePayload.newMetadata = newMetadata;
+                } else if (metadata.images[filename].addedTimestamp === undefined) {
+                    try {
+                        const stats = await fs.stat(filePath);
+                        updatePayload.addedTimestamp = Math.floor(stats.birthtimeMs || stats.mtimeMs);
+                    } catch {
+                        updatePayload.addedTimestamp = Date.now();
                     }
                 }
-            }
+
+                const fileExtension = path.extname(filename).toLowerCase();
+                const imageRecord = metadata.images[filename] || updatePayload.newMetadata;
+                if (imageRecord && imageRecord.thumbnailResolution === undefined && !SKIPPED_EXTENSIONS_FOR_JIMP.includes(fileExtension)) {
+                    // Force thumbnail generation since we are in a processing queue.
+                    const thumbResult = await generateThumbnail(userDirectories, 'bg', filename, false, false);
+                    if (thumbResult.path && thumbResult.resolution) {
+                        updatePayload.thumbnailResolution = thumbResult.resolution;
+                    }
+                }
+                return { filename, ...updatePayload };
+            })());
+
+            const batchResults = await Promise.allSettled(tasks);
+
+            // Now, apply the results of the batch sequentially to the metadata object.
+            batchResults.forEach(result => {
+                if (result.status === 'fulfilled' && result.value) {
+                    const { filename, newMetadata, addedTimestamp, thumbnailResolution } = result.value;
+                    if (newMetadata) {
+                        metadata.images[filename] = newMetadata;
+                    }
+                    // Check if the image record exists before trying to add properties to it.
+                    if (metadata.images[filename]) {
+                        if (addedTimestamp) {
+                            metadata.images[filename].addedTimestamp = addedTimestamp;
+                        }
+                        if (thumbnailResolution) {
+                            metadata.images[filename].thumbnailResolution = thumbnailResolution;
+                        }
+                    }
+                } else if (result.status === 'rejected') {
+                    console.error('[Background Sync] A task failed during batch processing:', result.reason);
+                }
+            });
+
+            processedCount += batchFiles.length;
+            renderProgressBar();
         }
+        process.stdout.write('\n'); // New line after the progress bar finishes.
     }
 
-    for (const filename of filesToDelete) {
-        delete metadata.images[filename];
+    if (filesToDelete.length > 0) {
+        console.log(`[Background Sync] Removing metadata for ${filesToDelete.length} deleted images.`);
+        for (const filename of filesToDelete) {
+            delete metadata.images[filename];
+        }
     }
 
     // Phase 3: Save changes silently.
     try {
         const jsonString = JSON.stringify(metadata, null, 4);
         await writeFileAtomic(backgroundsJsonPath, jsonString, 'utf8');
+        console.log('[Background Sync] Synchronization complete.');
     } catch (error) {
         console.error('[Background Sync] Failed to save backgrounds.json:', error);
     }
