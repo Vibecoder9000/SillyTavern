@@ -9,6 +9,13 @@ import { invalidateThumbnail, generateThumbnail, SKIPPED_EXTENSIONS_FOR_JIMP, CO
 import { getConfigValue } from '../util.js';
 
 /**
+ * The current version of the thumbnail system.
+ * Version 1: Legacy system with no resolution metadata.
+ * Version 2: System using target pixel area, with 'thumbnailResolution' in metadata.
+ */
+const TARGET_THUMBNAIL_SYSTEM_VERSION = 2;
+
+/**
  * Checks if a buffer contains an animated WebP by looking for the 'ANIM' chunk.
  * @param {Buffer} buffer The file buffer.
  * @returns {boolean}
@@ -97,8 +104,34 @@ export async function syncBackgroundsMetadata(userDirectories) {
         const rawData = await fs.readFile(backgroundsJsonPath, 'utf8');
         metadata = JSON.parse(rawData);
     } catch (error) {
-        // Silently create a new metadata object if the file doesn't exist.
-        metadata = { version: 1, images: {}, folders: [], tags: [] };
+        // If the file doesn't exist, this is a new installation.
+        // Create a new metadata object that is already at the latest version.
+        metadata = { version: 1, images: {}, folders: [], tags: [], thumbnailSystemVersion: TARGET_THUMBNAIL_SYSTEM_VERSION };
+    }
+
+    // This is the one-time migration check. If the data isn't at the target version, we force a full rebuild.
+    if (metadata.thumbnailSystemVersion !== TARGET_THUMBNAIL_SYSTEM_VERSION) {
+        console.log('[Background Sync] Outdated thumbnail system detected. Performing one-time migration. This may take a while...');
+
+        // Step 1: Purge the entire background thumbnail cache to remove all old files.
+        try {
+            const thumbFiles = await fs.readdir(thumbnailsBgPath);
+            await Promise.all(thumbFiles.map(file => fs.unlink(path.join(thumbnailsBgPath, file))));
+            console.log(`[Background Sync] Purged ${thumbFiles.length} old thumbnails from cache.`);
+        } catch (e) {
+            // It's okay if the directory doesn't exist. Any other error should be reported.
+            if (e.code !== 'ENOENT') {
+                console.error('[Background Sync] Failed to purge thumbnail cache during migration:', e);
+            }
+        }
+
+        // Step 2: Invalidate all resolution metadata to force regeneration.
+        for (const key in metadata.images) {
+            if (metadata.images[key].thumbnailResolution) {
+                delete metadata.images[key].thumbnailResolution;
+            }
+        }
+        console.log('[Background Sync] Invalidated all thumbnail metadata. Starting full regeneration...');
     }
 
     let imageFilesOnDisk;
@@ -113,35 +146,12 @@ export async function syncBackgroundsMetadata(userDirectories) {
         return;
     }
 
-    // Detect old 190x60 thumbnail format and force a full regeneration.
-    const firstImageFile = imageFilesOnDisk.find(f => f !== '__transparent.png');
-    if (firstImageFile) {
-        const firstThumbPath = path.join(thumbnailsBgPath, firstImageFile);
-        try {
-            const thumbBuffer = await fs.readFile(firstThumbPath);
-            const dims = imageSize(thumbBuffer);
-            if (dims.width === 190 && dims.height === 60) {
-                console.log('[Background Sync] Old 190x60 thumbnail format detected. Forcing regeneration for all images...');
-                for (const filename of imageFilesOnDisk) {
-                    invalidateThumbnail(userDirectories, 'bg', filename);
-                }
-                // Also clear resolution from all metadata to ensure they get re-processed.
-                for (const key in metadata.images) {
-                    if (metadata.images[key].thumbnailResolution) {
-                        delete metadata.images[key].thumbnailResolution;
-                    }
-                }
-            }
-        } catch (e) {
-            // Ignore if file doesn't exist or is unreadable. The normal sync will handle it.
-        }
-    }
-
+    // Phase 1: Identify all necessary work without modifying data yet.
     const filesOnDiskSet = new Set(imageFilesOnDisk);
     const metadataImageKeys = Object.keys(metadata.images);
     const filesToProcess = [];
 
-    // Phase 1: Identify all necessary work without modifying data yet.
+    // Check for thumbnails that need regeneration due to a configuration change.
     const needsThumbRegen = new Set();
     for (const filename of metadataImageKeys) {
         const imageMeta = metadata.images[filename];
@@ -150,11 +160,15 @@ export async function syncBackgroundsMetadata(userDirectories) {
         }
     }
 
+    // Determine the full list of files that need processing for any reason.
     for (const filename of imageFilesOnDisk) {
         const imageMeta = metadata.images[filename];
         const isNew = !imageMeta;
         const fileExtension = path.extname(filename).toLowerCase();
         const isSkippedFormat = SKIPPED_EXTENSIONS_FOR_JIMP.includes(fileExtension);
+
+        // A file needs an update if its metadata is missing, a timestamp is missing,
+        // it's flagged for regen, or its thumbnail resolution is missing (after migration).
         const needsUpdate = imageMeta && (
             imageMeta.addedTimestamp === undefined ||
             needsThumbRegen.has(filename) ||
@@ -169,11 +183,18 @@ export async function syncBackgroundsMetadata(userDirectories) {
     const filesToDelete = metadataImageKeys.filter(filename => !filesOnDiskSet.has(filename));
     const hasChanges = filesToProcess.length > 0 || filesToDelete.length > 0 || needsThumbRegen.size > 0;
 
-    // Phase 2: Execute the work only if changes were identified.
     if (!hasChanges) {
-        return;
+        // Before returning, ensure we still stamp the version if it was missing.
+        if (metadata.thumbnailSystemVersion !== TARGET_THUMBNAIL_SYSTEM_VERSION) {
+            metadata.thumbnailSystemVersion = TARGET_THUMBNAIL_SYSTEM_VERSION;
+            const jsonString = JSON.stringify(metadata, null, 4);
+            await writeFileAtomic(backgroundsJsonPath, jsonString, 'utf8');
+            console.log('[Background Sync] System version updated.');
+        }
+        return; // Nothing else to do.
     }
 
+    // Phase 2: Execute the work only if changes were identified.
     if (needsThumbRegen.size > 0) {
         console.log(`[Background Sync] Invalidating ${needsThumbRegen.size} thumbnails due to resolution change.`);
         for (const filename of needsThumbRegen) {
@@ -273,8 +294,10 @@ export async function syncBackgroundsMetadata(userDirectories) {
         }
     }
 
-    // Phase 3: Save changes silently.
+    // Phase 3: Save changes.
     try {
+        // Finally, stamp the metadata with the current system version before saving.
+        metadata.thumbnailSystemVersion = TARGET_THUMBNAIL_SYSTEM_VERSION;
         const jsonString = JSON.stringify(metadata, null, 4);
         await writeFileAtomic(backgroundsJsonPath, jsonString, 'utf8');
         console.log('[Background Sync] Synchronization complete.');
