@@ -97,7 +97,7 @@ export function invalidateThumbnail(directories, type, file) {
  * @param {string} file - The filename of the image.
  * @param {boolean} [forceGenerate=false] - Whether to force generation even if a thumbnail exists.
  * @param {boolean} [checkOnly=true] - Whether to only check for existence without generating.
- * @returns {Promise<{path: string|null, aspectRatio: number|null}>} Path to thumbnail and its aspect ratio.
+ * @returns {Promise<{path: string|null, aspectRatio: number|null, resolution: number|null}>} Path to thumbnail, its aspect ratio, and resolution.
  */
 export async function generateThumbnail(directories, type, file, forceGenerate = false, checkOnly = true) {
     const thumbnailFolder = getThumbnailFolder(directories, type);
@@ -111,7 +111,9 @@ export async function generateThumbnail(directories, type, file, forceGenerate =
                 const buffer = fs.readFileSync(pathToCachedFile);
                 const dimensions = sizeOf(buffer);
                 const ratio = (dimensions.height > 0) ? (dimensions.width / dimensions.height) : 1.0;
-                return { path: pathToCachedFile, aspectRatio: ratio };
+                // When a thumbnail exists, return the current resolution from config so the JSON can be updated.
+                const resolution = getConfigValue('thumbnails.resolution', 16000);
+                return { path: pathToCachedFile, aspectRatio: ratio, resolution };
             } catch (e) {
                 console.warn(`[Thumbnails] Could not read dimensions for ${file}. It might be corrupted.`, e);
                 // If we can't read the existing thumbnail, we'll try to regenerate it
@@ -154,10 +156,10 @@ export async function generateThumbnail(directories, type, file, forceGenerate =
  * @param {string} file - The filename of the image.
  * @param {string} originalFolder - Path to the original image folder.
  * @param {string} thumbnailFolder - Path to the thumbnail output folder.
- * @returns {Promise<{success: boolean, timings?: object, filename?: string, error?: string}>} Result of the processing.
+ * @returns {Promise<{success: boolean, timings?: object, filename?: string, error?: string, aspectRatio?: number, resolution?: number}>} Result of the processing.
  */
 async function processSingleImage(file, originalFolder, thumbnailFolder) {
-    const thumbnailResolution = getConfigValue('thumbnails.resolution', 15000);
+    const thumbnailResolution = getConfigValue('thumbnails.resolution', 16000);
     const quality = Math.min(100, Math.max(1, parseInt(getConfigValue('thumbnails.quality', 95, 'number'))));
     const pngFormat = String(getConfigValue('thumbnails.format', 'jpg')).toLowerCase().trim() === 'png';
     const pathToOriginalFile = path.join(originalFolder, file);

@@ -88,6 +88,7 @@ export async function generateSingleFileMetadata(filePath) {
 export async function syncBackgroundsMetadata(userDirectories) {
     const backgroundsJsonPath = path.join(userDirectories.root, 'backgrounds.json');
     const backgroundsFolderPath = userDirectories.backgrounds;
+    const thumbnailsBgPath = userDirectories.thumbnailsBg;
     const ALLOWED_IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.tif', '.tiff']);
     const currentResolution = getConfigValue('thumbnails.resolution', 15000);
 
@@ -110,6 +111,30 @@ export async function syncBackgroundsMetadata(userDirectories) {
     } catch (error) {
         console.error(`Could not read backgrounds directory for user at ${userDirectories.root}. Aborting sync.`, error);
         return;
+    }
+
+    // Detect old 190x60 thumbnail format and force a full regeneration.
+    const firstImageFile = imageFilesOnDisk.find(f => f !== '__transparent.png');
+    if (firstImageFile) {
+        const firstThumbPath = path.join(thumbnailsBgPath, firstImageFile);
+        try {
+            const thumbBuffer = await fs.readFile(firstThumbPath);
+            const dims = imageSize(thumbBuffer);
+            if (dims.width === 190 && dims.height === 60) {
+                console.log('[Background Sync] Old 190x60 thumbnail format detected. Forcing regeneration for all images...');
+                for (const filename of imageFilesOnDisk) {
+                    invalidateThumbnail(userDirectories, 'bg', filename);
+                }
+                // Also clear resolution from all metadata to ensure they get re-processed.
+                for (const key in metadata.images) {
+                    if (metadata.images[key].thumbnailResolution) {
+                        delete metadata.images[key].thumbnailResolution;
+                    }
+                }
+            }
+        } catch (e) {
+            // Ignore if file doesn't exist or is unreadable. The normal sync will handle it.
+        }
     }
 
     const filesOnDiskSet = new Set(imageFilesOnDisk);

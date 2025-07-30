@@ -139,7 +139,7 @@ thumbnails:
   # JPG thumbnail quality (0-100)
   quality: 95
   # Target resolution (total pixel area) for background thumbnails.
-  resolution: 15000
+  resolution: 16000
   # Maximum thumbnail dimensions per type [width, height]
   dimensions: { 'avatar': [96, 144], 'persona': [96, 144] }
 
