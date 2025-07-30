@@ -250,7 +250,7 @@ export async function syncBackgroundsMetadata(userDirectories) {
                     const fileExtension = path.extname(filename).toLowerCase();
                     const imageRecord = metadata.images[filename] || updatePayload.newMetadata;
                     if (imageRecord && imageRecord.thumbnailResolution === undefined && !SKIPPED_EXTENSIONS_FOR_JIMP.includes(fileExtension)) {
-                        const thumbResult = await generateThumbnail(userDirectories, 'bg', filename, false, false);
+                        const thumbResult = await generateThumbnail(userDirectories, 'bg', filename, false, imageRecord.isAnimated);
                         if (thumbResult.path && thumbResult.resolution) {
                             updatePayload.thumbnailResolution = thumbResult.resolution;
                         }
