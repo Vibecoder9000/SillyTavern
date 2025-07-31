@@ -149,6 +149,7 @@ async function seedContentForUser(contentIndex, directories, forceCategories) {
         contentLog.push(contentItem.filename);
 
         if (fs.existsSync(targetPath)) {
+            console.warn(`Content file ${contentItem.filename} already exists in ${contentTarget}`);
             continue;
         }
 
