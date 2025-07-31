@@ -4,7 +4,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { imageSize } from 'image-size';
 import writeFileAtomic from 'write-file-atomic';
-import { getAverageColor } from 'fast-average-color-node';
+import { Jimp } from '../jimp.js';
 import { invalidateThumbnail, generateThumbnail, SKIPPED_EXTENSIONS_FOR_JIMP, CONCURRENCY_LIMIT } from './thumbnails.js';
 import { getConfigValue } from '../util.js';
 
@@ -25,6 +25,36 @@ export const syncPromise = new Promise(resolve => {
  */
 function isAnimatedApng(buffer) {
     return buffer.subarray(0, 100).includes('acTL');
+}
+
+/**
+ * Calculate average color using Jimp.
+ * Resizes the image to 1x1 to efficiently get the average color.
+ * @param {Buffer} buffer The image buffer.
+ * @returns {Promise<string>} The average color as a hex string (e.g., '#RRGGBB').
+ */
+async function getAverageColorWithJimp(buffer) {
+    try {
+        const image = await Jimp.read(buffer);
+
+        // Resize to 1x1 using the correct object syntax for this project's version
+        image.resize({ w: 1, h: 1 });
+
+        // Get the color of the single pixel as a 32-bit integer
+        const colorInt = image.getPixelColor(0, 0);
+
+        // Manually convert the integer to RGBA using bitwise operators.
+        const r = (colorInt >> 24) & 255;
+        const g = (colorInt >> 16) & 255;
+        const b = (colorInt >> 8) & 255;
+
+        // Format as a hex string
+        const toHex = (c) => c.toString(16).padStart(2, '0');
+        return `#${toHex(r)}${toHex(g)}${toHex(b)}`;
+    } catch (error) {
+        console.error('[Jimp] Failed to calculate average color:', error);
+        return '#808080'; // Grey
+    }
 }
 
 /**
@@ -61,8 +91,14 @@ export async function generateSingleFileMetadata(filePath) {
                 isAnimated = false;
         }
 
-        const color = await getAverageColor(buffer);
-        const hexColor = color.hex;
+        let hexColor;
+        if (isAnimated) {
+            hexColor = '#808080'; // Default grey
+        } else {
+            // Only process non-animated images to avoid decoding errors.
+            hexColor = await getAverageColorWithJimp(buffer);
+        }
+
         return {
             hash,
             aspectRatio: parseFloat(aspectRatio.toFixed(4)),
