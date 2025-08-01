@@ -30,16 +30,16 @@
         min-height: 30px !important;
     }
 
-	.thumbnail:hover .jg-menu,
-	.folder-button:hover .jg-menu {
-		display: none;
-	}
+    .thumbnail:hover .jg-menu,
+    .folder-button:hover .jg-menu {
+        display: none;
+    }
 
-	.thumbnail.mobile-menu-open .jg-menu,
-	.folder-button.mobile-menu-open .jg-menu {
-		display: flex;
-		z-index: 4;
-	}
+    .thumbnail.mobile-menu-open .jg-menu,
+    .folder-button.mobile-menu-open .jg-menu {
+        display: flex;
+        z-index: 4;
+    }
 
     .mobile-only-menu-toggle {
         display: flex;
@@ -58,11 +58,11 @@
         backdrop-filter: blur(2px);
     }
 
-	.blank-folder-button.folder-button .jg-menu {
-		right: 4px;
-		left: auto;
-		width: fit-content;
-	}
+    .blank-folder-button.folder-button .jg-menu {
+        right: 4px;
+        left: auto;
+        width: fit-content;
+    }
 
     #extensions_settings,
     #extensions_settings2 {
@@ -137,7 +137,7 @@
     body {
         touch-action: none;
         overflow: hidden;
-		position: fixed;
+        position: fixed;
     }
 
     .world_entry_form_control {
@@ -391,31 +391,31 @@
         width: unset;
     }
 
-	.popup-overlay {
-		align-items: flex-start;
-		padding-top: 50px;
-	}
+    .popup-overlay {
+        align-items: flex-start;
+        padding-top: 50px;
+    }
 
-	.popup-panel {
-		width: 100%;
-		max-width: 100%;
-		margin: 0;
+    .popup-panel {
+        width: 100%;
+        max-width: 100%;
+        margin: 0;
 
-		height: auto;
-		max-height: 100%;
+        height: auto;
+        max-height: 100%;
 
-		border-radius: 0;
-		border: none;
-	}
+        border-radius: 0;
+        border: none;
+    }
 
     #bg-header-fixed > .flex-container {
         flex-wrap: wrap;
         row-gap: 0px;
     }
 
-	#bg-header-fixed > .flex-container > h3 {
-		flex-grow: 1;
-	}
+    #bg-header-fixed > .flex-container > h3 {
+        flex-grow: 1;
+    }
 
     #bg-header-fixed > .flex-container > h3,
     #bg-header-fixed > .flex-container > #background_fitting,
@@ -520,11 +520,11 @@
         display: none;
     }
 
-	.blank-folder-button .BGSampleTitle,
-	#starred-folder-button .BGSampleTitle,
-	#add-folder-button .BGSampleTitle {
-		display: block;
-	}
+    .blank-folder-button .BGSampleTitle,
+    #starred-folder-button .BGSampleTitle,
+    #add-folder-button .BGSampleTitle {
+        display: block;
+    }
 
     .tag.excluded:after {
         top: unset;
