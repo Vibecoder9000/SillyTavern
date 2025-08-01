@@ -2143,29 +2143,48 @@ export async function initBackgrounds() {
     if (drawerElement) {
         const checkVisibility = () => {
             const isNowOpen = drawerElement.classList.contains('openDrawer');
+
             if (isNowOpen && !hasGalleryLoaded && !galleryLoadInProgress) {
                 galleryLoadInProgress = true;
 
-                // Poll the server until it's ready, then load data.
-                const pollServerStatus = setInterval(async () => {
+                // Define the check-and-load logic once
+                const checkAndLoad = async () => {
                     try {
                         const response = await fetch('/api/backgrounds/status');
                         const status = await response.json();
+
                         if (status.ready) {
-                            clearInterval(pollServerStatus);
+                            // Server is ready, load immediately.
                             console.log('[Backgrounds] Server is ready. Loading gallery data.');
-                            getBackgrounds().finally(() => {
-                                hasGalleryLoaded = true;
-                                galleryLoadInProgress = false;
-                            });
+                            await getBackgrounds(); // Await the entire process
+                            hasGalleryLoaded = true;
+                            galleryLoadInProgress = false;
+                            return true; // Signal that loading is complete
                         }
                     } catch (error) {
-                        console.error('[Backgrounds] Failed to poll server status, retrying...', error);
+                        console.error('[Backgrounds] Failed to poll server status, will retry...', error);
                     }
-                }, 1000);
+                    return false; // Signal that we need to poll
+                };
+
+                // Immediately try to load
+                checkAndLoad().then(isReady => {
+                    // If the initial check failed (server was busy), start polling as a fallback.
+                    if (!isReady) {
+                        const pollServerStatus = setInterval(async () => {
+                            const loaded = await checkAndLoad();
+                            if (loaded) {
+                                clearInterval(pollServerStatus);
+                            }
+                        }, 1000); // Poll every second until ready
+                    }
+                });
             }
         };
+
+        // This attaches the function to the browser, so it runs when the panel opens.
         new MutationObserver(checkVisibility).observe(drawerElement, { attributes: true, attributeFilter: ['class'] });
+        // This runs the check once on page load, in case the panel is already open.
         checkVisibility();
     }
 
