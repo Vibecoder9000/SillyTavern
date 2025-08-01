@@ -400,3 +400,37 @@ export async function syncBackgroundsMetadata(userDirectories) {
         resolveSync();
     }
 }
+
+/**
+ * Sets a specific background image as the thumbnail for a folder.
+ * @param {import('../users.js').UserDirectoryList} userDirectories The directories for the user.
+ * @param {string} folderId The ID of the folder to update.
+ * @param {string|null} filename The filename of the image to set as thumbnail, or null to clear it.
+ * @returns {Promise<void>}
+ */
+export async function setFolderThumbnail(userDirectories, folderId, filename) {
+    await syncPromise; // Ensure initial sync is done.
+    const backgroundsJsonPath = path.join(userDirectories.root, 'backgrounds.json');
+
+    try {
+        const rawData = await fs.readFile(backgroundsJsonPath, 'utf8');
+        const metadata = JSON.parse(rawData);
+
+        const folderIndex = metadata.folders.findIndex(f => f.id === folderId);
+
+        if (folderIndex === -1) {
+            throw new Error(`Folder with ID "${folderId}" not found.`);
+        }
+
+        // Set or clear the thumbnail file property
+        metadata.folders[folderIndex].thumbnailFile = filename;
+
+        const jsonString = JSON.stringify(metadata, null, 4);
+        await writeFileAtomic(backgroundsJsonPath, jsonString, 'utf8');
+
+    } catch (error) {
+        console.error(`[SetFolderThumbnail] Failed to update backgrounds.json for user at ${userDirectories.root}:`, error);
+        // Re-throw to be handled by the API endpoint caller
+        throw error;
+    }
+}

@@ -645,3 +645,43 @@ router.post('/folders/add-bulk', async function (request, response) {
         release();
     }
 });
+
+/**
+ * Handles setting a thumbnail for a specific folder.
+ * @param {express.Request & { body: { folderId: string, filename: string | null }, user: any }} request
+ * @param {express.Response} response
+ */
+router.post('/folders/set-thumbnail', async function (request, response) {
+    if (!request.body || typeof request.body.folderId !== 'string') {
+        return response.status(400).send('Folder ID is required.');
+    }
+
+    const release = await fileLock.acquire();
+    try {
+        const { folderId, filename } = request.body;
+        const backgroundsJsonPath = path.join(request.user.directories.root, 'backgrounds.json');
+
+        const rawData = await fsp.readFile(backgroundsJsonPath, 'utf8');
+        const metadata = JSON.parse(rawData);
+
+        const folderToUpdate = metadata.folders?.find(f => f.id === folderId);
+
+        if (!folderToUpdate) {
+            return response.status(404).send('Folder not found.');
+        }
+
+        // Set the thumbnail file. If filename is null or undefined, it clears the thumbnail.
+        folderToUpdate.thumbnailFile = filename ? sanitize(filename) : null;
+
+        const jsonString = JSON.stringify(metadata, null, 4);
+        await fsp.writeFile(backgroundsJsonPath, jsonString, 'utf8');
+
+        return response.status(200).send('ok');
+
+    } catch (error) {
+        console.error('Failed to set folder thumbnail:', error);
+        return response.status(500).send('Failed to update background metadata.');
+    } finally {
+        release();
+    }
+});

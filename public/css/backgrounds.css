@@ -687,6 +687,51 @@ div#starred-folder-button .thumbnail-placeholder {
 }
 
 
+/* Folder Thumbnail Selection Mode */
+
+.popup-panel.is-selecting-thumbnail .popup-content {
+    background-color: rgba(0,0,0,0.2);
+}
+
+.popup-panel.is-selecting-thumbnail .thumbnail {
+    cursor: pointer;
+    transition: transform 0.2s ease, opacity 0.2s ease;
+    opacity: 0.8;
+}
+
+.popup-panel.is-selecting-thumbnail .thumbnail:hover {
+    opacity: 1;
+    transform: scale(1.03) translateY(-2px);
+    box-shadow: 0 0 15px rgba(135, 206, 250, 0.7);
+}
+
+.popup-panel.is-selecting-thumbnail .jg-menu,
+.popup-panel.is-selecting-thumbnail .mobile-only-menu-toggle {
+    display: none !important;
+}
+
+
+/* Popup Header Layout */
+
+.popup-header {
+    gap: 15px;
+}
+
+.popup-header h3 {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    min-width: 0; /* Prevents the long title from pushing other elements */
+}
+
+.popup-header-buttons {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-shrink: 0;
+}
+
+
 /* Clipper */
 
 .thumbnail-clipper[data-is-starred="true"]::after {

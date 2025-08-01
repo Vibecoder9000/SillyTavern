@@ -1011,18 +1011,37 @@ function createBlankFolderElement(folder, options = { withMenu: true }) {
     const clipper = document.createElement('div');
     clipper.className = 'thumbnail-clipper';
 
-    const iconOverlay = document.createElement('div');
-    iconOverlay.className = 'folder-icon-overlay dark-folder-overlay';
+    if (folder.thumbnailFile) {
+        const useAnimation = document.getElementById('background_thumbnails_animation').checked;
+        const finalUrl = `${getThumbnailUrl(folder.thumbnailFile)}&animated=${useAnimation}`;
 
-    const folderIcon = document.createElement('i');
-    folderIcon.className = 'fa-solid fa-folder';
+        const imgElement = new Image();
+        imgElement.src = PNG_PIXEL_B64; // Start with a placeholder
+        clipper.appendChild(imgElement);
+
+        // Asynchronously load the real thumbnail
+        getCachedServerThumbnail(finalUrl).then(src => {
+            imgElement.src = src;
+            imgElement.style.opacity = 1;
+        });
+        imgElement.style.objectFit = 'cover';
+        imgElement.style.width = '100%';
+        imgElement.style.height = '100%';
+        imgElement.style.opacity = 0;
+        imgElement.style.transition = 'opacity 0.4s ease';
+    } else {
+        const iconOverlay = document.createElement('div');
+        iconOverlay.className = 'folder-icon-overlay dark-folder-overlay';
+        const folderIcon = document.createElement('i');
+        folderIcon.className = 'fa-solid fa-folder';
+        iconOverlay.appendChild(folderIcon);
+        clipper.appendChild(iconOverlay);
+    }
 
     const titleDiv = document.createElement('div');
     titleDiv.className = 'BGSampleTitle';
     titleDiv.textContent = folder.name;
 
-    iconOverlay.appendChild(folderIcon);
-    clipper.appendChild(iconOverlay);
     clipper.appendChild(titleDiv);
     button.appendChild(clipper);
 
@@ -1890,7 +1909,35 @@ function openCustomFolderPopup(folderId) {
     const popupPanel = popupFragment.querySelector('.popup-panel');
     const contentArea = popupFragment.querySelector('.popup-content');
     const headerTitle = popupFragment.querySelector('h3');
-    // Set the title to the folder's name
+    const setThumbnailButton = popupFragment.querySelector('#folder_set_thumbnail_button');
+
+    // State and UI management for thumbnail selection
+    let isThumbnailSelectionMode = false;
+    const originalHeaderText = folder.name;
+    setThumbnailButton.style.display = 'block'; // Make the button visible
+
+    const enterThumbnailSelectionMode = () => {
+        isThumbnailSelectionMode = true;
+        popupPanel.classList.add('is-selecting-thumbnail');
+        headerTitle.textContent = translate('Select a Thumbnail');
+        const icon = setThumbnailButton.querySelector('i');
+        icon.classList.remove('fa-image');
+        icon.classList.add('fa-xmark');
+        setThumbnailButton.setAttribute('data-i18n', '[title]Cancel');
+        setThumbnailButton.title = translate('Cancel');
+    };
+
+    const exitThumbnailSelectionMode = () => {
+        isThumbnailSelectionMode = false;
+        popupPanel.classList.remove('is-selecting-thumbnail');
+        headerTitle.textContent = originalHeaderText;
+        const icon = setThumbnailButton.querySelector('i');
+        icon.classList.remove('fa-xmark');
+        icon.classList.add('fa-image');
+        setThumbnailButton.setAttribute('data-i18n', '[title]Set Folder Thumbnail');
+        setThumbnailButton.title = translate('Set Folder Thumbnail');
+    };
+
     headerTitle.textContent = folder.name;
     headerTitle.removeAttribute('data-i18n');
     let isClosing = false;
@@ -1957,14 +2004,58 @@ function openCustomFolderPopup(folderId) {
     };
 
     const handlePopupClick = async (e) => {
-        const closeButton = e.target.closest('.popup-close-button');
-        const jgButton = e.target.closest('.jg-button');
-        const thumbnail = e.target.closest('.thumbnail');
-        if (closeButton || !e.target.closest('.popup-panel')) {
-            closePopup();
+        const target = e.target;
+        const setThumbBtn = target.closest('#folder_set_thumbnail_button');
+        const closeButton = target.closest('.popup-close-button');
+        const jgButton = target.closest('.jg-button');
+        const thumbnail = target.closest('.thumbnail');
+
+        if (setThumbBtn) {
+            isThumbnailSelectionMode ? exitThumbnailSelectionMode() : enterThumbnailSelectionMode();
             return;
         }
-        if (jgButton) {
+
+        if (thumbnail) {
+            e.stopPropagation();
+            if (isThumbnailSelectionMode) {
+                const filename = thumbnail.dataset.bgfile;
+                const originalThumbnail = folder.thumbnailFile; // Store for rollback
+
+                // Optimistic UI update
+                folder.thumbnailFile = filename;
+                backgroundSelector.renderFolders();
+                closePopup(); // Close immediately for better UX
+
+                try {
+                    const response = await fetch('/api/backgrounds/folders/set-thumbnail', {
+                        method: 'POST',
+                        headers: getRequestHeaders(),
+                        body: JSON.stringify({
+                            folderId: folder.id,
+                            filename: filename,
+                        }),
+                    });
+
+                    if (!response.ok) {
+                        throw new Error(`Server responded with ${response.status}`);
+                    }
+                    toastr.success(`Set thumbnail for "${folder.name}"`);
+
+                } catch (error) {
+                    console.error('Failed to set folder thumbnail:', error);
+                    toastr.error('Could not set folder thumbnail. Reverting change.');
+                    // Rollback on failure
+                    folder.thumbnailFile = originalThumbnail;
+                    backgroundSelector.renderFolders();
+                }
+            } else {
+                onSelectBackgroundClick.call(thumbnail);
+                closePopup();
+            }
+            return;
+        }
+
+        if (jgButton && !isThumbnailSelectionMode) {
             e.stopPropagation();
             const action = jgButton.dataset.action;
             const context = jgButton.closest('.thumbnail');
@@ -1982,15 +2073,17 @@ function openCustomFolderPopup(folderId) {
                     break;
                 case 'delete':
                     await onDeleteBackgroundClick.call(jgButton, e);
-                    renderContent(); // Re-render the popup after deletion
+                    renderContent();
                     break;
                 case 'edit':
                     await onRenameBackgroundClick.call(jgButton, e);
-                    renderContent(); // Re-render the popup after rename
+                    renderContent();
                     break;
             }
-        } else if (thumbnail) {
-            onSelectBackgroundClick.call(thumbnail);
+            return;
+        }
+
+        if (closeButton || !target.closest('.popup-panel')) {
             closePopup();
         }
     };
