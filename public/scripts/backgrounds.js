@@ -1360,17 +1360,42 @@ async function autoBackgroundCommand() {
     const prompt = stringFormat(autoBgPrompt, list);
 
     const reply = await generateQuietPrompt({ quietPrompt: prompt });
-    const fuse = new Fuse(options, { keys: ['text'], threshold: 0.25 });
 
-    const bestMatch = fuse.search(reply, { limit: 1 });
-    if (bestMatch.length === 0) {
-        toastr.warning(translate('No match found.'));
+    if (typeof reply !== 'string' || !reply.trim()) {
+        const message = translate('No match found. The AI did not provide a suggestion.');
+        toastr.warning(message, null, { timeOut: 5000 });
+        console.error('autoBackgroundCommand: generateQuietPrompt returned an invalid reply.', reply);
         return '';
     }
-    const matchedFilename = backgroundSelector.images.find(img => img.filename.startsWith(bestMatch[0].item.text))?.filename;
+
+    // Find all background names that are present as substrings in the AI's reply (case-insensitive).
+    const foundMatches = options.filter(option =>
+        reply.toLowerCase().includes(option.text.toLowerCase()),
+    );
+
+    if (foundMatches.length === 0) {
+        const message = translate('No match found.');
+        toastr.warning(message, null, { timeOut: 5000 });
+        return '';
+    }
+
+    // From the potential matches, choose the longest one.
+    // This correctly handles cases where one name is a substring of another (e.g., "forest" vs. "dark forest").
+    const bestMatch = foundMatches.sort((a, b) => b.text.length - a.text.length)[0];
+
+    // The `options` array had the file extension removed, so we must find the full filename
+    const matchedFilename = backgroundSelector.images.find(
+        img => img.filename.toLowerCase().startsWith(bestMatch.text.toLowerCase()),
+    )?.filename;
+
     if (matchedFilename) {
         const thumbnail = document.querySelector(`.thumbnail[data-bgfile="${matchedFilename}"]`);
-        if (thumbnail) $(thumbnail).trigger('click');
+
+        if (thumbnail) {
+            thumbnail.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            flashHighlight($(thumbnail));
+            $(thumbnail).trigger('click');
+        }
     }
     return '';
 }
