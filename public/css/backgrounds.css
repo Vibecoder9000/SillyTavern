@@ -221,6 +221,58 @@ div#add-folder-button.folder-button .thumbnail-placeholder,
 }
 
 
+/* Header Modes */
+
+.selection-mode-item {
+    display: none !important;
+}
+
+#Backgrounds.selection-mode-active .standard-mode-item {
+    display: none !important;
+}
+
+#Backgrounds.selection-mode-active .selection-mode-item {
+    display: flex !important;
+}
+
+/* Ensure text elements display correctly */
+#Backgrounds.selection-mode-active #bg-selection-count,
+#Backgrounds.selection-mode-active h3.selection-mode-item {
+    display: block !important;
+}
+
+
+/* Bulk Selection Mode */
+
+#bg_menu_content.selection-active .thumbnail {
+    cursor: pointer;
+}
+
+.thumbnail .selection-overlay {
+    display: none;
+    position: absolute;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background-color: rgba(90, 150, 255, 0.4);
+    border: 2px solid #5a96ff;
+    border-radius: inherit;
+    z-index: 2;
+    align-items: center;
+    justify-content: center;
+    color: white;
+    font-size: 2em;
+    pointer-events: none;
+}
+
+.thumbnail.is-bulk-selected .selection-overlay {
+    display: flex;
+}
+
+#bg_menu_content.selection-active .jg-menu,
+#bg_menu_content.selection-active .mobile-only-menu-toggle {
+    display: none !important;
+}
+
+
 /* Popup Styles */
 
 .popup-overlay {
@@ -370,7 +422,7 @@ div#add-folder-button.folder-button .thumbnail-placeholder,
     box-sizing: border-box;
 }
 
-.thumbnail:hover { /* Just use Firefox, chrome is slightly more laggy */
+.thumbnail:hover {
     transform: translateY(-3px);
     transition: box-shadow 0.2s ease-out;
     box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);

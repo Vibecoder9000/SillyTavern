@@ -5168,33 +5168,47 @@
             <div id="Backgrounds" class="drawer-content closedDrawer bg-drawer-layout">
                 <div id="bg-header-fixed">
                     <div class="flex-container alignItemsBaseline wide100p">
-                        <h3 class="margin0" data-i18n="Backgrounds">
-                            Backgrounds
-                        </h3>
-                        <input id="bg-filter" data-i18n="[placeholder]Search" placeholder="Search" class="text_pole flex1" type="search" />
-                        <select id="bg-sort-order" class="text_pole" title="Sort by" data-i18n="[title]Sort by">
-                            <option value="alpha" data-i18n="A-Z" selected title="Sorts backgrounds alphabetically by filename (A-Z)." data-i18n="[title]Sorts backgrounds alphabetically by filename (A-Z).">A-Z</option>
-                            <option value="date" data-i18n="Date" title="Sorts by when the background was first recognized by the server (newest first). For older files, the file's creation date may be used." data-i18n="[title]Sorts by when the background was first recognized by the server (newest first). For older files, the file's creation date may be used.">Date</option>
+                        <!-- Standard Mode Items -->
+                        <h3 class="margin0 standard-mode-item" data-i18n="Backgrounds">Backgrounds</h3>
+                        <input id="bg-filter" class="text_pole flex1 standard-mode-item" type="search" data-i18n="[placeholder]Search" placeholder="Search" />
+                        <select id="bg-sort-order" class="text_pole standard-mode-item" title="Sort by" data-i18n="[title]Sort by">
+                            <option value="alpha" data-i18n="A-Z" selected>A-Z</option>
+                            <option value="date" data-i18n="Date">Date</option>
                         </select>
-                        <select id="background_fitting" class="text_pole" data-i18n="[title]Background Fitting" title="Background Fitting">
+                        <select id="background_fitting" class="text_pole standard-mode-item" data-i18n="[title]Background Fitting" title="Background Fitting">
                             <option value="classic" data-i18n="Classic">Classic</option>
                             <option value="cover" data-i18n="Cover">Cover</option>
                             <option value="contain" data-i18n="Contain">Contain</option>
                             <option value="stretch" data-i18n="Stretch">Stretch</option>
                             <option value="center" data-i18n="Center">Center</option>
                         </select>
-                        <div id="auto_background" class="menu_button menu_button_icon" data-i18n="[title]Automatically select a background based on the chat context" title="Automatically select a background based on the chat context.">
+                        <div id="auto_background" class="menu_button menu_button_icon standard-mode-item" data-i18n="[title]Automatically select a background based on the chat context" title="Automatically select a background based on the chat context.">
                             <i class="fa-solid fa-wand-magic"></i>
                             <span data-i18n="Auto-select">Auto-select</span>
                         </div>
-                        <div id="bg_lock_button" class="menu_button menu_button_icon" ...>
+                        <div id="bg_lock_button" class="menu_button menu_button_icon standard-mode-item" data-i18n="[title]Lock selected background for this chat" title="Lock selected background for this chat">
                             <i class="fa-solid fa-lock"></i>
                             <span data-i18n="Lock">Lock</span>
                         </div>
-                        <label for="add_bg_button" id="add_background_button_top" class="menu_button menu_button_icon interactable" title="Add a new background">
+                        <div id="bg_select_button" class="menu_button menu_button_icon standard-mode-item" data-i18n="[title]Select multiple backgrounds" title="Select multiple backgrounds">
+                            <i class="fa-solid fa-check-to-slot"></i>
+                            <span data-i18n="Select">Select</span>
+                        </div>
+                        <label for="add_bg_button" id="add_background_button_top" class="menu_button menu_button_icon interactable standard-mode-item" title="Add a new background">
                             <i class="fa-solid fa-plus"></i>
                             <span data-i18n="Add Background">Add Background</span>
                         </label>
+                        <!-- Selection Mode Items -->
+                        <h3 class="margin0 selection-mode-item" data-i18n="Selection Mode">Selection Mode</h3>
+                        <span id="bg-selection-count" class="flex1 selection-mode-item" style="text-align: center;">0 selected</span>
+                        <div id="bg_select_all_button" class="menu_button menu_button_icon selection-mode-item" data-i18n="[title]Select all visible" title="Select all visible">
+                           <i class="fa-solid fa-check-double"></i>
+                           <span data-i18n="Select All">Select All</span>
+                       </div>
+                       <div id="bg_select_cancel_button" class="menu_button menu_button_icon selection-mode-item" data-i18n="[title]Cancel selection" title="Cancel selection">
+                           <i class="fa-solid fa-xmark"></i>
+                           <span data-i18n="Cancel">Cancel</span>
+                       </div>
                     </div>
                 </div>
                 <div id="bg-scrollable-content">

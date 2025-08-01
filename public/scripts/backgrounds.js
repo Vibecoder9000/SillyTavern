@@ -213,6 +213,12 @@ function createThumbnailElement(imageData, calculatedSize, options = {}) {
 
     thumbnail.appendChild(clipper);
 
+    // The overlay for bulk selection mode
+    const selectionOverlay = document.createElement('div');
+    selectionOverlay.className = 'selection-overlay';
+    selectionOverlay.innerHTML = '<i class="fa-solid fa-check"></i>';
+    thumbnail.appendChild(selectionOverlay);
+
     const useAnimation = document.getElementById('background_thumbnails_animation').checked;
     const finalUrl = `${imageData.thumbnailUrl}&animated=${useAnimation}`;
     const isCached = SERVER_THUMBNAIL_CACHE.has(finalUrl);
@@ -392,25 +398,31 @@ class BackgroundSelector {
     }
 
     render(isInitial = false, newFilename = null) {
-        this.isInitialRender = isInitial;
-        this.containerWidth = this.container.clientWidth;
-        if (this.containerWidth === 0) return;
+        return new Promise(resolve => {
+            this.isInitialRender = isInitial;
+            this.containerWidth = this.container.clientWidth;
+            if (this.containerWidth === 0) {
+                resolve();
+                return;
+            }
 
-        // Target only the container for the main thumbnails for the fade animation.
-        const mainContainer = this.container.querySelector('#main-backgrounds-container');
+            const mainContainer = this.container.querySelector('#main-backgrounds-container');
 
-        if (mainContainer && mainContainer.children.length > 0) {
-            // Fade out existing content before replacing it.
-            mainContainer.classList.add('fading-out');
-            mainContainer.addEventListener('transitionend', () => {
+            const renderAndResolve = () => {
                 this._performRender(newFilename);
-                // Fade the new content in by removing the class. The new content is already there.
-                mainContainer.classList.remove('fading-out');
-            }, { once: true });
-        } else {
-            // If there's no content to fade, render immediately.
-            this._performRender(newFilename);
-        }
+                if (mainContainer) {
+                    mainContainer.classList.remove('fading-out');
+                }
+                resolve();
+            };
+
+            if (mainContainer && mainContainer.children.length > 0 && !isInitial) {
+                mainContainer.classList.add('fading-out');
+                mainContainer.addEventListener('transitionend', renderAndResolve, { once: true });
+            } else {
+                renderAndResolve();
+            }
+        });
     }
 
     _performRender(newFilename = null) {
@@ -589,6 +601,24 @@ class BackgroundSelector {
             });
 
         }, 100);
+    }
+
+    reapplySelectionStyles(selectedFiles) {
+        // First, clear the selection class from all thumbnails in the container
+        this.container.querySelectorAll('.thumbnail.is-bulk-selected').forEach(thumb => {
+            thumb.classList.remove('is-bulk-selected');
+        });
+
+        // If there are no selected files, we're done
+        if (!selectedFiles || selectedFiles.length === 0) return;
+
+        // Otherwise, loop through the provided filenames and apply the class
+        selectedFiles.forEach(filename => {
+            const thumb = this.container.querySelector(`.thumbnail[data-bgfile="${filename}"]`);
+            if (thumb) {
+                thumb.classList.add('is-bulk-selected');
+            }
+        });
     }
 
     destroy() {
@@ -2160,8 +2190,111 @@ function openFolderChooserPopup(filename) {
  * @returns {Promise<void>}
  */
 export async function initBackgrounds() {
+    let isSelectionModeActive = false;
+    let selectedBackgrounds = [];
+
+    const updateSelectionCount = () => {
+        const count = selectedBackgrounds.length;
+        const message = stringFormat(translate('{0} selected'), [count]);
+        $('#bg-selection-count').text(message);
+    };
+
+    const enterSelectionMode = () => {
+        isSelectionModeActive = true;
+        selectedBackgrounds = [];
+        $('#Backgrounds').addClass('selection-mode-active');
+        $('#bg_menu_content').addClass('selection-active');
+        $('.thumbnail.is-bulk-selected').removeClass('is-bulk-selected');
+        updateSelectionCount();
+    };
+
+    const exitSelectionMode = () => {
+        isSelectionModeActive = false;
+        selectedBackgrounds = [];
+        $('#Backgrounds').removeClass('selection-mode-active');
+        $('#bg_menu_content').removeClass('selection-active');
+        $('.thumbnail.is-bulk-selected').removeClass('is-bulk-selected');
+    };
+
+    const handleThumbnailBulkSelect = (thumbnailElement) => {
+        const bgFile = thumbnailElement.dataset.bgfile;
+        if (!bgFile) return;
+
+        const $thumb = $(thumbnailElement);
+        const index = selectedBackgrounds.indexOf(bgFile);
+
+        if (index === -1) {
+            // Not selected, so add it
+            selectedBackgrounds.push(bgFile);
+            $thumb.addClass('is-bulk-selected');
+        } else {
+            // Already selected, so remove it
+            selectedBackgrounds.splice(index, 1);
+            $thumb.removeClass('is-bulk-selected');
+        }
+        updateSelectionCount();
+    };
+
+    const handleBulkAddToFolder = async (folderId) => {
+        if (selectedBackgrounds.length === 0) {
+            toastr.warning(translate('Please select at least one background.'));
+            return;
+        }
+
+        const filenamesToAdd = selectedBackgrounds.filter(filename => {
+            const image = backgroundSelector.images.find(img => img.filename === filename);
+            return image && (!Array.isArray(image.folderIds) || !image.folderIds.includes(folderId));
+        });
+
+        if (filenamesToAdd.length === 0) {
+            toastr.info(translate('All selected backgrounds are already in that folder.'));
+            exitSelectionMode();
+            return;
+        }
+
+        try {
+            const response = await fetch('/api/backgrounds/folders/add-bulk', {
+                method: 'POST',
+                headers: getRequestHeaders(),
+                body: JSON.stringify({
+                    filenames: filenamesToAdd,
+                    folderId: folderId,
+                }),
+            });
+
+            if (!response.ok) throw new Error(`Server error: ${response.status}`);
+
+            filenamesToAdd.forEach(filename => {
+                const image = backgroundSelector.images.find(img => img.filename === filename);
+                if (image) {
+                    if (!Array.isArray(image.folderIds)) image.folderIds = [];
+                    image.folderIds.push(folderId);
+                }
+            });
+
+            toastr.success(stringFormat(translate('{0} backgrounds added to folder.'), [filenamesToAdd.length]));
+        } catch (error) {
+            console.error('Failed to save bulk folder update:', error);
+            toastr.error('Failed to update folder.');
+        } finally {
+            exitSelectionMode();
+        }
+    };
+
     if (backgroundSelector) backgroundSelector.destroy();
     backgroundSelector = new BackgroundSelector('bg_menu_content');
+
+    // Overwrite the default debounced render to include selection style re-application
+    backgroundSelector.debouncedRender = debounce(async () => {
+        // Await the render promise to ensure the DOM is updated before proceeding
+        await backgroundSelector.render(false);
+
+        // After re-rendering, if we are in selection mode, re-apply the visual state
+        if (isSelectionModeActive) {
+            backgroundSelector.reapplySelectionStyles(selectedBackgrounds);
+        }
+    }, 150);
+
     backgroundSelector.sortOrder = $('#bg-sort-order').val();
     const drawerElement = document.getElementById('Backgrounds');
 
@@ -2241,7 +2374,13 @@ export async function initBackgrounds() {
         .off('click', '.blank-folder-button').on('click', '.blank-folder-button', function(e) {
             e.stopPropagation();
             const folderId = this.dataset.folderId;
-            if (folderId) openCustomFolderPopup(folderId);
+            if (folderId) {
+                if (isSelectionModeActive) {
+                    handleBulkAddToFolder(folderId);
+                } else {
+                    openCustomFolderPopup(folderId);
+                }
+            }
         })
         .off('click', '.mobile-only-menu-toggle').on('click', '.mobile-only-menu-toggle', function(e) {
             e.stopPropagation();
@@ -2290,7 +2429,13 @@ export async function initBackgrounds() {
                     break;
             }
         })
-        .off('click', '.thumbnail').on('click', '.thumbnail', onSelectBackgroundClick)
+        .off('click', '.thumbnail').on('click', '.thumbnail', function(e) {
+            if (isSelectionModeActive) {
+                handleThumbnailBulkSelect(this);
+            } else {
+                onSelectBackgroundClick.call(this, e);
+            }
+        })
         .off('dragstart', '.thumbnail').on('dragstart', '.thumbnail', function() {
             window.isDraggingInternalThumbnail = true;
         })
@@ -2304,6 +2449,33 @@ export async function initBackgrounds() {
         } else {
             onLockBackgroundClick();
         }
+    });
+
+    $('#bg_select_button').off('click').on('click', enterSelectionMode);
+    $('#bg_select_cancel_button').off('click').on('click', exitSelectionMode);
+    $('#bg_select_all_button').off('click').on('click', () => {
+        const visibleFilenames = backgroundSelector.filteredImages.map(img => img.filename);
+        const allVisibleSelected = visibleFilenames.length > 0 && visibleFilenames.every(file => selectedBackgrounds.includes(file));
+
+        if (allVisibleSelected) {
+            // Deselect all visible
+            visibleFilenames.forEach(file => {
+                const index = selectedBackgrounds.indexOf(file);
+                if (index > -1) {
+                    selectedBackgrounds.splice(index, 1);
+                }
+                document.querySelector(`.thumbnail[data-bgfile="${file}"]`)?.classList.remove('is-bulk-selected');
+            });
+        } else {
+            // Select all visible
+            visibleFilenames.forEach(file => {
+                if (!selectedBackgrounds.includes(file)) {
+                    selectedBackgrounds.push(file);
+                }
+                document.querySelector(`.thumbnail[data-bgfile="${file}"]`)?.classList.add('is-bulk-selected');
+            });
+        }
+        updateSelectionCount();
     });
 
     $('#auto_background').off('click').on('click', autoBackgroundCommand);

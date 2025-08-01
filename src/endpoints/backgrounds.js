@@ -594,3 +594,54 @@ router.post('/folders/rename', async function (request, response) {
         release();
     }
 });
+
+/**
+ * Handles adding multiple backgrounds to a single folder in bulk.
+ * @param {express.Request & { body: { filenames: string[], folderId: string }, user: any }} request
+ * @param {express.Response} response
+ */
+router.post('/folders/add-bulk', async function (request, response) {
+    if (!request.body || !Array.isArray(request.body.filenames) || typeof request.body.folderId !== 'string') {
+        return response.status(400).send('Filenames array and folderId string are required.');
+    }
+
+    const release = await fileLock.acquire();
+    try {
+        const { filenames, folderId } = request.body;
+        const backgroundsJsonPath = path.join(request.user.directories.root, 'backgrounds.json');
+
+        const rawData = await fsp.readFile(backgroundsJsonPath, 'utf8');
+        const metadata = JSON.parse(rawData);
+
+        // Ensure the folder exists. While the client should prevent this, it's good practice.
+        if (!metadata.folders?.some(f => f.id === folderId)) {
+            return response.status(404).send('Target folder not found.');
+        }
+
+        for (const filename of filenames) {
+            const image = metadata.images[sanitize(filename)];
+
+            if (image) {
+                // Ensure the folderIds array exists
+                if (!Array.isArray(image.folderIds)) {
+                    image.folderIds = [];
+                }
+                // Add the folderId if it's not already present
+                if (!image.folderIds.includes(folderId)) {
+                    image.folderIds.push(folderId);
+                }
+            }
+        }
+
+        const jsonString = JSON.stringify(metadata, null, 4);
+        await fsp.writeFile(backgroundsJsonPath, jsonString, 'utf8');
+
+        return response.status(200).send('ok');
+
+    } catch (error) {
+        console.error('Failed to bulk add backgrounds to folder:', error);
+        return response.status(500).send('Failed to update background metadata.');
+    } finally {
+        release();
+    }
+});
