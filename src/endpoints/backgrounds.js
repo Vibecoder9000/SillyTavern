@@ -2,7 +2,7 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 import express from 'express';
 import sanitize from 'sanitize-filename';
-import crypto from 'node:crypto';
+import { uuidv4 } from '../util.js';
 import { invalidateThumbnail, dimensions, generateThumbnail, SKIPPED_EXTENSIONS_FOR_JIMP } from './thumbnails.js';
 import { getFileNameValidationFunction } from '../middleware/validateFileName.js';
 import { generateSingleFileMetadata, syncPromise } from './backgrounds-manager.js';
@@ -495,7 +495,7 @@ router.post('/folders/create', async function (request, response) {
         }
 
         const newFolder = {
-            id: crypto.randomUUID(),
+            id: uuidv4(),
             name: sanitize(request.body.name),
         };
 
