@@ -124,16 +124,24 @@ export async function generateSingleFileMetadata(filePath) {
  * @param {string} thumbnailsBgPath - The path to the background thumbnails directory.
  */
 async function purgeThumbnailCache(thumbnailsBgPath) {
+    // Check if the directory exists.
+    const directoryExists = await fs.stat(thumbnailsBgPath).then(stats => stats.isDirectory()).catch(() => false);
+
+    if (!directoryExists) {
+        return; // Nothing to purge.
+    }
+
     try {
         const thumbFiles = await fs.readdir(thumbnailsBgPath);
         if (thumbFiles.length > 0) {
             console.log(`[Background Sync] Purging ${thumbFiles.length} old thumbnails from cache...`);
-            await Promise.all(thumbFiles.map(file => fs.unlink(path.join(thumbnailsBgPath, file))));
+            // Sequentially delete file.
+            for (const file of thumbFiles) {
+                await fs.unlink(path.join(thumbnailsBgPath, file));
+            }
         }
     } catch (e) {
-        if (e.code !== 'ENOENT') { // It's okay if the directory doesn't exist.
-            console.error('[Background Sync] Failed to purge thumbnail cache:', e);
-        }
+        console.error('[Background Sync] Failed to purge thumbnail cache:', e);
     }
 }
 
