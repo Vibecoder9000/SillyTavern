@@ -1,4 +1,3 @@
-import { Fuse } from '../lib.js';
 import { chat_metadata, eventSource, generateQuietPrompt, getCurrentChatId, event_types, getRequestHeaders, saveSettingsDebounced } from '../script.js';
 import { openThirdPartyExtensionMenu, saveMetadataDebounced } from './extensions.js';
 import { SlashCommand } from './slash-commands/SlashCommand.js';
