@@ -152,7 +152,7 @@ export async function generateThumbnail(directories, type, file, forceGenerate =
         }
 
         // Process the image to generate thumbnail
-        const result = await processSingleImage(file, originalFolder, thumbnailFolder);
+        const result = await processSingleImage(file, originalFolder, thumbnailFolder, type);
         if (result.success) {
             return { path: pathToCachedFile, aspectRatio: result.aspectRatio, resolution: result.resolution };
         } else {
@@ -170,9 +170,10 @@ export async function generateThumbnail(directories, type, file, forceGenerate =
  * @param {string} file - The filename of the image.
  * @param {string} originalFolder - Path to the original image folder.
  * @param {string} thumbnailFolder - Path to the thumbnail output folder.
+ * @param {ThumbnailType} type - The type of thumbnail to generate.
  * @returns {Promise<{success: boolean, timings?: object, filename?: string, error?: string, aspectRatio?: number, resolution?: number}>} Result of the processing.
  */
-async function processSingleImage(file, originalFolder, thumbnailFolder) {
+async function processSingleImage(file, originalFolder, thumbnailFolder, type) {
     const thumbnailResolution = getConfigValue('thumbnails.resolution', 16000);
     const quality = Math.min(100, Math.max(1, parseInt(getConfigValue('thumbnails.quality', 95, 'number'))));
     const pngFormat = String(getConfigValue('thumbnails.format', 'jpg')).toLowerCase().trim() === 'png';
@@ -196,17 +197,23 @@ async function processSingleImage(file, originalFolder, thumbnailFolder) {
         stepStartTime = performance.now();
         const thumbImage = image.clone();
 
-        // Calculate new dimensions based on target pixel area
-        const targetPixelArea = thumbnailResolution;
-        const safeAspectRatio = aspectRatio > 0 ? aspectRatio : 1;
-        let newHeight = Math.round(Math.sqrt(targetPixelArea / safeAspectRatio));
-        let newWidth = Math.round(newHeight * safeAspectRatio);
+        if (type === 'bg') {
+            // Calculate new dimensions based on target pixel area
+            const targetPixelArea = thumbnailResolution;
+            const safeAspectRatio = aspectRatio > 0 ? aspectRatio : 1;
+            let newHeight = Math.round(Math.sqrt(targetPixelArea / safeAspectRatio));
+            let newWidth = Math.round(newHeight * safeAspectRatio);
 
-        // Ensure minimum dimensions
-        newWidth = Math.max(newWidth, 1);
-        newHeight = Math.max(newHeight, 1);
+            // Ensure minimum dimensions
+            newWidth = Math.max(newWidth, 1);
+            newHeight = Math.max(newHeight, 1);
 
-        thumbImage.resize({ w: newWidth, h: newHeight, mode: Jimp.RESIZE_BILINEAR });
+            thumbImage.resize({ w: newWidth, h: newHeight, mode: Jimp.RESIZE_BILINEAR });
+        } else if (type === 'avatar' || type === 'persona') {
+            // Crop and resize to fixed dimensions
+            const [width, height] = dimensions[type];
+            thumbImage.cover(width, height);
+        }
 
         timings.resize = performance.now() - stepStartTime;
 
@@ -222,7 +229,7 @@ async function processSingleImage(file, originalFolder, thumbnailFolder) {
 
         timings.total = performance.now() - totalStartTime;
 
-        return { success: true, timings, aspectRatio, resolution: targetPixelArea };
+        return { success: true, timings, aspectRatio, resolution: thumbnailResolution };
     } catch (error) {
         console.warn(`[Thumbnails] Failed to process image ${file}:`, error);
         return { success: false, filename: file, error: error.message };
@@ -273,7 +280,7 @@ export async function ensureThumbnailCache(directoriesList) {
         const allResults = [];
         for (let i = 0; i < totalFiles; i += CONCURRENCY_LIMIT) {
             const batchFiles = filesToProcess.slice(i, i + CONCURRENCY_LIMIT);
-            const tasks = batchFiles.map(file => processSingleImage(file, originalFolder, thumbnailFolder));
+            const tasks = batchFiles.map(file => processSingleImage(file, originalFolder, thumbnailFolder, 'bg'));
             const batchResults = await Promise.allSettled(tasks);
 
             processedCount += batchFiles.length;
