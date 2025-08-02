@@ -457,6 +457,7 @@ class BackgroundSelector {
 
         const isMobile = window.innerWidth <= 1000;
         const targetRowHeight = isMobile ? 80 : 110; // mobile size : desktop size
+        const minThumbsPerRow = isMobile ? 2 : 1;
 
         try {
             const allRows = calculateRowLayout(
@@ -464,6 +465,7 @@ class BackgroundSelector {
                 this.filteredImages,
                 false,
                 targetRowHeight,
+                minThumbsPerRow,
             );
 
             allRows.forEach(rowData => {
@@ -1667,7 +1669,7 @@ function onBackgroundFilterInput() {
  * @param {boolean} forceJustify - If true, the last row will be stretched to fill the width.
  * @returns {Array<object>} An array of row data, each containing images and calculated height.
  */
-function calculateRowLayout(containerWidth, images, forceJustify = false, targetRowHeight = 110) {
+function calculateRowLayout(containerWidth, images, forceJustify = false, targetRowHeight = 110, minThumbsPerRow = 1) {
     const rows = [];
     if (!images || images.length === 0 || containerWidth <= 0) return rows;
     const rowGap = 5;
@@ -1698,14 +1700,40 @@ function calculateRowLayout(containerWidth, images, forceJustify = false, target
     });
 
     if (currentRow.length > 0) {
-        if (forceJustify) {
-            const totalGapWidth = (currentRow.length - 1) * rowGap;
-            const rowHeight = Math.floor((containerWidth - totalGapWidth) / currentRowSummedAspectRatio);
-            rows.push({ images: currentRow, height: rowHeight });
-        } else {
-            rows.push({ images: currentRow, height: targetRowHeight });
+        rows.push({ images: currentRow, height: targetRowHeight });
+    }
+
+    // Post-process the rows to merge any that have fewer than the minimum thumbnails.
+    if (minThumbsPerRow > 1 && rows.length > 1) {
+        // Iterate backwards to safely modify the array.
+        for (let i = rows.length - 1; i > 0; i--) {
+            const thisRow = rows[i];
+            const prevRow = rows[i - 1];
+
+            if (thisRow.images.length < minThumbsPerRow) {
+                // This row is an orphan. Merge it with the previous one.
+                const mergedImages = prevRow.images.concat(thisRow.images);
+                const mergedSummedAspectRatio = mergedImages.reduce((sum, img) => sum + img.aspectRatio, 0);
+                const totalGapWidth = (mergedImages.length - 1) * rowGap;
+                const mergedRowHeight = Math.floor((containerWidth - totalGapWidth) / mergedSummedAspectRatio);
+
+                // Replace the previous row with the new merged row.
+                rows[i - 1] = { images: mergedImages, height: mergedRowHeight };
+
+                // Remove the current (orphan) row from the array.
+                rows.splice(i, 1);
+            }
         }
     }
+
+    // Justify the last row if needed, after all merging is done.
+    if (forceJustify && rows.length > 0) {
+        const lastRow = rows[rows.length - 1];
+        const lastRowSummedAspectRatio = lastRow.images.reduce((sum, img) => sum + img.aspectRatio, 0);
+        const totalGapWidth = (lastRow.images.length - 1) * rowGap;
+        lastRow.height = Math.floor((containerWidth - totalGapWidth) / lastRowSummedAspectRatio);
+    }
+
     return rows;
 }
 
@@ -1786,7 +1814,11 @@ function openStarredPopup() {
         }
         const thumbnailContainer = document.createElement('div');
         thumbnailContainer.className = 'thumbnail-container';
-        const rows = calculateRowLayout(usableWidth, starredImages, false);
+
+        const isMobile = window.innerWidth <= 1000;
+        const minThumbsPerRow = isMobile ? 2 : 1;
+        const rows = calculateRowLayout(usableWidth, starredImages, false, 110, minThumbsPerRow);
+
         rows.forEach(rowData => thumbnailContainer.appendChild(createRowElement(rowData)));
         contentArea.appendChild(thumbnailContainer);
         // Set up IntersectionObserver for lazy-loading thumbnails.
@@ -1975,7 +2007,11 @@ function openCustomFolderPopup(folderId) {
         }
         const thumbnailContainer = document.createElement('div');
         thumbnailContainer.className = 'thumbnail-container';
-        const rows = calculateRowLayout(usableWidth, folderImages, false);
+
+        const isMobile = window.innerWidth <= 1000;
+        const minThumbsPerRow = isMobile ? 2 : 1;
+        const rows = calculateRowLayout(usableWidth, folderImages, false, 110, minThumbsPerRow);
+
         rows.forEach(rowData => thumbnailContainer.appendChild(createRowElement(rowData, { currentFolderId: folderId })));
         contentArea.appendChild(thumbnailContainer);
         if (observer) observer.disconnect();
