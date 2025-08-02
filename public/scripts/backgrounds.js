@@ -100,7 +100,10 @@ async function getCachedServerThumbnail(thumbnailUrl) {
         return SERVER_THUMBNAIL_CACHE.get(thumbnailUrl);
     }
     try {
-        const response = await fetch(thumbnailUrl, { cache: 'no-cache' });
+        const response = await fetch(thumbnailUrl, {
+            cache: 'no-cache',
+            headers: getRequestHeaders(),
+        });
         if (!response.ok) return PNG_PIXEL_B64;
         const blob = await response.blob();
         const blobUrl = URL.createObjectURL(blob);

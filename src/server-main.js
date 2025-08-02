@@ -224,9 +224,6 @@ app.use(express.static(path.join(serverDirectory, 'public'), {}));
 // Public API
 app.use('/api/users', usersPublicRouter);
 
-// Host public thumbnails
-app.use('/thumbnail', thumbnailPublicRouter);
-
 // Everything below this line requires authentication
 app.use(requireLoginMiddleware);
 app.post('/api/ping', (request, response) => {
@@ -236,6 +233,9 @@ app.post('/api/ping', (request, response) => {
 
     response.sendStatus(204);
 });
+
+// Host thumbnails
+app.use('/thumbnail', thumbnailPublicRouter);
 
 // File uploads
 const uploadsPath = path.join(cliArgs.dataRoot, UPLOADS_DIRECTORY);
