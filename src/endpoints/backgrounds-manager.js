@@ -350,7 +350,7 @@ export async function syncBackgroundsMetadata(userDirectories) {
                     // Only attempt server-side thumbnail generation if thumbnailResolution is missing
                     // and server-side generation is not skipped for this file.
                     if (currentImageMeta && currentImageMeta.thumbnailResolution === undefined && !shouldSkipServerThumbnailGeneration) {
-                        const thumbResult = await generateThumbnail(userDirectories, 'bg', filename, false, currentImageMeta.isAnimated);
+                        const thumbResult = await generateThumbnail(userDirectories, 'bg', filename, false, false, currentImageMeta.isAnimated);
                         if (thumbResult.path && thumbResult.resolution) {
                             updatePayload.thumbnailResolution = thumbResult.resolution;
                         }

@@ -96,10 +96,16 @@ export function invalidateThumbnail(directories, type, file) {
  * @param {ThumbnailType} type - Type of thumbnail ('bg', 'avatar', 'persona').
  * @param {string} file - The filename of the image.
  * @param {boolean} [forceGenerate=false] - Whether to force generation even if a thumbnail exists.
- * @param {boolean} [checkOnly=true] - Whether to only check for existence without generating.
+ * @param {boolean} [checkOnly=false] - Whether to only check for existence without generating.
+ * @param {boolean} [isKnownAnimated=false] - If true, skips generation assuming the caller knows the file is animated.
  * @returns {Promise<{path: string|null, aspectRatio: number|null, resolution: number|null}>} Path to thumbnail, its aspect ratio, and resolution.
  */
-export async function generateThumbnail(directories, type, file, forceGenerate = false, checkOnly = true) {
+export async function generateThumbnail(directories, type, file, forceGenerate = false, checkOnly = false, isKnownAnimated = false) {
+    // If the caller has already determined the file is animated, skip processing.
+    if (isKnownAnimated) {
+        return { path: null, aspectRatio: null, resolution: null };
+    }
+
     const thumbnailFolder = getThumbnailFolder(directories, type);
     const originalFolder = getOriginalFolder(directories, type);
     const pathToCachedFile = path.join(thumbnailFolder, file);
