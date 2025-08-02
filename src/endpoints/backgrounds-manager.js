@@ -250,7 +250,6 @@ export async function syncBackgroundsMetadata(userDirectories) {
                 (imageMeta && imageMeta.isAnimated) ||
                 ((fileExtension === '.png' || fileExtension === '.webp') && imageMeta && !imageMeta.thumbnailResolution);
 
-
             const needsUpdate = imageMeta && (
                 imageMeta.addedTimestamp === undefined ||
                 needsThumbRegen.has(filename) ||
@@ -346,6 +345,7 @@ export async function syncBackgroundsMetadata(userDirectories) {
                         SKIPPED_EXTENSIONS_FOR_JIMP.includes(fileExtension) ||
                         (currentImageMeta && currentImageMeta.isAnimated);
 
+                    let warningMessage = null;
 
                     // Only attempt server-side thumbnail generation if thumbnailResolution is missing
                     // and server-side generation is not skipped for this file.
@@ -355,17 +355,28 @@ export async function syncBackgroundsMetadata(userDirectories) {
                             updatePayload.thumbnailResolution = thumbResult.resolution;
                         }
                     } else if (currentImageMeta && currentImageMeta.thumbnailResolution === undefined && shouldSkipServerThumbnailGeneration) {
-                        // If the thumbnail was expected to be skipped by the server
-                        console.warn(`[Background Sync] Server skipped thumbnail generation for "${filename}" (animated or unsupported format). Client-side generation may be required.`);
+                        // If the thumbnail was expected to be skipped by the server, create the warning message.
+                        warningMessage = `[Background Sync] Server cannot process "${filename}". It will be client generated.`;
                     }
-                    return { filename, ...updatePayload };
+                    // Return the warning message along with other data.
+                    return { filename, ...updatePayload, warningMessage };
                 })());
+
 
                 const batchResults = await Promise.allSettled(tasks);
 
+                // Collect all messages before printing
+                const messagesToLog = [];
+
                 batchResults.forEach(result => {
                     if (result.status === 'fulfilled' && result.value) {
-                        const { filename, newMetadata, addedTimestamp, thumbnailResolution } = result.value;
+                        const { filename, newMetadata, addedTimestamp, thumbnailResolution, warningMessage } = result.value;
+
+                        // Collect the warning message if it exists
+                        if (warningMessage) {
+                            messagesToLog.push({ type: 'warn', text: warningMessage });
+                        }
+
                         if (newMetadata) {
                             metadata.images[filename] = newMetadata;
                         }
@@ -378,9 +389,26 @@ export async function syncBackgroundsMetadata(userDirectories) {
                             }
                         }
                     } else if (result.status === 'rejected') {
-                        console.error('[Background Sync] A task failed during batch processing:', result.reason);
+                        // Also collect errors to prevent them from messing up the progress bar
+                        messagesToLog.push({ type: 'error', text: `[Background Sync] A task failed during batch processing: ${result.reason}` });
                     }
                 });
+
+                // Print collected messages
+                if (messagesToLog.length > 0) {
+                    // Clear the progress bar line before printing messages
+                    process.stdout.clearLine(0);
+                    process.stdout.cursorTo(0);
+
+                    // Log each message
+                    messagesToLog.forEach(msg => {
+                        if (msg.type === 'warn') {
+                            console.warn(msg.text);
+                        } else {
+                            console.error(msg.text);
+                        }
+                    });
+                }
 
                 processedCount += batchFiles.length;
                 renderProgressBar();
@@ -395,7 +423,7 @@ export async function syncBackgroundsMetadata(userDirectories) {
             }
         }
 
-        // Phase 3: Save changes.
+        // Save changes.
         const jsonString = JSON.stringify(metadata, null, 4);
         await writeFileAtomic(backgroundsJsonPath, jsonString, 'utf8');
         console.log('[Background Sync] Synchronization complete.');
