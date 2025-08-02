@@ -2,6 +2,7 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 import express from 'express';
 import sanitize from 'sanitize-filename';
+import writeFileAtomic from 'write-file-atomic';
 import { uuidv4 } from '../util.js';
 import { invalidateThumbnail, dimensions, generateThumbnail, SKIPPED_EXTENSIONS_FOR_JIMP } from './thumbnails.js';
 import { getFileNameValidationFunction } from '../middleware/validateFileName.js';
@@ -93,7 +94,7 @@ class BackgroundsMetadataManager {
             const result = await updateFn(metadata);
 
             const jsonString = JSON.stringify(metadata, null, 4);
-            await fsp.writeFile(this.jsonPath, jsonString, 'utf8');
+            await writeFileAtomic(this.jsonPath, jsonString, 'utf8');
 
             return result;
         } finally {
@@ -248,12 +249,15 @@ router.post('/rename', async function (request, response) {
         const newThumbPath = path.join(thumbnailsFolderPath, finalNewFilename);
 
         try {
-            await fsp.access(oldThumbPath); // Check for existence
+            // Attempt to rename the thumbnail only if it exists.
             await fsp.rename(oldThumbPath, newThumbPath);
         } catch (thumbError) {
             // If the thumbnail doesn't exist (ENOENT), it's not a critical error.
+            // For any other error (e.g., permissions), we must abort the operation.
             if (thumbError.code !== 'ENOENT') {
-                console.warn(`[Rename] Could not rename thumbnail for ${oldFilename}:`, thumbError);
+                // Re-throwing the error ensures it's caught by the outer catch block,
+                // preventing the metadata update and leaving the system in a more predictable state.
+                throw thumbError;
             }
         }
 
@@ -274,6 +278,7 @@ router.post('/rename', async function (request, response) {
         response.json({ filename: finalNewFilename, ...oldMetadata });
 
     } catch (error) {
+        // The startup sync process will correct any inconsistencies on the next launch.
         console.error(`Failed to rename background from ${request.body.old_bg} to ${request.body.new_bg}:`, error);
         const statusCode = error.statusCode || 500;
         const message = error.statusCode ? error.message : 'Failed to rename background.';
