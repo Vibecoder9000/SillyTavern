@@ -218,7 +218,7 @@ async function processSingleImage(file, originalFolder, thumbnailFolder, type) {
         } else if (type === 'avatar' || type === 'persona') {
             // Crop and resize to fixed dimensions
             const [width, height] = dimensions[type];
-            thumbImage.cover(width, height);
+            thumbImage.cover({ w: width, h: height });
         }
 
         timings.resize = performance.now() - stepStartTime;
