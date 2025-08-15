@@ -90,7 +90,7 @@ export function invalidateThumbnail(directories, type, file) {
     }
 }
 
-//**
+/**
  * Generates or retrieves a thumbnail for a given file.
  * @param {import('../users.js').UserDirectoryList} directories - User's directory configuration.
  * @param {ThumbnailType} type - Type of thumbnail ('bg', 'avatar', 'persona').
@@ -205,7 +205,7 @@ async function processSingleImage(file, originalFolder, thumbnailFolder, type) {
 
         if (type === 'bg') {
             const [maxWidth, maxHeight] = dimensions[type];
-            thumbImage.scaleToFit(maxWidth, maxHeight, Jimp.RESIZE_BILINEAR);
+            thumbImage.scaleToFit({ w: maxWidth, h: maxHeight, mode: Jimp.RESIZE_BILINEAR });
             thumbnailResolution = getThumbnailResolution();
         } else if (type === 'avatar' || type === 'persona') {
             // Crop and resize to fixed dimensions

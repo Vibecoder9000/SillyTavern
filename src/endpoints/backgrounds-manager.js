@@ -6,7 +6,7 @@ import { imageSize } from 'image-size';
 import writeFileAtomic from 'write-file-atomic';
 import { Jimp } from '../jimp.js';
 import { invalidateThumbnail, generateThumbnail, SKIPPED_EXTENSIONS_FOR_JIMP, CONCURRENCY_LIMIT } from './thumbnails.js';
-import { getConfigValue, getThumbnailResolution } from '../util.js';
+import { getThumbnailResolution } from '../util.js';
 
 /**
  * We create a promise that acts as a "lock".
