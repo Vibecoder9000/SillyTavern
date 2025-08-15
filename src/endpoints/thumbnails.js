@@ -8,7 +8,7 @@ import { Jimp, JimpMime } from '../jimp.js';
 import { sync as writeFileAtomicSync } from 'write-file-atomic';
 import { imageSize as sizeOf } from 'image-size';
 
-import { getImages, getConfigValue } from '../util.js';
+import { getImages, getConfigValue, getThumbnailResolution } from '../util.js';
 
 export const publicRouter = express.Router();
 export const apiRouter = express.Router();
@@ -90,7 +90,7 @@ export function invalidateThumbnail(directories, type, file) {
     }
 }
 
-/**
+//**
  * Generates or retrieves a thumbnail for a given file.
  * @param {import('../users.js').UserDirectoryList} directories - User's directory configuration.
  * @param {ThumbnailType} type - Type of thumbnail ('bg', 'avatar', 'persona').
@@ -118,7 +118,7 @@ export async function generateThumbnail(directories, type, file, forceGenerate =
                 const dimensions = sizeOf(buffer);
                 const ratio = (dimensions.height > 0) ? (dimensions.width / dimensions.height) : 1.0;
                 // When a thumbnail exists, return the current resolution from config so the JSON can be updated.
-                const resolution = getConfigValue('thumbnails.resolution', 16000);
+                const resolution = getThumbnailResolution();
                 return { path: pathToCachedFile, aspectRatio: ratio, resolution };
             } catch (e) {
                 console.warn(`[Thumbnails] Could not read dimensions for ${file}. It might be corrupted.`, e);
@@ -180,7 +180,6 @@ export async function generateThumbnail(directories, type, file, forceGenerate =
  * @returns {Promise<{success: boolean, timings?: object, filename?: string, error?: string, aspectRatio?: number, resolution?: number}>} Result of the processing.
  */
 async function processSingleImage(file, originalFolder, thumbnailFolder, type) {
-    const thumbnailResolution = getConfigValue('thumbnails.resolution', 16000);
     const quality = Math.min(100, Math.max(1, parseInt(getConfigValue('thumbnails.quality', 95, 'number'))));
     const pngFormat = String(getConfigValue('thumbnails.format', 'jpg')).toLowerCase().trim() === 'png';
     const pathToOriginalFile = path.join(originalFolder, file);
@@ -202,19 +201,12 @@ async function processSingleImage(file, originalFolder, thumbnailFolder, type) {
 
         stepStartTime = performance.now();
         const thumbImage = image.clone();
+        let thumbnailResolution;
 
         if (type === 'bg') {
-            // Calculate new dimensions based on target pixel area
-            const targetPixelArea = thumbnailResolution;
-            const safeAspectRatio = aspectRatio > 0 ? aspectRatio : 1;
-            let newHeight = Math.round(Math.sqrt(targetPixelArea / safeAspectRatio));
-            let newWidth = Math.round(newHeight * safeAspectRatio);
-
-            // Ensure minimum dimensions
-            newWidth = Math.max(newWidth, 1);
-            newHeight = Math.max(newHeight, 1);
-
-            thumbImage.resize({ w: newWidth, h: newHeight, mode: Jimp.RESIZE_BILINEAR });
+            const [maxWidth, maxHeight] = dimensions[type];
+            thumbImage.scaleToFit(maxWidth, maxHeight, Jimp.RESIZE_BILINEAR);
+            thumbnailResolution = getThumbnailResolution();
         } else if (type === 'avatar' || type === 'persona') {
             // Crop and resize to fixed dimensions
             const [width, height] = dimensions[type];

@@ -6,7 +6,7 @@ import { imageSize } from 'image-size';
 import writeFileAtomic from 'write-file-atomic';
 import { Jimp } from '../jimp.js';
 import { invalidateThumbnail, generateThumbnail, SKIPPED_EXTENSIONS_FOR_JIMP, CONCURRENCY_LIMIT } from './thumbnails.js';
-import { getConfigValue } from '../util.js';
+import { getConfigValue, getThumbnailResolution } from '../util.js';
 
 /**
  * We create a promise that acts as a "lock".
@@ -157,7 +157,7 @@ export async function syncBackgroundsMetadata(userDirectories) {
         const backgroundsFolderPath = userDirectories.backgrounds;
         const thumbnailsBgPath = userDirectories.thumbnailsBg;
         const ALLOWED_IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.tif', '.tiff']);
-        const currentResolution = getConfigValue('thumbnails.resolution', 15000);
+        const currentResolution = getThumbnailResolution();
 
         let metadata;
         let migrationTriggeredByFileIssues = false;

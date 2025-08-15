@@ -23,12 +23,6 @@ const keyMigrationMap = [
         migrate: (value) => (value ? 'png' : 'jpg'),
     },
     {
-        oldKey: 'thumbnails.dimensions.bg',
-        newKey: 'thumbnails.dimensions.bg',
-        migrate: () => void 0,
-        remove: true,
-    },
-    {
         oldKey: 'disableChatBackup',
         newKey: 'backups.chat.enabled',
         migrate: (value) => !value,
