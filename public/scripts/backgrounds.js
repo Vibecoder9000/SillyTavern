@@ -810,16 +810,18 @@ export async function getBackgrounds() {
             isCustom: false,
         }));
 
+        // Build the lookup map supporting multiple file types per name.
+        backgroundNameMap = new Map();
+        imageDataList.forEach(img => {
+            const normalizedName = normalizeBgName(img.filename);
+            if (!backgroundNameMap.has(normalizedName)) {
+                backgroundNameMap.set(normalizedName, []);
+            }
+            backgroundNameMap.get(normalizedName).push(img);
+        });
+
         if (backgroundSelector) {
             backgroundSelector.setData(imageDataList);
-
-            // After successfully loading and setting data, build the lookup map.
-            backgroundNameMap = new Map();
-            imageDataList.forEach(img => {
-                const normalizedName = normalizeBgName(img.filename);
-                backgroundNameMap.set(normalizedName, img);
-            });
-
             updateStateFromChatMetadata();
             highlightSelectedBackground();
         }
@@ -871,29 +873,41 @@ export async function findAndSetBackgroundByName(name) {
         return false;
     }
 
-    // Step 3: If the AI specified an extension, filter the candidates.
-    if (commandExtension) {
-        candidateKeys = candidateKeys.filter(key => {
-            const imgData = backgroundNameMap.get(key);
-            const fileExtension = imgData.filename.split('.').pop().toLowerCase();
-            return fileExtension === commandExtension;
-        });
-    }
-
-    if (candidateKeys.length === 0) {
-        console.warn(`[LiveBG Debug] No match found for "${normalizedSearchTerm}" with extension ".${commandExtension}"`);
-        return false;
-    }
-
-    // Step 4: From the final candidates, choose the longest (most specific) key.
+    // Step 3: Choose the most specific (longest) base name key.
     candidateKeys.sort((a, b) => b.length - a.length);
     const bestKey = candidateKeys[0];
-    const foundImage = backgroundNameMap.get(bestKey);
+    const candidateImages = backgroundNameMap.get(bestKey); // This is now an array of images
+    let foundImage = null;
+
+    // Step 4: Find the correct image from the candidates.
+    if (commandExtension) {
+        // If an extension was specified, find the exact match in the array.
+        foundImage = candidateImages.find(img => {
+            const fileExtension = img.filename.split('.').pop().toLowerCase();
+            return fileExtension === commandExtension;
+        });
+    } else {
+        // If no extension was specified.
+        const preferredExtensions = ['webp', 'gif', 'png', 'jpg', 'jpeg'];
+        for (const ext of preferredExtensions) {
+            foundImage = candidateImages.find(img => img.filename.toLowerCase().endsWith(`.${ext}`));
+            if (foundImage) break;
+        }
+        // Fallback.
+        if (!foundImage && candidateImages.length > 0) {
+            foundImage = candidateImages[0];
+        }
+    }
 
     if (foundImage) {
         const url = generateUrlParameter(foundImage.filename, false);
         await setBackground(foundImage.filename, url);
         return true;
+    }
+
+    // This warning will only trigger if the specific extension isn't found.
+    if (commandExtension) {
+        console.warn(`[LiveBG Debug] No match found for "${normalizedSearchTerm}" with extension ".${commandExtension}"`);
     }
 
     return false;
