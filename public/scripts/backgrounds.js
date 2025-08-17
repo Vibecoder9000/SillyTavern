@@ -15,6 +15,8 @@ let hasGalleryLoaded = false;
 let galleryLoadInProgress = false;
 const BG_METADATA_KEY = 'custom_background';
 const LIST_METADATA_KEY = 'chat_backgrounds';
+let backgroundLoadPromise = null;
+let backgroundNameMap = null;
 
 /**
  * Toggles the starred status of a background by calling the server API and then updates the UI.
@@ -756,6 +758,19 @@ function getHeadersForFormData() {
 }
 
 /**
+ * Helper function to create a consistent, searchable name for backgrounds.
+ * @param {string} name
+ * @returns {string}
+ */
+function normalizeBgName(name) {
+    if (typeof name !== 'string') return '';
+    return name
+        .toLowerCase()
+        .replace(/\.[^/.]+$/, '') // Remove file extension
+        .replace(/[\s_()\[\]-]/g, ''); // Remove spaces, underscores, parens, brackets, and hyphens
+}
+
+/**
  * Fetches background data in two stages: folders first, then images.
  * @returns {Promise<void>}
  */
@@ -797,6 +812,14 @@ export async function getBackgrounds() {
 
         if (backgroundSelector) {
             backgroundSelector.setData(imageDataList);
+
+            // After successfully loading and setting data, build the lookup map.
+            backgroundNameMap = new Map();
+            imageDataList.forEach(img => {
+                const normalizedName = normalizeBgName(img.filename);
+                backgroundNameMap.set(normalizedName, img);
+            });
+
             updateStateFromChatMetadata();
             highlightSelectedBackground();
         }
@@ -806,6 +829,74 @@ export async function getBackgrounds() {
         console.error('Failed to get background data:', error);
         toastr.error('Could not load backgrounds.');
     }
+}
+
+/**
+ * Finds a background by a partial name from the master list and applies it.
+ * @param {string} name - The partial or full name of the background to find.
+ * @returns {Promise<boolean>} - True on success, false on failure.
+ */
+export async function findAndSetBackgroundByName(name) {
+    if (!backgroundLoadPromise) {
+        backgroundLoadPromise = getBackgrounds();
+    }
+    await backgroundLoadPromise;
+
+    if (!backgroundNameMap) {
+        console.error('[LiveBG] Background lookup map is not available.');
+        return false;
+    }
+
+    // Step 1: Parse the AI's input into a base name.
+    const extensionMatch = name.match(/\.(png|jpg|jpeg|webp|gif)$/i);
+    const commandExtension = extensionMatch ? extensionMatch[1].toLowerCase() : null;
+    const commandBaseName = commandExtension ? name.substring(0, name.length - extensionMatch[0].length) : name;
+    const normalizedSearchTerm = normalizeBgName(commandBaseName);
+
+    let candidateKeys = [];
+
+    // Step 2: Find all potential matches where the search term starts with a known key.
+    for (const key of backgroundNameMap.keys()) {
+        if (normalizedSearchTerm.startsWith(key)) {
+            // "Whole word" check: ensure the match isn't just a prefix of a longer word.
+            const charAfterMatch = normalizedSearchTerm[key.length];
+            if (charAfterMatch === undefined || !/[a-z0-9]/.test(charAfterMatch)) {
+                candidateKeys.push(key);
+            }
+        }
+    }
+
+    if (candidateKeys.length === 0) {
+        // This is expected for incomplete commands and is not an error.
+        return false;
+    }
+
+    // Step 3: If the AI specified an extension, filter the candidates.
+    if (commandExtension) {
+        candidateKeys = candidateKeys.filter(key => {
+            const imgData = backgroundNameMap.get(key);
+            const fileExtension = imgData.filename.split('.').pop().toLowerCase();
+            return fileExtension === commandExtension;
+        });
+    }
+
+    if (candidateKeys.length === 0) {
+        console.warn(`[LiveBG Debug] No match found for "${normalizedSearchTerm}" with extension ".${commandExtension}"`);
+        return false;
+    }
+
+    // Step 4: From the final candidates, choose the longest (most specific) key.
+    candidateKeys.sort((a, b) => b.length - a.length);
+    const bestKey = candidateKeys[0];
+    const foundImage = backgroundNameMap.get(bestKey);
+
+    if (foundImage) {
+        const url = generateUrlParameter(foundImage.filename, false);
+        await setBackground(foundImage.filename, url);
+        return true;
+    }
+
+    return false;
 }
 
 /**
