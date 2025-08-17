@@ -767,7 +767,7 @@ function normalizeBgName(name) {
     return name
         .toLowerCase()
         .replace(/\.[^/.]+$/, '') // Remove file extension
-        .replace(/[\s_()\[\]-]/g, ''); // Remove spaces, underscores, parens, brackets, and hyphens
+        .replace(/[\s_()[\]-]/g, ''); // Remove spaces, underscores, parens, brackets, and hyphens
 }
 
 /**
