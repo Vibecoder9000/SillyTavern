@@ -2,21 +2,46 @@ import express from 'express';
 import path from 'node:path';
 import fs from 'node:fs/promises';
 import { serverDirectory } from '../server-directory.js';
-import { exec, spawn } from 'node:child_process';
-import util from 'node:util';
+import { spawn } from 'node:child_process';
 import crypto from 'node:crypto';
 
-const execPromise = util.promisify(exec);
 export const router = express.Router();
 
-const SANDBOX_DIR = path.join(serverDirectory, 'uploads');
+const SANDBOX_DIR = path.resolve(path.join(serverDirectory, 'uploads'));
 
-async function isPathInSandbox(filepath) {
+/**
+ * Safely checks if a given path is within the designated sandbox directory.
+ * It resolves the path and uses fs.realpath to prevent path traversal
+ * attacks via symbolic links.
+ * @param {string} userPath - The path provided by the user/LLM.
+ * @param {object} [options]
+ * @param {boolean} [options.checkExists=true] - If true, checks the realpath of an existing file/dir. Set to false for write operations where the path may not exist yet.
+ * @returns {Promise<boolean>} - True if the path is safely within the sandbox.
+ */
+async function isPathInSandbox(userPath, { checkExists = true } = {}) {
     try {
-        const resolvedPath = path.resolve(SANDBOX_DIR, filepath);
-        const sandboxPath = path.resolve(SANDBOX_DIR);
-        return resolvedPath.startsWith(sandboxPath);
+        const resolvedPath = path.resolve(SANDBOX_DIR, userPath);
+
+        if (!resolvedPath.startsWith(SANDBOX_DIR)) {
+            return false;
+        }
+
+        if (checkExists) {
+            const realPath = await fs.realpath(resolvedPath);
+            if (!realPath.startsWith(SANDBOX_DIR)) {
+                return false;
+            }
+        }
+
+        return true;
     } catch (error) {
+        if (error.code === 'ENOENT' && checkExists) {
+            return false;
+        }
+        if (error.code === 'ENOENT' && !checkExists) {
+            return true;
+        }
+        console.error('isPathInSandbox unexpected error:', error);
         return false;
     }
 }
@@ -32,13 +57,12 @@ router.post('/readfile', async (req, res) => {
         filepath = filepath.substring(1);
     }
 
-    if (!(await isPathInSandbox(filepath))) {
+    if (!(await isPathInSandbox(filepath, { checkExists: true }))) {
         return res.status(403).json({ error: 'Access denied: Path is outside the sandbox.' });
     }
 
     try {
         const fullPath = path.join(SANDBOX_DIR, filepath);
-        // Ensure the directory exists before trying to read from it.
         await fs.mkdir(SANDBOX_DIR, { recursive: true });
         const content = await fs.readFile(fullPath, 'utf-8');
         res.json({ content });
@@ -55,16 +79,14 @@ router.post('/readfile', async (req, res) => {
 router.post('/listdir', async (req, res) => {
     let { path: dirPath = '.' } = req.body;
 
-    // Sanitize path to handle LLM confusion between absolute and sandbox-relative paths.
     if (dirPath.startsWith('/')) {
         dirPath = dirPath.substring(1);
     }
-    // If stripping the slash resulted in an empty string (from path="/"), default to '.'
     if (dirPath === '') {
         dirPath = '.';
     }
 
-    if (!(await isPathInSandbox(dirPath))) {
+    if (!(await isPathInSandbox(dirPath, { checkExists: true }))) {
         return res.status(403).json({ error: 'Access denied: Path is outside the sandbox.' });
     }
 
@@ -106,17 +128,22 @@ router.post('/writefile', async (req, res) => {
         filepath = filepath.substring(1);
     }
 
-    if (!(await isPathInSandbox(filepath))) {
+    if (!(await isPathInSandbox(filepath, { checkExists: false }))) {
         return res.status(403).json({ error: 'Access denied: Path is outside the sandbox.' });
     }
 
     try {
         const fullPath = path.join(SANDBOX_DIR, filepath);
+        const dir = path.dirname(fullPath);
 
-        // Ensure the directory for the file exists before writing.
-        await fs.mkdir(path.dirname(fullPath), { recursive: true });
+        await fs.mkdir(dir, { recursive: true });
 
-        const flag = append ? 'a' : 'w'; // 'a' for append, 'w' for write/overwrite
+        const realDir = await fs.realpath(dir);
+        if (!realDir.startsWith(SANDBOX_DIR)) {
+             return res.status(403).json({ error: 'Access denied: Cannot write to a directory outside the sandbox.' });
+        }
+
+        const flag = append ? 'a' : 'w';
         await fs.writeFile(fullPath, content, { flag });
 
         const bytesWritten = Buffer.byteLength(content, 'utf8');
@@ -138,7 +165,7 @@ router.post('/deletefile', async (req, res) => {
         filepath = filepath.substring(1);
     }
 
-    if (!(await isPathInSandbox(filepath))) {
+    if (!(await isPathInSandbox(filepath, { checkExists: true }))) {
         return res.status(403).json({ error: 'Access denied: Path is outside the sandbox.' });
     }
 
@@ -159,6 +186,63 @@ router.post('/deletefile', async (req, res) => {
     }
 });
 
+/**
+ * Executes a command safely using `spawn` and returns a promise.
+ * It splits the command string into an executable and arguments, and crucially
+ * uses `shell: false` to prevent command injection vulnerabilities.
+ * @param {string} command - The full command string to execute.
+ * @param {object} options - Options to pass to spawn, including `cwd` and `signal`.
+ * @returns {Promise<{stdout: string, stderr: string, code: number}>}
+ */
+function spawnPromise(command, options) {
+    return new Promise((resolve, reject) => {
+        const parts = command.trim().split(/\s+/);
+        const cmd = parts[0];
+        const args = parts.slice(1);
+
+        if (!cmd) {
+            return reject(new Error("Command cannot be empty."));
+        }
+
+        const childProcess = spawn(cmd, args, {
+            ...options,
+            shell: false,
+        });
+
+        let stdout = '';
+        let stderr = '';
+
+        childProcess.stdout.on('data', (data) => { stdout += data.toString(); });
+        childProcess.stderr.on('data', (data) => { stderr += data.toString(); });
+
+        const killProcess = () => {
+            if (!childProcess.killed) {
+                childProcess.kill();
+            }
+        };
+
+        const onError = (error) => {
+            killProcess();
+            error.stdout = stdout;
+            error.stderr = stderr;
+            reject(error);
+        };
+
+        childProcess.on('error', onError);
+
+        childProcess.on('close', (code) => {
+            resolve({ stdout, stderr, code });
+        });
+
+        if (options.signal) {
+            options.signal.addEventListener('abort', () => {
+                killProcess();
+                reject(new Error("Execution was cancelled by the user."));
+            });
+        }
+    });
+}
+
 router.post('/executeshell', async (req, res) => {
     const { command } = req.body;
 
@@ -167,10 +251,9 @@ router.post('/executeshell', async (req, res) => {
     }
 
     try {
-        // We call our new promise-based wrapper here
-        const { stdout, stderr } = await execPromise(command, {
+        const { stdout, stderr } = await spawnPromise(command, {
             cwd: SANDBOX_DIR,
-            shell: true,
+            signal: req.signal,
         });
 
         const fullOutput = stdout + stderr;
@@ -178,7 +261,6 @@ router.post('/executeshell', async (req, res) => {
 
     } catch (error) {
         console.error(`Error executing command "${command}":`, error);
-        // The error object now contains the output from the failed command
         const fullOutput = (error.stdout || '') + (error.stderr || '');
         res.json({ output: fullOutput || `Command failed with error: ${error.message}` });
     }
@@ -198,33 +280,27 @@ router.post('/executepython', async (req, res) => {
     try {
         await fs.writeFile(scriptPath, code, 'utf-8');
 
-        // Set headers for streaming
         res.setHeader('Content-Type', 'text/plain; charset=utf-8');
         res.setHeader('Transfer-Encoding', 'chunked');
 
         const childProcess = spawn('python', ['-u', scriptPath], {
             cwd: SANDBOX_DIR,
-            // Use shell: true on Windows to ensure commands like 'pip' are found in PATH
             shell: process.platform === 'win32',
         });
 
-        // Stream stdout
         childProcess.stdout.on('data', (data) => {
             res.write(data);
         });
 
-        // Stream stderr
         childProcess.stderr.on('data', (data) => {
             res.write(data);
         });
 
-        // Handle process exit
         childProcess.on('close', (code) => {
             console.log(`Python process exited with code ${code}`);
             res.end();
         });
 
-        // Handle client disconnect
         req.on('close', () => {
             console.log('Client disconnected, killing Python process.');
             childProcess.kill();
@@ -232,14 +308,21 @@ router.post('/executepython', async (req, res) => {
 
         childProcess.on('error', (err) => {
             console.error('Failed to start subprocess.', err);
-            res.status(500).send(`Failed to start subprocess: ${err.message}`);
+            if (!res.headersSent) {
+                res.status(500).send(`Failed to start subprocess: ${err.message}`);
+            } else {
+                res.end();
+            }
         });
 
     } catch (error) {
         console.error('Error setting up Python execution:', error);
-        res.status(500).send(`Server error: ${error.message}`);
+        if (!res.headersSent) {
+            res.status(500).send(`Server error: ${error.message}`);
+        } else {
+            res.end();
+        }
     } finally {
-        // Schedule deletion of the temp file after a short delay
         setTimeout(async () => {
             try {
                 await fs.unlink(scriptPath);

@@ -1,3 +1,5 @@
+
+
 import { DOMPurify } from '../lib.js';
 import { power_user } from './power-user.js';
 
@@ -395,26 +397,32 @@ function registerBuiltinTools() {
         },
         {
             name: 'display_image',
-            description: 'Displays an image to the user from the uploaded files.',
+            description: 'Displays an image or video to the user from the uploaded files.',
             parameters: {
                 'type': 'object',
                 'properties': {
                     'filepath': {
                         'type': 'string',
-                        'description': 'The path to the image file to display, relative to the uploads directory.',
+                        'description': 'The path to the image or video file to display, relative to the uploads directory.',
                     },
                 },
                 'required': ['filepath'],
             },
             action: async ({ filepath }) => {
-                const allowedExtensions = ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.svg'];
+                const imageExtensions = ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.svg'];
+                const videoExtensions = ['.mp4', '.webm', '.ogg', '.mov'];
+
                 const extension = filepath.slice(filepath.lastIndexOf('.')).toLowerCase();
 
-                if (!allowedExtensions.includes(extension)) {
-                    return `Error: The file "${filepath}" is not a supported image type.`;
+                if (imageExtensions.includes(extension)) {
+                    return JSON.stringify({ type: 'image_display', filepath: filepath });
                 }
-                // The result is a special marker object that the UI will interpret.
-                return JSON.stringify({ type: 'image_display', filepath: filepath });
+
+                if (videoExtensions.includes(extension)) {
+                    return JSON.stringify({ type: 'video_display', filepath: filepath });
+                }
+
+                return `Error: The file "${filepath}" is not a supported image or video type.`;
             },
         },
         {

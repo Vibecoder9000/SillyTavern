@@ -2097,7 +2097,7 @@ export function addOneMessage(mes, { type = 'normal', insertAfter = null, scroll
         newMessage.find('.mes_text').html(html);
     }
     else if (mes.extra?.is_tool_result) {
-        if (mes.extra.image) {
+        if (mes.extra.image || mes.extra.video) {
             newMessage.addClass('tool-result-message');
             appendMediaToMessage(mes, newMessage);
         } else {
@@ -3030,18 +3030,31 @@ class StreamingProcessor {
                 let resultMessage;
                 let stopGeneration = false;
                 try {
-                    const parsed = JSON.parse(toolResult);
+                    const parsed = typeof toolResult === 'string' ? JSON.parse(toolResult) : toolResult;
+
                     if (parsed.type === 'image_display' && parsed.filepath) {
                         resultMessage = {
                             name: systemUserName,
                             is_user: false,
                             is_system: true,
-                            mes: '<tool_result>\nImage displayed to user.\n</tool_result>', // This message is for the AI's context and is not displayed to the user.
+                            mes: '<tool_result>\nImage displayed to user.\n</tool_result>',
                             extra: { is_tool_result: true, image: `/api/files/download/${parsed.filepath}` },
                         };
                         stopGeneration = true;
+                    } 
+                    else if (parsed.type === 'video_display' && parsed.filepath) {
+                        resultMessage = {
+                            name: systemUserName,
+                            is_user: false,
+                            is_system: true,
+                            mes: '<tool_result>\nVideo displayed to user.\n</tool_result>',
+                            extra: { is_tool_result: true, video: `/api/files/download/${parsed.filepath}` },
+                        };
+                        stopGeneration = true;
                     }
-                } catch (e) { /* Not a special JSON result, proceed normally */ }
+                } catch (e) {
+                    console.error("[Streaming] Failed to parse special tool result:", e);
+                }
 
                 if (!resultMessage) {
                     const cappedToolResult = await capToolOutput(toolResult);
@@ -4772,18 +4785,31 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
                 let resultMessage;
                 let stopGeneration = false;
                 try {
-                    const parsed = JSON.parse(toolResult);
+                    const parsed = typeof toolResult === 'string' ? JSON.parse(toolResult) : toolResult;
+
                     if (parsed.type === 'image_display' && parsed.filepath) {
                         resultMessage = {
                             name: systemUserName,
                             is_user: false,
                             is_system: true,
-                            mes: '<tool_result>\nImage displayed to user.\n</tool_result>', // This message is for the AI's context and is not displayed to the user.
+                            mes: '<tool_result>\nImage displayed to user.\n</tool_result>',
                             extra: { is_tool_result: true, image: `/api/files/download/${parsed.filepath}` },
                         };
                         stopGeneration = true;
                     }
-                } catch (e) { /* Not a special JSON result, proceed normally */ }
+                    else if (parsed.type === 'video_display' && parsed.filepath) {
+                        resultMessage = {
+                            name: systemUserName,
+                            is_user: false,
+                            is_system: true,
+                            mes: '<tool_result>\nVideo displayed to user.\n</tool_result>',
+                            extra: { is_tool_result: true, video: `/api/files/download/${parsed.filepath}` },
+                        };
+                        stopGeneration = true;
+                    }
+                } catch (e) {
+                    console.error("[Non-Streaming] Failed to parse special tool result:", e);
+                }
 
                 if (!resultMessage) {
                     const cappedToolResult = await capToolOutput(toolResult);
