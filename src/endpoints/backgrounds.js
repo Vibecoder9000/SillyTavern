@@ -3,12 +3,19 @@ import path from 'node:path';
 
 import express from 'express';
 import sanitize from 'sanitize-filename';
+import multer from 'multer';
 
+import { UPLOADS_DIRECTORY } from '../constants.js';
 import { dimensions, invalidateThumbnail } from './thumbnails.js';
 import { getImages } from '../util.js';
 import { getFileNameValidationFunction } from '../middleware/validateFileName.js';
 
 export const router = express.Router();
+
+const upload = multer({
+    dest: path.join(globalThis.DATA_ROOT, UPLOADS_DIRECTORY),
+    limits: { fieldSize: 500 * 1024 * 1024 },
+});
 
 router.post('/all', function (request, response) {
     const images = getImages(request.user.directories.backgrounds);
@@ -58,14 +65,13 @@ router.post('/rename', function (request, response) {
     return response.send('ok');
 });
 
-router.post('/upload', function (request, response) {
+router.post('/upload', upload.single('bg'), function (request, response) {
     if (!request.body || !request.file) return response.sendStatus(400);
 
     const img_path = path.join(request.file.destination, request.file.filename);
-    const filename = request.file.originalname;
-
     try {
-        fs.copyFileSync(img_path, path.join(request.user.directories.backgrounds, filename));
+        const filename = `${path.parse(sanitize(request.body.name)).name}.png`;
+        fs.renameSync(img_path, path.join(request.user.directories.backgrounds, filename));
         fs.unlinkSync(img_path);
         invalidateThumbnail(request.user.directories, 'bg', filename);
         response.send(filename);

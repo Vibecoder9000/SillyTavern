@@ -1,6 +1,7 @@
 import { DOMPurify } from '../lib.js';
+import { power_user } from './power-user.js';
 
-import { addOneMessage, chat, event_types, eventSource, main_api, saveChatConditional, system_avatar, systemUserName } from '../script.js';
+import { addOneMessage, chat, event_types, eventSource, main_api, getRequestHeaders, saveChatConditional, system_avatar, systemUserName } from '../script.js';
 import { chat_completion_sources, custom_prompt_post_processing_types, model_list, oai_settings } from './openai.js';
 import { Popup } from './popup.js';
 import { SlashCommand } from './slash-commands/SlashCommand.js';
@@ -201,10 +202,11 @@ class ToolDefinition {
     /**
      * Invokes the tool with the given parameters.
      * @param {object} parameters The parameters to pass to the tool.
+     * @param {AbortSignal} signal The AbortSignal to use for cancellation.
      * @returns {Promise<any>} The result of the tool's action function.
      */
-    async invoke(parameters) {
-        return await this.#action(parameters);
+    async invoke(parameters, signal) {
+        return await this.#action(parameters, signal);
     }
 
     /**
@@ -233,6 +235,293 @@ class ToolDefinition {
     }
 }
 
+function registerBuiltinTools() {
+    const builtinTools = [
+        {
+            name: 'write_file',
+            description: 'Writes or appends content to a file in the user\'s uploaded files. Creates the file and parent directories if they don\'t exist.',
+            parameters: {
+                'type': 'object',
+                'properties': {
+                    'filepath': {
+                        'type': 'string',
+                        'description': 'The path to the file to write to, relative to the uploads directory.',
+                    },
+                    'content': {
+                        'type': 'string',
+                        'description': 'The content to write to the file.',
+                    },
+                    'append': {
+                        'type': 'boolean',
+                        'description': 'If true, appends the content to the end of the file. If false (default), overwrites the file.',
+                    },
+                },
+                'required': ['filepath', 'content'],
+            },
+            action: async ({ filepath, content, append = false }) => {
+                try {
+                    const response = await fetch('/api/extensions/tools/writefile', {
+                        method: 'POST',
+                        headers: getRequestHeaders(),
+                        body: JSON.stringify({ filepath, content, append }),
+                    });
+
+                    const result = await response.json();
+
+                    if (!response.ok) {
+                        return `Error: ${result.error || 'An unknown error occurred.'}`;
+                    }
+
+                    return result.message;
+                } catch (error) {
+                    return `Error: Could not connect to the server to write the file. ${error.message}`;
+                }
+            },
+        },
+        {
+            name: 'read_file',
+            description: 'Reads the content of a text file from the user\'s uploaded files. Only use this for text.',
+            parameters: {
+                'type': 'object',
+                'properties': {
+                    'filepath': {
+                        'type': 'string',
+                        'description': 'The path to the file to read.',
+                    },
+                },
+                'required': ['filepath'],
+            },
+            action: async ({ filepath }) => {
+                try {
+                    const response = await fetch('/api/extensions/tools/readfile', {
+                        method: 'POST',
+                        headers: getRequestHeaders(),
+                        body: JSON.stringify({ filepath: filepath }),
+                    });
+
+                    const result = await response.json();
+
+                    if (!response.ok) {
+                        const errorMessage = `Error: ${result.error || 'An unknown error occurred.'}`;
+                        return errorMessage;
+                    }
+
+                    return result.content;
+                } catch (error) {
+                    const errorMessage = `Error: Could not connect to the server to read the file. ${error.message}`;
+                    return errorMessage;
+                }
+            },
+        },
+        {
+            name: 'list_directory',
+            description: 'Lists the files and directories in a given path within the user\'s uploaded files.',
+            parameters: {
+                'type': 'object',
+                'properties': {
+                    'path': {
+                        'type': 'string',
+                        'description': 'The path to the directory to list. Omit or use "." to list the root of the sandbox.',
+                    },
+                },
+            },
+            action: async ({ path = '.' }) => {
+                try {
+                    const response = await fetch('/api/extensions/tools/listdir', {
+                        method: 'POST',
+                        headers: getRequestHeaders(),
+                        body: JSON.stringify({ path }),
+                    });
+
+                    const result = await response.json();
+
+                    if (!response.ok) {
+                        const errorMessage = `Error: ${result.error || 'An unknown error occurred.'}`;
+                        return errorMessage;
+                    }
+
+                    let output = '';
+                    if (result.directories.length > 0) {
+                        output += 'Directories:\n' + result.directories.map(d => `  - ${d}/`).join('\n') + '\n\n';
+                    }
+                    if (result.files.length > 0) {
+                        output += 'Files:\n' + result.files.map(f => `  - ${f}`).join('\n');
+                    }
+
+                    if (output === '') {
+                        output = 'The directory is empty.';
+                    }
+
+                    const trimmedOutput = output.trim();
+                    return trimmedOutput;
+                } catch (error) {
+                    const errorMessage = `Error: Could not connect to the server to list the directory. ${error.message}`;
+                    return errorMessage;
+                }
+            },
+        },
+        {
+            name: 'delete_file',
+            description: 'Deletes a file from the user\'s uploaded files. This action is permanent and cannot be undone. Use with caution and explicit user permission.',
+            parameters: {
+                'type': 'object',
+                'properties': {
+                    'filepath': {
+                        'type': 'string',
+                        'description': 'The path to the file to delete, relative to the uploads directory.',
+                    },
+                },
+                'required': ['filepath'],
+            },
+            action: async ({ filepath }) => {
+                try {
+                    const response = await fetch('/api/extensions/tools/deletefile', {
+                        method: 'POST',
+                        headers: getRequestHeaders(),
+                        body: JSON.stringify({ filepath }),
+                    });
+
+                    const result = await response.json();
+
+                    if (!response.ok) {
+                        return `Error: ${result.error || 'An unknown error occurred.'}`;
+                    }
+
+                    return result.message;
+                } catch (error) {
+                    return `Error: Could not connect to the server to delete the file. ${error.message}`;
+                }
+            },
+        },
+        {
+            name: 'display_image',
+            description: 'Displays an image to the user from the uploaded files.',
+            parameters: {
+                'type': 'object',
+                'properties': {
+                    'filepath': {
+                        'type': 'string',
+                        'description': 'The path to the image file to display, relative to the uploads directory.',
+                    },
+                },
+                'required': ['filepath'],
+            },
+            action: async ({ filepath }) => {
+                const allowedExtensions = ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.svg'];
+                const extension = filepath.slice(filepath.lastIndexOf('.')).toLowerCase();
+
+                if (!allowedExtensions.includes(extension)) {
+                    return `Error: The file "${filepath}" is not a supported image type.`;
+                }
+                // The result is a special marker object that the UI will interpret.
+                return JSON.stringify({ type: 'image_display', filepath: filepath });
+            },
+        },
+        {
+            name: 'execute_shell',
+            description: 'Executes a shell command in the sandbox environment. Useful for git, curl, or other command-line tools.',
+            parameters: {
+                'type': 'object',
+                'properties': {
+                    'command': {
+                        'type': 'string',
+                        'description': 'The shell command to execute.',
+                    },
+                },
+                'required': ['command'],
+            },
+            action: async ({ command }, signal) => {
+                try {
+                    const response = await fetch('/api/extensions/tools/executeshell', {
+                        method: 'POST',
+                        headers: getRequestHeaders(),
+                        body: JSON.stringify({ command }),
+                        signal,
+                    });
+
+                    if (!response.ok) {
+                        const errorText = await response.text();
+                        return `Error executing command. Status: ${response.status}. Message: ${errorText}`;
+                    }
+
+                    const result = await response.json();
+                    const fullOutput = result.output;
+
+                    return fullOutput.trim() || 'Command executed with no output.';
+                } catch (error) {
+                    if (error.name === 'AbortError') {
+                        return 'Execution was cancelled by the user.';
+                    }
+                    return `Error: Could not connect to server. ${error.message}`;
+                }
+            },
+        },
+        {
+            name: 'execute_python',
+            description: 'Executes Python code in a secure environment with access to the user\'s uploaded files. The "subprocess" module is available to run shell commands. Downloading files from the internet (e.g., with yt-dlp) is permitted and encouraged. The current working directory is the user\'s uploaded files.',
+            parameters: {
+                'type': 'object',
+                'properties': {
+                    'code': {
+                        'type': 'string',
+                        'description': 'The Python code to execute.',
+                    },
+                },
+                'required': ['code'],
+            },
+            action: async ({ code }, signal) => {
+                let fullOutput = '';
+                try {
+                    const response = await fetch('/api/extensions/tools/executepython', {
+                        method: 'POST',
+                        headers: getRequestHeaders(),
+                        body: JSON.stringify({ code }),
+                        signal,
+                    });
+
+                    if (!response.ok) {
+                        const errorText = await response.text();
+                        return `Error: ${errorText}`;
+                    }
+
+                    const reader = response.body.getReader();
+                    const decoder = new TextDecoder();
+
+                    while (true) {
+                        const { done, value } = await reader.read();
+                        if (done) {
+                            break;
+                        }
+                        const chunk = decoder.decode(value, { stream: true });
+                        fullOutput += chunk;
+                    }
+
+                    return fullOutput.trim() || 'Script executed with no output.';
+
+                } catch (error) {
+                    if (error.name === 'AbortError') {
+                        const errorMessage = 'Execution was cancelled by the user. Do not re-attempt.';
+                        return errorMessage;
+                    }
+                    const errorMessage = `Error: Could not connect to the server or stream was interrupted. ${error.message}`;
+                    return errorMessage;
+                }
+            },
+        },
+    ];
+    const dangerousTools = ['write_file', 'delete_file', 'execute_shell', 'execute_python'];
+
+    builtinTools.forEach(tool => {
+        // This is the security gate.
+        if (dangerousTools.includes(tool.name) && !power_user.enable_dangerous_tools) {
+            return; // Skip registering the dangerous tool if the setting is off.
+        }
+        if (!ToolManager.tools.some(t => t.toFunctionOpenAI().function.name === tool.name)) {
+            ToolManager.registerFunctionTool(tool);
+        }
+    });
+}
+
 /**
  * A class that manages the registration and invocation of tools.
  */
@@ -249,7 +538,7 @@ export class ToolManager {
      * The maximum number of times to recurse when parsing tool calls.
      * @type {number}
      */
-    static RECURSE_LIMIT = 5;
+    static RECURSE_LIMIT = 50;
 
     /**
      * Returns an Array of all tools that have been registered.
@@ -317,9 +606,10 @@ export class ToolManager {
      * Invokes a tool by name. Returns the result of the tool's action function.
      * @param {string} name The name of the tool to invoke.
      * @param {object} parameters Function parameters. For example, if the tool requires a "name" parameter, you would pass {name: "value"}.
+     * @param {AbortSignal} signal The AbortSignal to use for cancellation.
      * @returns {Promise<string|Error>} The result of the tool's action function. If an error occurs, null is returned. Non-string results are JSON-stringified.
      */
-    static async invokeFunctionTool(name, parameters) {
+    static async invokeFunctionTool(name, parameters, signal) {
         try {
             if (!this.#tools.has(name)) {
                 throw new Error(`No tool with the name "${name}" has been registered.`);
@@ -327,7 +617,7 @@ export class ToolManager {
 
             const invokeParameters = this.#parseParameters(parameters);
             const tool = this.#tools.get(name);
-            const result = await tool.invoke(invokeParameters);
+            const result = await tool.invoke(invokeParameters, signal);
             return typeof result === 'string' ? result : JSON.stringify(result);
         } catch (error) {
             console.error(`[ToolManager] An error occurred while invoking the tool "${name}":`, error);
@@ -583,11 +873,128 @@ export class ToolManager {
     }
 
     /**
+     * Finds and parses a <tool> block from the LLM response.
+     * @param {string} text The text content from the LLM.
+     * @returns {object|null} The parsed tool call and reasoning, or null if not found.
+     */
+    static findAndParseNativeToolCall(text) {
+        const thinkMatch = text.match(/<think>([\s\S]*?)<\/think>/);
+        const reasoning = thinkMatch ? thinkMatch[1].trim() : '';
+
+        const toolTagIndex = text.indexOf('<tool>');
+        if (toolTagIndex === -1) {
+            return null;
+        }
+
+        // Start searching for the JSON object after the <tool> tag.
+        const jsonStartIndex = text.indexOf('{', toolTagIndex);
+        if (jsonStartIndex === -1) {
+            return null;
+        }
+
+        let braceCount = 1;
+        let jsonEndIndex = -1;
+
+        // Find the matching closing brace for the JSON object.
+        for (let i = jsonStartIndex + 1; i < text.length; i++) {
+            if (text[i] === '{') {
+                braceCount++;
+            } else if (text[i] === '}') {
+                braceCount--;
+            }
+
+            if (braceCount === 0) {
+                jsonEndIndex = i;
+                break;
+            }
+        }
+
+        if (jsonEndIndex !== -1) {
+            const jsonString = text.substring(jsonStartIndex, jsonEndIndex + 1);
+            try {
+                const parsed = JSON.parse(jsonString);
+                if (typeof parsed.tool === 'string' && typeof parsed.args === 'object') {
+                    // Success!
+                    return {
+                        tool_call: parsed,
+                        reasoning: reasoning,
+                        original_text: text,
+                    };
+                }
+            } catch (e) {
+                console.error('Failed to parse JSON from tool block:', e);
+                return null;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Reconstructs a tool call into a canonical, well-formed string.
+     * This ensures consistency regardless of how the model was stopped.
+     * @param {object} parsedTool The result from findAndParseNativeToolCall.
+     * @returns {string} The canonical tool call string.
+     */
+    static formatNativeToolCallForDisplay(parsedTool) {
+        const { tool_call, reasoning } = parsedTool;
+        let result = '';
+
+        if (reasoning) {
+            result += `<think>\n${reasoning}\n</think>\n`;
+        }
+
+        const toolJsonString = JSON.stringify(tool_call, null, 2);
+        result += `<tool>\n${toolJsonString}\n</tool>`;
+
+        return result;
+    }
+
+    /**
+     * Constructs the system prompt instructions for native tool calling.
+     * @returns {string|null} The instruction string or null if no tools are available.
+     */
+    static getNativeToolPrompt() {
+        if (this.tools.length === 0) {
+            return null;
+        }
+
+        const finalPromptParts = [];
+        finalPromptParts.push(`Always put your tool call in your main response. Go one step at a time.
+
+Call the tool with the required arguments inside a <tool> block. When calling a tool, you MUST follow the format and nothing else.
+
+Format example:
+
+<tool>
+{
+  "tool": "tool_name",
+  "args": {
+    "arg_name": "arg_value"
+  }
+}
+</tool>
+
+Here are the available tools:`);
+
+        const toolsString = this.tools.map(tool => {
+            const openAITool = tool.toFunctionOpenAI();
+            return JSON.stringify({
+                name: openAITool.function.name,
+                description: openAITool.function.description,
+                arguments: openAITool.function.parameters,
+            });
+        }).join('\n');
+        finalPromptParts.push(toolsString);
+
+        return finalPromptParts.join('\n\n');
+    }
+
+    /**
      * Checks if tool calling is supported for the current settings and generation type.
      * @returns {boolean} Whether tool calling is supported for the given type
      */
     static isToolCallingSupported() {
-        if (main_api !== 'openai' || !oai_settings.function_calling) {
+        if (main_api !== 'openai' || !oai_settings.function_calling || oai_settings.native_tool_calling) {
             return false;
         }
 
@@ -650,7 +1057,6 @@ export class ToolManager {
             chat_completion_sources.POLLINATIONS,
             chat_completion_sources.MOONSHOT,
             chat_completion_sources.FIREWORKS,
-            chat_completion_sources.COMETAPI,
         ];
         return supportedSources.includes(oai_settings.chat_completion_source);
     }
@@ -870,7 +1276,21 @@ export class ToolManager {
         });
     }
 
-    static initToolSlashCommands() {
+    static unregisterNativeToolCommand() {
+        this.#tools.clear();
+        SlashCommandParser.removeCommand('tools-list');
+        SlashCommandParser.removeCommand('tools-invoke');
+        SlashCommandParser.removeCommand('tools-register');
+        SlashCommandParser.removeCommand('tools-unregister');
+    }
+
+    static registerNativeToolCommand() {
+        // First, unregister any existing tool commands to ensure a clean slate.
+        this.unregisterNativeToolCommand();
+
+        // Now, register the built-in tools based on current settings
+        registerBuiltinTools();
+
         const toolsEnumProvider = () => ToolManager.tools.map(tool => {
             const toolOpenAI = tool.toFunctionOpenAI();
             return new SlashCommandEnumValue(toolOpenAI.function.name, toolOpenAI.function.description, enumTypes.enum, enumIcons.closure);
@@ -1110,4 +1530,13 @@ export class ToolManager {
             },
         }));
     }
+}
+
+export function initToolCalling() {
+    eventSource.on(event_types.DANGEROUS_TOOLS_TOGGLED, () => {
+        // Only refresh the native tool commands if the feature is currently active.
+        if (oai_settings.native_tool_calling) {
+            ToolManager.registerNativeToolCommand();
+        }
+    });
 }

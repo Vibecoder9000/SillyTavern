@@ -47,6 +47,7 @@ import { router as speechRouter } from './endpoints/speech.js';
 import { router as azureRouter } from './endpoints/azure.js';
 import { router as minimaxRouter } from './endpoints/minimax.js';
 import { router as dataMaidRouter } from './endpoints/data-maid.js';
+import { router as toolsRouter } from './endpoints/tools.js';
 
 /**
  * @typedef {object} ServerStartupResult
@@ -149,6 +150,7 @@ export function setupPrivateEndpoints(app) {
     app.use('/thumbnail', thumbnailRouter);
     app.use('/api/novelai', novelAiRouter);
     app.use('/api/extensions', extensionsRouter);
+    app.use('/api/extensions/tools', toolsRouter);
     app.use('/api/assets', assetsRouter);
     app.use('/api/files', filesRouter);
     app.use('/api/characters', charactersRouter);

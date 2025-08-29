@@ -252,7 +252,7 @@ import { initInputMarkdown } from './scripts/input-md-formatting.js';
 import { AbortReason } from './scripts/util/AbortReason.js';
 import { initSystemPrompts } from './scripts/sysprompt.js';
 import { registerExtensionSlashCommands as initExtensionSlashCommands } from './scripts/extensions-slashcommands.js';
-import { ToolManager } from './scripts/tool-calling.js';
+import { ToolManager, initToolCalling } from './scripts/tool-calling.js';
 import { addShowdownPatch } from './scripts/util/showdown-patch.js';
 import { applyBrowserFixes } from './scripts/browser-fixes.js';
 import { initServerHistory } from './scripts/server-history.js';
@@ -304,6 +304,49 @@ export {
     event_types,
     eventSource,
 };
+
+// TO ADD TO USER SETTINGS
+const TRUNCATION_NOTE = '\n[truncated- tool per-output length limit reached]\n';
+
+/**
+ * Truncates a string if its token count is estimated to exceed a specified limit.
+ * Uses an asynchronous token counter to check the total size, and then a character-based
+ * approximation for the truncation itself to ensure client-side performance.
+ * @param {string} output The string to cap.
+ * @returns {Promise<string>} A promise that resolves to the original or truncated string.
+ */
+async function capToolOutput(output) {
+    const truncationLimit = power_user.tool_output_truncation_limit ?? 4092;
+
+    // A limit of 0 disables truncation
+    if (truncationLimit <= 0) {
+        return output;
+    }
+
+    const contentTokenLimit = truncationLimit - 25;
+
+    // Use the async tokenizer to get an accurate count of the full output
+    const tokenCount = await getTokenCountAsync(output);
+
+    if (tokenCount <= contentTokenLimit) {
+        return output;
+    }
+
+    // Use a character-based approximation to perform the split.
+    const approximateCharLimit = contentTokenLimit * 4;
+    const halfCharLimit = Math.floor(approximateCharLimit / 2);
+
+    if (output.length <= approximateCharLimit) {
+        // This can happen if the character-to-token ratio is unusual.
+        // In this case, return the original output as it's not excessively long in characters.
+        return output;
+    }
+
+    const start = output.substring(0, halfCharLimit);
+    const end = output.substring(output.length - halfCharLimit);
+
+    return `${start}${TRUNCATION_NOTE}${end}`;
+}
 
 /**
  * Wait for page to load before continuing the app initialization.
@@ -364,6 +407,7 @@ let settingsReady = false;
 let currentVersion = '0.0.0';
 export let displayVersion = 'SillyTavern';
 
+let generatedPromptCache = '';
 let generation_started = new Date();
 /** @type {import('./scripts/char-data.js').v1CharData[]} */
 export let characters = [];
@@ -655,7 +699,7 @@ async function firstLoadInit() {
     initSystemPrompts();
     initExtensions();
     initExtensionSlashCommands();
-    ToolManager.initToolSlashCommands();
+    initToolCalling();
     await initPresetManager();
     await initSystemMessages();
     await getSettings();
@@ -1913,6 +1957,10 @@ export function appendImageToMessage(mes, messageElement) {
 }
 
 export function addCopyToCodeBlocks(messageElement) {
+    // If this is a tool result message, do not treat its content as code.
+    if ($(messageElement).hasClass('tool-result-message')) {
+        return;
+    }
     const codeBlocks = $(messageElement).find('pre code');
     for (let i = 0; i < codeBlocks.length; i++) {
         hljs.highlightElement(codeBlocks.get(i));
@@ -1963,6 +2011,7 @@ export function addOneMessage(mes, { type = 'normal', insertAfter = null, scroll
     let avatarImg = getThumbnailUrl('persona', user_avatar);
     const isSystem = mes.is_system;
     const title = mes.title;
+    generatedPromptCache = '';
 
     //for non-user mesages
     if (!mes['is_user']) {
@@ -2038,55 +2087,89 @@ export function addOneMessage(mes, { type = 'normal', insertAfter = null, scroll
     const newMessageId = typeof forceId == 'number' ? forceId : chat.length - 1;
 
     const newMessage = $(`#chat [mesid="${newMessageId}"]`);
-    const isSmallSys = mes?.extra?.isSmallSys;
 
-    if (isSmallSys === true) {
-        newMessage.addClass('smallSysMes');
+    if (mes.extra?.is_tool_call) {
+        const toolInfo = mes.extra.tool_call_info;
+        newMessage.addClass('tool-call-message');
+        let html = '<h4><i class="fa-solid fa-cogs"></i> Tool Call</h4>';
+        html += `<div class="tool-action"><p><b>Action:</b> <code>${DOMPurify.sanitize(toolInfo.tool)}</code></p>`;
+        html += `<p><b>Arguments:</b></p><pre><code>${DOMPurify.sanitize(JSON.stringify(toolInfo.args, null, 2))}</code></pre></div>`;
+        newMessage.find('.mes_text').html(html);
     }
-
-    if (Array.isArray(mes?.extra?.tool_invocations)) {
-        newMessage.addClass('toolCall');
-    }
-
-    //shows or hides the Prompt display button
-    let mesIdToFind = type === 'swipe' ? params.mesId - 1 : params.mesId;  //Number(newMessage.attr('mesId'));
-
-    //if we have itemized messages, and the array isn't null..
-    if (params.isUser === false && Array.isArray(itemizedPrompts) && itemizedPrompts.length > 0) {
-        const itemizedPrompt = itemizedPrompts.find(x => Number(x.mesId) === Number(mesIdToFind));
-        if (itemizedPrompt) {
-            newMessage.find('.mes_prompt').show();
-        }
-    }
-
-    newMessage.find('.avatar img').on('error', function () {
-        $(this).hide();
-        $(this).parent().html('<div class="missing-avatar fa-solid fa-user-slash"></div>');
-    });
-
-    if (type === 'swipe') {
-        const swipeMessage = chatElement.find(`[mesid="${chat.length - 1}"]`);
-        swipeMessage.attr('swipeid', params.swipeId);
-        swipeMessage.find('.mes_text').html(messageText).attr('title', title);
-        swipeMessage.find('.timestamp').text(timestamp).attr('title', `${params.extra.api} - ${params.extra.model}`);
-        updateReasoningUI(swipeMessage);
-        appendMediaToMessage(mes, swipeMessage);
-        if (power_user.timestamp_model_icon && params.extra?.api) {
-            insertSVGIcon(swipeMessage, params.extra);
-        }
-
-        if (mes.swipe_id == mes.swipes.length - 1) {
-            swipeMessage.find('.mes_timer').text(params.timerValue).attr('title', params.timerTitle);
-            swipeMessage.find('.tokenCounterDisplay').text(`${params.tokenCount}t`);
+    else if (mes.extra?.is_tool_result) {
+        if (mes.extra.image) {
+            newMessage.addClass('tool-result-message');
+            appendMediaToMessage(mes, newMessage);
         } else {
-            swipeMessage.find('.mes_timer').empty();
-            swipeMessage.find('.tokenCounterDisplay').empty();
+            const result = mes.extra.tool_result_content;
+            newMessage.addClass('tool-result-message');
+
+            // Build the elements programmatically to avoid markdown processing
+            const messageTextContainer = newMessage.find('.mes_text');
+            messageTextContainer.empty(); // Clear any default content first
+
+            const header = $('<h4><i class="fa-solid fa-check-circle"></i> Tool Result</h4>');
+            const pre = $('<pre></pre>');
+            const code = $('<code></code>');
+
+            code.text(result); // Use .text() to safely insert the content as plain text
+
+            pre.append(code);
+            messageTextContainer.append(header, pre);
         }
-    } else {
-        const messageId = forceId ?? chat.length - 1;
-        chatElement.find(`[mesid="${messageId}"] .mes_text`).append(messageText);
-        appendMediaToMessage(mes, newMessage);
-        showSwipes && hideSwipeButtons();
+    }
+    else {
+        // Render standard messages
+        const isSmallSys = mes?.extra?.isSmallSys;
+
+        if (isSmallSys === true) {
+            newMessage.addClass('smallSysMes');
+        }
+
+        if (Array.isArray(mes?.extra?.tool_invocations)) {
+            newMessage.addClass('toolCall');
+        }
+
+        //shows or hides the Prompt display button
+        let mesIdToFind = type === 'swipe' ? params.mesId - 1 : params.mesId;  //Number(newMessage.attr('mesId'));
+
+        //if we have itemized messages, and the array isn't null..
+        if (params.isUser === false && Array.isArray(itemizedPrompts) && itemizedPrompts.length > 0) {
+            const itemizedPrompt = itemizedPrompts.find(x => Number(x.mesId) === Number(mesIdToFind));
+            if (itemizedPrompt) {
+                newMessage.find('.mes_prompt').show();
+            }
+        }
+
+        newMessage.find('.avatar img').on('error', function () {
+            $(this).hide();
+            $(this).parent().html('<div class="missing-avatar fa-solid fa-user-slash"></div>');
+        });
+
+        if (type === 'swipe') {
+            const swipeMessage = chatElement.find(`[mesid="${chat.length - 1}"]`);
+            swipeMessage.attr('swipeid', params.swipeId);
+            swipeMessage.find('.mes_text').html(messageText).attr('title', title);
+            swipeMessage.find('.timestamp').text(timestamp).attr('title', `${params.extra.api} - ${params.extra.model}`);
+            updateReasoningUI(swipeMessage);
+            appendMediaToMessage(mes, swipeMessage);
+            if (power_user.timestamp_model_icon && params.extra?.api) {
+                insertSVGIcon(swipeMessage, params.extra);
+            }
+
+            if (mes.swipe_id == mes.swipes.length - 1) {
+                swipeMessage.find('.mes_timer').text(params.timerValue).attr('title', params.timerTitle);
+                swipeMessage.find('.tokenCounterDisplay').text(`${params.tokenCount}t`);
+            } else {
+                swipeMessage.find('.mes_timer').empty();
+                swipeMessage.find('.tokenCounterDisplay').empty();
+            }
+        } else {
+            const messageId = forceId ?? chat.length - 1;
+            chatElement.find(`[mesid="${messageId}"] .mes_text`).append(messageText);
+            appendMediaToMessage(mes, newMessage);
+            showSwipes && hideSwipeButtons();
+        }
     }
 
     addCopyToCodeBlocks(newMessage);
@@ -2723,12 +2806,13 @@ class StreamingProcessor {
     /**
      * Creates a new streaming processor.
      * @param {string} type Generation type
-     * @param {boolean} forceName2 If true, force the use of name2
+     * @param {object} generateOptions The options object from the Generate function call.
+     * @param {boolean} dryRun Whether this is a dry run.
      * @param {Date} timeStarted Date when generation was started
      * @param {string} continueMessage Previous message if the type is 'continue'
      * @param {PromptReasoning} promptReasoning Prompt reasoning instance
      */
-    constructor(type, forceName2, timeStarted, continueMessage, promptReasoning) {
+    constructor(type, generateOptions, dryRun, timeStarted, continueMessage, promptReasoning) {
         this.result = '';
         this.messageId = -1;
         /** @type {HTMLElement} */
@@ -2742,7 +2826,9 @@ class StreamingProcessor {
         /** @type {HTMLTextAreaElement} */
         this.sendTextarea = document.querySelector('#send_textarea');
         this.type = type;
-        this.force_name2 = forceName2;
+        this.generateOptions = generateOptions;
+        this.dryRun = dryRun;
+        this.force_name2 = generateOptions.force_name2;
         this.isStopped = false;
         this.isFinished = false;
         this.generator = this.nullStreamingGeneration;
@@ -2920,6 +3006,71 @@ class StreamingProcessor {
     }
 
     async onFinishStreaming(messageId, text) {
+        if (oai_settings.native_tool_calling && this.type !== 'impersonate' && this.type !== 'regenerate') {
+            const parsedTool = ToolManager.findAndParseNativeToolCall(text);
+            if (parsedTool) {
+                // Reconstruct the message to ensure it's well-formed and doesn't contain partial tags.
+                const formattedToolCall = ToolManager.formatNativeToolCallForDisplay(parsedTool);
+                chat[messageId].mes = formattedToolCall;
+                chat[messageId].extra = { is_tool_call: true, tool_call_info: parsedTool.tool_call, reasoning: parsedTool.reasoning };
+
+                // Re-render the message element with the special tool call formatting.
+                const messageElement = $(`#chat .mes[mesid="${messageId}"]`);
+                if (messageElement.length) {
+                    const toolInfo = parsedTool.tool_call;
+                    messageElement.addClass('tool-call-message');
+                    let html = '<h4><i class="fa-solid fa-cogs"></i> Tool Call</h4>';
+                    html += `<div class="tool-action"><p><b>Action:</b> <code>${DOMPurify.sanitize(toolInfo.tool)}</code></p>`;
+                    html += `<p><b>Arguments:</b></p><pre><code>${DOMPurify.sanitize(JSON.stringify(toolInfo.args, null, 2))}</code></pre></div>`;
+                    messageElement.find('.mes_text').html(html);
+                }
+
+                const toolResult = await ToolManager.invokeFunctionTool(parsedTool.tool_call.tool, parsedTool.tool_call.args, this.abortController.signal);
+
+                let resultMessage;
+                let stopGeneration = false;
+                try {
+                    const parsed = JSON.parse(toolResult);
+                    if (parsed.type === 'image_display' && parsed.filepath) {
+                        resultMessage = {
+                            name: systemUserName,
+                            is_user: false,
+                            is_system: true,
+                            mes: '<tool_result>\nImage displayed to user.\n</tool_result>', // This message is for the AI's context and is not displayed to the user.
+                            extra: { is_tool_result: true, image: `/api/files/download/${parsed.filepath}` },
+                        };
+                        stopGeneration = true;
+                    }
+                } catch (e) { /* Not a special JSON result, proceed normally */ }
+
+                if (!resultMessage) {
+                    const cappedToolResult = await capToolOutput(toolResult);
+                    resultMessage = {
+                        name: systemUserName,
+                        is_user: false,
+                        is_system: true,
+                        mes: `<tool_result>\n${cappedToolResult}\n</tool_result>`,
+                        extra: { is_tool_result: true, tool_result_content: cappedToolResult },
+                    };
+                }
+
+
+                chat.push(resultMessage);
+                addOneMessage(resultMessage);
+
+                // If a tool that stops generation was used, stop the cycle. Otherwise, continue.
+                if (!stopGeneration) {
+                    const newOptions = { ...this.generateOptions, depth: this.generateOptions.depth + 1 };
+                    Generate('normal', newOptions, this.dryRun);
+                }
+
+                this.markUIGenStopped();
+                unblockGeneration();
+                generatedPromptCache = '';
+                return;
+            }
+        }
+
         this.markUIGenStopped();
         await this.onProgressStreaming(messageId, text, true);
         addCopyToCodeBlocks($(`#chat .mes[mesid="${messageId}"]`));
@@ -2960,6 +3111,7 @@ class StreamingProcessor {
         saveLogprobsForActiveMessage(this.messageLogprobs.filter(Boolean), this.continueMessage);
         await saveChatConditional();
         unblockGeneration();
+        generatedPromptCache = '';
 
         const isAborted = this.abortController.signal.aborted;
         if (!isAborted && power_user.auto_swipe && generatedTextFiltered(text)) {
@@ -2974,6 +3126,7 @@ class StreamingProcessor {
         this.isStopped = true;
 
         this.markUIGenStopped();
+        generatedPromptCache = '';
         unblockGeneration();
 
         const noEmitTypes = ['swipe', 'impersonate', 'continue'];
@@ -3572,6 +3725,14 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
         creatorNotes,
     } = getCharacterCardFields();
 
+    if (oai_settings.native_tool_calling) {
+        const agnosticToolPrompt = ToolManager.getNativeToolPrompt();
+        if (agnosticToolPrompt) {
+            // Prepend the tool instructions to the main system prompt.
+            system = `${agnosticToolPrompt}\n\n${system}`;
+        }
+    }
+
     if (main_api !== 'openai') {
         if (power_user.sysprompt.enabled) {
             system = power_user.prefer_character_prompt && system
@@ -3608,7 +3769,7 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
     // Collect messages with usable content
     const canUseTools = ToolManager.isToolCallingSupported();
     const canPerformToolCalls = !dryRun && ToolManager.canPerformToolCalls(type) && depth < ToolManager.RECURSE_LIMIT;
-    let coreChat = chat.filter(x => !x.is_system || (canUseTools && Array.isArray(x.extra?.tool_invocations)));
+    let coreChat = chat.filter(x => !x.is_system || (canUseTools && Array.isArray(x.extra?.tool_invocations)) || x.extra?.is_tool_result);
     if (type === 'swipe') {
         coreChat.pop();
     }
@@ -4061,7 +4222,7 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
         is_send_press = true;
     }
 
-    let generatedPromptCache = cyclePrompt || '';
+    generatedPromptCache += cyclePrompt;
     if (generatedPromptCache.length == 0 || type === 'continue') {
         console.debug('generating prompt');
         chatString = '';
@@ -4166,6 +4327,26 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
         return lastMesString;
     }
 
+    // Clean up the already generated prompt for seamless addition
+    function cleanupPromptCache(promptCache) {
+        // Remove the first occurrance of character's name
+        if (promptCache.trimStart().startsWith(`${name2}:`)) {
+            promptCache = promptCache.replace(`${name2}:`, '').trimStart();
+        }
+
+        // Remove the first occurrance of prompt bias
+        if (promptCache.trimStart().startsWith(promptBias)) {
+            promptCache = promptCache.replace(promptBias, '');
+        }
+
+        // Add a space if prompt cache doesn't start with one
+        if (!/^\s/.test(promptCache) && !isInstruct) {
+            promptCache = ' ' + promptCache;
+        }
+
+        return promptCache;
+    }
+
     async function checkPromptSize() {
         console.debug('---checking Prompt size');
         setPromptString();
@@ -4252,6 +4433,11 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
                         ? promptBias.trimStart()
                         : ` ${promptBias.trimStart()}`;
             }
+        }
+
+        // Prune from prompt cache if it exists
+        if (generatedPromptCache.length !== 0) {
+            generatedPromptCache = cleanupPromptCache(generatedPromptCache);
         }
 
         // Flattens the multiple prompt objects to a string.
@@ -4394,6 +4580,7 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
     await eventSource.emit(event_types.GENERATE_AFTER_DATA, generate_data);
 
     if (dryRun) {
+        generatedPromptCache = '';
         return Promise.resolve();
     }
 
@@ -4461,7 +4648,8 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
 
         if (isStreamingEnabled() && type !== 'quiet') {
             continue_mag = promptReasoning.removePrefix(continue_mag);
-            streamingProcessor = new StreamingProcessor(type, force_name2, generation_started, continue_mag, promptReasoning);
+            const generateOptions = { automatic_trigger, force_name2, quiet_prompt, quietToLoud, skipWIAN, force_chid, signal, quietImage, quietName, jsonSchema, depth };
+            streamingProcessor = new StreamingProcessor(type, generateOptions, dryRun, generation_started, continue_mag, promptReasoning);
             if (isContinue) {
                 // Save reply does add cycle text to the prompt, so it's not needed here
                 streamingProcessor.firstMessageText = '';
@@ -4497,6 +4685,7 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
                             ToolManager.showToolCallError(invocationResult.errors);
                         }
                         unblockGeneration(type);
+                        generatedPromptCache = '';
                         streamingProcessor = null;
                         return;
                     }
@@ -4542,6 +4731,7 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
         // if an error was returned in data (textgenwebui), show it and throw it
         if (data.error) {
             unblockGeneration(type);
+            generatedPromptCache = '';
 
             if (data?.response) {
                 toastr.error(data.response, t`API Error`, { preventDuplicates: true });
@@ -4551,11 +4741,75 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
 
         if (jsonSchema) {
             unblockGeneration(type);
+            generatedPromptCache = '';
             return extractJsonFromData(data);
         }
 
         //const getData = await response.json();
         let getMessage = extractMessageFromData(data);
+
+        if (oai_settings.native_tool_calling && depth < ToolManager.RECURSE_LIMIT) {
+            const parsedTool = ToolManager.findAndParseNativeToolCall(getMessage);
+            if (parsedTool) {
+                // Reconstruct the message to ensure it's well-formed and doesn't contain partial tags.
+                const formattedToolCall = ToolManager.formatNativeToolCallForDisplay(parsedTool);
+                chat[chat.length - 1].mes = formattedToolCall;
+                chat[chat.length - 1].extra = { is_tool_call: true, tool_call_info: parsedTool.tool_call, reasoning: parsedTool.reasoning };
+
+                // Re-render the message element with the special tool call formatting.
+                const messageElement = $('#chat .mes').last();
+                if (messageElement.length) {
+                    const toolInfo = parsedTool.tool_call;
+                    messageElement.addClass('tool-call-message');
+                    let html = '<h4><i class="fa-solid fa-cogs"></i> Tool Call</h4>';
+                    html += `<div class="tool-action"><p><b>Action:</b> <code>${DOMPurify.sanitize(toolInfo.tool)}</code></p>`;
+                    html += `<p><b>Arguments:</b></p><pre><code>${DOMPurify.sanitize(JSON.stringify(toolInfo.args, null, 2))}</code></pre></div>`;
+                    messageElement.find('.mes_text').html(html);
+                }
+
+                const toolResult = await ToolManager.invokeFunctionTool(parsedTool.tool_call.tool, parsedTool.tool_call.args, signal);
+
+                let resultMessage;
+                let stopGeneration = false;
+                try {
+                    const parsed = JSON.parse(toolResult);
+                    if (parsed.type === 'image_display' && parsed.filepath) {
+                        resultMessage = {
+                            name: systemUserName,
+                            is_user: false,
+                            is_system: true,
+                            mes: '<tool_result>\nImage displayed to user.\n</tool_result>', // This message is for the AI's context and is not displayed to the user.
+                            extra: { is_tool_result: true, image: `/api/files/download/${parsed.filepath}` },
+                        };
+                        stopGeneration = true;
+                    }
+                } catch (e) { /* Not a special JSON result, proceed normally */ }
+
+                if (!resultMessage) {
+                    const cappedToolResult = await capToolOutput(toolResult);
+                    // Create an assistant-role message with the tool's output.
+                    resultMessage = {
+                        name: systemUserName,
+                        is_user: false,
+                        is_system: true,
+                        mes: `<tool_result>\n${cappedToolResult}\n</tool_result>`,
+                        extra: { is_tool_result: true, tool_result_content: cappedToolResult },
+                    };
+                }
+
+                chat.push(resultMessage);
+                addOneMessage(resultMessage);
+
+                if (stopGeneration) {
+                    unblockGeneration(type);
+                    return;
+                }
+
+                const newOptions = { automatic_trigger, force_name2, quiet_prompt, quietToLoud, skipWIAN, force_chid, signal, quietImage, quietName, jsonSchema, depth: depth + 1 };
+                return Generate('normal', newOptions, dryRun);
+            }
+        }
+
         let title = extractTitleFromData(data);
         let reasoning = extractReasoningFromData(data);
         let imageUrl = extractImageFromData(data);
@@ -4593,6 +4847,7 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
 
         if (isImpersonate) {
             $('#send_textarea').val(getMessage)[0].dispatchEvent(new Event('input', { bubbles: true }));
+            generatedPromptCache = '';
             await eventSource.emit(event_types.IMPERSONATE_READY, getMessage);
         }
         else if (type == 'quiet') {
@@ -4624,6 +4879,7 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
                         ToolManager.showToolCallError(invocationResult.errors);
                     }
                     unblockGeneration(type);
+                    generatedPromptCache = '';
                     return;
                 }
 
@@ -4666,6 +4922,8 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
         if (typeof exception?.error?.message === 'string') {
             toastr.error(exception.error.message, t`Text generation error`, { timeOut: 10000, extendedTimeOut: 20000 });
         }
+
+        generatedPromptCache = '';
 
         unblockGeneration(type);
         console.log(exception);
@@ -5237,13 +5495,7 @@ function extractImageFromData(data, { mainApi = null, chatCompletionSource = nul
                         return `data:${inlineData.mimeType};base64,${inlineData.data}`;
                     }
                 } break;
-                case chat_completion_sources.OPENROUTER: {
-                    const imageUrl = data?.choices[0]?.message?.images?.find(x => x.type === 'image_url')?.image_url?.url;
-                    if (isDataURL(imageUrl)) {
-                        return imageUrl;
-                    }
-                    // TODO: Handle remote URLs
-                }
+
             }
         } break;
     }
@@ -5528,19 +5780,30 @@ export function cleanUpMessage({ getMessage, isImpersonate, isContinue, displayI
             getMessage = getMessage.substring(0, getMessage.indexOf(power_user.instruct.input_sequence));
         }
     }
-
-    // Remove instruct sequences leaking to the output
-    if (isInstruct && power_user.instruct.sequences_as_stop_strings) {
-        const sequences = [
-            { value: power_user.instruct.input_sequence, apply: isImpersonate && isNotEmpty(power_user.instruct.input_sequence) },
-            { value: power_user.instruct.output_sequence, apply: !isImpersonate && isNotEmpty(power_user.instruct.output_sequence) },
-            { value: power_user.instruct.last_output_sequence, apply: !isImpersonate && isNotEmpty(power_user.instruct.last_output_sequence) },
-        ];
-        for (const seq of sequences.filter(s => s.apply)) {
-            seq.value.split('\n').filter(line => line.trim() !== '').forEach(line => { getMessage = getMessage.replaceAll(line, ''); });
-        }
+    if (isInstruct && power_user.instruct.input_sequence && isImpersonate) {
+        //getMessage = getMessage.replaceAll(power_user.instruct.input_sequence, '');
+        power_user.instruct.input_sequence.split('\n')
+            .filter(line => line.trim() !== '')
+            .forEach(line => {
+                getMessage = getMessage.replaceAll(line, '');
+            });
     }
-
+    if (isInstruct && power_user.instruct.output_sequence && !isImpersonate) {
+        //getMessage = getMessage.replaceAll(power_user.instruct.output_sequence, '');
+        power_user.instruct.output_sequence.split('\n')
+            .filter(line => line.trim() !== '')
+            .forEach(line => {
+                getMessage = getMessage.replaceAll(line, '');
+            });
+    }
+    if (isInstruct && power_user.instruct.last_output_sequence && !isImpersonate) {
+        //getMessage = getMessage.replaceAll(power_user.instruct.last_output_sequence, '');
+        power_user.instruct.last_output_sequence.split('\n')
+            .filter(line => line.trim() !== '')
+            .forEach(line => {
+                getMessage = getMessage.replaceAll(line, '');
+            });
+    }
     // clean-up group message from excessive generations
     if (selected_group) {
         getMessage = cleanGroupMessage(getMessage);
@@ -7024,10 +7287,46 @@ export function setGenerationParamsFromPreset(preset) {
 // Common code for message editor done and auto-save
 function updateMessage(div) {
     const mesBlock = div.closest('.mes_block');
-    let text = mesBlock.find('.edit_textarea').val()
-        ?? mesBlock.find('.mes_text').text();
+    const text = $('#curEditTextarea').val();
     const mesElement = div.closest('.mes');
     const mes = chat[mesElement.attr('mesid')];
+
+    if (mes.extra?.is_tool_call) {
+        // Attempt to parse the JSON to update the structured data for rendering.
+        const jsonMatch = text.match(/{[\s\S]*}/);
+        if (jsonMatch) {
+            try {
+                const parsedJson = JSON.parse(jsonMatch[0]);
+                mes.extra.tool_call_info = parsedJson;
+            } catch (error) {
+                console.warn('Failed to parse JSON from edited tool call. Raw text will be saved, but UI may not render correctly.', error);
+            }
+        }
+
+        // Find the original <think> block from the raw message data.
+        const originalRawMessage = mes.mes;
+        const toolStartIndex = originalRawMessage.indexOf('<tool>');
+        const thinkBlock = (toolStartIndex !== -1) ? originalRawMessage.substring(0, toolStartIndex) : '';
+
+        // Reconstruct the full message with the original think block and the new tool block.
+        mes.mes = thinkBlock + text;
+    } else if (mes.extra?.is_tool_result) {
+        mes.extra.tool_result_content = text;
+        mes.mes = `<tool_result>\n${text}\n</tool_result>`;
+        const bias = ''; // No bias for tool results
+        chat_metadata['tainted'] = true;
+        // Return early to skip standard message processing
+        return { mesBlock, text, mes, bias };
+    }
+
+    // This block handles saving edits for messages with special display text, like the instructions.
+    if ('display_text' in (mes.extra ?? {})) {
+        mes.extra.display_text = text;
+        const bias = mes.extra?.bias ?? '';
+        chat_metadata['tainted'] = true;
+        const mesBlock = div.closest('.mes_block');
+        return { mesBlock, text, mes, bias };
+    }
 
     let regexPlacement;
     if (mes.is_user) {
@@ -7039,7 +7338,7 @@ function updateMessage(div) {
     }
 
     // Ignore character override if sent as system
-    text = getRegexedString(
+    let processedText = getRegexedString(
         text,
         regexPlacement,
         {
@@ -7050,17 +7349,17 @@ function updateMessage(div) {
 
 
     if (power_user.trim_spaces) {
-        text = text.trim();
+        processedText = processedText.trim();
     }
 
-    const bias = substituteParams(extractMessageBias(text));
-    text = substituteParams(text);
+    const bias = substituteParams(extractMessageBias(processedText));
+    processedText = substituteParams(processedText);
     if (bias) {
-        text = removeMacros(text);
+        processedText = removeMacros(processedText);
     }
-    mes['mes'] = text;
+    mes['mes'] = processedText;
     if (mes['swipe_id'] !== undefined) {
-        mes['swipes'][mes['swipe_id']] = text;
+        mes['swipes'][mes['swipe_id']] = processedText;
     }
 
     // editing old messages
@@ -7076,7 +7375,7 @@ function updateMessage(div) {
 
     chat_metadata['tainted'] = true;
 
-    return { mesBlock, text, mes, bias };
+    return { mesBlock, text: processedText, mes, bias };
 }
 
 function openMessageDelete(fromSlashCommand) {
@@ -7120,38 +7419,96 @@ function messageEditAuto(div) {
 }
 
 async function messageEditDone(div) {
-    let { mesBlock, text, mes, bias } = updateMessage(div);
-    if (this_edit_mes_id == 0) {
-        text = substituteParams(text);
+    const updateResult = updateMessage(div);
+    if (!updateResult) return;
+
+    const messageId = this_edit_mes_id;
+    const mes = chat[messageId];
+
+    if (messageId == 0) {
+        mes.mes = substituteParams(mes.mes);
     }
 
-    await eventSource.emit(event_types.MESSAGE_EDITED, this_edit_mes_id);
-    text = chat[this_edit_mes_id]?.mes ?? text;
-    mesBlock.find('.mes_text').empty();
-    mesBlock.find('.mes_edit_buttons').css('display', 'none');
-    mesBlock.find('.mes_buttons').css('display', '');
-    mesBlock.find('.mes_text').append(
-        messageFormatting(
-            text,
-            this_edit_mes_chname,
+    await eventSource.emit(event_types.MESSAGE_EDITED, messageId);
+
+    const oldMessageElement = div.closest('.mes');
+
+    // Get basic parameters for the message template.
+    let avatarImg = getThumbnailUrl('persona', user_avatar);
+    if (!mes.is_user) {
+        if (mes.force_avatar) {
+            avatarImg = mes.force_avatar;
+        } else if (this_chid === undefined) {
+            avatarImg = system_avatar;
+        } else {
+            avatarImg = characters[this_chid].avatar !== 'none' ? getThumbnailUrl('avatar', characters[this_chid].avatar) : default_avatar;
+        }
+    } else if (mes.is_user && mes.force_avatar) {
+        avatarImg = mes.force_avatar;
+    }
+
+    const params = {
+        mesId: messageId,
+        swipeId: mes.swipe_id ?? 0,
+        characterName: mes.name,
+        isUser: mes.is_user,
+        avatarImg: avatarImg,
+        bias: messageFormatting(mes.extra?.bias ?? '', '', false, false, -1, {}, false),
+        isSystem: mes.is_system,
+        title: mes.title,
+        bookmarkLink: mes.extra?.bookmark_link ?? '',
+        forceAvatar: mes.force_avatar,
+        timestamp: timestampToMoment(mes.send_date).isValid() ? timestampToMoment(mes.send_date).format('LL LT') : '',
+        extra: mes.extra,
+        tokenCount: mes.extra?.token_count ?? 0,
+        type: mes.extra?.type ?? '',
+        ...formatGenerationTimer(mes.gen_started, mes.gen_finished, mes.extra?.token_count, mes.extra?.reasoning_duration, mes.extra?.time_to_first_token),
+    };
+
+    // Create the new jQuery element from the template.
+    const newMessageElement = getMessageFromTemplate(params);
+
+    // Apply special formatting for different message types.
+    if (mes.extra?.is_tool_call) {
+        const toolInfo = mes.extra.tool_call_info;
+        newMessageElement.addClass('tool-call-message');
+        let html = '<h4><i class="fa-solid fa-cogs"></i> Tool Call</h4>';
+        html += `<div class="tool-action"><p><b>Action:</b> <code>${DOMPurify.sanitize(toolInfo.tool)}</code></p>`;
+        html += `<p><b>Arguments:</b></p><pre><code>${DOMPurify.sanitize(JSON.stringify(toolInfo.args, null, 2))}</code></pre></div>`;
+        newMessageElement.find('.mes_text').html(html);
+    } else if (mes.extra?.is_tool_result) {
+        const result = mes.extra.tool_result_content;
+        newMessageElement.addClass('tool-result-message');
+        const messageTextContainer = newMessageElement.find('.mes_text');
+        messageTextContainer.empty();
+        const header = $('<h4><i class="fa-solid fa-check-circle"></i> Tool Result</h4>');
+        const pre = $('<pre></pre>');
+        const code = $('<code></code>');
+        code.text(result);
+        pre.append(code);
+        messageTextContainer.append(header, pre);
+    } else {
+        const sanitizerOverrides = mes.uses_system_ui ? { MESSAGE_ALLOW_SYSTEM_UI: true } : {};
+        const formattedMessageText = messageFormatting(
+            mes.extra?.display_text ?? mes.mes,
+            mes.name,
             mes.is_system,
             mes.is_user,
-            this_edit_mes_id,
-            {},
+            messageId,
+            sanitizerOverrides,
             false,
-        ),
-    );
-    mesBlock.find('.mes_bias').empty();
-    mesBlock.find('.mes_bias').append(messageFormatting(bias, '', false, false, -1, {}, false));
-    appendMediaToMessage(mes, div.closest('.mes'));
-    addCopyToCodeBlocks(div.closest('.mes'));
-
-    const reasoningEditDone = mesBlock.find('.mes_reasoning_edit_done:visible');
-    if (reasoningEditDone.length > 0) {
-        reasoningEditDone.trigger('click');
+        );
+        newMessageElement.find('.mes_text').append(formattedMessageText);
     }
 
-    await eventSource.emit(event_types.MESSAGE_UPDATED, this_edit_mes_id);
+    // Add media and code blocks.
+    appendMediaToMessage(mes, newMessageElement, false);
+    addCopyToCodeBlocks(newMessageElement);
+
+    // Replace the old DOM element with the new one.
+    oldMessageElement.replaceWith(newMessageElement);
+
+    // Finalize.
     this_edit_mes_id = undefined;
     await saveChatConditional();
 }
@@ -7971,6 +8328,47 @@ async function importCharacterChat(formData, eventTarget) {
 
     if (eventTarget instanceof HTMLInputElement) {
         eventTarget.value = '';
+    }
+}
+
+/**
+ * Imports supported files dropped into the app window.
+ * @param {File[]} files Array of files to process
+ * @param {Map<File, string>} [data] Extra data to pass to the import function
+ * @returns {Promise<void>}
+ */
+export async function processDroppedFiles(files, data = new Map()) {
+    const allowedMimeTypes = [
+        'application/json',
+        'image/png',
+        'application/yaml',
+        'application/x-yaml',
+        'text/yaml',
+        'text/x-yaml',
+    ];
+
+    const allowedExtensions = [
+        'charx',
+        'byaf',
+    ];
+
+    const avatarFileNames = [];
+    for (const file of files) {
+        const extension = file.name.split('.').pop().toLowerCase();
+        if (allowedMimeTypes.some(x => file.type.startsWith(x)) || allowedExtensions.includes(extension)) {
+            const preservedName = data instanceof Map && data.get(file);
+            const avatarFileName = await importCharacter(file, { preserveFileName: preservedName });
+            if (avatarFileName !== undefined) {
+                avatarFileNames.push(avatarFileName);
+            }
+        } else {
+            toastr.warning(t`Unsupported file type: ` + file.name);
+        }
+    }
+
+    if (avatarFileNames.length > 0) {
+        await importCharactersTags(avatarFileNames);
+        selectImportedChar(avatarFileNames[avatarFileNames.length - 1]);
     }
 }
 
@@ -8797,44 +9195,46 @@ export function swipe_right(_event = null, { source, repeated } = {}) {
     }
 }
 
-/**
- * Imports supported files dropped into the app window.
- * @param {File[]} files Array of files to process
- * @param {Map<File, string>} [data] Extra data to pass to the import function
- * @returns {Promise<void>}
- */
-export async function processDroppedFiles(files, data = new Map()) {
-    const allowedMimeTypes = [
-        'application/json',
-        'image/png',
-        'application/yaml',
-        'application/x-yaml',
-        'text/yaml',
-        'text/x-yaml',
-    ];
+async function uploadFile(file, destination) {
+    const formData = new FormData();
+    formData.append('file', file, file.name);
 
-    const allowedExtensions = [
-        'charx',
-        'byaf',
-    ];
+    try {
+        const headers = getRequestHeaders();
+        delete headers['Content-Type']; // Let the browser set the multipart header
 
-    const avatarFileNames = [];
-    for (const file of files) {
-        const extension = file.name.split('.').pop().toLowerCase();
-        if (allowedMimeTypes.some(x => file.type.startsWith(x)) || allowedExtensions.includes(extension)) {
-            const preservedName = data instanceof Map && data.get(file);
-            const avatarFileName = await importCharacter(file, { preserveFileName: preservedName });
-            if (avatarFileName !== undefined) {
-                avatarFileNames.push(avatarFileName);
-            }
-        } else {
-            toastr.warning(t`Unsupported file type: ` + file.name);
+        const response = await fetch(`/api/files/upload-multipart?destination=${destination}`, {
+            method: 'POST',
+            headers: headers,
+            body: formData,
+        });
+
+        if (!response.ok) {
+            const errorData = await response.json();
+            throw new Error(errorData.error || `HTTP error! status: ${response.status}`);
         }
-    }
 
-    if (avatarFileNames.length > 0) {
-        await importCharactersTags(avatarFileNames);
-        selectImportedChar(avatarFileNames[avatarFileNames.length - 1]);
+        const result = await response.json();
+
+        if (destination === 'sandbox') {
+            toastr.success(`Uploaded to server: ${result.filename}`);
+        }
+
+        return result;
+
+    } catch (error) {
+        console.error(`File upload error (destination: ${destination}):`, error);
+        toastr.error(`Upload failed for ${file.name}: ${error.message}`);
+        return null;
+    }
+}
+
+async function handleSandboxUploadDrop(files, event) {
+    if (!files || files.length === 0) {
+        return;
+    }
+    for (const file of files) {
+        await uploadFile(file, 'sandbox');
     }
 }
 
@@ -8873,8 +9273,7 @@ function selectImportedChar(charId) {
  * @returns {Promise<string>}
  */
 async function importCharacter(file, { preserveFileName = '', importTags = false } = {}) {
-    if (is_group_generating || is_send_press) {
-        toastr.error(t`Cannot import characters while generating. Stop the request and try again.`, t`Import aborted`);
+    if (is_send_press) {
         throw new Error('Cannot import character while generating');
     }
 
@@ -8915,13 +9314,15 @@ async function importCharacter(file, { preserveFileName = '', importTags = false
             let avatarFileName = `${data.file_name}.png`;
             if (importTags) {
                 await importCharactersTags([avatarFileName]);
-                selectImportedChar(data.file_name);
             }
             return avatarFileName;
+        } else {
+            return undefined;
         }
     } catch (error) {
-        console.error('Error importing character', error);
-        toastr.error(t`The file is likely invalid or corrupted.`, t`Could not import character`);
+        console.error('Character import failed:', error);
+        toastr.error(error.message, 'Import Error');
+        return undefined;
     }
 }
 
@@ -9846,6 +10247,24 @@ jQuery(async function () {
         if (!isMouseOverButtonOrMenu()) { hideMenu(); }
     });
 
+    $('#option_upload').on('click', function() {
+        $('#sandbox_upload_input').click();
+    });
+
+    $('#sandbox_upload_input').on('change', async function(event) {
+        const files = event.target.files;
+
+        if (!files || files.length === 0) {
+            return;
+        }
+
+        for (const file of files) {
+            await uploadFile(file, 'sandbox');
+        }
+
+        event.target.value = '';
+    });
+
     /* $('#set_chat_scenario').on('click', setScenarioOverride); */
 
     ///////////// OPTIMIZED LISTENERS FOR LEFT SIDE OPTIONS POPUP MENU //////////////////////
@@ -10157,7 +10576,21 @@ jQuery(async function () {
                 reasoningEdit.trigger('click');
             }
 
-            var text = chat[edit_mes_id]['mes'];
+            const mes = chat[edit_mes_id];
+            var text = mes.extra?.display_text ?? mes['mes'];
+
+            if (mes.extra?.is_tool_call) {
+                const toolStartIndex = text.indexOf('<tool>');
+                if (toolStartIndex !== -1) {
+                    // Extract just the tool part for the main edit box.
+                    text = text.substring(toolStartIndex);
+                }
+            }
+            else if (mes.extra?.is_tool_result) {
+                // For tool results, edit the raw content directly.
+                text = mes.extra.tool_result_content;
+            }
+
             if (chat[edit_mes_id]['is_user']) {
                 this_edit_mes_chname = name1;
             } else if (chat[edit_mes_id]['force_avatar']) {
@@ -10272,33 +10705,88 @@ jQuery(async function () {
     });
 
     $(document).on('click', '.mes_edit_cancel', async function () {
-        let text = chat[this_edit_mes_id]['mes'];
+        const messageId = this_edit_mes_id;
+        const mes = chat[messageId];
+        const oldMessageElement = $(this).closest('.mes');
 
-        $(this).closest('.mes_block').find('.mes_text').empty();
-        $(this).closest('.mes_edit_buttons').css('display', 'none');
-        $(this).closest('.mes_block').find('.mes_buttons').css('display', '');
-        $(this)
-            .closest('.mes_block')
-            .find('.mes_text')
-            .append(messageFormatting(
-                text,
-                this_edit_mes_chname,
-                chat[this_edit_mes_id].is_system,
-                chat[this_edit_mes_id].is_user,
-                this_edit_mes_id,
-                {},
-                false,
-            ));
-        appendMediaToMessage(chat[this_edit_mes_id], $(this).closest('.mes'));
-        addCopyToCodeBlocks($(this).closest('.mes'));
-
-        const reasoningEditDone = $(this).closest('.mes_block').find('.mes_reasoning_edit_cancel:visible');
-        if (reasoningEditDone.length > 0) {
-            reasoningEditDone.trigger('click');
+        // Get basic parameters for the message template.
+        let avatarImg = getThumbnailUrl('persona', user_avatar);
+        if (!mes.is_user) {
+            if (mes.force_avatar) {
+                avatarImg = mes.force_avatar;
+            } else if (this_chid === undefined) {
+                avatarImg = system_avatar;
+            } else {
+                avatarImg = characters[this_chid].avatar !== 'none' ? getThumbnailUrl('avatar', characters[this_chid].avatar) : default_avatar;
+            }
+        } else if (mes.is_user && mes.force_avatar) {
+            avatarImg = mes.force_avatar;
         }
 
-        await eventSource.emit(event_types.MESSAGE_UPDATED, this_edit_mes_id);
+        const params = {
+            mesId: messageId,
+            swipeId: mes.swipe_id ?? 0,
+            characterName: mes.name,
+            isUser: mes.is_user,
+            avatarImg: avatarImg,
+            bias: messageFormatting(mes.extra?.bias ?? '', '', false, false, -1, {}, false),
+            isSystem: mes.is_system,
+            title: mes.title,
+            bookmarkLink: mes.extra?.bookmark_link ?? '',
+            forceAvatar: mes.force_avatar,
+            timestamp: timestampToMoment(mes.send_date).isValid() ? timestampToMoment(mes.send_date).format('LL LT') : '',
+            extra: mes.extra,
+            tokenCount: mes.extra?.token_count ?? 0,
+            type: mes.extra?.type ?? '',
+            ...formatGenerationTimer(mes.gen_started, mes.gen_finished, mes.extra?.token_count, mes.extra?.reasoning_duration, mes.extra?.time_to_first_token),
+        };
+
+        // Create the new jQuery element from the template.
+        const newMessageElement = getMessageFromTemplate(params);
+
+        // Apply special formatting for different message types.
+        if (mes.extra?.is_tool_call) {
+            const toolInfo = mes.extra.tool_call_info;
+            newMessageElement.addClass('tool-call-message');
+            let html = '<h4><i class="fa-solid fa-cogs"></i> Tool Call</h4>';
+            html += `<div class="tool-action"><p><b>Action:</b> <code>${DOMPurify.sanitize(toolInfo.tool)}</code></p>`;
+            html += `<p><b>Arguments:</b></p><pre><code>${DOMPurify.sanitize(JSON.stringify(toolInfo.args, null, 2))}</code></pre></div>`;
+            newMessageElement.find('.mes_text').html(html);
+        } else if (mes.extra?.is_tool_result) {
+            const result = mes.extra.tool_result_content;
+            newMessageElement.addClass('tool-result-message');
+            const messageTextContainer = newMessageElement.find('.mes_text');
+            messageTextContainer.empty();
+            const header = $('<h4><i class="fa-solid fa-check-circle"></i> Tool Result</h4>');
+            const pre = $('<pre></pre>');
+            const code = $('<code></code>');
+            code.text(result);
+            pre.append(code);
+            messageTextContainer.append(header, pre);
+        } else {
+            const sanitizerOverrides = mes.uses_system_ui ? { MESSAGE_ALLOW_SYSTEM_UI: true } : {};
+            const formattedMessageText = messageFormatting(
+                mes.extra?.display_text ?? mes.mes,
+                mes.name,
+                mes.is_system,
+                mes.is_user,
+                messageId,
+                sanitizerOverrides,
+                false,
+            );
+            newMessageElement.find('.mes_text').append(formattedMessageText);
+        }
+
+        // Add media and code blocks.
+        appendMediaToMessage(mes, newMessageElement, false);
+        addCopyToCodeBlocks(newMessageElement);
+
+        // Replace the old DOM element with the new one.
+        oldMessageElement.replaceWith(newMessageElement);
+
+        // Finalize.
         this_edit_mes_id = undefined;
+        // No need to save chat on cancel.
     });
 
     $(document).on('click', '.mes_edit_up', async function () {
@@ -10764,13 +11252,10 @@ jQuery(async function () {
     $(document).on('keyup', function (e) {
         if (e.key === 'Escape') {
             const isEditVisible = $('#curEditTextarea').is(':visible') || $('.reasoning_edit_textarea').length > 0;
-            if (isEditVisible && power_user.auto_save_msg_edits === false) {
-                closeMessageEditor('all');
-                $('#send_textarea').trigger('focus');
-                return;
-            }
-            if (isEditVisible && power_user.auto_save_msg_edits === true) {
-                $(`#chat .mes[mesid="${this_edit_mes_id}"] .mes_edit_done`).trigger('click');
+            if (isEditVisible) {
+                if ($('#curEditTextarea').is(':visible')) {
+                    $(`#chat .mes[mesid="${this_edit_mes_id}"] .mes_edit_done`).trigger('click');
+                }
                 closeMessageEditor('reasoning');
                 $('#send_textarea').trigger('focus');
                 return;
@@ -10782,6 +11267,13 @@ jQuery(async function () {
                 }
             }
         }
+    });
+
+    $(document).on('input', '#tool_output_truncation_limit', function () {
+        const value = $(this).val();
+        $('#tool_output_truncation_limit_counter').val(value);
+        power_user.tool_output_truncation_limit = Number(value);
+        saveSettingsDebounced();
     });
 
     $('#char-management-dropdown').on('change', async (e) => {
@@ -10814,7 +11306,7 @@ jQuery(async function () {
                 }
             } break;
             case 'replace_update': {
-                const confirm = await Popup.show.confirm(t`Replace Character`, '<p>' + t`Choose a new character card to replace this character with.` + '</p>' + t`All chats, assets and group memberships will be preserved, but local changes to the character data will be lost.` + '<br />' + t`Proceed?`);
+                const confirm = await Popup.show.confirm('Replace Character', '<p>Choose a new character card to replace this character with.</p>All chats, assets and group memberships will be preserved, but local changes to the character data will be lost.<br />Proceed?');
                 if (confirm) {
                     async function uploadReplacementCard(e) {
                         const file = e.target.files[0];
@@ -10989,12 +11481,69 @@ jQuery(async function () {
         }
     });
 
-    charDragDropHandler = new DragAndDropHandler('body', async (files, event) => {
-        if (!files.length) {
-            await importFromURL(event.originalEvent.dataTransfer.items, files);
-        }
-        await processDroppedFiles(files);
-    }, { noAnimation: true });
+    const dropZoneContainer = $('#drop_zone_container');
+    const sandboxDropZone = $('#sandbox_drop_zone'); // Cache selector
+    let dragLeaveTimer;
+
+    // A single, unified handler on the body to manage all drag/drop events.
+    charDragDropHandler = new DragAndDropHandler('body',
+        // onDrop function:
+        async (files, event) => {
+            // Hide all visual feedback immediately on drop.
+            clearTimeout(dragLeaveTimer);
+            dropZoneContainer.addClass('displayNone');
+            sandboxDropZone.removeClass('drag-over');
+
+            const target = $(event.target);
+
+            // CASE 1: Drop occurred on the sandbox.
+            if (target.closest('#sandbox_drop_zone').length > 0) {
+                await handleSandboxUploadDrop(files, event);
+                return; // Stop processing.
+            }
+
+            // CASE 2: Drop occurred on an input field; ignore it.
+            if (target.closest('textarea, input, .mes_edit').length > 0) {
+                return; // Stop processing.
+            }
+
+            // CASE 3: Default drop behavior (character/lorebook import).
+            if (!files.length) {
+                await importFromURL(event.originalEvent.dataTransfer.items, files);
+            }
+            await processDroppedFiles(files);
+        },
+        // Options for managing visual feedback:
+        {
+            noAnimation: true,
+            onDragEnter: (event) => {
+                if (event.originalEvent.dataTransfer.types.includes('Files')) {
+                    clearTimeout(dragLeaveTimer);
+                    dropZoneContainer.removeClass('displayNone');
+                }
+            },
+            onDragOver: (event) => {
+                // This is the core of the fix.
+                // 1. Continuously cancel the hide timer to prevent flickering inside the window.
+                clearTimeout(dragLeaveTimer);
+
+                // 2. Manage the sandbox's visual state based on the element being hovered over.
+                if ($(event.target).closest('#sandbox_drop_zone').length > 0) {
+                    sandboxDropZone.addClass('drag-over');
+                } else {
+                    sandboxDropZone.removeClass('drag-over');
+                }
+            },
+            onDragLeave: (event) => {
+                // This event fires when leaving the window. Set a timer to hide the overlay.
+                // Also, ensure the sandbox state is cleaned up.
+                sandboxDropZone.removeClass('drag-over');
+                dragLeaveTimer = setTimeout(() => {
+                    dropZoneContainer.addClass('displayNone');
+                }, 150);
+            },
+        },
+    );
 
     $('#charListGridToggle').on('click', async () => {
         doCharListDisplaySwitch();

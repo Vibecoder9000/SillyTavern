@@ -11,8 +11,9 @@ import _ from 'lodash';
 import mime from 'mime-types';
 import { Jimp, JimpMime } from '../jimp.js';
 import storage from 'node-persist';
+import multer from 'multer';
 
-import { AVATAR_WIDTH, AVATAR_HEIGHT, DEFAULT_AVATAR_PATH } from '../constants.js';
+import { AVATAR_WIDTH, AVATAR_HEIGHT, DEFAULT_AVATAR_PATH, UPLOADS_DIRECTORY } from '../constants.js';
 import { default as validateAvatarUrlMiddleware, getFileNameValidationFunction } from '../middleware/validateFileName.js';
 import { deepMerge, humanizedISO8601DateTime, tryParse, extractFileFromZipBuffer, MemoryLimitedMap, getConfigValue, mutateJsonString } from '../util.js';
 import { TavernCardValidator } from '../validator/TavernCardValidator.js';
@@ -949,9 +950,13 @@ async function importFromPng(uploadPath, { request }, preservedFileName) {
     return '';
 }
 
+const upload = multer({
+    dest: path.join(globalThis.DATA_ROOT, UPLOADS_DIRECTORY),
+    limits: { fieldSize: 500 * 1024 * 1024 },
+});
 export const router = express.Router();
 
-router.post('/create', getFileNameValidationFunction('file_name'), async function (request, response) {
+router.post('/create', upload.single('avatar'), getFileNameValidationFunction('file_name'), async function (request, response) {
     try {
         if (!request.body) return response.sendStatus(400);
 
@@ -1027,7 +1032,7 @@ router.post('/rename', validateAvatarUrlMiddleware, async function (request, res
     }
 });
 
-router.post('/edit', validateAvatarUrlMiddleware, async function (request, response) {
+router.post('/edit', upload.single('avatar'), validateAvatarUrlMiddleware, async function (request, response) {
     if (!request.body) {
         console.warn('Error: no response body detected');
         response.status(400).send('Error: no response body detected');
@@ -1303,7 +1308,7 @@ function getPreservedName(request) {
         : undefined;
 }
 
-router.post('/import', async function (request, response) {
+router.post('/import', upload.single('avatar'), async function (request, response) {
     if (!request.body || !request.file) return response.sendStatus(400);
 
     const uploadPath = path.join(request.file.destination, request.file.filename);
@@ -1341,6 +1346,40 @@ router.post('/import', async function (request, response) {
     } catch (err) {
         console.error(err);
         response.send({ error: true });
+    }
+});
+
+router.post('/import-from-path', async function (request, response) {
+    try {
+        const { filepath, preserveFileName } = request.body;
+
+        if (!filepath || !fs.existsSync(filepath)) {
+            return response.status(400).json({ error: 'Invalid or missing filepath.' });
+        }
+
+        const format = path.extname(filepath).substring(1).toLowerCase();
+        const context = { request, response };
+
+        const formatImportFunctions = {
+            'yaml': importFromYaml, 'yml': importFromYaml, 'json': importFromJson,
+            'png': importFromPng, 'charx': importFromCharX, 'byaf': importFromByaf,
+        };
+
+        const importFunction = formatImportFunctions[format];
+        if (!importFunction) {
+            throw new Error(`Unsupported format: ${format}`);
+        }
+
+        const fileName = await importFunction(filepath, context, preserveFileName);
+
+        if (!fileName) {
+            throw new Error('Failed to import character');
+        }
+
+        response.send({ file_name: fileName });
+    } catch (err) {
+        console.error(err);
+        response.status(500).send({ error: err.message || 'An unexpected error occurred during import.' });
     }
 });
 

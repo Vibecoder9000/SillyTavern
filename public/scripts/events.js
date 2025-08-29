@@ -24,6 +24,7 @@ export const event_types = {
     EXTENSION_SETTINGS_LOADED: 'extension_settings_loaded',
     SETTINGS_LOADED: 'settings_loaded',
     SETTINGS_UPDATED: 'settings_updated',
+    DANGEROUS_TOOLS_TOGGLED: 'dangerous_tools_toggled',
     GROUP_UPDATED: 'group_updated',
     MOVABLE_PANELS_RESET: 'movable_panels_reset',
     SETTINGS_LOADED_BEFORE: 'settings_loaded_before',
