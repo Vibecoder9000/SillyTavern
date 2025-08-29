@@ -51,6 +51,7 @@ public/error/
 /default/scaffold
 public/scripts/extensions/third-party
 /certs
+/uploads
 .aider*
 .env
 /StartDev.bat

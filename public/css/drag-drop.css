@@ -1,0 +1,53 @@
+/* Sandbox File Drop Zone */
+#drop_zone_container {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100vw;
+    height: 100dvh;
+    z-index: 1000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    pointer-events: none;
+}
+
+#sandbox_drop_zone {
+    width: calc(var(--sheldWidth) * 0.70);
+    aspect-ratio: 1 / 1;
+    background-color: rgba(var(--SmartThemeChatTintColorValues), 0.8);
+    filter: brightness(0.5);
+    border: 3px dashed var(--SmartThemeBorderColor);
+    border-radius: 30px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    backdrop-filter: blur(4px);
+    -webkit-backdrop-filter: blur(4px);
+    transition: transform 0.2s ease-in-out, background-color 0.2s ease-in-out, border-color 0.2s ease-in-out;
+    pointer-events: all;
+}
+
+#sandbox_drop_zone h2 span {
+    display: block;
+}
+
+#sandbox_drop_zone h2 span:first-child {
+    margin-bottom: 2em;
+}
+
+#sandbox_drop_zone h2 {
+    color: var(--SmartThemeBodyColor);
+    font-size: 1.5em;
+    font-weight: bold;
+    margin: 0;
+    padding: 20px;
+    pointer-events: none;
+}
+
+#sandbox_drop_zone.drag-over {
+    transform: scale(1.02);
+    background-color: rgba(var(--SmartThemeChatTintColorValues), 0.95);
+    border-color: var(--SmartThemeBodyColor);
+}
