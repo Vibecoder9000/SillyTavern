@@ -9,8 +9,10 @@ import { sync as writeFileAtomicSync } from 'write-file-atomic';
 
 import { getImages, tryParse } from '../util.js';
 import { getFileNameValidationFunction } from '../middleware/validateFileName.js';
+import cacheBuster from '../middleware/cacheBuster.js';
 import { applyAvatarCropResize } from './characters.js';
 import { invalidateThumbnail } from './thumbnails.js';
+
 import { UPLOADS_DIRECTORY } from '../constants.js';
 import cacheBuster from '../middleware/cacheBuster.js';
 

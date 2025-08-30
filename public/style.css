@@ -13,6 +13,7 @@
 @import url(css/welcome.css);
 @import url(css/data-maid.css);
 @import url(css/secrets.css);
+@import url(css/backgrounds.css);
 
 :root {
     interpolate-size: allow-keywords;
@@ -3342,23 +3343,6 @@ input[type=search]:focus::-webkit-search-cancel-button {
 .bg_example:hover[custom="false"] .bg_example_copy,
 .bg_example:focus-within[custom="false"] .bg_example_copy {
     display: none;
-}
-
-.BGSampleTitle {
-    display: flex;
-    width: 100%;
-    height: min-content;
-    text-align: center;
-    justify-content: center;
-    align-self: flex-end;
-    bottom: 0;
-    position: relative;
-    word-break: break-word;
-    background-color: var(--SmartThemeBlurTintColor);
-    font-size: calc(var(--fontScale) * 0.9em);
-    max-height: 50%;
-    overflow-y: clip;
-    border-radius: 0 0 7px 7px;
 }
 
 .bg_example[custom="true"] .BGSampleTitle {

@@ -53,6 +53,7 @@ export const CONTENT_TYPES = {
     QUICK_REPLIES: 'quick_replies',
     SYSPROMPT: 'sysprompt',
     REASONING: 'reasoning',
+    BACKGROUNDS_METADATA: 'backgrounds_metadata',
 };
 
 /**
@@ -272,9 +273,9 @@ export function getContentOfType(type, format) {
 function getTargetByType(type, directories) {
     switch (type) {
         case CONTENT_TYPES.SETTINGS:
+        case CONTENT_TYPES.BACKGROUNDS_METADATA:
             return directories.root;
         case CONTENT_TYPES.CHARACTER:
-            return directories.characters;
         case CONTENT_TYPES.SPRITES:
             return directories.characters;
         case CONTENT_TYPES.BACKGROUND:

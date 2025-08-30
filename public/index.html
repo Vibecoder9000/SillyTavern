@@ -5310,45 +5310,106 @@
             <div id="site_logo" class="drawer-toggle drawer-header" title="Change Background Image" data-i18n="[title]Change Background Image">
                 <div class="drawer-icon fa-solid fa-panorama fa-fw closedIcon"></div>
             </div>
-            <div id="Backgrounds" class="drawer-content closedDrawer">
-                <div class="flex-container">
+            <div id="Backgrounds" class="drawer-content closedDrawer bg-drawer-layout">
+                <div id="bg-header-fixed">
                     <div class="flex-container alignItemsBaseline wide100p">
-                        <h3 class="margin0 flex2" data-i18n="Background Image">
-                            Background Image
-                        </h3>
-                        <input id="bg-filter" data-i18n="[placeholder]Filter" placeholder="Filter" class="text_pole flex1" type="search" />
-                        <select id="background_fitting" class="text_pole" data-i18n="[title]Background Fitting" title="Background Fitting">
+                        <!-- Standard Mode Items -->
+                        <h3 class="margin0 standard-mode-item" data-i18n="Backgrounds">Backgrounds</h3>
+                        <input id="bg-filter" class="text_pole flex1 standard-mode-item" type="search" data-i18n="[placeholder]Search" placeholder="Search" />
+                        <select id="bg-sort-order" class="text_pole standard-mode-item" title="Sort by" data-i18n="[title]Sort by">
+                            <option value="alpha" data-i18n="A-Z" selected>A-Z</option>
+                            <option value="date" data-i18n="Date">Date</option>
+                        </select>
+                        <select id="background_fitting" class="text_pole standard-mode-item" data-i18n="[title]Background Fitting" title="Background Fitting">
                             <option value="classic" data-i18n="Classic">Classic</option>
                             <option value="cover" data-i18n="Cover">Cover</option>
                             <option value="contain" data-i18n="Contain">Contain</option>
                             <option value="stretch" data-i18n="Stretch">Stretch</option>
                             <option value="center" data-i18n="Center">Center</option>
                         </select>
-                        <div id="auto_background" class="menu_button menu_button_icon" data-i18n="[title]Automatically select a background based on the chat context" title="Automatically select a background based on the chat context.">
+                        <div id="auto_background" class="menu_button menu_button_icon standard-mode-item" data-i18n="[title]Automatically select a background based on the chat context" title="Automatically select a background based on the chat context.">
                             <i class="fa-solid fa-wand-magic"></i>
                             <span data-i18n="Auto-select">Auto-select</span>
                         </div>
-                    </div>
-                    <h3 data-i18n="System Backgrounds" class="wide100p textAlignCenter">
-                        System Backgrounds
-                    </h3>
-                    <div id="bg_menu_content" class="bg_list">
-                        <form id="form_bg_download" class="bg_example no-border no-shadow" action="javascript:void(null);" method="post" enctype="multipart/form-data">
-                            <label class="input-file">
-                                <input type="file" id="add_bg_button" name="avatar" accept="image/*, video/*">
-                                <div class="bg_example no-border no-shadow add_bg_but" style="background-image: url('/img/addbg3.png');"></div>
-                            </label>
-                        </form>
-                    </div>
-                    <h3 data-i18n="Chat Backgrounds" class="wide100p textAlignCenter">
-                        Chat Backgrounds
-                    </h3>
-                    <div id="bg_chat_hint" class="wide100p textAlignCenter">
-                        <span data-i18n="bg_chat_hint_1">Chat backgrounds generated with the</span> <code><i class="fa-solid fa-paintbrush"></i>&nbsp;Image Generation</code> <span data-i18n="bg_chat_hint_2">extension will appear here.</span>
-                    </div>
-                    <div id="bg_custom_content" class="bg_list">
+                        <div id="bg_lock_button" class="menu_button menu_button_icon standard-mode-item" data-i18n="[title]Lock selected background for this chat" title="Lock selected background for this chat">
+                            <i class="fa-solid fa-lock"></i>
+                            <span data-i18n="Lock">Lock</span>
+                        </div>
+                        <div id="bg_select_button" class="menu_button menu_button_icon standard-mode-item" data-i18n="[title]Select multiple backgrounds" title="Select multiple backgrounds">
+                            <i class="fa-solid fa-check-to-slot"></i>
+                            <span data-i18n="Select">Select</span>
+                        </div>
+                        <label for="add_bg_button" id="add_background_button_top" class="menu_button menu_button_icon interactable standard-mode-item" title="Add a new background">
+                            <i class="fa-solid fa-plus"></i>
+                            <span data-i18n="Add Background">Add Background</span>
+                        </label>
+                        <!-- Selection Mode Items -->
+                        <h3 class="margin0 selection-mode-item" data-i18n="Selection Mode">Selection Mode</h3>
+                        <span id="bg-selection-count" class="flex1 selection-mode-item" style="text-align: center;">0 selected</span>
+                        <div id="bg_select_all_button" class="menu_button menu_button_icon selection-mode-item" data-i18n="[title]Select all visible" title="Select all visible">
+                           <i class="fa-solid fa-check-double"></i>
+                           <span data-i18n="Select All">Select All</span>
+                       </div>
+                       <div id="bg_select_cancel_button" class="menu_button menu_button_icon selection-mode-item" data-i18n="[title]Cancel selection" title="Cancel selection">
+                           <i class="fa-solid fa-xmark"></i>
+                           <span data-i18n="Cancel">Cancel</span>
+                       </div>
                     </div>
                 </div>
+                <div id="bg-scrollable-content">
+                    <div id="bg_menu_content" class="bg_list">
+                    </div>
+                </div>
+                <form id="form_bg_upload" style="display: none;">
+                   <input type="file" id="add_bg_button" name="avatar" accept="image/jpeg,image/png,image/gif,image/bmp,image/svg+xml,video/*">
+                </form>
+                <div id="bg_scroll_top">
+                    <i class="fa-solid fa-chevron-up"></i>
+                </div>
+                <template id="thumbnail-menu-template">
+                    <div class="jg-menu">
+                        <div data-action="star" class="jg-button jg-star fa-fw pointer" data-i18n="[title]Star Background" title="Star Background">
+                            <i class="fa-solid fa-star"></i>
+                            <i class="fa-regular fa-star"></i>
+                        </div>
+                        <div data-action="add-to-folder" class="jg-button jg-add-to-folder fa-solid fa-folder-plus fa-fw pointer" data-i18n="[title]Add to Folder" title="Add to Folder"></div>
+                        <div data-action="edit" class="jg-button jg-edit fa-solid fa-pen-to-square fa-fw pointer" data-i18n="[title]Rename Background" title="Rename Background"></div>
+                        <div data-action="delete" class="jg-button jg-delete fa-solid fa-trash-can fa-fw pointer" data-i18n="[title]Delete Background" title="Delete Background"></div>
+                    </div>
+                </template>
+                <template id="starred-popup-template">
+                    <div class="popup-overlay">
+                        <div class="popup-panel">
+                            <div class="popup-header">
+                                <h3 data-i18n="Starred Backgrounds">Starred Backgrounds</h3>
+                                <div class="popup-header-buttons">
+                                    <div id="folder_set_thumbnail_button" class="popup-close-button" data-i18n="[title]Set Folder Thumbnail" title="Set Folder Thumbnail" style="display: none;">
+                                        <i class="fa-solid fa-image"></i>
+                                    </div>
+                                    <div class="popup-close-button" data-i18n="[title]Close" title="Close">
+                                        <i class="fa-solid fa-xmark"></i>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="popup-content">
+                            </div>
+                        </div>
+                    </div>
+                </template>
+                <template id="folder-chooser-popup-template">
+                    <div class="popup-overlay">
+                        <div class="popup-panel">
+                            <div class="popup-header">
+                                <h3 data-i18n="Add to Folder">Add to Folder</h3>
+                                <div class="popup-close-button" data-i18n="[title]Close" title="Close">
+                                    <i class="fa-solid fa-xmark"></i>
+                                </div>
+                            </div>
+                            <div class="popup-content" id="folder-chooser-content">
+                            </div>
+                        </div>
+                    </div>
+                </template>
             </div>
         </div>
         <div id="extensions-settings-button" class="drawer">
@@ -6279,17 +6340,6 @@
                     <div id="select_chat_cross" class="opacity50p hoverglow fa-solid fa-circle-xmark fontsize120p" alt="Close Past Chat Popup"></div>
                 </div>
                 <div id="select_chat_div"></div>
-            </div>
-        </div>
-        <div id="background_template" class="template_element">
-            <div class="bg_example flex-container" bgfile="" class="bg_example_img" title="">
-                <div title="Copy to system backgrounds" data-i18n="[title]Copy to system backgrounds" class="bg_button bg_example_copy fa-solid fa-file-arrow-up"></div>
-                <div title="Rename background" data-i18n="[title]Rename background" class="bg_button bg_example_edit fa-solid fa-pencil"></div>
-                <div title="Lock" data-i18n="[title]Lock" class="bg_button bg_example_lock fa-solid fa-lock"></div>
-                <div title="Unlock" data-i18n="[title]Unlock" class="bg_button bg_example_unlock fa-solid fa-lock-open"></div>
-                <div title="Delete background" data-i18n="[title]Delete background" class="bg_button bg_example_cross fa-solid fa-circle-xmark"></div>
-                <div class="BGSampleTitle">
-                </div>
             </div>
         </div>
         <!-- templates for JS to reuse when needed -->

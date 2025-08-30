@@ -1581,30 +1581,25 @@ export function createThumbnail(dataUrl, maxWidth = null, maxHeight = null, type
             const canvas = document.createElement('canvas');
             const ctx = canvas.getContext('2d');
 
-            // Calculate the thumbnail dimensions while maintaining the aspect ratio
-            const aspectRatio = img.width / img.height;
-            let thumbnailWidth = maxWidth;
-            let thumbnailHeight = maxHeight;
+            let thumbnailWidth = img.width;
+            let thumbnailHeight = img.height;
 
-            if (maxWidth === null) {
-                thumbnailWidth = img.width;
-                maxWidth = img.width;
-            }
+            if (maxWidth === null) maxWidth = img.width;
+            if (maxHeight === null) maxHeight = img.height;
 
-            if (maxHeight === null) {
-                thumbnailHeight = img.height;
-                maxHeight = img.height;
-            }
+            // Only scale down, never up.
+            if (thumbnailWidth > maxWidth || thumbnailHeight > maxHeight) {
+                const imgAspectRatio = thumbnailWidth / thumbnailHeight;
+                const maxAspectRatio = maxWidth / maxHeight;
 
-            // Do not upscale if image is already smaller than max dimensions
-            if (img.width <= maxWidth && img.height <= maxHeight) {
-                thumbnailWidth = img.width;
-                thumbnailHeight = img.height;
-            } else {
-                if (img.width > img.height) {
-                    thumbnailHeight = maxWidth / aspectRatio;
+                // If image is wider than the bounding box aspect ratio, it's limited by width.
+                if (imgAspectRatio > maxAspectRatio) {
+                    thumbnailWidth = maxWidth;
+                    thumbnailHeight = maxWidth / imgAspectRatio;
                 } else {
-                    thumbnailWidth = maxHeight * aspectRatio;
+                    // Otherwise, it's limited by height.
+                    thumbnailHeight = maxHeight;
+                    thumbnailWidth = maxHeight * imgAspectRatio;
                 }
             }
 

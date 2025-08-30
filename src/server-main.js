@@ -55,13 +55,17 @@ import {
     setWindowTitle,
     getConfigValue,
 } from './util.js';
+
 import { ensureThumbnailCache } from './endpoints/thumbnails.js';
+import { UPLOADS_DIRECTORY } from './constants.js';
 
 // Routers
 import { router as usersPublicRouter } from './endpoints/users-public.js';
+import { publicRouter as thumbnailPublicRouter } from './endpoints/thumbnails.js';
 import { init as statsInit, onExit as statsOnExit } from './endpoints/stats.js';
 import { checkForNewContent } from './endpoints/content-manager.js';
 import { init as settingsInit } from './endpoints/settings.js';
+import { syncBackgroundsMetadata } from './endpoints/backgrounds-manager.js';
 import { redirectDeprecatedEndpoints, ServerStartup, setupPrivateEndpoints } from './server-startup.js';
 import { diskCache } from './endpoints/characters.js';
 import { migrateFlatSecrets } from './endpoints/secrets.js';
@@ -159,6 +163,12 @@ if (!cliArgs.disableCsrf) {
             req.session.csrfToken = token;
         },
         size: 32,
+        skipCsrfProtection: (req) => {
+            if (req.method === 'GET' && req.path.startsWith('/thumbnail')) {
+                return true;
+            }
+            return false;
+        },
     });
 
     app.get('/csrf-token', (req, res) => {
@@ -225,6 +235,9 @@ app.post('/api/ping', (request, response) => {
     response.sendStatus(204);
 });
 
+// Host thumbnails
+app.use('/thumbnail', thumbnailPublicRouter);
+
 // File uploads
 app.use(multerMonkeyPatch);
 
@@ -259,7 +272,15 @@ async function preSetupTasks() {
 
     const directories = await getUserDirectoriesList();
     await checkForNewContent(directories);
-    await ensureThumbnailCache(directories);
+
+    for (const userDirectories of directories) {
+        try {
+            await syncBackgroundsMetadata(userDirectories);
+        } catch (error) {
+            console.error(`Failed to sync background metadata for user at ${userDirectories.root}:`, error);
+        }
+    }
+
     await diskCache.verify(directories);
     migrateFlatSecrets(directories);
     cleanUploads();

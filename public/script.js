@@ -233,7 +233,7 @@ import {
     updatePersonaConnectionsAvatarList,
     isPersonaPanelOpen,
 } from './scripts/personas.js';
-import { getBackgrounds, initBackgrounds, loadBackgroundSettings, background_settings } from './scripts/backgrounds.js';
+import { initBackgrounds, loadBackgroundSettings, background_settings, findAndSetBackgroundByName } from './scripts/backgrounds.js';
 import { hideLoader, showLoader } from './scripts/loader.js';
 import { BulkEditOverlay } from './scripts/BulkEditOverlay.js';
 import { initTextGenModels } from './scripts/textgen-models.js';
@@ -709,7 +709,6 @@ async function firstLoadInit() {
     initMacros();
     await getUserAvatars(true, user_avatar);
     await getCharacters();
-    await getBackgrounds();
     await initTokenizers();
     initBackgrounds();
     initAuthorsNote();
@@ -2801,6 +2800,53 @@ function hideStopButton() {
     }
 }
 
+/**
+ * Scans for new background commands in the full text and executes them.
+ * @param {string} fullText The entire cumulative text received so far.
+ * @param {number} lastProcessedIndex The end index of the last command that was successfully processed.
+ * @returns {Promise<number>} The new index to be used as lastProcessedIndex for the next call.
+ */
+async function processLiveBackgroundCommands(fullText, lastProcessedIndex) {
+    const searchStartIndex = Math.max(0, lastProcessedIndex - 20);
+
+    if (!fullText.substring(searchStartIndex).includes('image:{')) {
+        return lastProcessedIndex;
+    }
+
+    // Use a non-greedy match (.+?) to capture everything until the first closing brace.
+    // This will probably fail for filenames with brackets.
+    const commandRegex = /image:\{(.+?)\}/g;
+    commandRegex.lastIndex = searchStartIndex;
+
+    let match;
+    let newLastProcessedIndex = lastProcessedIndex;
+    const newCommandsFound = [];
+
+    // First, find all new commands in the current text without processing them yet.
+    while ((match = commandRegex.exec(fullText)) !== null) {
+        const matchEndIndex = commandRegex.lastIndex;
+
+        // Only consider commands that end after our last processed point.
+        if (matchEndIndex > lastProcessedIndex) {
+            newCommandsFound.push({
+                command: match[1].trim(),
+                endIndex: matchEndIndex,
+            });
+        }
+    }
+
+    // Now, if any new commands were found, process the last one.
+    if (newCommandsFound.length > 0) {
+        const finalCommand = newCommandsFound[newCommandsFound.length - 1];
+        await findAndSetBackgroundByName(finalCommand.command);
+
+        // Update our high-water mark to the end of this last command.
+        newLastProcessedIndex = finalCommand.endIndex;
+    }
+
+    return newLastProcessedIndex;
+}
+
 class StreamingProcessor {
     /**
      * Creates a new streaming processor.
@@ -2848,6 +2894,7 @@ class StreamingProcessor {
         this.promptReasoning = promptReasoning;
         /** @type {string} */
         this.image = '';
+        this.lastProcessedIndex = 0;
     }
 
     /**
@@ -2906,6 +2953,8 @@ class StreamingProcessor {
     }
 
     async onProgressStreaming(messageId, text, isFinal) {
+        this.lastProcessedIndex = await processLiveBackgroundCommands(text, this.lastProcessedIndex);
+
         const isImpersonate = this.type == 'impersonate';
         const isContinue = this.type == 'continue';
 
