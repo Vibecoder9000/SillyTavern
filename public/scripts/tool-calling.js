@@ -363,39 +363,6 @@ function registerBuiltinTools() {
             },
         },
         {
-            name: 'delete_file',
-            description: 'Deletes a file from the user\'s uploaded files. This action is permanent and cannot be undone. Use with caution and explicit user permission.',
-            parameters: {
-                'type': 'object',
-                'properties': {
-                    'filepath': {
-                        'type': 'string',
-                        'description': 'The path to the file to delete, relative to the uploads directory.',
-                    },
-                },
-                'required': ['filepath'],
-            },
-            action: async ({ filepath }) => {
-                try {
-                    const response = await fetch('/api/extensions/tools/deletefile', {
-                        method: 'POST',
-                        headers: getRequestHeaders(),
-                        body: JSON.stringify({ filepath }),
-                    });
-
-                    const result = await response.json();
-
-                    if (!response.ok) {
-                        return `Error: ${result.error || 'An unknown error occurred.'}`;
-                    }
-
-                    return result.message;
-                } catch (error) {
-                    return `Error: Could not connect to the server to delete the file. ${error.message}`;
-                }
-            },
-        },
-        {
             name: 'display_image',
             description: 'Displays an image or video to the user from the uploaded files.',
             parameters: {
@@ -517,7 +484,7 @@ function registerBuiltinTools() {
             },
         },
     ];
-    const dangerousTools = ['write_file', 'delete_file', 'execute_shell', 'execute_python'];
+    const dangerousTools = ['write_file', 'execute_shell', 'execute_python'];
 
     builtinTools.forEach(tool => {
         // This is the security gate.

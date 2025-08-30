@@ -9,6 +9,22 @@ export const router = express.Router();
 
 const SANDBOX_DIR = path.resolve(path.join(serverDirectory, 'uploads'));
 
+const COMMAND_DENYLIST = new Set([
+    'rm',
+    'mv',
+    'shred',
+    'dd',
+    'truncate',
+    'chmod',
+    'chown',
+    'del',
+    'erase',
+    'move',
+    'rename',
+    'ren',
+    'icacls',
+]);
+
 /**
  * Safely checks if a given path is within the designated sandbox directory.
  * It resolves the path and uses fs.realpath to prevent path traversal
@@ -154,38 +170,6 @@ router.post('/writefile', async (req, res) => {
     }
 });
 
-router.post('/deletefile', async (req, res) => {
-    let { filepath } = req.body;
-
-    if (!filepath) {
-        return res.status(400).json({ error: 'filepath is required.' });
-    }
-
-    if (filepath.startsWith('/')) {
-        filepath = filepath.substring(1);
-    }
-
-    if (!(await isPathInSandbox(filepath, { checkExists: true }))) {
-        return res.status(403).json({ error: 'Access denied: Path is outside the sandbox.' });
-    }
-
-    try {
-        const fullPath = path.join(SANDBOX_DIR, filepath);
-        await fs.unlink(fullPath);
-        res.json({ message: `Successfully deleted file: ${filepath}` });
-    } catch (error) {
-        if (error.code === 'ENOENT') {
-            res.status(404).json({ error: `File not found: ${filepath}` });
-        } else if (error.code === 'EISDIR') {
-            res.status(400).json({ error: `Cannot delete a directory with this tool: ${filepath}` });
-        }
-        else {
-            console.error(`Error deleting file "${filepath}":`, error);
-            res.status(500).json({ error: 'An error occurred while deleting the file.' });
-        }
-    }
-});
-
 /**
  * Executes a command safely using `spawn` and returns a promise.
  * It splits the command string into an executable and arguments, and crucially
@@ -202,6 +186,14 @@ function spawnPromise(command, options) {
 
         if (!cmd) {
             return reject(new Error("Command cannot be empty."));
+        }
+
+        const normalizedCmd = path.basename(cmd).toLowerCase();
+
+        if (COMMAND_DENYLIST.has(normalizedCmd)) {
+            const errorMessage = `Error: The command "${normalizedCmd}" is forbidden for security reasons.`;
+            console.warn(`Blocked forbidden command: ${command}`);
+            return reject(new Error(errorMessage));
         }
 
         const childProcess = spawn(cmd, args, {
@@ -262,6 +254,11 @@ router.post('/executeshell', async (req, res) => {
     } catch (error) {
         console.error(`Error executing command "${command}":`, error);
         const fullOutput = (error.stdout || '') + (error.stderr || '');
+
+        if (error.message.includes('forbidden for security reasons')) {
+            return res.status(403).json({ output: error.message });
+        }
+
         res.json({ output: fullOutput || `Command failed with error: ${error.message}` });
     }
 });
