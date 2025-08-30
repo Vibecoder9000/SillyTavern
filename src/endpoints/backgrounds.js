@@ -5,7 +5,6 @@ import sanitize from 'sanitize-filename';
 import multer from 'multer';
 
 import { UPLOADS_DIRECTORY } from '../constants.js';
-import { dimensions, invalidateThumbnail } from './thumbnails.js';
 import { getImages } from '../util.js';
 
 import writeFileAtomic from 'write-file-atomic';
