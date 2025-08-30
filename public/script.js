@@ -1913,11 +1913,18 @@ export function appendMediaToMessage(mes, messageElement, adjustScroll = true) {
 
     // Add video to message
     if (mes.extra?.video) {
-        const container = $('#message_video_template .mes_video_container').clone();
-        messageElement.find('.mes_video_container').remove();
-        messageElement.find('.mes_block').append(container);
+        // Use the image container as it's guaranteed to exist in the template.
+        const container = messageElement.find('.mes_img_container');
+        container.empty(); // Clear any existing content (like the default <img>).
+
+        const video = $('<video class="mes_video" controls></video>');
+        container.append(video);
+
+        // Hide the main text container to prevent it from showing as an empty box.
+        const text = messageElement.find('.mes_text');
+        text.addClass('displayNone');
+
         const chatHeight = $('#chat').prop('scrollHeight');
-        const video = container.find('.mes_video');
         video.off('loadedmetadata').on('loadedmetadata', function () {
             if (!adjustScroll) {
                 return;
@@ -1929,7 +1936,9 @@ export function appendMediaToMessage(mes, messageElement, adjustScroll = true) {
         });
 
         video.attr('src', mes.extra?.video);
+        container.addClass('img_extra');
     } else {
+        // This is now redundant as we are reusing the image container, but safe to keep.
         messageElement.find('.mes_video_container').remove();
     }
 
@@ -7331,6 +7340,7 @@ function updateMessage(div) {
         // Reconstruct the full message with the original think block and the new tool block.
         mes.mes = thinkBlock + text;
     } else if (mes.extra?.is_tool_result) {
+        // For media results, there's no text content to save, so we only update the text representation.
         mes.extra.tool_result_content = text;
         mes.mes = `<tool_result>\n${text}\n</tool_result>`;
         const bias = ''; // No bias for tool results
