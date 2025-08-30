@@ -4,13 +4,21 @@ import { Buffer } from 'node:buffer';
 import fetch from 'node-fetch';
 import FormData from 'form-data';
 import express from 'express';
+import path from 'node:path';
+import multer from 'multer';
 
+import { UPLOADS_DIRECTORY } from '../constants.js';
 import { getConfigValue, mergeObjectWithYaml, excludeKeysByYaml, trimV1 } from '../util.js';
 import { setAdditionalHeaders } from '../additional-headers.js';
 import { readSecret, SECRET_KEYS } from './secrets.js';
 import { AIMLAPI_HEADERS, OPENROUTER_HEADERS } from '../constants.js';
 
 export const router = express.Router();
+
+const upload = multer({
+    dest: path.join(globalThis.DATA_ROOT, UPLOADS_DIRECTORY),
+    limits: { fieldSize: 500 * 1024 * 1024 },
+});
 
 router.post('/caption-image', async (request, response) => {
     try {
@@ -214,7 +222,7 @@ router.post('/caption-image', async (request, response) => {
     }
 });
 
-router.post('/transcribe-audio', async (request, response) => {
+router.post('/transcribe-audio', upload.single('file'), async (request, response) => {
     try {
         const key = readSecret(request.user.directories, SECRET_KEYS.OPENAI);
 

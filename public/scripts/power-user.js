@@ -9,7 +9,6 @@ import {
     getRequestHeaders,
     substituteParams,
     eventSource,
-    event_types,
     getCurrentChatId,
     printCharactersDebounced,
     setCharacterId,
@@ -30,6 +29,7 @@ import {
     extension_prompt_types,
     extension_prompt_roles,
 } from '../script.js';
+import { event_types } from './events.js';
 import { isMobile, initMovingUI, favsToHotswap } from './RossAscends-mods.js';
 import {
     groups,
@@ -335,6 +335,8 @@ export const power_user = {
     external_media_forbidden_overrides: [],
     pin_styles: true,
     click_to_edit: false,
+    hide_tool_messages: false,
+    enable_dangerous_tools: false,
 };
 
 let themes = [];
@@ -1709,6 +1711,9 @@ export async function loadPowerUserSettings(settings, data) {
     $('#forbid_external_media').prop('checked', power_user.forbid_external_media);
     $('#pin_styles').prop('checked', power_user.pin_styles);
     $('#click_to_edit').prop('checked', power_user.click_to_edit);
+    $('#hide_tool_messages').prop('checked', power_user.hide_tool_messages);
+    $('body').toggleClass('hide-tool-messages', power_user.hide_tool_messages);
+    $('#enable_dangerous_tools').prop('checked', power_user.enable_dangerous_tools);
 
     for (const theme of themes) {
         const option = document.createElement('option');
@@ -4089,6 +4094,18 @@ jQuery(() => {
 
     $('#click_to_edit').on('input', function () {
         power_user.click_to_edit = !!$(this).prop('checked');
+        saveSettingsDebounced();
+    });
+
+    $('#hide_tool_messages').on('input', function () {
+        power_user.hide_tool_messages = !!$(this).prop('checked');
+        $('body').toggleClass('hide-tool-messages', power_user.hide_tool_messages);
+        saveSettingsDebounced();
+    });
+
+    $('#enable_dangerous_tools').on('input', function () {
+        power_user.enable_dangerous_tools = !!$(this).prop('checked');
+        eventSource.emit(event_types.DANGEROUS_TOOLS_TOGGLED);
         saveSettingsDebounced();
     });
 

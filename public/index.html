@@ -40,6 +40,8 @@
     <link rel="stylesheet" type="text/css" href="css/toggle-dependent.css">
     <link rel="stylesheet" type="text/css" href="css/world-info.css">
     <link rel="stylesheet" type="text/css" href="css/extensions-panel.css">
+    <link rel="stylesheet" type="text/css" href="css/tool-calling.css">
+    <link rel="stylesheet" type="text/css" href="css/drag-drop.css">
     <link rel="stylesheet" type="text/css" href="css/select2-overrides.css">
     <link rel="stylesheet" type="text/css" href="css/mobile-styles.css">
     <link rel="stylesheet" type="text/css" href="css/user.css">
@@ -691,7 +693,7 @@
                                         </span>
                                     </div>
                                 </div>
-                                <div class="range-block" data-source="openai,claude,aimlapi,openrouter,ai21,makersuite,vertexai,mistralai,custom,cohere,perplexity,groq,nanogpt,deepseek,xai,pollinations,moonshot,fireworks,cometapi">
+                                <div class="range-block" data-source="openai,claude,aimlapi,openrouter,ai21,makersuite,vertexai,mistralai,custom,cohere,perplexity,groq,nanogpt,deepseek,xai,pollinations,moonshot,fireworks">
                                     <div class="range-block-title" data-i18n="Temperature">
                                         Temperature
                                     </div>
@@ -704,7 +706,7 @@
                                         </div>
                                     </div>
                                 </div>
-                                <div class="range-block" data-source="openai,aimlapi,openrouter,custom,cohere,perplexity,groq,mistralai,nanogpt,deepseek,xai,pollinations,moonshot,fireworks,cometapi">
+                                <div class="range-block" data-source="openai,aimlapi,openrouter,custom,cohere,perplexity,groq,mistralai,nanogpt,deepseek,xai,pollinations,moonshot,fireworks">
                                     <div class="range-block-title" data-i18n="Frequency Penalty">
                                         Frequency Penalty
                                     </div>
@@ -717,7 +719,7 @@
                                         </div>
                                     </div>
                                 </div>
-                                <div class="range-block" data-source="openai,aimlapi,openrouter,custom,cohere,perplexity,groq,mistralai,nanogpt,deepseek,xai,pollinations,moonshot,fireworks,cometapi">
+                                <div class="range-block" data-source="openai,aimlapi,openrouter,custom,cohere,perplexity,groq,mistralai,nanogpt,deepseek,xai,pollinations,moonshot,fireworks">
                                     <div class="range-block-title" data-i18n="Presence Penalty">
                                         Presence Penalty
                                     </div>
@@ -743,7 +745,7 @@
                                         </div>
                                     </div>
                                 </div>
-                                <div class="range-block" data-source="openai,claude,aimlapi,openrouter,ai21,makersuite,vertexai,mistralai,custom,cohere,perplexity,groq,nanogpt,deepseek,xai,pollinations,moonshot,fireworks,cometapi">
+                                <div class="range-block" data-source="openai,claude,aimlapi,openrouter,ai21,makersuite,vertexai,mistralai,custom,cohere,perplexity,groq,nanogpt,deepseek,xai,pollinations,moonshot,fireworks">
                                     <div class="range-block-title" data-i18n="Top P">
                                         Top P
                                     </div>
@@ -1984,22 +1986,7 @@
                                             </b>
                                         </div>
                                     </div>
-                                    <div class="range-block" data-source="openai,cohere,mistralai,custom,claude,aimlapi,openrouter,groq,deepseek,makersuite,vertexai,ai21,xai,pollinations,moonshot,fireworks,cometapi">
-                                        <label for="openai_function_calling" class="checkbox_label flexWrap widthFreeExpand">
-                                            <input id="openai_function_calling" type="checkbox" />
-                                            <span data-i18n="Enable function calling">Enable function calling</span>
-                                            <div id="openai_function_calling_supported" data-cc-toggle="false">
-                                                <i class="icon-supported fa-solid fa-circle-check" title="Supported by the current model" data-i18n="[title]Supported by the current model"></i>
-                                                <i class="icon-unsupported fa-solid fa-circle-exclamation" title="Unsupported by the current model" data-i18n="[title]Unsupported by the current model"></i>
-                                            </div>
-                                        </label>
-                                        <div class="flexBasis100p toggle-description justifyLeft">
-                                            <span data-i18n="enable_functions_desc_1">Allows using </span><a href="https://platform.openai.com/docs/guides/function-calling" target="_blank" data-i18n="enable_functions_desc_2">function tools</a>.
-                                            <span data-i18n="enable_functions_desc_3">Can be utilized by various extensions to provide additional functionality.</span>
-                                            <strong data-i18n="enable_functions_desc_4">Not supported when Prompt Post-Processing with "no tools" is used!</strong>
-                                        </div>
-                                    </div>
-                                    <div class="range-block" data-source="openai,aimlapi,openrouter,mistralai,makersuite,vertexai,claude,custom,xai,pollinations,moonshot,cohere,cometapi">
+                                    <div class="range-block" data-source="openai,aimlapi,openrouter,mistralai,makersuite,vertexai,claude,custom,xai,pollinations,moonshot,cohere">
                                         <label for="openai_image_inlining" class="checkbox_label flexWrap widthFreeExpand">
                                             <input id="openai_image_inlining" type="checkbox" />
                                             <span data-i18n="Send inline images">Send inline images</span>
@@ -2077,7 +2064,7 @@
                                             </span>
                                         </div>
                                     </div>
-                                    <div class="range-block" data-source="deepseek,aimlapi,openrouter,custom,claude,xai,makersuite,vertexai,pollinations,moonshot,mistralai,fireworks,cometapi">
+                                    <div class="range-block" data-source="deepseek,aimlapi,openrouter,custom,claude,xai,makersuite,vertexai,pollinations,moonshot,mistralai,fireworks">
                                         <label for="openai_show_thoughts" class="checkbox_label widthFreeExpand">
                                             <input id="openai_show_thoughts" type="checkbox" />
                                             <span data-i18n="Request model reasoning">Request model reasoning</span>
@@ -2091,7 +2078,7 @@
                                             </span>
                                         </div>
                                     </div>
-                                    <div class="flex-container flexFlowColumn wide100p textAlignCenter marginTop10" data-source="openai,custom,claude,xai,makersuite,vertexai,aimlapi,openrouter,pollinations,perplexity,cometapi">
+                                    <div class="flex-container flexFlowColumn wide100p textAlignCenter marginTop10" data-source="openai,custom,claude,xai,makersuite,vertexai,aimlapi,openrouter,pollinations,perplexity">
                                         <div class="flex-container oneline-dropdown" title="Constrains effort on reasoning for reasoning models.&#10;Reducing reasoning effort can result in faster responses and fewer tokens used on reasoning in a response." data-i18n="[title]Constrains effort on reasoning for reasoning models.">
                                             <label for="openai_reasoning_effort">
                                                 <span data-i18n="Reasoning Effort">Reasoning Effort</span>
@@ -2804,8 +2791,6 @@
                                 <option value="aimlapi">AI/ML API</option>
                                 <option value="claude">Claude</option>
                                 <option value="cohere">Cohere</option>
-                                <!-- Temporarily disabled. -->
-                                <!-- <option value="cometapi">CometAPI</option> -->
                                 <option value="deepseek">DeepSeek</option>
                                 <option value="fireworks">Fireworks AI</option>
                                 <option value="groq">Groq</option>
@@ -3178,7 +3163,6 @@
                                         <option value="gemini-2.5-flash-preview-04-17">gemini-2.5-flash-preview-04-17</option>
                                         <option value="gemini-2.5-flash-lite">gemini-2.5-flash-lite</option>
                                         <option value="gemini-2.5-flash-lite-preview-06-17">gemini-2.5-flash-lite-preview-06-17</option>
-                                        <option value="gemini-2.5-flash-image-preview">gemini-2.5-flash-image-preview</option>
                                     </optgroup>
                                     <optgroup label="Gemini 2.0">
                                         <option value="gemini-2.0-pro-exp-02-05">gemini-2.0-pro-exp-02-05 → 2.5-pro-exp-03-25</option>
@@ -3357,7 +3341,6 @@
                                         <option value="gemini-2.5-flash-preview-04-17">gemini-2.5-flash-preview-04-17</option>
                                         <option value="gemini-2.5-flash-lite">gemini-2.5-flash-lite</option>
                                         <option value="gemini-2.5-flash-lite-preview-06-17">gemini-2.5-flash-lite-preview-06-17</option>
-                                        <option value="gemini-2.5-flash-image-preview">gemini-2.5-flash-image-preview</option>
                                     </optgroup>
                                     <optgroup label="Gemini 2.0">
                                         <option value="gemini-2.0-flash-exp" data-mode="full">gemini-2.0-flash-exp</option>
@@ -3517,24 +3500,6 @@
                                 <select id="model_fireworks_select">
                                     <option value="" data-i18n="-- Connect to the API --">-- Connect to the API --</option>
                                 </select>
-                            </div>
-                        </div>
-                        <div id="cometapi_form" data-source="cometapi">
-                            <h4><a href="https://api.cometapi.com/" target="_blank" rel="noopener noreferrer" data-i18n="CometAPI API Key">CometAPI API Key</a></h4>
-                            <div class="flex-container">
-                                <input id="api_key_cometapi" name="api_key_cometapi" class="text_pole flex1" value="" type="text" autocomplete="off">
-                                <div title="Manage API keys" data-i18n="[title]Manage API keys" class="menu_button fa-solid fa-key fa-fw manage-api-keys" data-key="api_key_cometapi"></div>
-                            </div>
-                            <div data-for="api_key_cometapi" class="neutral_warning" data-i18n="For privacy reasons, your API key will be hidden after you click 'Connect'.">
-                                For privacy reasons, your API key will be hidden after you click 'Connect'.
-                            </div>
-                            <div>
-                                <h4 data-i18n="CometAPI Model">CometAPI Model</h4>
-                                <div class="flex-container">
-                                    <select id="model_cometapi_select" class="flex1">
-                                        <option value="" data-i18n="-- Connect to the API --">-- Connect to the API --</option>
-                                    </select>
-                                </div>
                             </div>
                         </div>
                         <div id="perplexity_form" data-source="perplexity">
@@ -4826,6 +4791,45 @@
                                     <input id="click_to_edit" type="checkbox" />
                                     <small data-i18n="Click to Edit">Click to Edit</small>
                                 </label>
+                            </div>
+                        </div>
+                        <div class="inline-drawer wide100p flexFlowColumn">
+                            <div class="inline-drawer-toggle inline-drawer-header userSettingsInnerExpandable" title="Settings for the Tool Calling feature." data-i18n="[title]Settings for the Tool Calling feature.">
+                                <b><span data-i18n="Tool Calling">Tool Calling</span></b>
+                                <div class="fa-solid fa-circle-chevron-down inline-drawer-icon down"></div>
+                            </div>
+                            <div class="inline-drawer-content">
+                                <label class="checkbox_label" for="openai_function_calling" data-source="openai,cohere,mistralai,custom,claude,aimlapi,openrouter,groq,deepseek,makersuite,vertexai,ai21,xai,pollinations,moonshot,fireworks" title="Allows using API-specific function tools. Can be utilized by various extensions to provide additional functionality. Not supported when Prompt Post-Processing with 'no tools' is used!" data-i18n="[title]Allows using API-specific function tools. Can be utilized by various extensions to provide additional functionality. Not supported when Prompt Post-Processing with 'no tools' is used!">
+                                    <input id="openai_function_calling" type="checkbox" />
+                                    <small data-i18n="Enable API Function Calling">Enable API Function Calling</small>
+                                    <div id="openai_function_calling_supported" data-cc-toggle="false">
+                                        <i class="icon-supported fa-solid fa-circle-check" title="Supported by the current model" data-i18n="[title]Supported by the current model"></i>
+                                        <i class="icon-unsupported fa-solid fa-circle-exclamation" title="Unsupported by the current model" data-i18n="[title]Unsupported by the current model"></i>
+                                    </div>
+                                </label>
+                                <label class="checkbox_label" for="tool_calling" title="Replace the API tool calling with inserting tools info into the system prompt and detecting <tool> tags. This is API and model agnostic." data-i18n="[title]Replace the API tool calling with inserting tools info into the system prompt and detecting <tool> tags. This is API and model agnostic.">
+                                    <input id="tool_calling" type="checkbox" />
+                                    <small data-i18n="Native Tool Calling">Native Tool Calling</small>
+                                </label>
+                                <hr>
+                                <div id="tool_calling_dependent_settings">
+                                    <label class="checkbox_label" for="hide_tool_messages" title="Hide tool call and result messages from the chat view. They will still be part of the chat history for the AI." data-i18n="[title]Hide tool call and result messages from the chat view. They will still be part of the chat history for the AI.">
+                                        <input id="hide_tool_messages" type="checkbox" />
+                                        <small data-i18n="Hide tool calls and results">Hide tool calls and results</small>
+                                    </label>
+                                    <label class="checkbox_label" for="enable_dangerous_tools" title="Enabling this allows the AI to execute code and modify files on the server." data-i18n="[title]WARNING: Enabling this allows the AI to execute code and modify files on the server. Use with extreme caution.">
+                                        <input id="enable_dangerous_tools" type="checkbox" />
+                                        <small data-i18n="Enable dangerous tools">Enable dangerous tools</small>
+                                    </label>
+                                </div>
+                                <div class="alignitemscenter flex-container flexFlowColumn wide100p gap0" style="margin-top: 10px;">
+                                    <small>
+                                        <span data-i18n="Output Limit">Output Limit</span>
+                                        <div class="fa-solid fa-circle-info opacity50p" data-i18n="[title]Maximum number of tokens for a single tool output before it is truncated. Set to 0 to disable." title="Maximum number of tokens for a single tool output before it is truncated. Set to 0 to disable."></div>
+                                    </small>
+                                    <input class="neo-range-slider" type="range" id="tool_output_truncation_limit" name="tool_output_truncation_limit" min="0" max="65536" step="256" value="4092">
+                                    <input class="neo-range-input" type="number" min="0" max="65536" step="256" data-for="tool_output_truncation_limit" id="tool_output_truncation_limit_counter" value="4092">
+                                </div>
                             </div>
                         </div>
                     </div>
@@ -6439,7 +6443,7 @@
                                         </span>
                                         <div class="flex-container">
                                             <div class="flex-container flexFlowColumn">
-                                                <label class="checkbox flex-container alignitemscenter flexNoGap" data-i18n="[title]This entry will not be recursively activated by other entries." title="This entry will not be recursively activated by other entries.">
+                                                <label class="checkbox flex-container alignitemscenter flexNoGap" title="This entry will not be recursively activated by other entries.">
                                                     <input type="checkbox" name="excludeRecursion" />
                                                     <span data-i18n="Non-recursable">
                                                         Non-recursable
@@ -7567,6 +7571,7 @@
                     <div class="file_attached">
                         <input id="file_form_input" type="file" hidden>
                         <input id="embed_file_input" type="file" hidden>
+                        <input id="sandbox_upload_input" type="file" hidden multiple>
                         <i class="fa-solid fa-file-alt"></i>
                         <span class="file_name">File Name</span>
                         <span class="file_size">File Size</span>
@@ -7600,6 +7605,14 @@
                 </div>
             </div>
         </div>
+    </div>
+    <div id="drop_zone_container" class="displayNone">
+            <div id="sandbox_drop_zone">
+                    <h2>
+                            <span data-i18n="Drop here to upload to SillyTavern">Drop here to upload to SillyTavern</span>
+                            <span data-i18n="Drop elsewhere to import character">Drop elsewhere to import character</span>
+                    </h2>
+            </div>
     </div>
     <!-- popups live outside sheld to avoid blur conflicts -->
     <div id="options" class="font-family-reset" style="display: none;">
@@ -7661,6 +7674,10 @@
             <a id="option_impersonate" title="Ask AI to write your message for you" data-i18n="[title]Ask AI to write your message for you">
                 <i class="fa-lg fa-solid fa-user-secret"></i>
                 <span data-i18n="Impersonate">Impersonate</span>
+            </a>
+            <a id="option_upload" title="Upload a file to SillyTavern" data-i18n="[title]Upload a file to SillyTavern">
+                <i class="la-lg fa-solid fa-upload"></i>
+                <span data-i18n="Upload file">Upload file</span>
             </a>
             <a id="option_continue" title="Continue the last message" data-i18n="[title]Continue the last message">
                 <i class="fa-lg fa-solid fa-arrow-right"></i>
