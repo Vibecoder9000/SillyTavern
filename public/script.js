@@ -305,7 +305,6 @@ export {
     eventSource,
 };
 
-// TO ADD TO USER SETTINGS
 const TRUNCATION_NOTE = '\n[truncated- tool per-output length limit reached]\n';
 
 /**
@@ -4235,7 +4234,7 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
         is_send_press = true;
     }
 
-    generatedPromptCache += cyclePrompt;
+    let generatedPromptCache = cyclePrompt || '';
     if (generatedPromptCache.length == 0 || type === 'continue') {
         console.debug('generating prompt');
         chatString = '';
@@ -5521,7 +5520,13 @@ function extractImageFromData(data, { mainApi = null, chatCompletionSource = nul
                         return `data:${inlineData.mimeType};base64,${inlineData.data}`;
                     }
                 } break;
-
+                case chat_completion_sources.OPENROUTER: {
+                    const imageUrl = data?.choices[0]?.message?.images?.find(x => x.type === 'image_url')?.image_url?.url;
+                    if (isDataURL(imageUrl)) {
+                        return imageUrl;
+                    }
+                    // TODO: Handle remote URLs
+                }
             }
         } break;
     }
@@ -5806,30 +5811,18 @@ export function cleanUpMessage({ getMessage, isImpersonate, isContinue, displayI
             getMessage = getMessage.substring(0, getMessage.indexOf(power_user.instruct.input_sequence));
         }
     }
-    if (isInstruct && power_user.instruct.input_sequence && isImpersonate) {
-        //getMessage = getMessage.replaceAll(power_user.instruct.input_sequence, '');
-        power_user.instruct.input_sequence.split('\n')
-            .filter(line => line.trim() !== '')
-            .forEach(line => {
-                getMessage = getMessage.replaceAll(line, '');
-            });
+    // Remove instruct sequences leaking to the output
+    if (isInstruct && power_user.instruct.sequences_as_stop_strings) {
+        const sequences = [
+            { value: power_user.instruct.input_sequence, apply: isImpersonate && isNotEmpty(power_user.instruct.input_sequence) },
+            { value: power_user.instruct.output_sequence, apply: !isImpersonate && isNotEmpty(power_user.instruct.output_sequence) },
+            { value: power_user.instruct.last_output_sequence, apply: !isImpersonate && isNotEmpty(power_user.instruct.last_output_sequence) },
+        ];
+        for (const seq of sequences.filter(s => s.apply)) {
+            seq.value.split('\n').filter(line => line.trim() !== '').forEach(line => { getMessage = getMessage.replaceAll(line, ''); });
+        }
     }
-    if (isInstruct && power_user.instruct.output_sequence && !isImpersonate) {
-        //getMessage = getMessage.replaceAll(power_user.instruct.output_sequence, '');
-        power_user.instruct.output_sequence.split('\n')
-            .filter(line => line.trim() !== '')
-            .forEach(line => {
-                getMessage = getMessage.replaceAll(line, '');
-            });
-    }
-    if (isInstruct && power_user.instruct.last_output_sequence && !isImpersonate) {
-        //getMessage = getMessage.replaceAll(power_user.instruct.last_output_sequence, '');
-        power_user.instruct.last_output_sequence.split('\n')
-            .filter(line => line.trim() !== '')
-            .forEach(line => {
-                getMessage = getMessage.replaceAll(line, '');
-            });
-    }
+
     // clean-up group message from excessive generations
     if (selected_group) {
         getMessage = cleanGroupMessage(getMessage);
@@ -7313,7 +7306,8 @@ export function setGenerationParamsFromPreset(preset) {
 // Common code for message editor done and auto-save
 function updateMessage(div) {
     const mesBlock = div.closest('.mes_block');
-    const text = $('#curEditTextarea').val();
+    let text = mesBlock.find('.edit_textarea').val()
+        ?? mesBlock.find('.mes_text').text();
     const mesElement = div.closest('.mes');
     const mes = chat[mesElement.attr('mesid')];
 
@@ -11332,7 +11326,7 @@ jQuery(async function () {
                 }
             } break;
             case 'replace_update': {
-                const confirm = await Popup.show.confirm('Replace Character', '<p>Choose a new character card to replace this character with.</p>All chats, assets and group memberships will be preserved, but local changes to the character data will be lost.<br />Proceed?');
+                const confirm = await Popup.show.confirm(t`Replace Character`, '<p>' + t`Choose a new character card to replace this character with.` + '</p>' + t`All chats, assets and group memberships will be preserved, but local changes to the character data will be lost.` + '<br />' + t`Proceed?`);
                 if (confirm) {
                     async function uploadReplacementCard(e) {
                         const file = e.target.files[0];

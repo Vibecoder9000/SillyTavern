@@ -260,7 +260,7 @@
                         <span data-i18n="Click to set">Click to set</span>
                     </div>
                 </div>
-                <label class="checkbox_label marginBot5" for="sd_bfl_upsampling" title="Whether to perform upsampling on the prompt. If active, automatically modifies the prompt for more creative generation.">
+                <label class="checkbox_label marginBot5" for="sd_bfl_upsampling" data-i18n="[title]Whether to perform upsampling on the prompt. If active, automatically modifies the prompt for more creative generation." title="Whether to perform upsampling on the prompt. If active, automatically modifies the prompt for more creative generation.">
                     <input id="sd_bfl_upsampling" type="checkbox" />
                     <span data-i18n="Prompt Upsampling">
                         Prompt Upsampling
@@ -450,6 +450,10 @@
                 <label class="flex1 checkbox_label" for="sd_novel_decrisper" title="Reduce artifacts caused by high guidance values.">
                     <input id="sd_novel_decrisper" type="checkbox" />
                     <small data-i18n="Decrisper">Decrisper</small>
+                </label>
+                <label class="flex1 checkbox_label" data-i18n="[title]Enable guidance only after body has been formed, to improve diversity and saturation of samples. May reduce relevance" title="Enable guidance only after body has been formed, to improve diversity and saturation of samples. May reduce relevance">
+                    <input id="sd_novel_variety_boost" type="checkbox" />
+                    <small data-i18n="Variety+">Variety+</small>
                 </label>
             </div>
 
