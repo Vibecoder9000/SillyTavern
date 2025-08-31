@@ -1,5 +1,4 @@
-/* This is the main flex container for the entire drawer.
-   It establishes the column layout and fixed height needed for internal scrolling. */
+/* This is the main flex container for the entire drawer */
 #Backgrounds.drawer-content.openDrawer.bg-drawer-layout {
     display: flex;
     flex-direction: column;
@@ -14,7 +13,7 @@
 }
 
 #bg-header-fixed {
-    flex-shrink: 0; /* Prevent header from shrinking */
+    flex-shrink: 0;
     padding: 5px;
     background-color: var(--SmartThemeBlurTintColor);
     border-bottom: 1px solid var(--SmartThemeBorderColor);
@@ -26,7 +25,6 @@
     gap: 5px;
 }
 
-/* This container will grow to fill available space and handle its own scrolling. */
 #bg-scrollable-content {
     flex-grow: 1;
     overflow-y: auto;
