@@ -19,7 +19,7 @@
     border-bottom: 1px solid var(--SmartThemeBorderColor);
 }
 
-#bg-header-fixed > .flex-container {
+#bg-header-fixed>.flex-container {
     display: flex;
     align-items: center;
     gap: 5px;
@@ -30,4 +30,8 @@
     overflow-y: auto;
     overflow-x: hidden;
     padding: 0 5px 5px;
+}
+
+#bg-filter {
+    font-size: calc(var(--mainFontSize) * 0.95);
 }

@@ -30,12 +30,12 @@
         row-gap: 10px;
     }
 
-    #bg-header-fixed > .flex-container {
+    #bg-header-fixed>.flex-container {
         flex-wrap: wrap;
         row-gap: 0px;
     }
 
-    #Backgrounds:not(.selection-mode-active) #bg-header-fixed > .flex-container::after {
+    #Backgrounds:not(.selection-mode-active) #bg-header-fixed>.flex-container::after {
         content: '';
         order: 1;
         flex-basis: 100%;
@@ -43,30 +43,30 @@
     }
 
     /* --- Row 1 Item --- */
-    .standard-mode-item[data-i18n="Backgrounds"] {
+    #bg-header-fixed #bg-header-title {
         order: 1;
         flex-grow: 1;
     }
-    .standard-mode-item#background_fitting,
-    .standard-mode-item#auto_background {
+
+    #bg-header-fixed #background_fitting,
+    #bg-header-fixed #auto_background {
         order: 1;
     }
 
     /* --- Row 2 Item --- */
-    .standard-mode-item#bg-filter {
+    #bg-header-fixed #bg-filter {
         order: 2;
         flex-grow: 1;
         min-width: 0;
     }
 
     /* --- Row 3 Item --- */
-    .standard-mode-item#add_background_button_top {
+    #bg-header-fixed #add_background_button_top {
         order: 3;
         width: 100%;
         text-align: center;
-        padding-top: 0.8rem;
-        padding-bottom: 0.8rem;
-        font-size: 1.1em;
+        padding-top: 0.5em;
+        padding-bottom: 0.5em;
     }
 
     #Backgrounds.drawer-content.openDrawer.bg-drawer-layout {
