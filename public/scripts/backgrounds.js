@@ -15,6 +15,8 @@ const PNG_PIXEL = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkY
 const PNG_PIXEL_BLOB = new Blob([Uint8Array.from(atob(PNG_PIXEL), c => c.charCodeAt(0))], { type: 'image/png' });
 const PLACEHOLDER_IMAGE = `url('data:image/png;base64,${PNG_PIXEL}')`;
 
+let backgroundSearcher = null;
+
 /**
  * Storage for frontend-generated background thumbnails.
  * This is used to store thumbnails for backgrounds that cannot be generated on the server.
@@ -394,6 +396,7 @@ async function onDeleteBackgroundClick(e) {
         }
 
         bgToDelete.remove();
+        backgroundSearcher = null;
 
         if (url === chat_metadata[BG_METADATA_KEY]) {
             removeBackgroundMetadata();
@@ -458,6 +461,7 @@ export async function getBackgrounds() {
             $('#bg_menu_content').append(template);
         }
         activateLazyLoader();
+        backgroundSearcher = null;
     }
 }
 
@@ -695,6 +699,78 @@ function onBackgroundFilterInput() {
             $bgContent.hide();
         }
     });
+}
+
+function buildBackgroundSearchIndex() {
+    const bgElements = Array.from(document.querySelectorAll('#bg_menu_content .bg_example, #bg_custom_content .bg_example'));
+
+    const options = bgElements.map(el => {
+        const bgFile = el.getAttribute('bgfile');
+        const titleEl = el.querySelector('.BGSampleTitle');
+        const text = titleEl ? titleEl.innerText.trim() : (bgFile ? bgFile.substring(0, bgFile.lastIndexOf('.')) : '');
+        return { element: el, text: text, bgfile: bgFile };
+    }).filter(x => x.text && x.text.length > 0);
+
+    if (options.length === 0) {
+        console.warn('[LiveBG] No backgrounds available to build search index.');
+        backgroundSearcher = null; // Reset if no options are found
+        return;
+    }
+
+    backgroundSearcher = {
+        fuse: new Fuse(options, { keys: ['text'], threshold: 0.4 }),
+        options: options, // Cache raw options for fallback search
+    };
+}
+
+/**
+ * Finds a background by a partial name from the existing panel and applies it.
+ * @param {string} name - The partial or full name of the background to find.
+ * @returns {Promise<boolean>} - True on success, false on failure.
+ */
+export async function findAndSetBackgroundByName(name) {
+    if (!backgroundSearcher) {
+        buildBackgroundSearchIndex();
+    }
+
+    if (!backgroundSearcher) {
+        console.warn('[LiveBG] Background searcher not available.');
+        return false;
+    }
+
+    const { fuse, options } = backgroundSearcher;
+    const searchResults = fuse.search(name, { limit: 1 });
+
+    let bestMatch = null;
+
+    if (searchResults.length > 0) {
+        bestMatch = searchResults[0].item;
+    } else {
+        // Use the cached options for the fallback search to avoid another DOM query
+        const fallbackMatch = options.find(option => option.text.toLowerCase().includes(name.toLowerCase()));
+        if (fallbackMatch) {
+            bestMatch = fallbackMatch;
+        }
+    }
+
+    if (!bestMatch) {
+        console.warn(`[LiveBG] No background found matching "${name}".`);
+        return false;
+    }
+
+    const matchedElement = $(bestMatch.element);
+
+    const scrollContainer = matchedElement.closest('#Backgrounds');
+    if (scrollContainer.length) {
+        scrollContainer.animate({
+            scrollTop: matchedElement.offset().top - scrollContainer.offset().top + scrollContainer.scrollTop()
+        }, 300);
+    }
+
+    flashHighlight(matchedElement);
+    matchedElement.trigger('click');
+
+    return true;
 }
 
 export function initBackgrounds() {
