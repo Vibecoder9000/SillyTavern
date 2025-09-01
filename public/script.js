@@ -3078,7 +3078,6 @@ class StreamingProcessor {
 
                 this.toolCalls = toolCalls;
                 this.result = text;
-                this.lastProcessedIndex = await processLiveBackgroundCommands(this.result, this.lastProcessedIndex);
                 this.swipes = Array.from(swipes ?? []);
                 if (logprobs) {
                     this.messageLogprobs.push(...(Array.isArray(logprobs) ? logprobs : [logprobs]));
