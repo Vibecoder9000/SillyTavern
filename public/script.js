@@ -233,7 +233,7 @@ import {
     updatePersonaConnectionsAvatarList,
     isPersonaPanelOpen,
 } from './scripts/personas.js';
-import { getBackgrounds, initBackgrounds, loadBackgroundSettings, background_settings } from './scripts/backgrounds.js';
+import { getBackgrounds, initBackgrounds, loadBackgroundSettings, background_settings, findAndSetBackgroundByName } from './scripts/backgrounds.js';
 import { hideLoader, showLoader } from './scripts/loader.js';
 import { BulkEditOverlay } from './scripts/BulkEditOverlay.js';
 import { initTextGenModels } from './scripts/textgen-models.js';
@@ -2719,6 +2719,45 @@ function hideStopButton() {
     }
 }
 
+/**
+ * Scans for new background commands in the full text and executes them.
+ * @param {string} fullText The entire cumulative text received so far.
+ * @param {number} lastProcessedIndex The end index of the last command that was successfully processed.
+ * @returns {Promise<number>} The new index to be used as lastProcessedIndex for the next call.
+ */
+async function processLiveBackgroundCommands(fullText, lastProcessedIndex) {
+    const searchStartIndex = Math.max(0, lastProcessedIndex - 20);
+
+    if (!fullText.substring(searchStartIndex).includes('{{image:')) {
+        return lastProcessedIndex;
+    }
+
+    const commandRegex = /\{\{image:(.+?)\}\}/g; // regex for the macro {{image:filename}}
+    commandRegex.lastIndex = searchStartIndex;
+
+    let match;
+    let newLastProcessedIndex = lastProcessedIndex;
+    const newCommandsFound = [];
+
+    while ((match = commandRegex.exec(fullText)) !== null) {
+        const matchEndIndex = commandRegex.lastIndex;
+        if (matchEndIndex > lastProcessedIndex) {
+            newCommandsFound.push({
+                command: match[1].trim(),
+                endIndex: matchEndIndex,
+            });
+        }
+    }
+
+    if (newCommandsFound.length > 0) {
+        const finalCommand = newCommandsFound[newCommandsFound.length - 1];
+        await findAndSetBackgroundByName(finalCommand.command);
+        newLastProcessedIndex = finalCommand.endIndex;
+    }
+
+    return newLastProcessedIndex;
+}
+
 class StreamingProcessor {
     /**
      * Creates a new streaming processor.
@@ -2763,6 +2802,7 @@ class StreamingProcessor {
         this.promptReasoning = promptReasoning;
         /** @type {string} */
         this.image = '';
+        this.lastProcessedIndex = 0;
     }
 
     /**
@@ -2821,6 +2861,7 @@ class StreamingProcessor {
     }
 
     async onProgressStreaming(messageId, text, isFinal) {
+        this.lastProcessedIndex = await processLiveBackgroundCommands(text, this.lastProcessedIndex);
         const isImpersonate = this.type == 'impersonate';
         const isContinue = this.type == 'continue';
 
@@ -4556,6 +4597,7 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
 
         //const getData = await response.json();
         let getMessage = extractMessageFromData(data);
+        await processLiveBackgroundCommands(getMessage, 0);
         let title = extractTitleFromData(data);
         let reasoning = extractReasoningFromData(data);
         let imageUrl = extractImageFromData(data);
