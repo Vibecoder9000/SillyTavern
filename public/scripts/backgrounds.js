@@ -763,7 +763,7 @@ export async function findAndSetBackgroundByName(name) {
     const scrollContainer = matchedElement.closest('#Backgrounds');
     if (scrollContainer.length) {
         scrollContainer.animate({
-            scrollTop: matchedElement.offset().top - scrollContainer.offset().top + scrollContainer.scrollTop()
+            scrollTop: matchedElement.offset().top - scrollContainer.offset().top + scrollContainer.scrollTop(),
         }, 300);
     }
 
