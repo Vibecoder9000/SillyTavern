@@ -2,12 +2,18 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 import express from 'express';
 import sanitize from 'sanitize-filename';
+import multer from 'multer';
+
+import { UPLOADS_DIRECTORY } from '../constants.js';
+import { getImages } from '../util.js';
+
 import writeFileAtomic from 'write-file-atomic';
 import { uuidv4 } from '../util.js';
 import { invalidateThumbnail, dimensions, generateThumbnail, SKIPPED_EXTENSIONS_FOR_JIMP } from './thumbnails.js';
 import { getFileNameValidationFunction } from '../middleware/validateFileName.js';
 import { generateSingleFileMetadata, syncPromise } from './backgrounds-manager.js';
 
+const upload = multer({ dest: UPLOADS_DIRECTORY });
 let isSyncComplete = false;
 
 // When the main sync promise resolves, we flip the flag to true.
@@ -329,23 +335,22 @@ async function getUniqueFilename(directory, originalFilename) {
  * @param {express.Response} response - The Express response object.
  * @returns {Promise<void>}
  */
-router.post('/upload', async function (request, response) {
+router.post('/upload', upload.single('avatar'), async function (request, response) {
     if (!request.body || !request.file) {
         return response.status(400).send('No file uploaded.');
     }
 
+    let finalBgPath;
+
     try {
-        // 1. Get a unique filename to prevent overwriting
         const tempPath = request.file.path;
         const backgroundsFolderPath = request.user.directories.backgrounds;
 
         const uniqueFilename = await getUniqueFilename(backgroundsFolderPath, request.file.originalname);
-        const finalBgPath = path.join(backgroundsFolderPath, uniqueFilename);
+        finalBgPath = path.join(backgroundsFolderPath, uniqueFilename);
 
-        // 2. Move the uploaded file to its final destination with the unique name
         await fsp.rename(tempPath, finalBgPath);
 
-        // 3. Generate thumbnail and metadata for the file with its new unique name
         const fileExtension = path.extname(uniqueFilename).toLowerCase();
         const isSkippedFormat = SKIPPED_EXTENSIONS_FOR_JIMP.includes(fileExtension);
 
@@ -353,34 +358,37 @@ router.post('/upload', async function (request, response) {
             request.user.directories,
             'bg',
             uniqueFilename,
-            !isSkippedFormat, // forceGenerate should be true only if it's NOT a skipped format
+            !isSkippedFormat,
             false,
         );
         const newMetadata = await generateSingleFileMetadata(finalBgPath);
 
         if (!newMetadata) {
-            await fsp.unlink(finalBgPath); // Clean up if metadata fails
             throw new Error(`Failed to generate metadata for ${uniqueFilename}.`);
         }
 
-        // Add the thumbnail resolution to the metadata if it was successfully generated
         if (thumbResult && thumbResult.resolution) {
             newMetadata.thumbnailResolution = thumbResult.resolution;
         }
 
-        // 4. Read, update, and write backgrounds.json
         const manager = new BackgroundsMetadataManager(request.user.directories);
         await manager.update(metadata => {
             metadata.images[uniqueFilename] = newMetadata;
         });
 
-        // 5. Send back the complete metadata including the FINAL unique filename
         response.json({ filename: uniqueFilename, ...newMetadata });
 
     } catch (err) {
         const originalFilename = request.file?.originalname ?? 'unknown file';
         console.error(`Background upload failed for ${originalFilename}:`, err);
-        try { await fsp.unlink(request.file.path); } catch { /* ignore */ }
+
+        if (finalBgPath) {
+            try { await fsp.unlink(finalBgPath); } catch { /* ignore */ }
+        }
+        if (request.file?.path) {
+            try { await fsp.unlink(request.file.path); } catch { /* ignore */ }
+        }
+
         if (!response.headersSent) {
             response.status(500).send('Failed to process uploaded file.');
         }
