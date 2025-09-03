@@ -13,7 +13,6 @@ import { SlashCommandScope } from './SlashCommandScope.js';
  * _abortController:SlashCommandAbortController,
  * _debugController:SlashCommandDebugController,
  * _hasUnnamedArgument:boolean,
- * [id:string]:string|SlashCommandClosure|(string|SlashCommandClosure)[]|undefined,
  * }} NamedArguments
  */
 
