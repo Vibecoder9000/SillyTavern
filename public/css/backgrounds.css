@@ -1,5 +1,5 @@
 /* This is the main flex container for the entire drawer */
-#Backgrounds.drawer-content.openDrawer.bg-drawer-layout {
+#Backgrounds.openDrawer {
     display: flex;
     flex-direction: column;
     height: calc(100vh - var(--topBarBlockSize));
@@ -34,4 +34,91 @@
 
 #bg-filter {
     font-size: calc(var(--mainFontSize) * 0.95);
+}
+
+/* Thumbnail Menu & Buttons */
+
+.mobile-only-menu-toggle {
+    display: none;
+}
+
+.bg_example .jg-menu {
+    display: flex;
+    position: absolute;
+    top: 2px;
+    right: 2px;
+    background-color: rgba(0, 0, 0, 0.5);
+    border-radius: 8px;
+    gap: 2px;
+    padding: 3px;
+    z-index: 3;
+    backdrop-filter: blur(4px);
+    border: 1px solid var(--SmartThemeBorderColor);
+
+    opacity: 0;
+    visibility: hidden;
+    transform: scale(0.9);
+    transform-origin: center;
+    transition: opacity 0.15s ease-out, visibility 0.15s ease-out, transform 0.15s ease-out;
+}
+
+.bg_example:hover .jg-menu {
+    opacity: 1;
+    visibility: visible;
+    transform: scale(1);
+}
+
+.bg_example .jg-button {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: white;
+    padding: 5px;
+    font-size: 1.2em;
+    border-radius: 6px;
+    transition: background-color 0.15s ease;
+}
+
+.bg_example .jg-button:hover {
+    background-color: rgba(255, 255, 255, 0.2);
+}
+
+.bg_example .jg-unlock {
+    display: none;
+}
+
+.bg_example.locked .jg-lock {
+    display: none;
+}
+
+.bg_example.locked .jg-unlock {
+    display: flex;
+}
+
+/* Thumbnail Title */
+
+.bg_example .BGSampleTitle {
+    position: absolute;
+    bottom: 1px;
+    left: 0;
+    right: 0;
+    background: linear-gradient(transparent, rgba(0, 0, 0, 0.8));
+    color: var(--SmartThemeBodyColor);
+    font-size: 0.85em;
+    font-weight: 600;
+    padding: 8px 6px 0px;
+    text-align: center;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    opacity: 0;
+    transition: opacity 0.15s ease-in-out;
+    pointer-events: none;
+    transform: translateY(1px);
+    border-radius: 0 0 6px 6px;
+}
+
+.bg_example:hover .BGSampleTitle {
+    opacity: 1;
+    transition-delay: 0.05s;
 }
