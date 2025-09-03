@@ -700,12 +700,40 @@ function onBackgroundFilterInput() {
 export function initBackgrounds() {
     eventSource.on(event_types.CHAT_CHANGED, onChatChanged);
     eventSource.on(event_types.FORCE_SET_BACKGROUND, forceSetBackground);
-    $(document).on('click', '.bg_example', onSelectBackgroundClick);
-    $(document).on('click', '.bg_example_lock', onLockBackgroundClick);
-    $(document).on('click', '.bg_example_unlock', onUnlockBackgroundClick);
-    $(document).on('click', '.bg_example_edit', onRenameBackgroundClick);
-    $(document).on('click', '.bg_example_cross', onDeleteBackgroundClick);
-    $(document).on('click', '.bg_example_copy', onCopyToSystemBackgroundClick);
+
+    $(document)
+        .off('click', '.bg_example').on('click', '.bg_example', onSelectBackgroundClick)
+        .off('click', '.bg_example_copy').on('click', '.bg_example_copy', onCopyToSystemBackgroundClick)
+        .off('click', '.mobile-only-menu-toggle').on('click', '.mobile-only-menu-toggle', function(e) {
+            e.stopPropagation();
+            const $context = $(this).closest('.bg_example');
+            const wasOpen = $context.hasClass('mobile-menu-open');
+            // Close all other open menus before opening a new one.
+            $('.bg_example.mobile-menu-open').removeClass('mobile-menu-open');
+            if (!wasOpen) {
+                $context.addClass('mobile-menu-open');
+            }
+        })
+        .off('click', '.jg-button').on('click', '.jg-button', function (e) {
+            e.stopPropagation();
+            const action = $(this).data('action');
+
+            switch (action) {
+                case 'lock':
+                    onLockBackgroundClick.call(this, e);
+                    break;
+                case 'unlock':
+                    onUnlockBackgroundClick.call(this, e);
+                    break;
+                case 'edit':
+                    onRenameBackgroundClick.call(this, e);
+                    break;
+                case 'delete':
+                    onDeleteBackgroundClick.call(this, e);
+                    break;
+            }
+        });
+
     $('#auto_background').on('click', autoBackgroundCommand);
     $('#add_bg_button').on('change', onBackgroundUploadSelected);
     $('#bg-filter').on('input', onBackgroundFilterInput);
