@@ -1682,9 +1682,6 @@ async function convertFileIfVideo(formData) {
             throw new Error(`Static thumbnail upload failed with status: ${thumbResponse.status}`);
         }
 
-        // Only after the thumbnail is confirmed saved, upload the main animated background
-        await uploadBackground(formData);
-
         toastMessage.remove();
     } catch (error) {
         toastMessage?.remove();

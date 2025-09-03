@@ -2,16 +2,20 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { performance } from 'node:perf_hooks';
 
+import multer from 'multer';
 import express from 'express';
 import sanitize from 'sanitize-filename';
 import { Jimp, JimpMime } from '../jimp.js';
 import { sync as writeFileAtomicSync } from 'write-file-atomic';
 import { imageSize as sizeOf } from 'image-size';
+import { UPLOADS_DIRECTORY } from '../constants.js';
 
 import { getImages, getConfigValue, getThumbnailResolution } from '../util.js';
 
 export const publicRouter = express.Router();
 export const apiRouter = express.Router();
+
+const upload = multer({ dest: UPLOADS_DIRECTORY });
 
 export const CONCURRENCY_LIMIT = 8;
 export const SKIPPED_EXTENSIONS_FOR_JIMP = ['.apng', '.mp4', '.webm', '.avi', '.mkv', '.flv', '.gif'];
@@ -312,7 +316,7 @@ export async function ensureThumbnailCache(directoriesList) {
  * @param {express.Request} request - The Express request object.
  * @param {express.Response} response - The Express response object.
  */
-apiRouter.post('/upload-generated', async function(request, response) {
+apiRouter.post('/upload-generated', upload.single('avatar'), async function(request, response) {
     const rawFilename = request.query.originalFilename;
     if (typeof rawFilename !== 'string') {
         console.error('[Thumbnails API] originalFilename query parameter is missing or not a string.');
