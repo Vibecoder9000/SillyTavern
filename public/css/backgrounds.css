@@ -42,6 +42,33 @@
     display: none;
 }
 
+.bg_example.flex-container {
+    width: 30%;
+    max-width: 200px;
+    margin: 5px;
+    aspect-ratio: 16/9;
+    cursor: pointer;
+    box-shadow: 0 0 7px var(--black50a);
+
+    position: relative;
+    overflow: hidden;
+    border-radius: 10px;
+    border: 1px solid var(--SmartThemeBorderColor);
+}
+
+.bg_example_img {
+    position: absolute;
+    top: -2px;
+    left: -2px;
+    right: -2px;
+    bottom: -2px;
+
+    background-image: inherit;
+
+    background-size: cover;
+    background-position: center;
+}
+
 .bg_example .jg-menu {
     display: flex;
     position: absolute;
@@ -99,14 +126,14 @@
 
 .bg_example .BGSampleTitle {
     position: absolute;
-    bottom: 1px;
+    bottom: 0;
     left: 0;
     right: 0;
-    background: linear-gradient(transparent, rgba(0, 0, 0, 0.8));
+    background: linear-gradient(transparent, rgba(0, 0, 0, 0.9));
     color: var(--SmartThemeBodyColor);
     font-size: 0.85em;
     font-weight: 600;
-    padding: 8px 6px 0px;
+    padding: 0px 6px 2px;
     text-align: center;
     white-space: nowrap;
     overflow: hidden;
@@ -114,8 +141,7 @@
     opacity: 0;
     transition: opacity 0.15s ease-in-out;
     pointer-events: none;
-    transform: translateY(1px);
-    border-radius: 0 0 6px 6px;
+    border-radius: 0 0 8px 8px;
 }
 
 .bg_example:hover .BGSampleTitle {

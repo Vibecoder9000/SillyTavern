@@ -3305,22 +3305,6 @@ input[type=search]:focus::-webkit-search-cancel-button {
     justify-content: space-evenly;
 }
 
-.bg_example {
-    width: 30%;
-    max-width: 200px;
-    background-repeat: no-repeat;
-    background-size: cover;
-    background-position: center;
-    border-radius: 10px;
-    border: 1px solid var(--SmartThemeBorderColor);
-    box-shadow: 0 0 7px var(--black50a);
-    margin: 5px;
-    cursor: pointer;
-    aspect-ratio: 16/9;
-    justify-content: flex-end;
-    position: relative;
-}
-
 .bg_example.locked {
     outline: 2px solid var(--golden);
 }
