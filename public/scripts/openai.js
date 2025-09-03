@@ -2271,16 +2271,6 @@ async function sendOpenAIRequest(type, messages, signal, { jsonSchema = null } =
     // https://api-docs.deepseek.com/api/create-chat-completion
     if (isDeepSeek) {
         generate_data.top_p = generate_data.top_p || Number.EPSILON;
-
-        if (generate_data.model.endsWith('-reasoner')) {
-            delete generate_data.top_p;
-            delete generate_data.temperature;
-            delete generate_data.frequency_penalty;
-            delete generate_data.presence_penalty;
-            delete generate_data.top_logprobs;
-            delete generate_data.logprobs;
-            delete generate_data.logit_bias;
-        }
     }
 
     if (isXAI) {
@@ -4599,6 +4589,27 @@ function getFireworksMaxContext(model, isUnlocked) {
     return max_32k;
 }
 
+/**
+ * Get the maximum context size for the NanoGPT model
+ * @param {string} model Model identifier
+ * @param {boolean} isUnlocked Whether context limits are unlocked
+ * @returns {number} Maximum context size in tokens
+ */
+function getNanoGptMaxContext(model, isUnlocked) {
+    if (isUnlocked) {
+        return unlocked_max;
+    }
+
+    if (Array.isArray(model_list)) {
+        const modelInfo = model_list.find(m => m.id === model);
+        if (modelInfo?.context_length) {
+            return modelInfo.context_length;
+        }
+    }
+
+    return max_128k;
+}
+
 async function onModelChange() {
     biasCache = undefined;
     let value = String($(this).val() || '');
@@ -4762,6 +4773,8 @@ async function onModelChange() {
             $('#openai_max_context').attr('max', max_2mil);
         } else if (value.includes('gemini-1.5-pro')) {
             $('#openai_max_context').attr('max', max_2mil);
+        } else if (value.includes('gemini-2.5-flash-image-preview')) {
+            $('#openai_max_context').attr('max', max_32k);
         } else if (value.includes('gemini-1.5-flash') || value.includes('gemini-2.0-flash') || value.includes('gemini-2.0-pro') || value.includes('gemini-exp') || value.includes('gemini-2.5-flash') || value.includes('gemini-2.5-pro') || value.includes('learnlm-2.0-flash')) {
             $('#openai_max_context').attr('max', max_1mil);
         } else if (value.includes('gemma-3-27b-it')) {
@@ -4929,14 +4942,11 @@ async function onModelChange() {
     }
 
     if (oai_settings.chat_completion_source === chat_completion_sources.NANOGPT) {
-        if (oai_settings.max_context_unlocked) {
-            $('#openai_max_context').attr('max', unlocked_max);
-        } else {
-            $('#openai_max_context').attr('max', max_128k);
-        }
-
+        const maxContext = getNanoGptMaxContext(oai_settings.nanogpt_model, oai_settings.max_context_unlocked);
+        $('#openai_max_context').attr('max', maxContext);
         oai_settings.openai_max_context = Math.min(Number($('#openai_max_context').attr('max')), oai_settings.openai_max_context);
         $('#openai_max_context').val(oai_settings.openai_max_context).trigger('input');
+        oai_settings.temp_openai = Math.min(oai_max_temp, oai_settings.temp_openai);
         $('#temp_openai').attr('max', oai_max_temp).val(oai_settings.temp_openai).trigger('input');
     }
 
@@ -5532,6 +5542,8 @@ export function isImageInliningSupported() {
             return true;
         case chat_completion_sources.MOONSHOT:
             return visionSupportedModels.some(model => oai_settings.moonshot_model.includes(model));
+        case chat_completion_sources.NANOGPT:
+            return (Array.isArray(model_list) && model_list.find(m => m.id === oai_settings.nanogpt_model)?.capabilities?.vision);
         default:
             return false;
     }
