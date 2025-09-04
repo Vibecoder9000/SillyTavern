@@ -265,9 +265,10 @@ async function onCopyToSystemBackgroundClick(e) {
  * It caches the thumbnail in local storage and returns a blob URL for the thumbnail.
  * If the thumbnail cannot be fetched, it returns a transparent PNG pixel as a fallback.
  * @param {string} bg Background URL
+ * @param {boolean} isCustom Is the background custom?
  * @returns {Promise<string>} Blob URL of the thumbnail
  */
-async function getThumbnailFromStorage(bg) {
+async function getThumbnailFromStorage(bg, isCustom) {
     const cachedBlobUrl = THUMBNAIL_BLOBS.get(bg);
     if (cachedBlobUrl) {
         return cachedBlobUrl;
@@ -281,7 +282,8 @@ async function getThumbnailFromStorage(bg) {
     }
 
     try {
-        const response = await fetch(getBackgroundPath(bg), { cache: 'force-cache' });
+        const url = isCustom ? bg : getBackgroundPath(bg);
+        const response = await fetch(url, { cache: 'force-cache' });
         if (!response.ok) {
             throw new Error('Fetch failed with status: ' + response.status);
         }
@@ -519,7 +521,7 @@ async function resolveImageUrl(bg, isCustom) {
     const fileExtension = bg.split('.').pop().toLowerCase();
     const isAnimated = ['mp4', 'webp'].includes(fileExtension);
     const thumbnailUrl = isAnimated && !background_settings.animation
-        ? await getThumbnailFromStorage(bg)
+        ? await getThumbnailFromStorage(bg, isCustom)
         : isCustom
             ? bg
             : getThumbnailUrl('bg', bg);
