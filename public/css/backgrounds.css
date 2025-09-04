@@ -209,5 +209,4 @@ body.reduced-motion #bg_custom {
 
 .bg_example:hover .BGSampleTitle {
     opacity: 1;
-    transition-delay: 0.05s;
 }
