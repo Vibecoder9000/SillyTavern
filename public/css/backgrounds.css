@@ -1,3 +1,61 @@
+/* Main Page Backgrounds */
+#bg1,
+#bg_custom {
+    background-repeat: no-repeat;
+    background-attachment: fixed;
+    background-size: cover;
+    position: absolute;
+    width: 100%;
+    height: 100%;
+    transition: background-image var(--animation-duration-3x) ease-in-out;
+}
+
+/* Fitting options */
+#background_fitting {
+    max-width: 6em;
+}
+/* Fill/Cover - scales to fill width while maintaining aspect ratio */
+#bg1.cover,
+#bg_custom.cover {
+    background-size: cover;
+    background-position: center;
+}
+/* Fit/Contain - shows entire image maintaining aspect ratio */
+#bg1.contain,
+#bg_custom.contain {
+    background-size: contain;
+    background-position: center;
+    background-repeat: no-repeat;
+}
+/* Stretch - stretches to fill entire space */
+#bg1.stretch,
+#bg_custom.stretch {
+    background-size: 100% 100%;
+}
+/* Center - centers without scaling */
+#bg1.center,
+#bg_custom.center {
+    background-size: auto;
+    background-position: center;
+    background-repeat: no-repeat;
+}
+body.reduced-motion #bg1,
+body.reduced-motion #bg_custom {
+    transition: none;
+}
+#bg1 {
+    background-image: url('data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=');
+    z-index: -3;
+}
+#bg_custom {
+    background-image: none;
+    z-index: -2;
+}
+
+.bg_example.locked {
+    outline: 2px solid var(--golden);
+}
+
 /* This is the main flex container for the entire drawer */
 #Backgrounds.drawer-content.openDrawer.bg-drawer-layout {
     display: flex;
@@ -37,7 +95,6 @@
 }
 
 /* Thumbnail Menu & Buttons */
-
 .mobile-only-menu-toggle {
     display: none;
 }
@@ -123,7 +180,6 @@
 }
 
 /* Thumbnail Title */
-
 .bg_example .BGSampleTitle {
     position: absolute;
     bottom: 0;
