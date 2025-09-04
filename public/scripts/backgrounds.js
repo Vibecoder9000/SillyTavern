@@ -583,7 +583,7 @@ async function onBackgroundUploadSelected() {
     const formData = new FormData(form);
 
     const file = formData.get('avatar');
-    if (!file || file.size === 0) {
+    if (!(file instanceof File) || file.size === 0) {
         form.reset();
         return;
     }
@@ -621,7 +621,7 @@ async function convertFileIfVideo(formData) {
         const sourceBuffer = await file.arrayBuffer();
         const convertedBuffer = await globalThis.convertVideoToAnimatedWebp({ buffer: new Uint8Array(sourceBuffer), name: file.name });
         const convertedFileName = file.name.replace(/\.[^/.]+$/, '.webp');
-        const convertedFile = new File([convertedBuffer], convertedFileName, { type: 'image/webp' });
+        const convertedFile = new File([new Uint8Array(convertedBuffer)], convertedFileName, { type: 'image/webp' });
         formData.set('avatar', convertedFile);
         toastMessage.remove();
     } catch (error) {
@@ -704,7 +704,7 @@ export function initBackgrounds() {
     $(document)
         .off('click', '.bg_example').on('click', '.bg_example', onSelectBackgroundClick)
         .off('click', '.bg_example_copy').on('click', '.bg_example_copy', onCopyToSystemBackgroundClick)
-        .off('click', '.mobile-only-menu-toggle').on('click', '.mobile-only-menu-toggle', function(e) {
+        .off('click', '.bg_example .mobile-only-menu-toggle').on('click', '.bg_example .mobile-only-menu-toggle', function (e) {
             e.stopPropagation();
             const $context = $(this).closest('.bg_example');
             const wasOpen = $context.hasClass('mobile-menu-open');
@@ -720,16 +720,16 @@ export function initBackgrounds() {
 
             switch (action) {
                 case 'lock':
-                    onLockBackgroundClick.call(this, e);
+                    onLockBackgroundClick.call(this, e.originalEvent);
                     break;
                 case 'unlock':
-                    onUnlockBackgroundClick.call(this, e);
+                    onUnlockBackgroundClick.call(this, e.originalEvent);
                     break;
                 case 'edit':
-                    onRenameBackgroundClick.call(this, e);
+                    onRenameBackgroundClick.call(this, e.originalEvent);
                     break;
                 case 'delete':
-                    onDeleteBackgroundClick.call(this, e);
+                    onDeleteBackgroundClick.call(this, e.originalEvent);
                     break;
             }
         });

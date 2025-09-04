@@ -102,7 +102,7 @@ body.reduced-motion #bg_custom {
 }
 
 /* Thumbnail Menu & Buttons */
-.mobile-only-menu-toggle {
+.bg_example .mobile-only-menu-toggle {
     display: none;
 }
 
@@ -194,7 +194,7 @@ body.reduced-motion #bg_custom {
     right: 0;
     background: linear-gradient(transparent, rgba(0, 0, 0, 0.9));
     color: var(--SmartThemeBodyColor);
-    font-size: 0.85em;
+    font-size: 0.9em;
     font-weight: 600;
     padding: 0px 6px 2px;
     text-align: center;
