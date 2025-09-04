@@ -14,12 +14,14 @@
 #background_fitting {
     max-width: 6em;
 }
+
 /* Fill/Cover - scales to fill width while maintaining aspect ratio */
 #bg1.cover,
 #bg_custom.cover {
     background-size: cover;
     background-position: center;
 }
+
 /* Fit/Contain - shows entire image maintaining aspect ratio */
 #bg1.contain,
 #bg_custom.contain {
@@ -27,11 +29,13 @@
     background-position: center;
     background-repeat: no-repeat;
 }
+
 /* Stretch - stretches to fill entire space */
 #bg1.stretch,
 #bg_custom.stretch {
     background-size: 100% 100%;
 }
+
 /* Center - centers without scaling */
 #bg1.center,
 #bg_custom.center {
@@ -39,14 +43,17 @@
     background-position: center;
     background-repeat: no-repeat;
 }
+
 body.reduced-motion #bg1,
 body.reduced-motion #bg_custom {
     transition: none;
 }
+
 #bg1 {
     background-image: url('data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=');
     z-index: -3;
 }
+
 #bg_custom {
     background-image: none;
     z-index: -2;
