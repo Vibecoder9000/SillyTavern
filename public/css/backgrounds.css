@@ -150,7 +150,7 @@ body.reduced-motion #bg_custom {
     visibility: hidden;
     transform: scale(0.9);
     transform-origin: center;
-    transition: opacity 0.15s ease-out, visibility 0.15s ease-out, transform 0.15s ease-out;
+    transition: opacity var(--animation-duration) ease-out, visibility var(--animation-duration) ease-out, transform var(--animation-duration) ease-out;
 }
 
 .bg_example:hover .jg-menu {
@@ -167,7 +167,7 @@ body.reduced-motion #bg_custom {
     padding: 5px;
     font-size: 1.2em;
     border-radius: 6px;
-    transition: background-color 0.15s ease;
+    transition: background-color var(--animation-duration) ease;
 }
 
 .bg_example .jg-button:hover {
@@ -202,7 +202,7 @@ body.reduced-motion #bg_custom {
     overflow: hidden;
     text-overflow: ellipsis;
     opacity: 0;
-    transition: opacity 0.15s ease-in-out;
+    transition: opacity var(--animation-duration) ease-in-out;
     pointer-events: none;
     border-radius: 0 0 8px 8px;
 }
