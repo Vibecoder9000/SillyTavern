@@ -428,10 +428,6 @@
     .horde_multiple_hint {
         display: none;
     }
-
-    .bg_list {
-        width: unset;
-    }
 }
 
 /*landscape mode phones and ipads*/

@@ -3,7 +3,7 @@ import { chat_metadata, eventSource, event_types, generateQuietPrompt, getCurren
 import { openThirdPartyExtensionMenu, saveMetadataDebounced } from './extensions.js';
 import { SlashCommand } from './slash-commands/SlashCommand.js';
 import { SlashCommandParser } from './slash-commands/SlashCommandParser.js';
-import { createThumbnail, flashHighlight, getBase64Async, stringFormat } from './utils.js';
+import { createThumbnail, flashHighlight, getBase64Async, stringFormat, debounce } from './utils.js';
 import { t } from './i18n.js';
 import { Popup } from './popup.js';
 
@@ -32,11 +32,15 @@ const THUMBNAIL_CONFIG = {
     height: 90,
 };
 
+let systemBackgrounds = [];
+
 /**
  * Global IntersectionObserver instance for lazy loading backgrounds
  * @type {IntersectionObserver|null}
  */
 let lazyLoadObserver = null;
+let resizeObserver = null;
+let isFiltering = false;
 
 export let background_settings = {
     name: '__transparent.png',
@@ -44,6 +48,159 @@ export let background_settings = {
     fitting: 'classic',
     animation: false,
 };
+
+/**
+ * Calculates the layout for a row of images to achieve a justified gallery effect.
+ * @param {number} containerWidth - The width of the container.
+ * @param {Array<object>} images - An array of image data objects.
+ * @returns {Array<object>} An array of row data, each containing images and calculated height.
+ */
+function calculateRowLayout(containerWidth, images) {
+    const rows = [];
+    if (!images || images.length === 0 || containerWidth <= 0) return rows;
+
+    const isMobileLayout = containerWidth < 480;
+    const targetRowHeight = isMobileLayout ? 80 : 110;
+    const minThumbsPerRow = isMobileLayout ? 2 : 3;
+    const rowGap = 5; // This is the space BETWEEN images.
+
+    let currentRow = [];
+    let currentRowSummedAspectRatio = 0;
+
+    images.forEach(image => {
+        const aspectRatio = image.aspectRatio;
+        if (!aspectRatio || typeof aspectRatio !== 'number' || aspectRatio <= 0) {
+            const err = new Error(`Invalid or missing aspectRatio for image: ${image.filename}. Check metadata.`);
+            console.error(err.stack);
+            throw err;
+        }
+
+        const prospectiveTotalAspectRatio = currentRowSummedAspectRatio + aspectRatio;
+        const prospectiveGapWidth = currentRow.length * rowGap;
+        const prospectiveWidth = (prospectiveTotalAspectRatio * targetRowHeight) + prospectiveGapWidth;
+
+        // Determine if we should finalize the current row.
+        // The new logic prevents finalizing a row with too few images, unless adding
+        // the next image would make the row excessively long (e.g., >130% of the width).
+        // This allows a sparse row to grab one more image and become acceptably full,
+        // even if it makes it slightly wider than the ideal target. The height calculation
+        // will then adjust it to fit perfectly.
+        const isRowFullEnough = currentRow.length >= minThumbsPerRow;
+        const isWidthExceeded = prospectiveWidth > containerWidth;
+        const isMassivelyExceeded = prospectiveWidth > containerWidth * 1.3;
+
+        if (currentRow.length > 0 && isWidthExceeded && (isRowFullEnough || isMassivelyExceeded)) {
+            const totalGapWidth = (currentRow.length - 1) * rowGap;
+            const rowHeight = Math.floor((containerWidth - totalGapWidth) / currentRowSummedAspectRatio);
+            rows.push({ images: currentRow, height: rowHeight });
+            currentRow = [image];
+            currentRowSummedAspectRatio = aspectRatio;
+        } else {
+            currentRow.push(image);
+            currentRowSummedAspectRatio += aspectRatio;
+        }
+    });
+
+    if (currentRow.length > 0) {
+        rows.push({ images: currentRow, height: targetRowHeight });
+    }
+
+    if (minThumbsPerRow > 1 && rows.length > 1) {
+        // This final check remains to merge any sparse "orphan" row at the very end.
+        const lastRow = rows[rows.length - 1];
+        if (lastRow.images.length < minThumbsPerRow) {
+            const prevRow = rows[rows.length - 2];
+            const mergedImages = prevRow.images.concat(lastRow.images);
+            const mergedSummedAspectRatio = mergedImages.reduce((sum, img) => sum + img.aspectRatio, 0);
+            const totalGapWidth = (mergedImages.length - 1) * rowGap;
+            const mergedRowHeight = Math.floor((containerWidth - totalGapWidth) / mergedSummedAspectRatio);
+
+            rows[rows.length - 2] = { images: mergedImages, height: mergedRowHeight };
+            rows.pop(); // Remove the now-merged last row
+        }
+    }
+
+    return rows;
+}
+
+/**
+ * Calculates the dimensions of an image based on its aspect ratio and the calculated row height.
+ * @param {number} aspectRatio - The aspect ratio of the image (width / height).
+ * @param {number} rowHeight - The exact height for the image within its calculated row.
+ * @returns {{width: number, height: number}} The calculated width and height.
+ */
+function calculateImageSize(aspectRatio, rowHeight) {
+    const width = Math.round(rowHeight * aspectRatio);
+    const height = Math.round(rowHeight);
+    return { width, height };
+}
+
+/**
+ * Creates a single thumbnail DOM element. This version now correctly mimics the
+ * original template's structure and attributes to work with the original event handlers.
+ * @param {object} imageData - Data for the image (filename, isCustom).
+ * @param {object} calculatedSize - Calculated size for the thumbnail {width, height}.
+ * @returns {HTMLElement} The created thumbnail element.
+ */
+function createThumbnailElement(imageData, calculatedSize) {
+    const bg = imageData.filename;
+    const isCustom = imageData.isCustom;
+
+    // Clone the template to ensure all buttons and menus are included.
+    const thumbnail = $('#background_template .bg_example').clone();
+
+    // Create the clipper div using vanilla JS
+    const clipper = document.createElement('div');
+    clipper.className = 'thumbnail-clipper';
+
+    // Use vanilla JS to add the lazy-load class to the clipper
+    clipper.classList.add('lazy-load-background');
+
+    // Move the title from the main container into the new clipper
+    const titleElement = thumbnail.find('.BGSampleTitle');
+    clipper.appendChild(titleElement.get(0));
+
+    // Add the clipper to the main container
+    thumbnail.append(clipper);
+
+    const url = generateUrlParameter(bg, isCustom);
+    const title = isCustom ? bg.split('/').pop() : bg;
+    const friendlyTitle = title.slice(0, title.lastIndexOf('.'));
+
+    // Use the original 'bgfile' attribute that your event handlers expect
+    thumbnail.attr('title', title);
+    thumbnail.attr('bgfile', bg);
+    thumbnail.attr('custom', String(isCustom));
+    thumbnail.data('url', url);
+
+    // The placeholder image is set on the clipper
+    clipper.style.backgroundImage = PLACEHOLDER_IMAGE;
+
+    titleElement.text(friendlyTitle);
+
+    // Apply the calculated dimensions from the layout engine
+    thumbnail.css('width', `${calculatedSize.width}px`);
+    thumbnail.css('height', `${calculatedSize.height}px`);
+
+    return thumbnail.get(0);
+}
+
+/**
+ * Creates a row element containing multiple thumbnail elements.
+ * @param {object} rowData - Data for the row, including images and calculated height.
+ * @returns {HTMLElement} The created row element.
+ */
+function createRowElement(rowData) {
+    const rowElement = document.createElement('div');
+    rowElement.className = 'thumbnail-row';
+
+    rowData.images.forEach((imageData) => {
+        const calculatedSize = calculateImageSize(imageData.aspectRatio, rowData.height);
+        const thumbnail = createThumbnailElement(imageData, calculatedSize);
+        rowElement.appendChild(thumbnail);
+    });
+    return rowElement;
+}
 
 export function loadBackgroundSettings(settings) {
     let backgroundSettings = settings.background;
@@ -93,21 +250,7 @@ async function onChatChanged() {
 }
 
 async function getChatBackgroundsList() {
-    const list = chat_metadata[LIST_METADATA_KEY];
-    const listEmpty = !Array.isArray(list) || list.length === 0;
-
-    $('#bg_custom_content').empty();
-    $('#bg_chat_hint').toggle(listEmpty);
-
-    if (listEmpty) {
-        return;
-    }
-
-    for (const bg of list) {
-        const template = await getBackgroundFromTemplate(bg, true);
-        $('#bg_custom_content').append(template);
-    }
-    activateLazyLoader();
+    renderChatBackgrounds(); // The logic is now entirely in the new function
 }
 
 function getBackgroundPath(fileUrl) {
@@ -382,17 +525,16 @@ async function onDeleteBackgroundClick(e) {
             list.splice(index, 1);
         }
 
-        const siblingSelector = '.bg_example:not(#form_bg_download)';
-        const nextBg = bgToDelete.next(siblingSelector);
-        const prevBg = bgToDelete.prev(siblingSelector);
-        const anyBg = $(siblingSelector);
+        if (bg === background_settings.name) {
+            const siblingSelector = '.bg_example';
+            const nextBg = bgToDelete.next(siblingSelector);
+            const prevBg = bgToDelete.prev(siblingSelector);
 
-        if (nextBg.length > 0) {
-            nextBg.trigger('click');
-        } else if (prevBg.length > 0) {
-            prevBg.trigger('click');
-        } else {
-            $(anyBg[Math.floor(Math.random() * anyBg.length)]).trigger('click');
+            if (nextBg.length > 0) {
+                nextBg.trigger('click');
+            } else if (prevBg.length > 0) {
+                prevBg.trigger('click');
+            }
         }
 
         bgToDelete.remove();
@@ -445,6 +587,63 @@ async function autoBackgroundCommand() {
     return '';
 }
 
+/**
+ * Renders the system backgrounds gallery.
+ * @param {string[]} [backgrounds] - An optional array of background filenames to render. If not provided, renders all system backgrounds.
+ */
+function renderSystemBackgrounds(backgrounds) {
+    const sourceList = backgrounds ?? systemBackgrounds;
+    const container = $('#bg_menu_content');
+    container.empty();
+
+    const containerWidth = container.width();
+    if (containerWidth <= 0 || sourceList.length === 0) return;
+
+    const imageDataList = sourceList.map(bg => ({
+        filename: bg,
+        aspectRatio: 1.777,
+        isCustom: false,
+    }));
+
+    const allRows = calculateRowLayout(containerWidth, imageDataList);
+
+    allRows.forEach(rowData => {
+        const rowElement = createRowElement(rowData);
+        container.append(rowElement);
+    });
+
+    activateLazyLoader();
+}
+
+/**
+ * Renders the chat-specific (custom) backgrounds gallery.
+ * @param {string[]} [backgrounds] - An optional array of background filenames to render. If not provided, renders all chat backgrounds.
+ */
+function renderChatBackgrounds(backgrounds) {
+    const sourceList = backgrounds ?? (chat_metadata[LIST_METADATA_KEY] || []);
+    const container = $('#bg_custom_content');
+    container.empty();
+    $('#bg_chat_hint').toggle(!sourceList.length);
+
+    const containerWidth = container.width();
+    if (containerWidth <= 0 || sourceList.length === 0) return;
+
+    const imageDataList = sourceList.map(bg => ({
+        filename: bg,
+        aspectRatio: 1.777,
+        isCustom: true,
+    }));
+
+    const allRows = calculateRowLayout(containerWidth, imageDataList);
+
+    allRows.forEach(rowData => {
+        const rowElement = createRowElement(rowData);
+        container.append(rowElement);
+    });
+
+    activateLazyLoader();
+}
+
 export async function getBackgrounds() {
     const response = await fetch('/api/backgrounds/all', {
         method: 'POST',
@@ -454,12 +653,8 @@ export async function getBackgrounds() {
     if (response.ok) {
         const { images, config } = await response.json();
         Object.assign(THUMBNAIL_CONFIG, config);
-        $('#bg_menu_content').children('div').remove();
-        for (const bg of images) {
-            const template = await getBackgroundFromTemplate(bg, false);
-            $('#bg_menu_content').append(template);
-        }
-        activateLazyLoader();
+        systemBackgrounds = images; // Store the data
+        renderSystemBackgrounds(); // Call the renderer
     }
 }
 
@@ -470,6 +665,7 @@ function activateLazyLoader() {
         lazyLoadObserver = null;
     }
 
+    // Target the elements that actually have the lazy-load class
     const lazyLoadElements = document.querySelectorAll('.lazy-load-background');
 
     const options = {
@@ -481,14 +677,19 @@ function activateLazyLoader() {
     lazyLoadObserver = new IntersectionObserver((entries, observer) => {
         entries.forEach(entry => {
             if (entry.target instanceof HTMLElement && entry.isIntersecting) {
-                const target = entry.target;
-                const bg = target.getAttribute('bgfile');
-                const isCustom = target.getAttribute('custom') === 'true';
-                resolveImageUrl(bg, isCustom)
-                    .then(url => { target.style.backgroundImage = url; })
-                    .catch(() => { target.style.backgroundImage = PLACEHOLDER_IMAGE; });
-                target.classList.remove('lazy-load-background');
-                observer.unobserve(target);
+                const clipper = entry.target; // The target is now the clipper itself
+                const parentThumbnail = clipper.closest('.bg_example');
+
+                if (parentThumbnail) {
+                    const bg = parentThumbnail.getAttribute('bgfile');
+                    const isCustom = parentThumbnail.getAttribute('custom') === 'true';
+                    resolveImageUrl(bg, isCustom)
+                        .then(url => { clipper.style.backgroundImage = url; })
+                        .catch(() => { clipper.style.backgroundImage = PLACEHOLDER_IMAGE; });
+                }
+
+                clipper.classList.remove('lazy-load-background');
+                observer.unobserve(clipper);
             }
         });
     }, options);
@@ -688,57 +889,69 @@ function setFittingClass(fitting) {
 }
 
 function onBackgroundFilterInput() {
-    const filterValue = String($(this).val()).toLowerCase();
-    $('#bg_menu_content > div').each(function () {
-        const $bgContent = $(this);
-        if ($bgContent.attr('title').toLowerCase().includes(filterValue)) {
-            $bgContent.show();
-        } else {
-            $bgContent.hide();
-        }
-    });
+    isFiltering = true; // Set the flag to prevent ResizeObserver from re-rendering
+
+    const filterValue = String($('#bg-filter').val()).toLowerCase();
+    console.debug(`[Backgrounds] Re-rendering for filter: "${filterValue}"`);
+
+    // Filter the source data arrays
+    const filteredSystemBgs = systemBackgrounds.filter(bg => bg.toLowerCase().includes(filterValue));
+    const chatBgs = chat_metadata[LIST_METADATA_KEY] || [];
+    const filteredChatBgs = chatBgs.filter(bg => bg.toLowerCase().includes(filterValue));
+
+    // Re-render the galleries with the filtered data
+    renderSystemBackgrounds(filteredSystemBgs);
+    renderChatBackgrounds(filteredChatBgs);
+
+    console.debug(`[Backgrounds] Found ${filteredSystemBgs.length} system and ${filteredChatBgs.length} chat backgrounds.`);
+
+    // After a delay, reset the flag. This gives the debounced resize observer
+    // enough time to fire and be ignored.
+    setTimeout(() => {
+        isFiltering = false;
+    }, 300);
 }
 
 export function initBackgrounds() {
     eventSource.on(event_types.CHAT_CHANGED, onChatChanged);
     eventSource.on(event_types.FORCE_SET_BACKGROUND, forceSetBackground);
-
     $(document)
+        // This handler is for clicking the main thumbnail area. It remains the same.
         .off('click', '.bg_example').on('click', '.bg_example', onSelectBackgroundClick)
-        .off('click', '.bg_example_copy').on('click', '.bg_example_copy', onCopyToSystemBackgroundClick)
-        .off('click', '.bg_example .mobile-only-menu-toggle').on('click', '.bg_example .mobile-only-menu-toggle', function (e) {
-            e.stopPropagation();
-            const $context = $(this).closest('.bg_example');
-            const wasOpen = $context.hasClass('mobile-menu-open');
-            // Close all other open menus before opening a new one.
-            $('.bg_example.mobile-menu-open').removeClass('mobile-menu-open');
-            if (!wasOpen) {
-                $context.addClass('mobile-menu-open');
-            }
-        })
-        .off('click', '.jg-button').on('click', '.jg-button', function (e) {
-            e.stopPropagation();
-            const action = $(this).data('action');
 
+        // This single handler is for ALL buttons inside a thumbnail to stop event bubbling.
+        .off('click', '.bg_button, .jg-button').on('click', '.bg_button, .jg-button', function(e) {
+            // This is the most important step. It prevents the click from reaching the parent .bg_example.
+            e.stopPropagation();
+
+            const $button = $(this);
+            const action = $button.data('action');
+
+            // We use .call(this, e) to ensure the context inside the functions is correct.
             switch (action) {
                 case 'lock':
-                    onLockBackgroundClick.call(this, e.originalEvent);
+                    onLockBackgroundClick.call(this, e);
                     break;
                 case 'unlock':
-                    onUnlockBackgroundClick.call(this, e.originalEvent);
+                    onUnlockBackgroundClick.call(this, e);
                     break;
                 case 'edit':
-                    onRenameBackgroundClick.call(this, e.originalEvent);
+                    onRenameBackgroundClick.call(this, e);
                     break;
                 case 'delete':
-                    onDeleteBackgroundClick.call(this, e.originalEvent);
+                    onDeleteBackgroundClick.call(this, e);
+                    break;
+                default:
+                    // This handles the "Copy" button, which doesn't use data-action.
+                    if ($button.hasClass('bg_example_copy')) {
+                        onCopyToSystemBackgroundClick.call(this, e);
+                    }
                     break;
             }
         });
-
     $('#auto_background').on('click', autoBackgroundCommand);
     $('#add_bg_button').on('change', onBackgroundUploadSelected);
-    $('#bg-filter').on('input', onBackgroundFilterInput);
+    $('#bg-filter').on('input', debounce(onBackgroundFilterInput, 250));
     SlashCommandParser.addCommandObject(SlashCommand.fromProps({
         name: 'lockbg',
         callback: () => onLockBackgroundClick(new CustomEvent('click')),
@@ -772,4 +985,21 @@ export function initBackgrounds() {
         await getBackgrounds();
         await onChatChanged();
     });
+
+    const debouncedRenderAll = debounce(() => {
+        // This is the crucial check. If a filter operation is in progress,
+        // we prevent the observer from re-rendering and wiping out the filter results.
+        if (isFiltering) {
+            return;
+        }
+        renderSystemBackgrounds();
+        renderChatBackgrounds();
+    }, 200);
+
+    resizeObserver = new ResizeObserver(debouncedRenderAll);
+    const menuContent = document.getElementById('bg_menu_content');
+    const customContent = document.getElementById('bg_custom_content');
+
+    if (menuContent) resizeObserver.observe(menuContent);
+    if (customContent) resizeObserver.observe(customContent);
 }

@@ -97,8 +97,27 @@ body.reduced-motion #bg_custom {
     padding: 0 5px 5px;
 }
 
+#bg_menu_content, #bg_custom_content {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+}
+
 #bg-filter {
     font-size: calc(var(--mainFontSize) * 0.95);
+}
+
+/* Thumbnails */
+.bg_example:hover .BGSampleTitle {
+    opacity: 1;
+}
+
+.thumbnail-row {
+    display: flex;
+    gap: 5px;
+}
+
+.thumbnail-row:not(:last-child) {
 }
 
 /* Thumbnail Menu & Buttons */
@@ -106,33 +125,14 @@ body.reduced-motion #bg_custom {
     display: none;
 }
 
-.bg_example.flex-container {
-    width: 30%;
-    max-width: 200px;
-    margin: 5px;
-    aspect-ratio: 16/9;
+.bg_example {
+    flex-shrink: 0;
     cursor: pointer;
     box-shadow: 0 0 7px var(--black50a);
-
     position: relative;
     overflow: hidden;
-    border-radius: 8px;
     border: 0px solid transparent;
-    outline: 2px solid var(--SmartThemeBorderColor);
-    outline-offset: -1px;
-}
-
-.bg_example_img {
-    position: absolute;
-    top: -2px;
-    left: -2px;
-    right: -2px;
-    bottom: -2px;
-
-    background-image: inherit;
-
-    background-size: cover;
-    background-position: center;
+    outline: 1px solid var(--SmartThemeBorderColor);
 }
 
 .bg_example .jg-menu {
@@ -188,6 +188,21 @@ body.reduced-motion #bg_custom {
     display: flex;
 }
 
+.thumbnail-clipper {
+    position: absolute;
+    top: -2px;
+    left: -2px;
+    right: -2px;
+    bottom: -2px;
+
+    overflow: hidden;
+
+    border-radius: inherit;
+
+    background-size: cover;
+    background-position: center;
+}
+
 /* Thumbnail Title */
 .bg_example .BGSampleTitle {
     position: absolute;
@@ -206,9 +221,4 @@ body.reduced-motion #bg_custom {
     opacity: 0;
     transition: opacity var(--animation-duration) ease-in-out;
     pointer-events: none;
-    border-radius: 0 0 8px 8px;
-}
-
-.bg_example:hover .BGSampleTitle {
-    opacity: 1;
 }
