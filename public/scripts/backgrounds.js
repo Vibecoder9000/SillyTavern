@@ -109,7 +109,7 @@ async function forceSetBackground(backgroundInfo) {
     list.push(bg);
     chat_metadata[LIST_METADATA_KEY] = list;
     saveMetadataDebounced();
-    await getChatBackgroundsList();
+    renderChatBackgrounds();
     highlightNewBackground(bg);
     highlightLockedBackground();
 }
@@ -122,12 +122,8 @@ async function onChatChanged() {
         unsetCustomBackground();
     }
 
-    await getChatBackgroundsList();
-    highlightLockedBackground();
-}
-
-async function getChatBackgroundsList() {
     renderChatBackgrounds();
+    highlightLockedBackground();
 }
 
 function getBackgroundPath(fileUrl) {
@@ -277,7 +273,7 @@ async function onCopyToSystemBackgroundClick(e) {
     const index = list.indexOf(bgNames.oldBg);
     list.splice(index, 1);
     saveMetadataDebounced();
-    await getChatBackgroundsList();
+    renderChatBackgrounds();
 }
 
 /**
@@ -428,7 +424,7 @@ async function onDeleteBackgroundClick(e) {
         }
 
         if (isCustom) {
-            await getChatBackgroundsList();
+            renderChatBackgrounds();
             saveMetadataDebounced();
         }
     }
