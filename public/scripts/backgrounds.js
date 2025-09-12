@@ -762,19 +762,19 @@ export function initBackgrounds() {
 
             switch (action) {
                 case 'lock':
-                    onLockBackgroundClick.call(this, e);
+                    onLockBackgroundClick.call(this, e.originalEvent);
                     break;
                 case 'unlock':
-                    onUnlockBackgroundClick.call(this, e);
+                    onUnlockBackgroundClick.call(this, e.originalEvent);
                     break;
                 case 'edit':
-                    onRenameBackgroundClick.call(this, e);
+                    onRenameBackgroundClick.call(this, e.originalEvent);
                     break;
                 case 'delete':
-                    onDeleteBackgroundClick.call(this, e);
+                    onDeleteBackgroundClick.call(this, e.originalEvent);
                     break;
                 case 'copy':
-                    onCopyToSystemBackgroundClick.call(this, e);
+                    onCopyToSystemBackgroundClick.call(this, e.originalEvent);
                     break;
             }
         });
