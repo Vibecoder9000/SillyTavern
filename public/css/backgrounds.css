@@ -112,15 +112,6 @@ body.reduced-motion #bg_custom {
     opacity: 1;
 }
 
-.thumbnail-row {
-    display: flex;
-    gap: 5px;
-}
-
-.thumbnail-row:not(:last-child) {
-}
-
-/* Thumbnail Menu & Buttons */
 .bg_example .mobile-only-menu-toggle {
     display: none;
 }

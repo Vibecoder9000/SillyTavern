@@ -592,28 +592,6 @@ async function resolveImageUrl(bg, isCustom) {
     return `url("${thumbnailUrl}")`;
 }
 
-/**
- * Instantiates a background template
- * @param {string} bg Path to background
- * @param {boolean} isCustom Whether the background is custom
- * @returns {Promise<JQuery<HTMLElement>>} Background template
- */
-async function getBackgroundFromTemplate(bg, isCustom) {
-    const template = $('#background_template .bg_example').clone();
-    const url = generateUrlParameter(bg, isCustom);
-    const title = isCustom ? bg.split('/').pop() : bg;
-    const friendlyTitle = title.slice(0, title.lastIndexOf('.'));
-
-    template.attr('title', title);
-    template.attr('bgfile', bg);
-    template.attr('custom', String(isCustom));
-    template.data('url', url);
-    template.addClass('lazy-load-background');
-    template.css('background-image', PLACEHOLDER_IMAGE);
-    template.find('.BGSampleTitle').text(friendlyTitle);
-    return template;
-}
-
 async function setBackground(bg, url) {
     $('#bg1').css('background-image', url);
     background_settings.name = bg;
@@ -771,9 +749,17 @@ export function initBackgrounds() {
         .off('click', '.bg_example').on('click', '.bg_example', onSelectBackgroundClick)
         .off('click', '.bg_example .mobile-only-menu-toggle').on('click', '.bg_example .mobile-only-menu-toggle', function (e) {
             e.stopPropagation();
-
-            const $button = $(this);
-            const action = $button.data('action');
+            const $context = $(this).closest('.bg_example');
+            const wasOpen = $context.hasClass('mobile-menu-open');
+            // Close all other open menus before opening a new one.
+            $('.bg_example.mobile-menu-open').removeClass('mobile-menu-open');
+            if (!wasOpen) {
+                $context.addClass('mobile-menu-open');
+            }
+        })
+        .off('click', '.jg-button').on('click', '.jg-button', function (e) {
+            e.stopPropagation();
+            const action = $(this).data('action');
 
             switch (action) {
                 case 'lock':
@@ -788,13 +774,8 @@ export function initBackgrounds() {
                 case 'delete':
                     onDeleteBackgroundClick.call(this, e);
                     break;
-                default:
-                    if ($button.hasClass('bg_example_copy')) {
-                        onCopyToSystemBackgroundClick.call(this, e);
-                    }
-                    break;
                 case 'copy':
-                    onCopyToSystemBackgroundClick.call(this, e.originalEvent);
+                    onCopyToSystemBackgroundClick.call(this, e);
                     break;
             }
         });
