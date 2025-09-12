@@ -39,8 +39,6 @@ let systemBackgrounds = [];
  * @type {IntersectionObserver|null}
  */
 let lazyLoadObserver = null;
-let resizeObserver = null;
-let isFiltering = false;
 
 export let background_settings = {
     name: '__transparent.png',
