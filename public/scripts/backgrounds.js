@@ -411,6 +411,11 @@ async function onDeleteBackgroundClick(e) {
                 nextBg.trigger('click');
             } else if (prevBg.length > 0) {
                 prevBg.trigger('click');
+            } else {
+                const anyOtherBg = $('.bg_example').not(bgToDelete).first();
+                if (anyOtherBg.length > 0) {
+                    anyOtherBg.trigger('click');
+                }
             }
         }
 
