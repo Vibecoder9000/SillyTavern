@@ -58,10 +58,8 @@ function createThumbnailElement(imageData) {
     const bg = imageData.filename;
     const isCustom = imageData.isCustom;
 
-    // Clone the template (this part is fine)
     const thumbnail = $('#background_template .bg_example').clone();
 
-    // Create and configure the clipper div (this part is also fine)
     const clipper = document.createElement('div');
     clipper.className = 'thumbnail-clipper lazy-load-background';
     clipper.style.backgroundImage = PLACEHOLDER_IMAGE;
@@ -74,16 +72,11 @@ function createThumbnailElement(imageData) {
     const title = isCustom ? bg.split('/').pop() : bg;
     const friendlyTitle = title.slice(0, title.lastIndexOf('.'));
 
-    // Set attributes for event handlers (this part is fine)
     thumbnail.attr('title', title);
     thumbnail.attr('bgfile', bg);
     thumbnail.attr('custom', String(isCustom));
     thumbnail.data('url', url);
     titleElement.text(friendlyTitle);
-
-    // REMOVED: Do NOT set inline width and height. The CSS handles it.
-    // thumbnail.css('width', `${calculatedSize.width}px`);
-    // thumbnail.css('height', `${calculatedSize.height}px`);
 
     return thumbnail.get(0);
 }
