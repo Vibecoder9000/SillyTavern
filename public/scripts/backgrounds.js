@@ -493,7 +493,7 @@ function renderChatBackgrounds(backgrounds) {
     const sourceList = backgrounds ?? (chat_metadata[LIST_METADATA_KEY] || []);
     const container = $('#bg_custom_content');
     container.empty();
-    $('#bg_chat_hint').toggle(!sourceList.length);
+    $('#bg_chat_header').toggle(sourceList.length > 0);
 
     if (sourceList.length === 0) return;
 
@@ -743,6 +743,8 @@ function onBackgroundFilterInput() {
 export function initBackgrounds() {
     eventSource.on(event_types.CHAT_CHANGED, onChatChanged);
     eventSource.on(event_types.FORCE_SET_BACKGROUND, forceSetBackground);
+
+    renderChatBackgrounds();
 
     $(document)
         .off('click', '.bg_example').on('click', '.bg_example', onSelectBackgroundClick)
