@@ -752,7 +752,6 @@ function setFittingClass(fitting) {
 
 function onBackgroundFilterInput() {
     const filterValue = String($(this).val()).toLowerCase();
-    // Target both galleries
     $('#bg_menu_content > .bg_example, #bg_custom_content > .bg_example').each(function () {
         const $bg = $(this);
         const title = $bg.attr('title') || '';
@@ -769,7 +768,6 @@ export function initBackgrounds() {
     eventSource.on(event_types.FORCE_SET_BACKGROUND, forceSetBackground);
 
     $(document)
-        // For clicking the main thumbnail area
         .off('click', '.bg_example').on('click', '.bg_example', onSelectBackgroundClick)
         .off('click', '.bg_example .mobile-only-menu-toggle').on('click', '.bg_example .mobile-only-menu-toggle', function (e) {
             e.stopPropagation();
@@ -803,7 +801,7 @@ export function initBackgrounds() {
 
     $('#auto_background').on('click', autoBackgroundCommand);
     $('#add_bg_button').on('change', onBackgroundUploadSelected);
-    $('#bg-filter').on('input', debounce(onBackgroundFilterInput, 250));	
+    $('#bg-filter').on('input', debounce(onBackgroundFilterInput, 250));
     SlashCommandParser.addCommandObject(SlashCommand.fromProps({
         name: 'lockbg',
         callback: () => onLockBackgroundClick(new CustomEvent('click')),
@@ -838,4 +836,3 @@ export function initBackgrounds() {
         await onChatChanged();
     });
 }
-
