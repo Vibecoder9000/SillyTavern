@@ -59,8 +59,8 @@ body.reduced-motion #bg_custom {
     z-index: -2;
 }
 
-.bg_example.locked {
-    outline: 2px solid var(--golden);
+.bg_example.flex-container.locked:not(:focus-visible) {
+    outline-color: var(--golden);
 }
 
 /* This is the main flex container for the entire drawer */
@@ -130,10 +130,18 @@ body.reduced-motion #bg_custom {
     box-shadow: 0 0 7px var(--black50a);
     position: relative;
     overflow: hidden;
+
+    border-radius: 8px;
     border: 0px solid transparent;
-    outline: 1px solid var(--SmartThemeBorderColor);
+    outline: 2px solid var(--SmartThemeBorderColor);
+    outline-offset: -1px;
+
     height: auto;
     aspect-ratio: 16 / 9;
+}
+
+.bg_example:focus-visible {
+    outline-offset: inherit;
 }
 
 .bg_example .jg-menu {
@@ -143,11 +151,13 @@ body.reduced-motion #bg_custom {
     right: 2px;
     background-color: rgba(0, 0, 0, 0.5);
     border-radius: 8px;
-    gap: 2px;
-    padding: 3px;
+    gap: 3px;
+    padding: 3px 5px;
     z-index: 3;
     backdrop-filter: blur(4px);
     border: 1px solid var(--SmartThemeBorderColor);
+    justify-items: center;
+    align-items: center;
 
     opacity: 0;
     visibility: hidden;
@@ -156,7 +166,8 @@ body.reduced-motion #bg_custom {
     transition: opacity var(--animation-duration) ease-out, visibility var(--animation-duration) ease-out, transform var(--animation-duration) ease-out;
 }
 
-.bg_example:hover .jg-menu {
+.bg_example:hover .jg-menu,
+.bg_example:focus-within .jg-menu {
     opacity: 1;
     visibility: visible;
     transform: scale(1);
@@ -164,11 +175,13 @@ body.reduced-motion #bg_custom {
 
 .bg_example .jg-button {
     display: flex;
+    width: 30px;
+    height: 30px;
     align-items: center;
     justify-content: center;
     color: white;
     padding: 5px;
-    font-size: 1.2em;
+    font-size: 1.1em;
     border-radius: 6px;
     transition: background-color var(--animation-duration) ease;
 }
@@ -195,13 +208,15 @@ body.reduced-motion #bg_custom {
     left: -2px;
     right: -2px;
     bottom: -2px;
-
     overflow: hidden;
-
     border-radius: inherit;
-
     background-size: cover;
     background-position: center;
+}
+
+.bg_example:not([custom="true"]) .jg-copy,
+.bg_example[custom="true"] .jg-edit {
+    display: none;
 }
 
 /* Thumbnail Title */
@@ -222,4 +237,11 @@ body.reduced-motion #bg_custom {
     opacity: 0;
     transition: opacity var(--animation-duration) ease-in-out;
     pointer-events: none;
+    border-radius: 0 0 8px 8px;
 }
+
+.bg_example:hover .BGSampleTitle,
+.bg_example:focus-within .BGSampleTitle {
+    opacity: 1;
+}
+

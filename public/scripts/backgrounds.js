@@ -771,9 +771,7 @@ export function initBackgrounds() {
     $(document)
         // For clicking the main thumbnail area
         .off('click', '.bg_example').on('click', '.bg_example', onSelectBackgroundClick)
-
-        // For buttons inside a thumbnail to stop event bubbling
-        .off('click', '.bg_button, .jg-button').on('click', '.bg_button, .jg-button', function(e) {
+        .off('click', '.bg_example .mobile-only-menu-toggle').on('click', '.bg_example .mobile-only-menu-toggle', function (e) {
             e.stopPropagation();
 
             const $button = $(this);
@@ -797,12 +795,15 @@ export function initBackgrounds() {
                         onCopyToSystemBackgroundClick.call(this, e);
                     }
                     break;
+                case 'copy':
+                    onCopyToSystemBackgroundClick.call(this, e.originalEvent);
+                    break;
             }
         });
 
     $('#auto_background').on('click', autoBackgroundCommand);
     $('#add_bg_button').on('change', onBackgroundUploadSelected);
-    $('#bg-filter').on('input', debounce(onBackgroundFilterInput, 250));
+    $('#bg-filter').on('input', debounce(onBackgroundFilterInput, 250));	
     SlashCommandParser.addCommandObject(SlashCommand.fromProps({
         name: 'lockbg',
         callback: () => onLockBackgroundClick(new CustomEvent('click')),
@@ -837,3 +838,4 @@ export function initBackgrounds() {
         await onChatChanged();
     });
 }
+
