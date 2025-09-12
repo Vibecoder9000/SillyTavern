@@ -98,9 +98,9 @@ body.reduced-motion #bg_custom {
 }
 
 #bg_menu_content, #bg_custom_content {
-    display: flex;
-    flex-direction: column;
+    display: grid;
     gap: 5px;
+    grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
 }
 
 #bg-filter {
@@ -126,13 +126,14 @@ body.reduced-motion #bg_custom {
 }
 
 .bg_example {
-    flex-shrink: 0;
     cursor: pointer;
     box-shadow: 0 0 7px var(--black50a);
     position: relative;
     overflow: hidden;
     border: 0px solid transparent;
     outline: 1px solid var(--SmartThemeBorderColor);
+    height: auto;
+    aspect-ratio: 16 / 9;
 }
 
 .bg_example .jg-menu {

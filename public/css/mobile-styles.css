@@ -21,6 +21,10 @@
         display: none;
     }
 
+    .bg_list {
+        width: 100%;
+    }
+
     .bg_button {
         font-size: 15px;
     }
