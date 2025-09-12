@@ -728,7 +728,7 @@ function setFittingClass(fitting) {
 }
 
 function onBackgroundFilterInput() {
-    const filterValue = String($(this).val()).toLowerCase();
+    const filterValue = String($('#bg-filter').val()).toLowerCase();
     $('#bg_menu_content > .bg_example, #bg_custom_content > .bg_example').each(function () {
         const $bg = $(this);
         const title = $bg.attr('title') || '';
