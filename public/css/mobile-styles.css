@@ -21,6 +21,10 @@
         display: none;
     }
 
+    #bg_menu_content, #bg_custom_content {
+        grid-template-columns: repeat(auto-fill, minmax(100px, 1fr));
+    }
+
     .bg_list {
         width: unset;
     }
@@ -59,6 +63,11 @@
         z-index: 3;
         cursor: pointer;
         backdrop-filter: blur(2px);
+    }
+
+    .bg_example .jg-button {
+        width: 30px;
+        height: 30px;
     }
 
     #bg-header-controls {
