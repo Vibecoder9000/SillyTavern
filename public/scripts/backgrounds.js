@@ -136,7 +136,7 @@ async function onChatChanged() {
 }
 
 async function getChatBackgroundsList() {
-    renderChatBackgrounds(); // The logic is now entirely in the new function
+    renderChatBackgrounds();
 }
 
 function getBackgroundPath(fileUrl) {
@@ -484,10 +484,9 @@ function renderSystemBackgrounds(backgrounds) {
 
     if (sourceList.length === 0) return;
 
-    // NO MORE layout calculation. Just loop and append.
     sourceList.forEach(bg => {
         const imageData = { filename: bg, isCustom: false };
-        const thumbnail = createThumbnailElement(imageData); // Note: No size parameter!
+        const thumbnail = createThumbnailElement(imageData);
         container.append(thumbnail);
     });
 
@@ -506,10 +505,9 @@ function renderChatBackgrounds(backgrounds) {
 
     if (sourceList.length === 0) return;
 
-    // NO MORE layout calculation. Just loop and append.
     sourceList.forEach(bg => {
         const imageData = { filename: bg, isCustom: true };
-        const thumbnail = createThumbnailElement(imageData); // Note: No size parameter!
+        const thumbnail = createThumbnailElement(imageData);
         container.append(thumbnail);
     });
 
@@ -525,8 +523,8 @@ export async function getBackgrounds() {
     if (response.ok) {
         const { images, config } = await response.json();
         Object.assign(THUMBNAIL_CONFIG, config);
-        systemBackgrounds = images; // Store the data
-        renderSystemBackgrounds(); // Call the renderer
+        systemBackgrounds = images;
+        renderSystemBackgrounds();
     }
 }
 
@@ -537,7 +535,6 @@ function activateLazyLoader() {
         lazyLoadObserver = null;
     }
 
-    // Target the elements that actually have the lazy-load class
     const lazyLoadElements = document.querySelectorAll('.lazy-load-background');
 
     const options = {
@@ -549,7 +546,7 @@ function activateLazyLoader() {
     lazyLoadObserver = new IntersectionObserver((entries, observer) => {
         entries.forEach(entry => {
             if (entry.target instanceof HTMLElement && entry.isIntersecting) {
-                const clipper = entry.target; // The target is now the clipper itself
+                const clipper = entry.target;
                 const parentThumbnail = clipper.closest('.bg_example');
 
                 if (parentThumbnail) {
@@ -762,10 +759,9 @@ function setFittingClass(fitting) {
 
 function onBackgroundFilterInput() {
     const filterValue = String($(this).val()).toLowerCase();
-    // Target BOTH galleries at once
+    // Target both galleries
     $('#bg_menu_content > .bg_example, #bg_custom_content > .bg_example').each(function () {
         const $bg = $(this);
-        // Using .attr('title') is better than relying on text content
         const title = $bg.attr('title') || '';
         if (title.toLowerCase().includes(filterValue)) {
             $bg.show();
@@ -778,19 +774,18 @@ function onBackgroundFilterInput() {
 export function initBackgrounds() {
     eventSource.on(event_types.CHAT_CHANGED, onChatChanged);
     eventSource.on(event_types.FORCE_SET_BACKGROUND, forceSetBackground);
+
     $(document)
-        // This handler is for clicking the main thumbnail area. It remains the same.
+        // For clicking the main thumbnail area
         .off('click', '.bg_example').on('click', '.bg_example', onSelectBackgroundClick)
 
-        // This single handler is for ALL buttons inside a thumbnail to stop event bubbling.
+        // For buttons inside a thumbnail to stop event bubbling
         .off('click', '.bg_button, .jg-button').on('click', '.bg_button, .jg-button', function(e) {
-            // This is the most important step. It prevents the click from reaching the parent .bg_example.
             e.stopPropagation();
 
             const $button = $(this);
             const action = $button.data('action');
 
-            // We use .call(this, e) to ensure the context inside the functions is correct.
             switch (action) {
                 case 'lock':
                     onLockBackgroundClick.call(this, e);
@@ -805,13 +800,13 @@ export function initBackgrounds() {
                     onDeleteBackgroundClick.call(this, e);
                     break;
                 default:
-                    // This handles the "Copy" button, which doesn't use data-action.
                     if ($button.hasClass('bg_example_copy')) {
                         onCopyToSystemBackgroundClick.call(this, e);
                     }
                     break;
             }
         });
+
     $('#auto_background').on('click', autoBackgroundCommand);
     $('#add_bg_button').on('change', onBackgroundUploadSelected);
     $('#bg-filter').on('input', debounce(onBackgroundFilterInput, 250));

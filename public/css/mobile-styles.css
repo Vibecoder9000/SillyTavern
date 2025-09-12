@@ -22,7 +22,7 @@
     }
 
     .bg_list {
-        width: 100%;
+        width: unset;
     }
 
     .bg_button {

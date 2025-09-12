@@ -3242,6 +3242,7 @@ input[type=search]:focus::-webkit-search-cancel-button {
     width: calc(var(--sheldWidth) - 10px);
     max-width: 100vw;
     max-width: 100dvw;
+    justify-content: space-evenly;
 }
 
 .bg_example.locked {
