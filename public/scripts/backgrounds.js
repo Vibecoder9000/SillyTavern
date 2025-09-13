@@ -3,7 +3,7 @@ import { chat_metadata, eventSource, event_types, generateQuietPrompt, getCurren
 import { openThirdPartyExtensionMenu, saveMetadataDebounced } from './extensions.js';
 import { SlashCommand } from './slash-commands/SlashCommand.js';
 import { SlashCommandParser } from './slash-commands/SlashCommandParser.js';
-import { createThumbnail, flashHighlight, getBase64Async, stringFormat } from './utils.js';
+import { createThumbnail, flashHighlight, getBase64Async, stringFormat, debounce } from './utils.js';
 import { t } from './i18n.js';
 import { Popup } from './popup.js';
 
@@ -97,7 +97,7 @@ async function getChatBackgroundsList() {
     const listEmpty = !Array.isArray(list) || list.length === 0;
 
     $('#bg_custom_content').empty();
-    $('#bg_chat_hint').toggle(listEmpty);
+    $('#bg_chat_header').toggle(!listEmpty);
 
     if (listEmpty) {
         return;
@@ -702,6 +702,8 @@ function onBackgroundFilterInput() {
 export function initBackgrounds() {
     eventSource.on(event_types.CHAT_CHANGED, onChatChanged);
     eventSource.on(event_types.FORCE_SET_BACKGROUND, forceSetBackground);
+
+    getChatBackgroundsList();
 
     $(document)
         .off('click', '.bg_example').on('click', '.bg_example', onSelectBackgroundClick)
