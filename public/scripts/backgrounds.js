@@ -68,7 +68,7 @@ export function loadBackgroundSettings(settings) {
  */
 async function forceSetBackground(backgroundInfo) {
     saveBackgroundMetadata(backgroundInfo.url);
-    setCustomBackground();
+    $('#bg1').css('background-image', backgroundInfo.url);
 
     const list = chat_metadata[LIST_METADATA_KEY] || [];
     const bg = backgroundInfo.path;
@@ -81,15 +81,19 @@ async function forceSetBackground(backgroundInfo) {
 }
 
 async function onChatChanged() {
-    if (hasCustomBackground()) {
-        setCustomBackground();
-    }
-    else {
-        unsetCustomBackground();
+    const lockedUrl = chat_metadata[BG_METADATA_KEY];
+
+    if (lockedUrl) {
+        // This chat has a locked background, so apply it directly to the main view.
+        $('#bg1').css('background-image', lockedUrl);
+    } else {
+        // This chat does not have a locked background, so apply the user's global setting.
+        $('#bg1').css('background-image', background_settings.url);
     }
 
     await getChatBackgroundsList();
     highlightLockedBackground();
+    updateLockButtonState();
 }
 
 async function getChatBackgroundsList() {
@@ -115,59 +119,63 @@ function getBackgroundPath(fileUrl) {
 }
 
 function highlightLockedBackground() {
-    $('.bg_example').removeClass('locked');
+    $('.bg_example[data-is-chat-locked]').removeAttr('data-is-chat-locked');
 
-    const lockedBackground = chat_metadata[BG_METADATA_KEY];
+    const lockedBackgroundUrl = chat_metadata[BG_METADATA_KEY];
 
-    if (!lockedBackground) {
+    if (lockedBackgroundUrl) {
+        const match = lockedBackgroundUrl.match(/backgrounds\/(.+)"\)$/);
+        if (match && match[1]) {
+            const lockedFilename = decodeURIComponent(match[1]);
+            const $lockedThumb = $(`.bg_example[bgfile="${lockedFilename}"]`);
+
+            if ($lockedThumb.length) {
+                $lockedThumb.attr('data-is-chat-locked', '');
+            }
+        }
+    }
+}
+
+/**
+ * Locks the background for the current chat
+ * @param {Event} e Click event
+ * @returns {string} Empty string
+ */
+function onLockBackgroundClick() {
+    if (!getCurrentChatId()) {
+        toastr.warning(t`Select a chat to lock the background for it`);
         return;
     }
 
-    $('.bg_example').each(function () {
-        const url = $(this).data('url');
-        if (url === lockedBackground) {
-            $(this).addClass('locked');
-        }
-    });
-}
+    // Take the global background's URL and save it to the chat's metadata.
+    const urlToLock = background_settings.url;
+    saveBackgroundMetadata(urlToLock);
 
-/**
- * Locks the background for the current chat
- * @param {Event} e Click event
- * @returns {string} Empty string
- */
-function onLockBackgroundClick(e) {
-    e?.stopPropagation();
-
-    const chatName = getCurrentChatId();
-
-    if (!chatName) {
-        toastr.warning('Select a chat to lock the background for it');
-        return '';
-    }
-
-    const relativeBgImage = getUrlParameter(this) ?? background_settings.url;
-
-    saveBackgroundMetadata(relativeBgImage);
-    setCustomBackground();
+    // Update UI states to reflect the new lock.
     highlightLockedBackground();
-    return '';
+    updateLockButtonState();
+    toastr.success(t`Background locked for this chat.`);
 }
 
 /**
- * Locks the background for the current chat
+ * Unlocks the background for the current chat
  * @param {Event} e Click event
  * @returns {string} Empty string
  */
-function onUnlockBackgroundClick(e) {
-    e?.stopPropagation();
+function onUnlockBackgroundClick() {
+    // Delete the lock from the chat's metadata.
     removeBackgroundMetadata();
-    unsetCustomBackground();
+
+    // Revert the view to the current global background.
+    $('#bg1').css('background-image', background_settings.url);
+
+    // Update UI states to reflect the removal of the lock.
     highlightLockedBackground();
-    return '';
+    updateLockButtonState();
+    toastr.success(t`Background unlocked for this chat.`);
 }
 
-function hasCustomBackground() {
+function isChatBackgroundLocked() {
     return chat_metadata[BG_METADATA_KEY];
 }
 
@@ -181,54 +189,20 @@ function removeBackgroundMetadata() {
     saveMetadataDebounced();
 }
 
-function setCustomBackground() {
-    const file = chat_metadata[BG_METADATA_KEY];
-
-    // bg already set
-    if (document.getElementById('bg_custom').style.backgroundImage == file) {
-        return;
-    }
-
-    $('#bg_custom').css('background-image', file);
-}
-
-function unsetCustomBackground() {
-    $('#bg_custom').css('background-image', 'none');
-}
-
 function onSelectBackgroundClick() {
-    const isCustom = $(this).attr('custom') === 'true';
-    const relativeBgImage = getUrlParameter(this);
-
-    // if clicked on upload button
-    if (!relativeBgImage) {
-        return;
-    }
-
-    // Automatically lock the background if it's custom or other background is locked
-    if (hasCustomBackground() || isCustom) {
-        saveBackgroundMetadata(relativeBgImage);
-        setCustomBackground();
-        highlightLockedBackground();
-    }
-    highlightLockedBackground();
-
-    const customBg = window.getComputedStyle(document.getElementById('bg_custom')).backgroundImage;
-
-    // Custom background is set. Do not override the layer below
-    if (customBg !== 'none') {
-        return;
-    }
-
     const bgFile = $(this).attr('bgfile');
-    const backgroundUrl = getBackgroundPath(bgFile);
+    const backgroundCssUrl = getUrlParameter(this);
 
-    // Fetching to browser memory to reduce flicker
-    fetch(backgroundUrl).then(() => {
-        setBackground(bgFile, relativeBgImage);
-    }).catch(() => {
-        console.log('Background could not be set: ' + backgroundUrl);
-    });
+    // Set the view and update the global background setting.
+    setBackground(bgFile, backgroundCssUrl);
+
+    // Conditionally update the lock if one is already active for this chat.
+    if (isChatBackgroundLocked()) {
+        saveBackgroundMetadata(backgroundCssUrl);
+    }
+
+    // Update UI highlights to reflect the changes.
+    highlightLockedBackground();
 }
 
 async function onCopyToSystemBackgroundClick(e) {
@@ -399,7 +373,6 @@ async function onDeleteBackgroundClick(e) {
 
         if (url === chat_metadata[BG_METADATA_KEY]) {
             removeBackgroundMetadata();
-            unsetCustomBackground();
             highlightLockedBackground();
         }
 
@@ -548,6 +521,7 @@ async function getBackgroundFromTemplate(bg, isCustom) {
     template.addClass('lazy-load-background');
     template.css('background-image', PLACEHOLDER_IMAGE);
     template.find('.BGSampleTitle').text(friendlyTitle);
+
     return template;
 }
 
@@ -676,6 +650,28 @@ function highlightNewBackground(bg) {
 }
 
 /**
+ * Updates the top bar lock/unlock button's appearance and text
+ */
+function updateLockButtonState() {
+    const lockButton = $('#bg_lock_button');
+    const icon = lockButton.find('i');
+    const text = lockButton.find('span');
+    const isLocked = isChatBackgroundLocked();
+
+    if (isLocked) {
+        icon.removeClass('fa-lock').addClass('fa-unlock');
+        text.text(t`Unlock`).attr('data-i18n', 'Unlock');
+        lockButton.attr('title', t`Unlock background for this chat`)
+            .attr('data-i18n', '[title]Unlock background for this chat');
+    } else {
+        icon.removeClass('fa-unlock').addClass('fa-lock');
+        text.text(t`Lock`).attr('data-i18n', 'Lock');
+        lockButton.attr('title', t`Lock selected background for this chat`)
+            .attr('data-i18n', '[title]Lock selected background for this chat');
+    }
+}
+
+/**
  * Sets the fitting class for the background element
  * @param {string} fitting Fitting type
  */
@@ -720,12 +716,6 @@ export function initBackgrounds() {
             const action = $(this).data('action');
 
             switch (action) {
-                case 'lock':
-                    onLockBackgroundClick.call(this, e.originalEvent);
-                    break;
-                case 'unlock':
-                    onUnlockBackgroundClick.call(this, e.originalEvent);
-                    break;
                 case 'edit':
                     onRenameBackgroundClick.call(this, e.originalEvent);
                     break;
@@ -738,18 +728,26 @@ export function initBackgrounds() {
             }
         });
 
+    $('#bg_lock_button').on('click', function () {
+        if (isChatBackgroundLocked()) {
+            onUnlockBackgroundClick();
+        } else {
+            onLockBackgroundClick();
+        }
+    });
+
     $('#auto_background').on('click', autoBackgroundCommand);
     $('#add_bg_button').on('change', onBackgroundUploadSelected);
     $('#bg-filter').on('input', onBackgroundFilterInput);
     SlashCommandParser.addCommandObject(SlashCommand.fromProps({
         name: 'lockbg',
-        callback: () => onLockBackgroundClick(new CustomEvent('click')),
+        callback: onLockBackgroundClick,
         aliases: ['bglock'],
         helpString: 'Locks a background for the currently selected chat',
     }));
     SlashCommandParser.addCommandObject(SlashCommand.fromProps({
         name: 'unlockbg',
-        callback: () => onUnlockBackgroundClick(new CustomEvent('click')),
+        callback: onUnlockBackgroundClick,
         aliases: ['bgunlock'],
         helpString: 'Unlocks a background for the currently selected chat',
     }));

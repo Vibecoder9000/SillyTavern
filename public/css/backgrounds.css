@@ -1,13 +1,19 @@
 /* Main Page Backgrounds */
-#bg1,
-#bg_custom {
+#bg1 {
+    background-image: url('data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=');
     background-repeat: no-repeat;
     background-attachment: fixed;
     background-size: cover;
+    background-position: center;
     position: absolute;
     width: 100%;
     height: 100%;
+    z-index: -3;
     transition: background-image var(--animation-duration-3x) ease-in-out;
+}
+
+body.reduced-motion #bg1 {
+    transition: none;
 }
 
 /* Fitting options */
@@ -15,53 +21,23 @@
     max-width: 6em;
 }
 
-/* Fill/Cover - scales to fill width while maintaining aspect ratio */
-#bg1.cover,
-#bg_custom.cover {
-    background-size: cover;
-    background-position: center;
-}
-
 /* Fit/Contain - shows entire image maintaining aspect ratio */
-#bg1.contain,
-#bg_custom.contain {
+#bg1.contain {
     background-size: contain;
-    background-position: center;
     background-repeat: no-repeat;
 }
 
 /* Stretch - stretches to fill entire space */
-#bg1.stretch,
-#bg_custom.stretch {
+#bg1.stretch {
     background-size: 100% 100%;
 }
 
 /* Center - centers without scaling */
-#bg1.center,
-#bg_custom.center {
+#bg1.center {
     background-size: auto;
-    background-position: center;
     background-repeat: no-repeat;
 }
 
-body.reduced-motion #bg1,
-body.reduced-motion #bg_custom {
-    transition: none;
-}
-
-#bg1 {
-    background-image: url('data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=');
-    z-index: -3;
-}
-
-#bg_custom {
-    background-image: none;
-    z-index: -2;
-}
-
-.bg_example.flex-container.locked:not(:focus-visible) {
-    outline-color: var(--golden);
-}
 
 /* This is the main flex container for the entire drawer */
 #Backgrounds.drawer-content.openDrawer.bg-drawer-layout {
@@ -122,8 +98,13 @@ body.reduced-motion #bg_custom {
     outline-offset: -1px;
 }
 
-.bg_example.flex-container:focus-visible {
+.bg_example[data-is-chat-locked] {
+    outline-color: var(--golden);
+}
+
+.bg_example:focus-visible {
     outline-offset: inherit;
+    outline-color: var(--interactable-outline-color);
 }
 
 .bg_example_img {
@@ -185,18 +166,6 @@ body.reduced-motion #bg_custom {
     background-color: rgba(255, 255, 255, 0.2);
 }
 
-.bg_example .jg-unlock {
-    display: none;
-}
-
-.bg_example.locked .jg-lock {
-    display: none;
-}
-
-.bg_example.locked .jg-unlock {
-    display: flex;
-}
-
 .bg_example:not([custom="true"]) .jg-copy,
 .bg_example[custom="true"] .jg-edit {
     display: none;
@@ -223,7 +192,26 @@ body.reduced-motion #bg_custom {
     border-radius: 0 0 8px 8px;
 }
 
+/* Lock Icon */
 .bg_example:hover .BGSampleTitle,
 .bg_example:focus-within .BGSampleTitle {
     opacity: 1;
+}
+
+.bg_example[data-is-chat-locked]::after {
+    content: '\f023';
+    font-family: 'Font Awesome 6 Free';
+    font-weight: 900;
+
+    position: absolute;
+    bottom: 5px;
+    right: 5px;
+    z-index: 4;
+    color: var(--white100);
+    background-color: var(--black60a);
+    backdrop-filter: blur(2px);
+    padding: 4px 6px;
+    border-radius: 5px;
+    font-size: calc(var(--mainFontSize) * 0.8);
+    pointer-events: none;
 }

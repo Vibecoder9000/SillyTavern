@@ -81,7 +81,8 @@
     }
 
     #bg-header-fixed #background_fitting,
-    #bg-header-fixed #auto_background {
+    #bg-header-fixed #auto_background,
+    #bg-header-fixed #bg_lock_button {
         order: 1;
     }
 
