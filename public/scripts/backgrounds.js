@@ -97,7 +97,7 @@ async function getChatBackgroundsList() {
     const listEmpty = !Array.isArray(list) || list.length === 0;
 
     $('#bg_custom_content').empty();
-    $('#bg_chat_header').toggle(!listEmpty);
+    $('#bg_chat_hint').toggle(listEmpty);
 
     if (listEmpty) {
         return;
@@ -702,8 +702,6 @@ function onBackgroundFilterInput() {
 export function initBackgrounds() {
     eventSource.on(event_types.CHAT_CHANGED, onChatChanged);
     eventSource.on(event_types.FORCE_SET_BACKGROUND, forceSetBackground);
-
-    getChatBackgroundsList();
 
     $(document)
         .off('click', '.bg_example').on('click', '.bg_example', onSelectBackgroundClick)
