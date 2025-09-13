@@ -521,7 +521,6 @@ async function getBackgroundFromTemplate(bg, isCustom) {
     template.addClass('lazy-load-background');
     template.css('background-image', PLACEHOLDER_IMAGE);
     template.find('.BGSampleTitle').text(friendlyTitle);
-
     return template;
 }
 
