@@ -60,6 +60,7 @@ export function loadBackgroundSettings(settings) {
     setFittingClass(backgroundSettings.fitting);
     $('#background_fitting').val(backgroundSettings.fitting);
     $('#background_thumbnails_animation').prop('checked', background_settings.animation);
+    updateBackgroundHighlight();
 }
 
 /**
@@ -94,6 +95,7 @@ async function onChatChanged() {
     await getChatBackgroundsList();
     highlightLockedBackground();
     updateLockButtonState();
+    updateBackgroundHighlight();
 }
 
 async function getChatBackgroundsList() {
@@ -172,6 +174,7 @@ function onUnlockBackgroundClick() {
     // Update UI states to reflect the removal of the lock.
     highlightLockedBackground();
     updateLockButtonState();
+    updateBackgroundHighlight();
     toastr.success(t`Background unlocked for this chat.`);
 }
 
@@ -196,13 +199,8 @@ function onSelectBackgroundClick() {
     // Set the view and update the global background setting.
     setBackground(bgFile, backgroundCssUrl);
 
-    // Conditionally update the lock if one is already active for this chat.
-    if (isChatBackgroundLocked()) {
-        saveBackgroundMetadata(backgroundCssUrl);
-    }
-
     // Update UI highlights to reflect the changes.
-    highlightLockedBackground();
+    updateBackgroundHighlight();
 }
 
 async function onCopyToSystemBackgroundClick(e) {
@@ -525,7 +523,10 @@ async function getBackgroundFromTemplate(bg, isCustom) {
 }
 
 async function setBackground(bg, url) {
-    $('#bg1').css('background-image', url);
+    // Only change the visual background if one is not locked for the current chat.
+    if (!isChatBackgroundLocked()) {
+        $('#bg1').css('background-image', url);
+    }
     background_settings.name = bg;
     background_settings.url = url;
     saveSettingsDebounced();
@@ -680,6 +681,20 @@ function setFittingClass(fitting) {
         backgrounds.toggleClass(option, option === fitting);
     }
     background_settings.fitting = fitting;
+}
+
+function updateBackgroundHighlight() {
+    $('.bg_example.selected-background').removeClass('selected-background');
+
+    // The "selected" highlight should always reflect the global background setting.
+    const activeUrl = background_settings.url;
+
+    if (activeUrl) {
+        // Find the thumbnail whose data-url attribute matches the active URL
+        $('.bg_example').filter(function() {
+            return $(this).data('url') === activeUrl;
+        }).addClass('selected-background');
+    }
 }
 
 function onBackgroundFilterInput() {

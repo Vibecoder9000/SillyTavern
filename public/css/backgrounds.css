@@ -98,8 +98,9 @@ body.reduced-motion #bg1 {
     outline-offset: -1px;
 }
 
-.bg_example[data-is-chat-locked] {
-    outline-color: var(--golden);
+.bg_example.flex-container[data-is-chat-locked] {
+    outline: 2px solid var(--golden);
+    outline-offset: 0;
 }
 
 .bg_example:focus-visible {
@@ -118,6 +119,11 @@ body.reduced-motion #bg1 {
 
     background-size: cover;
     background-position: center;
+}
+
+.bg_example.selected-background {
+    outline: 2px solid white;
+    outline-offset: 0;
 }
 
 .bg_example .jg-menu {
