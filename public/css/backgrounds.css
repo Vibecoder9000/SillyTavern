@@ -67,8 +67,8 @@ body.reduced-motion #bg_custom {
 #Backgrounds.drawer-content.openDrawer.bg-drawer-layout {
     display: flex;
     flex-direction: column;
-    height: fit-content;
-    max-height: calc(100vh - var(--topBarBlockSize));
+    height: auto;
+    height: calc-size(auto, size);
     overflow: hidden;
     width: var(--sheldWidth);
     max-width: var(--sheldWidth);
