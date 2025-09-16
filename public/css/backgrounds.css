@@ -121,6 +121,23 @@
     outline-offset: 0;
 }
 
+.bg_example.selected-background::before {
+    content: '\f00c';
+    font-family: 'Font Awesome 6 Free';
+    font-weight: 900;
+    position: absolute;
+    top: 5px;
+    left: 5px;
+    z-index: 4;
+    color: var(--white100);
+    background-color: var(--black60a);
+    backdrop-filter: blur(2px);
+    padding: 4px 6px;
+    border-radius: 5px;
+    font-size: calc(var(--mainFontSize) * 0.9);
+    pointer-events: none;
+}
+
 .bg_example .jg-menu {
     display: flex;
     position: absolute;
