@@ -740,7 +740,7 @@ function updateLockButtonState() {
  * @param {string} fitting Fitting type
  */
 function setFittingClass(fitting) {
-    const backgrounds = $('#bg1, #bg_custom');
+    const backgrounds = $('#bg1');
     for (const option of ['cover', 'contain', 'stretch', 'center']) {
         backgrounds.toggleClass(option, option === fitting);
     }
