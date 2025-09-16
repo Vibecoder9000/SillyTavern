@@ -115,7 +115,7 @@ function getBackgroundPath(fileUrl) {
 }
 
 function highlightLockedBackground() {
-    $('.bg_example[data-is-chat-locked]').removeAttr('data-is-chat-locked');
+    $('.bg_example.locked-background').removeClass('locked-background');
 
     const lockedBackgroundUrl = chat_metadata[BG_METADATA_KEY];
 
@@ -126,7 +126,7 @@ function highlightLockedBackground() {
             const $lockedThumb = $(`.bg_example[bgfile="${lockedFilename}"]`);
 
             if ($lockedThumb.length) {
-                $lockedThumb.attr('data-is-chat-locked', '');
+                $lockedThumb.addClass('locked-background');
             }
         }
     }

@@ -93,7 +93,7 @@
     outline-offset: -1px;
 }
 
-.bg_example.flex-container[data-is-chat-locked] {
+.bg_example.flex-container.locked-background {
     outline: 2px solid var(--golden);
     outline-offset: 0;
 }
@@ -213,7 +213,7 @@
     opacity: 1;
 }
 
-.bg_example[data-is-chat-locked]::after {
+.bg_example.locked-background::after {
     content: '\f023';
     font-family: 'Font Awesome 6 Free';
     font-weight: 900;
