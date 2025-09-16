@@ -425,6 +425,7 @@ export async function getBackgrounds() {
             $('#bg_menu_content').append(template);
         }
         activateLazyLoader();
+        updateBackgroundHighlight();
     }
 }
 
