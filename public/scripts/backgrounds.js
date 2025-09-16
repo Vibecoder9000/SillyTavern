@@ -84,13 +84,7 @@ async function forceSetBackground(backgroundInfo) {
 async function onChatChanged() {
     const lockedUrl = chat_metadata[BG_METADATA_KEY];
 
-    if (lockedUrl) {
-        // This chat has a locked background, so apply it directly to the main view.
-        $('#bg1').css('background-image', lockedUrl || background_settings.url);
-    } else {
-        // This chat does not have a locked background, so apply the user's global setting.
-        $('#bg1').css('background-image', background_settings.url);
-    }
+    $('#bg1').css('background-image', lockedUrl || background_settings.url);
 
     await getChatBackgroundsList();
     highlightLockedBackground();
