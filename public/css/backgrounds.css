@@ -223,7 +223,7 @@
     right: 5px;
     z-index: 4;
     color: var(--white100);
-    filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.7));
+    filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.8));
     font-size: calc(var(--mainFontSize) * 0.8);
     pointer-events: none;
 }
