@@ -92,33 +92,33 @@
         height: 0;
     }
 
-    /* --- Row 1 Item --- */
-    #bg-header-fixed #bg-header-title {
-        order: 1;
-        flex-grow: 1;
-    }
+	#bg-header-fixed #bg-header-controls {
+		flex-wrap: wrap;
+	}
 
-    #bg-header-fixed #background_fitting,
-    #bg-header-fixed #auto_background,
-    #bg-header-fixed #bg_lock_button {
-        order: 1;
-    }
+	.bg-header-row-1, .bg-header-row-2, .bg-header-row-3 {
+		flex-basis: 100%;
+		display: flex;
+		align-items: center;
+		gap: 5px;
+	}
 
-    /* --- Row 2 Item --- */
-    #bg-header-fixed #bg-filter {
-        order: 2;
-        flex-grow: 1;
-        min-width: 0;
-    }
+	.bg-header-row-1 { order: 1; } /* Title and other buttons */
+	.bg-header-row-2 { order: 2; } /* Search */
+	.bg-header-row-3 { order: 3; } /* Add button */
 
-    /* --- Row 3 Item --- */
-    #bg-header-fixed #add_background_button_top {
-        order: 3;
-        width: 100%;
-        text-align: center;
-        padding-top: 0.5em;
-        padding-bottom: 0.5em;
-    }
+	.bg-header-row-1 #bg-header-title {
+		flex-grow: 1;
+	}
+	.bg-header-row-2 #bg-filter,
+	.bg-header-row-3 #add_background_button_top {
+		width: 100%;
+	}
+	.bg-header-row-3 #add_background_button_top {
+		text-align: center;
+		padding-top: 0.5em;
+		padding-bottom: 0.5em;
+	}
 
     #Backgrounds.drawer-content.openDrawer.bg-drawer-layout {
         width: 100dvw;
