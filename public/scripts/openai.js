@@ -1834,31 +1834,18 @@ function saveModelList(data) {
     }
 
     if (oai_settings.chat_completion_source == chat_completion_sources.MISTRALAI) {
-        /** @type {HTMLSelectElement} */
-        const mistralModelSelect = document.querySelector('#model_mistralai_select');
-        if (mistralModelSelect) {
-            const options = Array.from(mistralModelSelect.options);
-            options.forEach((option) => {
-                const existingModel = model_list.find(model => model.id === option.value);
-                if (!existingModel) {
-                    option.remove();
-                }
-            });
+        $('#model_mistralai_select').empty();
 
-            const otherOptionsGroup = mistralModelSelect.querySelector('#mistralai_other_models');
-            for (const model of model_list.filter(model => model?.capabilities?.completion_chat)) {
-                if (!options.some(option => option.value === model.id) && otherOptionsGroup) {
-                    otherOptionsGroup.append(new Option(model.id, model.id));
-                }
-            }
-
-            const selectedModel = model_list.find(model => model.id === oai_settings.mistralai_model);
-            if (!selectedModel) {
-                oai_settings.mistralai_model = model_list.find(model => model?.capabilities?.completion_chat)?.id;
-            }
-
-            $('#model_mistralai_select').val(oai_settings.mistralai_model).trigger('change');
+        for (const model of model_list.filter(model => model?.capabilities?.completion_chat)) {
+            $('#model_mistralai_select').append(new Option(model.id, model.id));
         }
+
+        const selectedModel = model_list.find(model => model.id === oai_settings.mistralai_model);
+        if (!selectedModel) {
+            oai_settings.mistralai_model = model_list.find(model => model?.capabilities?.completion_chat)?.id;
+        }
+
+        $('#model_mistralai_select').val(oai_settings.mistralai_model).trigger('change');
     }
 
     if (oai_settings.chat_completion_source == chat_completion_sources.ELECTRONHUB) {
@@ -1934,7 +1921,7 @@ function saveModelList(data) {
     }
 
     if (oai_settings.chat_completion_source === chat_completion_sources.MAKERSUITE) {
-        // Clear only the "Other" optgroup for dynamic models
+    // Clear only the "Other" optgroup for dynamic models
         $('#google_other_models').empty();
 
         // Get static model options that are already in the HTML
@@ -1945,7 +1932,7 @@ function saveModelList(data) {
 
         // Add dynamic models to the "Other" group
         model_list.forEach((model) => {
-            // Only add if not already in static list
+        // Only add if not already in static list
             if (!staticModels.includes(model.id)) {
                 $('#google_other_models').append(
                     $('<option>', {
@@ -2040,6 +2027,24 @@ function saveModelList(data) {
             .empty()
             .append(new Option(modelId || 'None', modelId || '', true, true))
             .trigger('change');
+    }
+
+    if (oai_settings.chat_completion_source == chat_completion_sources.XAI) {
+        $('#model_xai_select').empty();
+        model_list.forEach((model) => {
+            $('#model_xai_select').append(
+                $('<option>', {
+                    value: model.id,
+                    text: model.id,
+                }));
+        });
+
+        const selectedModel = model_list.find(model => model.id === oai_settings.xai_model);
+        if (model_list.length > 0 && (!selectedModel || !oai_settings.xai_model)) {
+            oai_settings.xai_model = model_list[0].id;
+        }
+
+        $('#model_xai_select').val(oai_settings.xai_model).trigger('change');
     }
 }
 
@@ -2465,19 +2470,24 @@ async function sendOpenAIRequest(type, messages, signal, { jsonSchema = null } =
     }
 
     if (isXAI) {
-        if (generate_data.model.includes('grok-4')) {
+        const model = generate_data.model;
+        if (model.includes('grok-3-mini')) {
             delete generate_data.presence_penalty;
             delete generate_data.frequency_penalty;
             delete generate_data.stop;
+        } else {
+            // As of 2025/09/21, only grok-3-mini accepts reasoning_effort
             delete generate_data.reasoning_effort;
         }
-        if (generate_data.model.includes('grok-3-mini')) {
+
+        if (model.includes('grok-4') || model.includes('grok-code')) {
             delete generate_data.presence_penalty;
             delete generate_data.frequency_penalty;
-        }
-        if (generate_data.model.includes('grok-vision')) {
-            delete generate_data.tools;
-            delete generate_data.tool_choice;
+
+            // grok-4-fast-non-reasoning accepts stop
+            if (!model.includes('grok-4-fast-non-reasoning')) {
+                delete generate_data.stop;
+            }
         }
     }
 
@@ -4650,75 +4660,8 @@ function getMistralMaxContext(model, isUnlocked) {
         }
     }
 
-    const contextMap = {
-        'codestral-2405': 32768,
-        'codestral-2411-rc5': 262144,
-        'codestral-2412': 262144,
-        'codestral-2501': 262144,
-        'codestral-2508': 256000,
-        'codestral-latest': 256000,
-        'codestral-mamba-2407': 262144,
-        'codestral-mamba-latest': 262144,
-        'open-codestral-mamba': 262144,
-        'ministral-3b-2410': 131072,
-        'ministral-3b-latest': 131072,
-        'ministral-8b-2410': 131072,
-        'ministral-8b-latest': 131072,
-        'mistral-large-2407': 131072,
-        'mistral-large-2411': 131072,
-        'mistral-large-latest': 131072,
-        'mistral-large-pixtral-2411': 131072,
-        'mistral-tiny-2407': 131072,
-        'mistral-tiny-latest': 131072,
-        'open-mistral-nemo': 131072,
-        'open-mistral-nemo-2407': 131072,
-        'pixtral-12b': 131072,
-        'pixtral-12b-2409': 131072,
-        'pixtral-12b-latest': 131072,
-        'pixtral-large-2411': 131072,
-        'pixtral-large-latest': 131072,
-        'open-mixtral-8x22b': 65536,
-        'open-mixtral-8x22b-2404': 65536,
-        'mistral-embed': 32768,
-        'mistral-large-2402': 32768,
-        'mistral-medium': 131072,
-        'mistral-medium-2312': 32768,
-        'mistral-medium-2505': 131072,
-        'mistral-medium-2508': 262144,
-        'mistral-medium-latest': 262144,
-        'mistral-moderation-2411': 32768,
-        'mistral-moderation-latest': 32768,
-        'mistral-ocr-2503': 32768,
-        'mistral-ocr-latest': 32768,
-        'mistral-saba-2502': 32768,
-        'mistral-saba-latest': 32768,
-        'mistral-small': 32768,
-        'mistral-small-2312': 32768,
-        'mistral-small-2402': 32768,
-        'mistral-small-2409': 32768,
-        'mistral-small-2501': 32768,
-        'mistral-small-2503': 32768,
-        'mistral-small-2506': 131072,
-        'mistral-small-latest': 131072,
-        'mistral-tiny': 32768,
-        'mistral-tiny-2312': 32768,
-        'open-mistral-7b': 32768,
-        'open-mixtral-8x7b': 32768,
-        'devstral-small-2505': 131072,
-        'devstral-small-2507': 131072,
-        'devstral-small-latest': 131072,
-        'devstral-medium-latest': 131072,
-        'devstral-medium-2507': 131072,
-        'magistral-medium-latest': 40960,
-        'magistral-medium-2506': 40960,
-        'magistral-small-latest': 40960,
-        'magistral-small-2506': 40000,
-        'magistral-small-2507': 40960,
-        'magistral-medium-2507': 40960,
-    };
-
     // Return context size if model found, otherwise default to 32k
-    return Object.entries(contextMap).find(([key]) => model.includes(key))?.[1] || 32768;
+    return max_32k;
 }
 
 /**
@@ -4996,6 +4939,10 @@ async function onModelChange() {
     }
 
     if ($(this).is('#model_xai_select')) {
+        if (!value) {
+            console.debug('Null XAI model selected. Ignoring.');
+            return;
+        }
         console.log('XAI model changed to', value);
         oai_settings.xai_model = value;
     }
@@ -5264,11 +5211,14 @@ async function onModelChange() {
             $('#openai_max_context').attr('max', unlocked_max);
         } else if (oai_settings.xai_model.includes('grok-2-vision')) {
             $('#openai_max_context').attr('max', max_32k);
-        } else if (oai_settings.xai_model.includes('grok-vision')) {
-            $('#openai_max_context').attr('max', max_8k);
+        } else if (oai_settings.xai_model.includes('grok-4-fast')) {
+            $('#openai_max_context').attr('max', max_2mil);
         } else if (oai_settings.xai_model.includes('grok-4')) {
             $('#openai_max_context').attr('max', max_256k);
+        } else if (oai_settings.xai_model.includes('grok-code')) {
+            $('#openai_max_context').attr('max', max_256k);
         } else {
+            // grok 2 and grok 3
             $('#openai_max_context').attr('max', max_128k);
         }
 
@@ -5817,7 +5767,6 @@ export function isImageInliningSupported() {
         // xAI (Grok)
         'grok-4',
         'grok-2-vision',
-        'grok-vision',
         // Moonshot
         'moonshot-v1-8k-vision-preview',
         'moonshot-v1-32k-vision-preview',
@@ -5850,6 +5799,7 @@ export function isImageInliningSupported() {
         case chat_completion_sources.COHERE:
             return visionSupportedModels.some(model => oai_settings.cohere_model.includes(model));
         case chat_completion_sources.XAI:
+            // TODO: xAI's /models endpoint doesn't return modality info
             return visionSupportedModels.some(model => oai_settings.xai_model.includes(model));
         case chat_completion_sources.AIMLAPI:
             return (Array.isArray(model_list) && model_list.find(m => m.id === oai_settings.aimlapi_model)?.features?.includes('openai/chat-completion.vision'));
