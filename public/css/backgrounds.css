@@ -53,8 +53,6 @@
 }
 
 #bg-header-fixed {
-    display: flex;
-    flex-direction: column;
     flex-shrink: 0;
     padding: 5px;
     background-color: var(--SmartThemeBlurTintColor);
@@ -123,6 +121,7 @@
     border: 0px solid transparent;
     outline: 2px solid var(--SmartThemeBorderColor);
     outline-offset: -1px;
+
     height: auto;
     aspect-ratio: 16 / 9;
 }
@@ -130,6 +129,21 @@
 .bg_example.locked-background {
     outline: 2px solid var(--golden);
     outline-offset: 0;
+}
+
+.bg_example.locked-background::after {
+    content: '\f023';
+    font-family: 'Font Awesome 6 Free';
+    font-weight: 900;
+
+    position: absolute;
+    bottom: 5px;
+    right: 5px;
+    z-index: 4;
+    color: var(--golden);
+    filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.8));
+    font-size: calc(var(--mainFontSize) * 0.8);
+    pointer-events: none;
 }
 
 .bg_example:focus-visible {
@@ -243,23 +257,7 @@
     border-radius: 0 0 8px 8px;
 }
 
-/* Lock Icon */
 .bg_example:hover .BGSampleTitle,
 .bg_example:focus-within .BGSampleTitle {
     opacity: 1;
-}
-
-.bg_example.locked-background::after {
-    content: '\f023';
-    font-family: 'Font Awesome 6 Free';
-    font-weight: 900;
-
-    position: absolute;
-    bottom: 5px;
-    right: 5px;
-    z-index: 4;
-    color: var(--golden);
-    filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.8));
-    font-size: calc(var(--mainFontSize) * 0.8);
-    pointer-events: none;
 }
