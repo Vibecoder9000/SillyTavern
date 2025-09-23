@@ -5296,34 +5296,30 @@
             </div>
             <div id="Backgrounds" class="drawer-content closedDrawer bg-drawer-layout">
                 <div id="bg-header-fixed">
-                    <div id="bg-header-controls" class="flex-container">
-                        <div class="bg-header-row-1">
-                            <h3 id="bg-header-title" class="margin0" data-i18n="Backgrounds">Backgrounds</h3>
-                            <select id="background_fitting" class="text_pole" data-i18n="[title]Background Fitting" title="Background Fitting">
-                                <option value="classic" data-i18n="Classic">Classic</option>
-                                <option value="cover" data-i18n="Cover">Cover</option>
-                                <option value="contain" data-i18n="Contain">Contain</option>
-                                <option value="stretch" data-i18n="Stretch">Stretch</option>
-                                <option value="center" data-i18n="Center">Center</option>
-                           </select>
-                            <div id="auto_background" class="menu_button menu_button_icon">
-                                <i class="fa-solid fa-wand-magic"></i>
-                                <span data-i18n="Auto-select">Auto-select</span>
-                            </div>
-                            <div id="bg_lock_button" class="menu_button menu_button_icon">
-                                <i class="fa-solid fa-lock"></i>
-                                <span data-i18n="Lock">Lock</span>
-                            </div>
+                    <div class="bg-header-row-1">
+                        <label for="add_bg_button" id="add_background_button_top" class="menu_button menu_button_icon interactable">
+                            <i class="fa-solid fa-plus"></i>
+                            <span data-i18n="Add Background">Add Background</span>
+                        </label>
+                        <span class="expander"></span>
+                        <select id="background_fitting" class="text_pole" data-i18n="[title]Background Fitting" title="Background Fitting">
+                            <option value="classic" data-i18n="Classic">Classic</option>
+                            <option value="cover" data-i18n="Cover">Cover</option>
+                            <option value="contain" data-i18n="Contain">Contain</option>
+                            <option value="stretch" data-i18n="Stretch">Stretch</option>
+                            <option value="center" data-i18n="Center">Center</option>
+                        </select>
+                        <div id="auto_background" class="menu_button menu_button_icon">
+                            <i class="fa-solid fa-wand-magic"></i>
+                            <span data-i18n="Auto-select">Auto-select</span>
                         </div>
-                        <div class="bg-header-row-2">
-                            <input id="bg-filter" class="text_pole" type="search" data-i18n="[placeholder]Filter backgrounds" placeholder="Filter backgrounds" />
+                        <div id="bg_lock_button" class="menu_button menu_button_icon">
+                            <i class="fa-solid fa-lock"></i>
+                            <span data-i18n="Lock">Lock</span>
                         </div>
-                        <div class="bg-header-row-3">
-                            <label for="add_bg_button" id="add_background_button_top" class="menu_button menu_button_icon interactable">
-                                <i class="fa-solid fa-plus"></i>
-                                <span data-i18n="Add Background">Add Background</span>
-                            </label>
-                        </div>
+                    </div>
+                    <div class="bg-header-row-2">
+                        <input id="bg-filter" class="text_pole" type="search" data-i18n="[placeholder]Search..." placeholder="Search..." />
                     </div>
                 </div>
                 <div id="bg-scrollable-content">
