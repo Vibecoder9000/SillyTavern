@@ -57,6 +57,7 @@
     padding: 5px;
     background-color: var(--SmartThemeBlurTintColor);
     border-bottom: 1px solid var(--SmartThemeBorderColor);
+    width: 100%;
 }
 
 .bg-header-row-1,
