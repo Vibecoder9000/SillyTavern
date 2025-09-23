@@ -3,7 +3,6 @@
     background-repeat: no-repeat;
     background-attachment: fixed;
     background-size: cover;
-    background-position: center;
     position: absolute;
     width: 100%;
     height: 100%;
@@ -16,9 +15,16 @@
     max-width: 8em;
 }
 
+/* Fill/Cover - scales to fill width while maintaining aspect ratio */
+#bg1.cover {
+    background-size: cover;
+    background-position: center;
+}
+
 /* Fit/Contain - shows entire image maintaining aspect ratio */
 #bg1.contain {
     background-size: contain;
+    background-position: center;
     background-repeat: no-repeat;
 }
 
@@ -30,9 +36,9 @@
 /* Center - centers without scaling */
 #bg1.center {
     background-size: auto;
+    background-position: center;
     background-repeat: no-repeat;
 }
-
 
 /* This is the main flex container for the entire drawer */
 #Backgrounds.drawer-content.openDrawer.bg-drawer-layout {
