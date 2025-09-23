@@ -179,8 +179,6 @@ function highlightLockedBackground() {
 
 /**
  * Locks the background for the current chat
- * @param {Event} e Click event
- * @returns {string} Empty string
  */
 function onLockBackgroundClick() {
     if (!getCurrentChatId()) {
@@ -200,8 +198,6 @@ function onLockBackgroundClick() {
 
 /**
  * Unlocks the background for the current chat
- * @param {Event} e Click event
- * @returns {string} Empty string
  */
 function onUnlockBackgroundClick() {
     // Delete the lock from the chat's metadata.
@@ -755,7 +751,7 @@ function updateBackgroundHighlight() {
 
     if (activeUrl) {
         // Find the thumbnail whose data-url attribute matches the active URL
-        $('.bg_example').filter(function() {
+        $('.bg_example').filter(function () {
             return $(this).data('url') === activeUrl;
         }).addClass('selected-background');
     }
@@ -829,13 +825,19 @@ export function initBackgrounds() {
     $('#bg-filter').on('input', () => debouncedOnBackgroundFilterInput());
     SlashCommandParser.addCommandObject(SlashCommand.fromProps({
         name: 'lockbg',
-        callback: onLockBackgroundClick,
+        callback: () => {
+            onLockBackgroundClick();
+            return '';
+        },
         aliases: ['bglock'],
         helpString: 'Locks a background for the currently selected chat',
     }));
     SlashCommandParser.addCommandObject(SlashCommand.fromProps({
         name: 'unlockbg',
-        callback: onUnlockBackgroundClick,
+        callback: () => {
+            onUnlockBackgroundClick();
+            return '';
+        },
         aliases: ['bgunlock'],
         helpString: 'Unlocks a background for the currently selected chat',
     }));
