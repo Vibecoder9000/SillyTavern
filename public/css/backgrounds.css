@@ -126,6 +126,11 @@
     aspect-ratio: 16 / 9;
 }
 
+.bg_example:focus-visible {
+    outline-offset: inherit;
+    outline-color: var(--interactable-outline-color);
+}
+
 .bg_example.locked-background {
     outline: 2px solid var(--golden);
     outline-offset: 0;
@@ -144,15 +149,6 @@
     filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.8));
     font-size: calc(var(--mainFontSize) * 0.8);
     pointer-events: none;
-}
-
-.bg_example:focus-visible {
-    outline-offset: inherit;
-    outline-color: var(--interactable-outline-color);
-}
-
-.bg_example:focus-visible {
-    outline-offset: inherit;
 }
 
 .bg_example.selected-background {
