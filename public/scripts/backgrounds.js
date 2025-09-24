@@ -165,15 +165,9 @@ function highlightLockedBackground() {
     const lockedBackgroundUrl = chat_metadata[BG_METADATA_KEY];
 
     if (lockedBackgroundUrl) {
-        const match = lockedBackgroundUrl.match(/backgrounds\/(.+)"\)$/);
-        if (match && match[1]) {
-            const lockedFilename = decodeURIComponent(match[1]);
-            const $lockedThumb = $(`.bg_example[bgfile="${lockedFilename}"]`);
-
-            if ($lockedThumb.length) {
-                $lockedThumb.addClass('locked-background');
-            }
-        }
+        $('.bg_example').filter(function () {
+            return $(this).data('url') === lockedBackgroundUrl;
+        }).addClass('locked-background');
     }
 }
 
