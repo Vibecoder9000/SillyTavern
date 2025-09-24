@@ -41,14 +41,12 @@
 }
 
 /* This is the main flex container for the entire drawer */
-#Backgrounds.drawer-content.openDrawer.bg-drawer-layout {
+.drawer-content.openDrawer.bg-drawer-layout {
     display: flex;
+}
+
+.bg-drawer-layout {
     flex-direction: column;
-    height: auto;
-    height: calc-size(auto, size);
-    overflow: hidden;
-    width: var(--sheldWidth);
-    max-width: var(--sheldWidth);
     padding: 0;
 }
 
