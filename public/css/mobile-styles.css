@@ -92,11 +92,6 @@
         max-width: 6em;
     }
 
-    #auto_background>span,
-    #bg_lock_button>span {
-        display: none;
-    }
-
     #Backgrounds.drawer-content.openDrawer.bg-drawer-layout {
         width: 100dvw;
         max-width: 100dvw;

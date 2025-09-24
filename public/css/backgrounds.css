@@ -150,6 +150,11 @@
     pointer-events: none;
 }
 
+.bg_example:not(.locked-background) .jg-unlock,
+.bg_example.locked-background .jg-lock {
+    display: none;
+}
+
 .bg_example.selected-background {
     outline: 2px solid white;
     outline-offset: 0;
