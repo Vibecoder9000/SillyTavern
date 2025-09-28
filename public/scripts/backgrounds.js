@@ -21,6 +21,9 @@ const THUMBNAIL_COLUMNS_MAX = 8;
 const THUMBNAIL_COLUMNS_DEFAULT_DESKTOP = 5;
 const THUMBNAIL_COLUMNS_DEFAULT_MOBILE = 3;
 
+// How far (px) the user must scroll before the scroll-to-top button appears
+const SCROLL_VISIBILITY_THRESHOLD = 300;
+
 /**
  * Storage for frontend-generated background thumbnails.
  * This is used to store thumbnails for backgrounds that cannot be generated on the server.
@@ -43,6 +46,8 @@ const THUMBNAIL_CONFIG = {
  * @type {IntersectionObserver|null}
  */
 let lazyLoadObserver = null;
+// cleanup function returned by setupScrollToTop
+let bgScrollCleanup = null;
 
 export let background_settings = {
     name: '__transparent.png',
@@ -747,72 +752,65 @@ function onBackgroundFilterInput() {
 const debouncedOnBackgroundFilterInput = debounce(onBackgroundFilterInput, debounce_timeout.standard);
 
 function setupScrollToTop() {
-    // Delay setup slightly to ensure DOM elements exist when called during init
-    setTimeout(() => {
-        const scrollContainer = document.getElementById('bg-scrollable-content');
-        const btn = document.getElementById('bg-scroll-top');
-        const drawer = document.getElementById('Backgrounds');
+    const scrollContainer = document.getElementById('bg-scrollable-content');
+    const btn = document.getElementById('bg-scroll-top');
+    const drawer = document.getElementById('Backgrounds');
 
-        if (!scrollContainer || !btn || !drawer) {
-            // Not fatal; backgrounds drawer may not be present in some contexts
-            console.error('Scroll-to-top dependencies not found.');
-            return;
+    if (!btn || !drawer) {
+        // Not fatal; the drawer or button may not exist in some builds. Use debug level.
+        console.debug('Scroll-to-top: button or drawer not found during setup.');
+        return () => { /* noop cleanup */ };
+    }
+
+    if (!scrollContainer) {
+        console.debug('Scroll-to-top: scroll container not found during setup.');
+        return () => { /* noop cleanup */ };
+    }
+
+    // rAF-throttled scroll handler
+    let ticking = false;
+    const onScroll = () => {
+        if (!ticking) {
+            window.requestAnimationFrame(() => {
+                if (scrollContainer.scrollTop > SCROLL_VISIBILITY_THRESHOLD) {
+                    btn.classList.add('visible');
+                } else {
+                    btn.classList.remove('visible');
+                }
+                ticking = false;
+            });
+            ticking = true;
         }
+    };
+    scrollContainer.addEventListener('scroll', onScroll, { passive: true });
 
-        // rAF-throttled scroll handler
-        let ticking = false;
-        const onScroll = () => {
-            if (!ticking) {
-                window.requestAnimationFrame(() => {
-                    if (scrollContainer.scrollTop > 300) {
-                        btn.classList.add('visible');
-                    } else {
-                        btn.classList.remove('visible');
-                    }
-                    ticking = false;
-                });
-                ticking = true;
-            }
-        };
-        scrollContainer.addEventListener('scroll', onScroll, { passive: true });
+    // Hide the button when the drawer is closed. This is defensive—prefer emitting an event from the drawer open/close logic.
+    const drawerObserver = new MutationObserver(() => {
+        if (!drawer.classList.contains('openDrawer')) {
+            btn.classList.remove('visible');
+        }
+    });
+    drawerObserver.observe(drawer, { attributes: true, attributeFilter: ['class'] });
 
-        // Hide the button if the drawer is closed
-        const drawerObserver = new MutationObserver(() => {
-            if (!drawer.classList.contains('openDrawer')) {
-                btn.classList.remove('visible');
-            }
-        });
-        drawerObserver.observe(drawer, { attributes: true, attributeFilter: ['class'] });
+    // Scroll to top on click (button semantics provide keyboard activation natively)
+    const onActivate = (e) => {
+        if (e) {
+            e.preventDefault();
+            e.stopPropagation();
+        }
+        scrollContainer.scrollTo({ top: 0, behavior: 'smooth' });
+    };
+    btn.addEventListener('click', onActivate);
 
-        // Scroll to top on click
-        const onActivate = (e) => {
-            if (e) {
-                e.preventDefault();
-                e.stopPropagation();
-            }
-            scrollContainer.scrollTo({ top: 0, behavior: 'smooth' });
-        };
-        btn.addEventListener('click', onActivate);
+    // Initial state check
+    if (scrollContainer.scrollTop > SCROLL_VISIBILITY_THRESHOLD) btn.classList.add('visible');
 
-        // Keyboard activation (Enter / Space)
-        const onKey = (e) => {
-            if (e.key === 'Enter' || e.key === ' ') {
-                onActivate(e);
-            }
-        };
-        btn.addEventListener('keydown', onKey);
-
-        // Expose cleanup so disconnects can remove listeners if needed
-        /** @type {any} */ (btn)._bg_scroll_cleanup = () => {
-            scrollContainer.removeEventListener('scroll', onScroll);
-            btn.removeEventListener('click', onActivate);
-            btn.removeEventListener('keydown', onKey);
-            drawerObserver.disconnect();
-        };
-
-        // Initial state check
-        if (scrollContainer.scrollTop > 300) btn.classList.add('visible');
-    }, 100);
+    // Return cleanup function for caller to hold and invoke when appropriate
+    return () => {
+        scrollContainer.removeEventListener('scroll', onScroll);
+        btn.removeEventListener('click', onActivate);
+        drawerObserver.disconnect();
+    };
 }
 
 export function initBackgrounds() {
@@ -909,5 +907,13 @@ export function initBackgrounds() {
     });
 
     // Initialize scroll-to-top button behavior for the backgrounds drawer
-    setupScrollToTop();
+    try {
+        if (typeof bgScrollCleanup === 'function') {
+            bgScrollCleanup();
+        }
+        bgScrollCleanup = setupScrollToTop();
+    } catch (err) {
+        console.debug('Failed to initialize bg scroll-to-top:', err);
+        bgScrollCleanup = null;
+    }
 }

@@ -10,6 +10,16 @@
     z-index: -1;
 }
 
+/* Theme variables for small UI controls in the backgrounds drawer */
+:root {
+    --bg-scroll-button-size: 42px;
+    --bg-scroll-button-font-size: 18px;
+    --bg-scroll-button-offset: 20px;
+    --bg-scroll-button-bg-alpha: 0.9;
+    --bg-scroll-button-bg-hover-alpha: 0.95;
+    --bg-scroll-button-z: 10;
+}
+
 /* Fitting options */
 #background_fitting {
     max-width: 8em;
@@ -222,38 +232,34 @@
 
 /* Scroll-to-Top Button */
 
-/* Scroll-to-Top Button */
-
 #bg-scroll-top {
     position: absolute;
-    bottom: 20px;
-    right: 20px;
-    width: 42px;
-    height: 42px;
-    background: rgba(40, 40, 40, 0.92);
+    bottom: var(--bg-scroll-button-offset);
+    right: var(--bg-scroll-button-offset);
+    width: var(--bg-scroll-button-size);
+    height: var(--bg-scroll-button-size);
+    background: rgba(40, 40, 40, var(--bg-scroll-button-bg-alpha));
     color: #fff;
     border: 1px solid var(--SmartThemeBorderColor, #888);
     border-radius: 50%;
     cursor: pointer;
-    z-index: 10;
-    font-size: 18px;
+    z-index: var(--bg-scroll-button-z);
+    font-size: var(--bg-scroll-button-font-size);
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    visibility: hidden;
     opacity: 0;
-    transition: visibility 0s linear calc(var(--animation-duration) * -1), opacity var(--animation-duration) ease;
+    transition: opacity var(--animation-duration) ease;
     pointer-events: none;
 }
 
 #bg-scroll-top.visible {
-    visibility: visible;
     opacity: 1;
     pointer-events: auto;
 }
 
 #bg-scroll-top:hover {
-    background: rgba(60, 60, 60, 0.95);
+    background: rgba(60, 60, 60, var(--bg-scroll-button-bg-hover-alpha));
     border-color: var(--golden, #ffd700);
 }
 
