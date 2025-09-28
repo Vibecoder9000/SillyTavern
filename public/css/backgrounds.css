@@ -88,6 +88,7 @@
     overflow-y: auto;
     overflow-x: hidden;
     padding: 0 5px 15px;
+    position: relative;
 }
 
 #bg_menu_content,
@@ -217,6 +218,49 @@
 
 .bg_example .jg-button:hover {
     background-color: rgba(255, 255, 255, 0.2);
+}
+
+/* Scroll-to-Top Button */
+
+/* Scroll-to-Top Button */
+
+#bg-scroll-top {
+    position: absolute;
+    bottom: 20px;
+    right: 20px;
+    width: 42px;
+    height: 42px;
+    background: rgba(40, 40, 40, 0.92);
+    color: #fff;
+    border: 1px solid var(--SmartThemeBorderColor, #888);
+    border-radius: 50%;
+    cursor: pointer;
+    z-index: 10;
+    font-size: 18px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    visibility: hidden;
+    opacity: 0;
+    transition: visibility 0s linear calc(var(--animation-duration) * -1), opacity var(--animation-duration) ease;
+    pointer-events: none;
+}
+
+#bg-scroll-top.visible {
+    visibility: visible;
+    opacity: 1;
+    pointer-events: auto;
+}
+
+#bg-scroll-top:hover {
+    background: rgba(60, 60, 60, 0.95);
+    border-color: var(--golden, #ffd700);
+}
+
+#bg-scroll-top .fa-solid {
+    margin: 0;
+    padding: 0;
+    line-height: 1;
 }
 
 .thumbnail-clipper {

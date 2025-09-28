@@ -746,6 +746,75 @@ function onBackgroundFilterInput() {
 
 const debouncedOnBackgroundFilterInput = debounce(onBackgroundFilterInput, debounce_timeout.standard);
 
+function setupScrollToTop() {
+    // Delay setup slightly to ensure DOM elements exist when called during init
+    setTimeout(() => {
+        const scrollContainer = document.getElementById('bg-scrollable-content');
+        const btn = document.getElementById('bg-scroll-top');
+        const drawer = document.getElementById('Backgrounds');
+
+        if (!scrollContainer || !btn || !drawer) {
+            // Not fatal; backgrounds drawer may not be present in some contexts
+            console.error('Scroll-to-top dependencies not found.');
+            return;
+        }
+
+        // rAF-throttled scroll handler
+        let ticking = false;
+        const onScroll = () => {
+            if (!ticking) {
+                window.requestAnimationFrame(() => {
+                    if (scrollContainer.scrollTop > 300) {
+                        btn.classList.add('visible');
+                    } else {
+                        btn.classList.remove('visible');
+                    }
+                    ticking = false;
+                });
+                ticking = true;
+            }
+        };
+        scrollContainer.addEventListener('scroll', onScroll, { passive: true });
+
+        // Hide the button if the drawer is closed
+        const drawerObserver = new MutationObserver(() => {
+            if (!drawer.classList.contains('openDrawer')) {
+                btn.classList.remove('visible');
+            }
+        });
+        drawerObserver.observe(drawer, { attributes: true, attributeFilter: ['class'] });
+
+        // Scroll to top on click
+        const onActivate = (e) => {
+            if (e) {
+                e.preventDefault();
+                e.stopPropagation();
+            }
+            scrollContainer.scrollTo({ top: 0, behavior: 'smooth' });
+        };
+        btn.addEventListener('click', onActivate);
+
+        // Keyboard activation (Enter / Space)
+        const onKey = (e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+                onActivate(e);
+            }
+        };
+        btn.addEventListener('keydown', onKey);
+
+        // Expose cleanup so disconnects can remove listeners if needed
+        /** @type {any} */ (btn)._bg_scroll_cleanup = () => {
+            scrollContainer.removeEventListener('scroll', onScroll);
+            btn.removeEventListener('click', onActivate);
+            btn.removeEventListener('keydown', onKey);
+            drawerObserver.disconnect();
+        };
+
+        // Initial state check
+        if (scrollContainer.scrollTop > 300) btn.classList.add('visible');
+    }, 100);
+}
+
 export function initBackgrounds() {
     eventSource.on(event_types.CHAT_CHANGED, onChatChanged);
     eventSource.on(event_types.FORCE_SET_BACKGROUND, forceSetBackground);
@@ -838,4 +907,7 @@ export function initBackgrounds() {
         await getBackgrounds();
         await onChatChanged();
     });
+
+    // Initialize scroll-to-top button behavior for the backgrounds drawer
+    setupScrollToTop();
 }
