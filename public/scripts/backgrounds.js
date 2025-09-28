@@ -4,6 +4,7 @@ import { openThirdPartyExtensionMenu, saveMetadataDebounced } from './extensions
 import { SlashCommand } from './slash-commands/SlashCommand.js';
 import { SlashCommandParser } from './slash-commands/SlashCommandParser.js';
 import { createThumbnail, flashHighlight, getBase64Async, stringFormat, debounce } from './utils.js';
+import { power_user } from './power-user.js';
 import { debounce_timeout } from './constants.js';
 import { t } from './i18n.js';
 import { Popup } from './popup.js';
@@ -798,7 +799,12 @@ function setupScrollToTop() {
             e.preventDefault();
             e.stopPropagation();
         }
-        scrollContainer.scrollTo({ top: 0, behavior: 'smooth' });
+
+        const userPrefersReduced = (typeof power_user !== 'undefined' && !!power_user.reduced_motion)
+            || document.body.classList.contains('reduced-motion')
+            || (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+
+        scrollContainer.scrollTo({ top: 0, behavior: userPrefersReduced ? 'auto' : 'smooth' });
     };
     btn.addEventListener('click', onActivate);
 
