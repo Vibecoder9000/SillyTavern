@@ -798,7 +798,7 @@ function setupScrollToTop() {
             e.stopPropagation();
         }
 
-        const userPrefersReduced = (typeof power_user !== 'undefined' && power_user.reduced_motion);
+        const userPrefersReduced = power_user.reduced_motion;
 
         scrollContainer.scrollTo({ top: 0, behavior: userPrefersReduced ? 'auto' : 'smooth' });
     };
