@@ -766,19 +766,18 @@ function setupScrollToTop() {
         return () => { /* noop cleanup */ };
     }
 
-    // rAF-throttled scroll handler
+    // Throttled scroll handler
     let ticking = false;
+    const THROTTLE_DELAY = 300; // 300ms delay
+
     const onScroll = () => {
         if (!ticking) {
-            window.requestAnimationFrame(() => {
-                if (scrollContainer.scrollTop > SCROLL_VISIBILITY_THRESHOLD) {
-                    btn.classList.add('visible');
-                } else {
-                    btn.classList.remove('visible');
-                }
-                ticking = false;
-            });
             ticking = true;
+
+            setTimeout(() => {
+                btn.classList.toggle('visible', scrollContainer.scrollTop > SCROLL_VISIBILITY_THRESHOLD);
+                ticking = false;
+            }, THROTTLE_DELAY);
         }
     };
     scrollContainer.addEventListener('scroll', onScroll, { passive: true });
