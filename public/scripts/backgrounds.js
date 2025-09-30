@@ -47,8 +47,6 @@ const THUMBNAIL_CONFIG = {
  * @type {IntersectionObserver|null}
  */
 let lazyLoadObserver = null;
-// cleanup function returned by setupScrollToTop
-let bgScrollCleanup = null;
 
 export let background_settings = {
     name: '__transparent.png',
@@ -912,14 +910,5 @@ export function initBackgrounds() {
         await onChatChanged();
     });
 
-    // Initialize scroll-to-top button behavior for the backgrounds drawer
-    try {
-        if (typeof bgScrollCleanup === 'function') {
-            bgScrollCleanup();
-        }
-        bgScrollCleanup = setupScrollToTop();
-    } catch (err) {
-        console.debug('Failed to initialize bg scroll-to-top:', err);
-        bgScrollCleanup = null;
-    }
+    setupScrollToTop();
 }
