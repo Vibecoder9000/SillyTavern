@@ -783,14 +783,6 @@ function setupScrollToTop() {
     };
     scrollContainer.addEventListener('scroll', onScroll, { passive: true });
 
-    // Hide the button when the drawer is closed. This is defensive—prefer emitting an event from the drawer open/close logic.
-    const drawerObserver = new MutationObserver(() => {
-        if (!drawer.classList.contains('openDrawer')) {
-            btn.classList.remove('visible');
-        }
-    });
-    drawerObserver.observe(drawer, { attributes: true, attributeFilter: ['class'] });
-
     // Scroll to top on click (button semantics provide keyboard activation natively)
     const onActivate = (e) => {
         if (e) {
@@ -811,7 +803,6 @@ function setupScrollToTop() {
     return () => {
         scrollContainer.removeEventListener('scroll', onScroll);
         btn.removeEventListener('click', onActivate);
-        drawerObserver.disconnect();
     };
 }
 
