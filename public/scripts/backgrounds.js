@@ -798,9 +798,7 @@ function setupScrollToTop() {
             e.stopPropagation();
         }
 
-        const userPrefersReduced = (typeof power_user !== 'undefined' && !!power_user.reduced_motion)
-            || document.body.classList.contains('reduced-motion')
-            || (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+        const userPrefersReduced = (typeof power_user !== 'undefined' && power_user.reduced_motion);
 
         scrollContainer.scrollTo({ top: 0, behavior: userPrefersReduced ? 'auto' : 'smooth' });
     };
