@@ -221,7 +221,6 @@
 }
 
 /* Scroll-to-Top Button */
-
 #bg-scroll-top {
     position: absolute;
     bottom: 20px;
@@ -250,7 +249,7 @@
 
 #bg-scroll-top:hover {
     background: rgba(60, 60, 60, 0.95);
-    border-color: var(--golden, #ffd700);
+    border-color: var(--white100);
 }
 
 #bg-scroll-top .fa-solid {
