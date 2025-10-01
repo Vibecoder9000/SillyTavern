@@ -3,6 +3,7 @@ import {
     DOMPurify,
     Readability,
     isProbablyReaderable,
+    lodash,
 } from '../lib.js';
 
 import { getContext } from './extensions.js';
@@ -2569,12 +2570,10 @@ export function versionCompare(srcVersion, minVersion) {
  * @param {string} params.scrollContainerId Scrollable container element ID
  * @param {string} params.buttonId Button element ID
  * @param {string} params.drawerId Drawer element ID
+ * @param {number} params.visibilityThreshold Scroll position (px) to show the button (default: 300)
  * @returns {() => void} Cleanup function to remove event listeners
  */
-export function setupScrollToTop({ scrollContainerId, buttonId, drawerId }) {
-    // How far (px) the user must scroll before the scroll-to-top button appears
-    const SCROLL_VISIBILITY_THRESHOLD = 300;
-
+export function setupScrollToTop({ scrollContainerId, buttonId, drawerId, visibilityThreshold = 300 }) {
     const scrollContainer = document.getElementById(scrollContainerId);
     const btn = document.getElementById(buttonId);
     const drawer = document.getElementById(drawerId);
@@ -2590,37 +2589,23 @@ export function setupScrollToTop({ scrollContainerId, buttonId, drawerId }) {
         return () => { /* noop cleanup */ };
     }
 
-    // Throttled scroll handler
-    let ticking = false;
-    const THROTTLE_DELAY = 300; // 300ms delay
-
-    const onScroll = () => {
-        if (!ticking) {
-            ticking = true;
-
-            setTimeout(() => {
-                btn.classList.toggle('visible', scrollContainer.scrollTop > SCROLL_VISIBILITY_THRESHOLD);
-                ticking = false;
-            }, THROTTLE_DELAY);
-        }
-    };
+    const updateButtonVisibility = () => btn.classList.toggle('visible', scrollContainer.scrollTop > visibilityThreshold);
+    const updateButtonVisibilityThrottled = lodash.throttle(updateButtonVisibility, debounce_timeout.standard, { leading: true, trailing: true });
+    const onScroll = () => updateButtonVisibilityThrottled();
     scrollContainer.addEventListener('scroll', onScroll, { passive: true });
 
     // Scroll to top on click (button semantics provide keyboard activation natively)
-    const onActivate = (e) => {
-        if (e) {
-            e.preventDefault();
-            e.stopPropagation();
-        }
+    const onActivate = (/** @type {MouseEvent} */ e) => {
+        e.preventDefault();
+        e.stopPropagation();
 
         const userPrefersReduced = power_user.reduced_motion;
-
         scrollContainer.scrollTo({ top: 0, behavior: userPrefersReduced ? 'auto' : 'smooth' });
     };
     btn.addEventListener('click', onActivate);
 
     // Initial state check
-    if (scrollContainer.scrollTop > SCROLL_VISIBILITY_THRESHOLD) btn.classList.add('visible');
+    updateButtonVisibility();
 
     // Return cleanup function for caller to hold and invoke when appropriate
     return () => {
