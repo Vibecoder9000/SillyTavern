@@ -227,9 +227,9 @@
     right: 20px;
     width: 42px;
     height: 42px;
-    background: rgba(40, 40, 40, 0.9);
-    color: #fff;
-    border: 1px solid var(--SmartThemeBorderColor, #888);
+    background: var(--SmartThemeBlurTintColor);
+    color: var(--SmartThemeBodyColor);
+    border: 1px solid var(--SmartThemeBorderColor);
     border-radius: 50%;
     cursor: pointer;
     z-index: 10;
@@ -248,8 +248,8 @@
 }
 
 #bg-scroll-top:hover {
-    background: rgba(60, 60, 60, 0.95);
-    border-color: var(--white100);
+    filter: brightness(1.2);
+    outline: 1px solid var(--interactable-outline-color);
 }
 
 #bg-scroll-top .fa-solid {
