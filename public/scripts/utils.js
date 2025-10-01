@@ -2570,7 +2570,7 @@ export function versionCompare(srcVersion, minVersion) {
  * @param {string} params.scrollContainerId Scrollable container element ID
  * @param {string} params.buttonId Button element ID
  * @param {string} params.drawerId Drawer element ID
- * @param {number} params.visibilityThreshold Scroll position (px) to show the button (default: 300)
+ * @param {number} [params.visibilityThreshold] Scroll position (px) to show the button (default: 300)
  * @returns {() => void} Cleanup function to remove event listeners
  */
 export function setupScrollToTop({ scrollContainerId, buttonId, drawerId, visibilityThreshold = 300 }) {
