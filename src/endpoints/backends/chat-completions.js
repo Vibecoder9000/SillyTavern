@@ -156,7 +156,7 @@ async function sendClaudeRequest(request, response) {
         const convertedPrompt = convertClaudeMessages(request.body.messages, request.body.assistant_prefill, useSystemPrompt, useTools, getPromptNames(request));
         const useThinking = /^claude-(3-7|opus-4|sonnet-4)/.test(request.body.model);
         const useWebSearch = /^claude-(3-5|3-7|opus-4|sonnet-4)/.test(request.body.model) && Boolean(request.body.enable_web_search);
-        const isOpus41 = /^claude-opus-4-1/.test(request.body.model);
+        const isLimitedSampling = /^claude-(opus-4-1|sonnet-4-5)/.test(request.body.model);
         const cacheTTL = getConfigValue('claude.extendedTTL', false, 'boolean') ? '1h' : '5m';
         let fixThinkingPrefill = false;
         // Add custom stop sequences
@@ -226,7 +226,7 @@ async function sendClaudeRequest(request, response) {
             betaHeaders.push('extended-cache-ttl-2025-04-11');
         }
 
-        if (isOpus41) {
+        if (isLimitedSampling) {
             if (requestBody.top_p < 1) {
                 delete requestBody.temperature;
             } else {
@@ -1851,7 +1851,7 @@ router.post('/generate', function (request, response) {
         const cachingAtDepth = getConfigValue('claude.cachingAtDepth', -1, 'number');
         const isClaude3or4 = /anthropic\/claude-(3|opus-4|sonnet-4)/.test(request.body.model);
         const cacheTTL = getConfigValue('claude.extendedTTL', false, 'boolean') ? '1h' : '5m';
-        if (Number.isInteger(cachingAtDepth) && cachingAtDepth >= 0 && isClaude3or4) {
+        if (Array.isArray(request.body.messages) && Number.isInteger(cachingAtDepth) && cachingAtDepth >= 0 && isClaude3or4) {
             cachingAtDepthForOpenRouterClaude(request.body.messages, cachingAtDepth, cacheTTL);
         }
 

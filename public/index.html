@@ -3016,6 +3016,7 @@
                                 <h4 data-i18n="Claude Model">Claude Model</h4>
                                 <select id="model_claude_select">
                                     <optgroup label="Versions">
+                                        <option value="claude-sonnet-4-5">claude-sonnet-4-5</option>
                                         <option value="claude-opus-4-1">claude-opus-4-1</option>
                                         <option value="claude-opus-4-1-20250805">claude-opus-4-1-20250805</option>
                                         <option value="claude-opus-4-0">claude-opus-4-0</option>
@@ -4910,7 +4911,6 @@
                                     <small data-i18n="Smooth Streaming">
                                         Smooth Streaming
                                     </small>
-                                    <i class="fa-solid fa-flask" data-i18n="[title]Experimental feature. May not work for all backends." title="Experimental feature. May not work for all backends."></i>
                                 </div>
                                 <div id="smooth_streaming_speed_control" class="flexBasis100p wide100p">
                                     <input type="range" id="smooth_streaming_speed" name="smooth_streaming_speed" min="0" max="100" step="10" value="50">
@@ -4920,6 +4920,11 @@
                                         <span data-i18n="Fast">Fast</span>
                                     </div>
                                 </div>
+                            </label>
+                            <label class="checkbox_label" for="stream_fade_in" title="Fade in streamed text when it appears, instead of it just popping in." data-i18n="[title]Fade in streamed text when it appears, instead of it just popping in">
+                                <input id="stream_fade_in" type="checkbox" />
+                                <small data-i18n="Stream Fade-In">Stream Fade-In</small>
+                                <i class="fa-solid fa-flask" data-i18n="[title]Experimental feature. May not work for all backends." title="Experimental feature. May not work for all backends."></i>
                             </label>
 
                             <label for="play_message_sound" class="checkbox_label" title="Play a sound when a message generation finishes." data-i18n="[title]Play a sound when a message generation finishes">

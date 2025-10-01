@@ -5033,6 +5033,9 @@ async function onModelChange() {
         if (oai_settings.max_context_unlocked) {
             $('#openai_max_context').attr('max', max_200k);
         }
+        else if (value.startsWith('claude-sonnet-4-5')) {
+            $('#openai_max_context').attr('max', max_1mil);
+        }
         else if (value == 'claude-2.1' || value.startsWith('claude-3') || value.startsWith('claude-opus') || value.startsWith('claude-sonnet')) {
             $('#openai_max_context').attr('max', max_200k);
         }

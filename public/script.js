@@ -267,6 +267,7 @@ import { clearItemizedPrompts, deleteItemizedPrompts, findItemizedPromptSet, ini
 import { getSystemMessageByType, initSystemMessages, SAFETY_CHAT, sendSystemMessage, system_message_types, system_messages } from './scripts/system-messages.js';
 import { event_types, eventSource } from './scripts/events.js';
 import { initAccessibility } from './scripts/a11y.js';
+import { applyStreamFadeIn } from './scripts/util/stream-fadein.js';
 
 // API OBJECT FOR EXTERNAL WIRING
 globalThis.SillyTavern = {
@@ -1927,7 +1928,7 @@ export function addCopyToCodeBlocks(messageElement) {
             e.stopPropagation();
         });
         copyButton.addEventListener('pointerup', async function () {
-            const text = codeBlocks.get(i).innerText;
+            const text = codeBlocks.get(i).textContent;
             await copyText(text);
             toastr.info(t`Copied!`, '', { timeOut: 2000 });
         });
@@ -2905,7 +2906,11 @@ class StreamingProcessor {
                 false,
             );
             if (this.messageTextDom instanceof HTMLElement) {
-                this.messageTextDom.innerHTML = formattedText;
+                if (power_user.stream_fade_in) {
+                    applyStreamFadeIn(this.messageTextDom, formattedText);
+                } else {
+                    this.messageTextDom.innerHTML = formattedText;
+                }
             }
 
             const timePassed = formatGenerationTimer(this.timeStarted, currentTime, currentTokenCount, this.reasoningHandler.getDuration(), this.timeToFirstToken);
