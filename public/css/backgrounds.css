@@ -233,8 +233,8 @@
     border: 1px solid var(--SmartThemeBorderColor, #888);
     border-radius: 50%;
     cursor: pointer;
-        z-index: 10;
-        font-size: 18px;
+    z-index: 10;
+    font-size: 18px;
     display: inline-flex;
     align-items: center;
     justify-content: center;
