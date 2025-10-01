@@ -58,7 +58,7 @@ export const renderPaginationDropdown = function(pageSize, sizeChangerOptions) {
     return sizeSelect.outerHTML;
 };
 
-export const paginationDropdownChangeHandler = function (event, size) {
+export const paginationDropdownChangeHandler = function(event, size) {
     let dropdown = $(event?.originalEvent?.currentTarget || event.delegateTarget).find('select');
     dropdown.find('[selected]').removeAttr('selected');
     dropdown.find(`[value=${size}]`).attr('selected', '');
@@ -2272,7 +2272,7 @@ export async function fetchFaFile(name) {
     return [...sheet.cssRules]
         .filter(rule => rule.style?.content)
         .map(rule => rule.selectorText.split(/,\s*/).map(selector => selector.split('::').shift().slice(1)))
-        ;
+    ;
 }
 export async function fetchFa() {
     return [...new Set((await Promise.all([
