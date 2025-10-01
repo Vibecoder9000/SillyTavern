@@ -3,8 +3,7 @@ import { chat_metadata, eventSource, event_types, generateQuietPrompt, getCurren
 import { openThirdPartyExtensionMenu, saveMetadataDebounced } from './extensions.js';
 import { SlashCommand } from './slash-commands/SlashCommand.js';
 import { SlashCommandParser } from './slash-commands/SlashCommandParser.js';
-import { createThumbnail, flashHighlight, getBase64Async, stringFormat, debounce } from './utils.js';
-import { power_user } from './power-user.js';
+import { createThumbnail, flashHighlight, getBase64Async, stringFormat, debounce, setupScrollToTop } from './utils.js';
 import { debounce_timeout } from './constants.js';
 import { t } from './i18n.js';
 import { Popup } from './popup.js';
@@ -22,8 +21,6 @@ const THUMBNAIL_COLUMNS_MAX = 8;
 const THUMBNAIL_COLUMNS_DEFAULT_DESKTOP = 5;
 const THUMBNAIL_COLUMNS_DEFAULT_MOBILE = 3;
 
-// How far (px) the user must scroll before the scroll-to-top button appears
-const SCROLL_VISIBILITY_THRESHOLD = 300;
 
 /**
  * Storage for frontend-generated background thumbnails.
@@ -750,60 +747,6 @@ function onBackgroundFilterInput() {
 
 const debouncedOnBackgroundFilterInput = debounce(onBackgroundFilterInput, debounce_timeout.standard);
 
-function setupScrollToTop() {
-    const scrollContainer = document.getElementById('bg-scrollable-content');
-    const btn = document.getElementById('bg-scroll-top');
-    const drawer = document.getElementById('Backgrounds');
-
-    if (!btn || !drawer) {
-        // Not fatal; the drawer or button may not exist in some builds. Use debug level.
-        console.debug('Scroll-to-top: button or drawer not found during setup.');
-        return () => { /* noop cleanup */ };
-    }
-
-    if (!scrollContainer) {
-        console.debug('Scroll-to-top: scroll container not found during setup.');
-        return () => { /* noop cleanup */ };
-    }
-
-    // Throttled scroll handler
-    let ticking = false;
-    const THROTTLE_DELAY = 300; // 300ms delay
-
-    const onScroll = () => {
-        if (!ticking) {
-            ticking = true;
-
-            setTimeout(() => {
-                btn.classList.toggle('visible', scrollContainer.scrollTop > SCROLL_VISIBILITY_THRESHOLD);
-                ticking = false;
-            }, THROTTLE_DELAY);
-        }
-    };
-    scrollContainer.addEventListener('scroll', onScroll, { passive: true });
-
-    // Scroll to top on click (button semantics provide keyboard activation natively)
-    const onActivate = (e) => {
-        if (e) {
-            e.preventDefault();
-            e.stopPropagation();
-        }
-
-        const userPrefersReduced = power_user.reduced_motion;
-
-        scrollContainer.scrollTo({ top: 0, behavior: userPrefersReduced ? 'auto' : 'smooth' });
-    };
-    btn.addEventListener('click', onActivate);
-
-    // Initial state check
-    if (scrollContainer.scrollTop > SCROLL_VISIBILITY_THRESHOLD) btn.classList.add('visible');
-
-    // Return cleanup function for caller to hold and invoke when appropriate
-    return () => {
-        scrollContainer.removeEventListener('scroll', onScroll);
-        btn.removeEventListener('click', onActivate);
-    };
-}
 
 export function initBackgrounds() {
     eventSource.on(event_types.CHAT_CHANGED, onChatChanged);
@@ -898,5 +841,9 @@ export function initBackgrounds() {
         await onChatChanged();
     });
 
-    setupScrollToTop();
+    setupScrollToTop({
+        scrollContainerId: 'bg-scrollable-content',
+        buttonId: 'bg-scroll-top',
+        drawerId: 'Backgrounds',
+    });
 }

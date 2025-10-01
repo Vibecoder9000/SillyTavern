@@ -57,7 +57,7 @@ export const renderPaginationDropdown = function(pageSize, sizeChangerOptions) {
     return sizeSelect.outerHTML;
 };
 
-export const paginationDropdownChangeHandler = function(event, size) {
+export const paginationDropdownChangeHandler = function (event, size) {
     let dropdown = $(event?.originalEvent?.currentTarget || event.delegateTarget).find('select');
     dropdown.find('[selected]').removeAttr('selected');
     dropdown.find(`[value=${size}]`).attr('selected', '');
@@ -2271,7 +2271,7 @@ export async function fetchFaFile(name) {
     return [...sheet.cssRules]
         .filter(rule => rule.style?.content)
         .map(rule => rule.selectorText.split(/,\s*/).map(selector => selector.split('::').shift().slice(1)))
-    ;
+        ;
 }
 export async function fetchFa() {
     return [...new Set((await Promise.all([
@@ -2561,4 +2561,70 @@ export function textValueMatcher(params, data) {
  */
 export function versionCompare(srcVersion, minVersion) {
     return (srcVersion || '0.0.0').localeCompare(minVersion, undefined, { numeric: true, sensitivity: 'base' }) > -1;
+}
+
+/**
+ * Sets up the scroll-to-top button functionality.
+ * @param {object} params Parameters object
+ * @param {string} params.scrollContainerId Scrollable container element ID
+ * @param {string} params.buttonId Button element ID
+ * @param {string} params.drawerId Drawer element ID
+ * @returns {() => void} Cleanup function to remove event listeners
+ */
+export function setupScrollToTop({ scrollContainerId, buttonId, drawerId }) {
+    // How far (px) the user must scroll before the scroll-to-top button appears
+    const SCROLL_VISIBILITY_THRESHOLD = 300;
+
+    const scrollContainer = document.getElementById(scrollContainerId);
+    const btn = document.getElementById(buttonId);
+    const drawer = document.getElementById(drawerId);
+
+    if (!btn || !drawer) {
+        // Not fatal; the drawer or button may not exist in some builds. Use debug level.
+        console.debug('Scroll-to-top: button or drawer not found during setup.');
+        return () => { /* noop cleanup */ };
+    }
+
+    if (!scrollContainer) {
+        console.debug('Scroll-to-top: scroll container not found during setup.');
+        return () => { /* noop cleanup */ };
+    }
+
+    // Throttled scroll handler
+    let ticking = false;
+    const THROTTLE_DELAY = 300; // 300ms delay
+
+    const onScroll = () => {
+        if (!ticking) {
+            ticking = true;
+
+            setTimeout(() => {
+                btn.classList.toggle('visible', scrollContainer.scrollTop > SCROLL_VISIBILITY_THRESHOLD);
+                ticking = false;
+            }, THROTTLE_DELAY);
+        }
+    };
+    scrollContainer.addEventListener('scroll', onScroll, { passive: true });
+
+    // Scroll to top on click (button semantics provide keyboard activation natively)
+    const onActivate = (e) => {
+        if (e) {
+            e.preventDefault();
+            e.stopPropagation();
+        }
+
+        const userPrefersReduced = power_user.reduced_motion;
+
+        scrollContainer.scrollTo({ top: 0, behavior: userPrefersReduced ? 'auto' : 'smooth' });
+    };
+    btn.addEventListener('click', onActivate);
+
+    // Initial state check
+    if (scrollContainer.scrollTop > SCROLL_VISIBILITY_THRESHOLD) btn.classList.add('visible');
+
+    // Return cleanup function for caller to hold and invoke when appropriate
+    return () => {
+        scrollContainer.removeEventListener('scroll', onScroll);
+        btn.removeEventListener('click', onActivate);
+    };
 }
