@@ -14,7 +14,7 @@ import storage from 'node-persist';
 
 import { AVATAR_WIDTH, AVATAR_HEIGHT, DEFAULT_AVATAR_PATH } from '../constants.js';
 import { default as validateAvatarUrlMiddleware, getFileNameValidationFunction } from '../middleware/validateFileName.js';
-import { deepMerge, humanizedISO8601DateTime, tryParse, extractFileFromZipBuffer, MemoryLimitedMap, getConfigValue, mutateJsonString } from '../util.js';
+import { deepMerge, humanizedISO8601DateTime, tryParse, extractFileFromZipBuffer, MemoryLimitedMap, getConfigValue, mutateJsonString, clientRelativePath } from '../util.js';
 import { TavernCardValidator } from '../validator/TavernCardValidator.js';
 import { parse, read, write } from '../character-card-parser.js';
 import { readWorldInfoFile } from './worldinfo.js';
@@ -952,6 +952,42 @@ async function importFromPng(uploadPath, { request }, preservedFileName) {
 }
 
 export const router = express.Router();
+
+// Endpoint to upload an animated companion (base64 payload) into the characters folder
+router.post('/upload-companion', async (request, response) => {
+    try {
+        if (!request.body) return response.status(400).send({ error: 'No data' });
+        const { image, format, ch_name, filename } = request.body;
+        if (!image || !format) return response.status(400).send({ error: 'Missing image or format' });
+        if (String(format).toLowerCase() !== 'webp') return response.status(400).send({ error: 'Only webp supported' });
+
+        const baseName = ch_name ? sanitize(String(ch_name)) : '';
+        const fileNameSafe = filename ? sanitize(String(filename)) : `${Date.now()}.webp`;
+
+        let pathToNewFile;
+        if (baseName) {
+            // prefer per-character subfolder
+            const subdir = path.join(request.user.directories.characters, baseName);
+            if (!fs.existsSync(subdir)) fs.mkdirSync(subdir, { recursive: true });
+            pathToNewFile = path.join(subdir, fileNameSafe);
+        } else {
+            // place as flat file in characters folder
+            pathToNewFile = path.join(request.user.directories.characters, fileNameSafe);
+        }
+
+        // ensure directory exists
+        const dirn = path.dirname(pathToNewFile);
+        if (!fs.existsSync(dirn)) fs.mkdirSync(dirn, { recursive: true });
+
+        const imageBuffer = Buffer.from(image, 'base64');
+        await fs.promises.writeFile(pathToNewFile, new Uint8Array(imageBuffer));
+
+        return response.send({ path: clientRelativePath(request.user.directories.root, pathToNewFile) });
+    } catch (err) {
+        console.error('upload-companion failed', err);
+        return response.status(500).send({ error: 'Failed to save companion' });
+    }
+});
 
 router.post('/create', getFileNameValidationFunction('file_name'), async function (request, response) {
     try {
