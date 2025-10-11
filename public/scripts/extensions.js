@@ -1667,6 +1667,3 @@ export async function initExtensions() {
      */
     $('#third_party_extension_button').on('click', () => openThirdPartyExtensionMenu());
 }
-
-// Expose openThirdPartyExtensionMenu globally for third-party extensions
-try { globalThis.openThirdPartyExtensionMenu = openThirdPartyExtensionMenu; } catch (_) { /* ignore */ }
