@@ -14,7 +14,7 @@ import storage from 'node-persist';
 
 import { AVATAR_WIDTH, AVATAR_HEIGHT, DEFAULT_AVATAR_PATH } from '../constants.js';
 import { default as validateAvatarUrlMiddleware, getFileNameValidationFunction } from '../middleware/validateFileName.js';
-import { deepMerge, humanizedISO8601DateTime, tryParse, extractFileFromZipBuffer, MemoryLimitedMap, getConfigValue, mutateJsonString, clientRelativePath } from '../util.js';
+import { deepMerge, humanizedISO8601DateTime, tryParse, extractFileFromZipBuffer, MemoryLimitedMap, getConfigValue, mutateJsonString } from '../util.js';
 import { TavernCardValidator } from '../validator/TavernCardValidator.js';
 import { parse, read, write } from '../character-card-parser.js';
 import { readWorldInfoFile } from './worldinfo.js';
@@ -953,44 +953,9 @@ async function importFromPng(uploadPath, { request }, preservedFileName) {
 
 export const router = express.Router();
 
-// Endpoint to upload an animated companion (base64 payload) into the characters folder
-router.post('/upload-companion', async (request, response) => {
-    try {
-        if (!request.body) return response.status(400).send({ error: 'No data' });
-        const { image, format, ch_name, filename } = request.body;
-        if (!image || !format) return response.status(400).send({ error: 'Missing image or format' });
-        if (String(format).toLowerCase() !== 'webp') return response.status(400).send({ error: 'Only webp supported' });
-
-        const baseName = ch_name ? sanitize(String(ch_name)) : '';
-        const fileNameSafe = filename ? sanitize(String(filename)) : `${Date.now()}.webp`;
-
-        let pathToNewFile;
-        if (baseName) {
-            // prefer per-character subfolder
-            const subdir = path.join(request.user.directories.characters, baseName);
-            if (!fs.existsSync(subdir)) fs.mkdirSync(subdir, { recursive: true });
-            pathToNewFile = path.join(subdir, fileNameSafe);
-        } else {
-            // place as flat file in characters folder
-            pathToNewFile = path.join(request.user.directories.characters, fileNameSafe);
-        }
-
-        // ensure directory exists
-        const dirn = path.dirname(pathToNewFile);
-        if (!fs.existsSync(dirn)) fs.mkdirSync(dirn, { recursive: true });
-
-        const imageBuffer = Buffer.from(image, 'base64');
-        await fs.promises.writeFile(pathToNewFile, new Uint8Array(imageBuffer));
-
-        return response.send({ path: clientRelativePath(request.user.directories.root, pathToNewFile) });
-    } catch (err) {
-        console.error('upload-companion failed', err);
-        return response.status(500).send({ error: 'Failed to save companion' });
-    }
-});
-
 router.post('/create', getFileNameValidationFunction('file_name'), async function (request, response) {
     try {
+        try { console.log('[CHAR-CREATE] hit', { route: request.originalUrl, method: request.method, file: !!request.file, name: request.body?.ch_name }); } catch(_) {}
         if (!request.body) return response.sendStatus(400);
 
         request.body.ch_name = sanitize(request.body.ch_name);
@@ -1085,6 +1050,7 @@ router.post('/edit', validateAvatarUrlMiddleware, async function (request, respo
     let targetFile = (request.body.avatar_url).replace('.png', '');
 
     try {
+        try { console.log('[CHAR-EDIT] hit', { route: request.originalUrl, method: request.method, file: !!request.file, avatar_url: request.body?.avatar_url }); } catch(_) {}
         if (!request.file) {
             const avatarPath = path.join(request.user.directories.characters, request.body.avatar_url);
             await writeCharacterData(avatarPath, char, targetFile, request);
@@ -1254,6 +1220,46 @@ router.post('/all', async function (request, response) {
         console.error(err);
         const isRangeError = err instanceof RangeError;
         response.status(500).send({ overflow: isRangeError, error: true });
+    }
+});
+
+/**
+ * HTTP POST endpoint for the "/api/characters/manifest" route.
+ *
+ * Returns a lightweight manifest describing companion media for characters.
+ * Each entry contains: avatar (png filename), base (filename without ext),
+ * video (video/webp filename from character JSON if present) and video_exists (boolean).
+ */
+router.post('/manifest', async function (request, response) {
+    try {
+        const charactersPath = request.user.directories.characters;
+        const files = fs.readdirSync(charactersPath).filter(f => f.endsWith('.png'));
+        const out = [];
+
+        for (const file of files) {
+            try {
+                const filePath = path.join(charactersPath, file);
+                const json = await readCharacterData(filePath);
+                if (!json) {
+                    out.push({ avatar: file, base: path.parse(file).name, video: null, video_exists: false });
+                    continue;
+                }
+                let parsed;
+                try { parsed = JSON.parse(json); } catch (e) { parsed = null; }
+                const base = path.parse(file).name;
+                const videoName = parsed && parsed.data && parsed.data.extensions && parsed.data.extensions.video_avatar ? String(parsed.data.extensions.video_avatar) : null;
+                const videoExists = videoName ? fs.existsSync(path.join(charactersPath, videoName)) : false;
+                out.push({ avatar: file, base, video: videoName, video_exists: !!videoExists });
+            } catch (err) {
+                console.warn('Failed to read character for manifest entry', file, err);
+                out.push({ avatar: file, base: path.parse(file).name, video: null, video_exists: false });
+            }
+        }
+
+        return response.send(out);
+    } catch (err) {
+        console.error('Failed to build characters manifest', err);
+        return response.sendStatus(500);
     }
 });
 
