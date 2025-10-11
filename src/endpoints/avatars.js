@@ -39,7 +39,6 @@ router.post('/delete', getFileNameValidationFunction('avatar'), function (reques
 });
 
 router.post('/upload', getFileNameValidationFunction('overwrite_name'), async (request, response) => {
-    try { console.log('[AVATARS-UPLOAD] hit', { route: request.originalUrl, method: request.method, file: !!request.file, overwrite: request.body?.overwrite_name }); } catch(_) {}
     if (!request.file) return response.sendStatus(400);
 
     try {
@@ -58,7 +57,6 @@ router.post('/upload', getFileNameValidationFunction('overwrite_name'), async (r
         const pathToNewFile = path.join(request.user.directories.avatars, filename);
         writeFileAtomicSync(pathToNewFile, image);
         fs.unlinkSync(pathToUpload);
-        try { console.log('[AVATARS-UPLOAD] saved', { file: filename, dest: pathToNewFile }); } catch(_) {}
         return response.send({ path: filename });
     } catch (err) {
         console.error('Error uploading user avatar:', err);

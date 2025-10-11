@@ -233,24 +233,6 @@ app.post('/api/ping', (request, response) => {
 // File uploads
 const uploadsPath = path.join(cliArgs.dataRoot, UPLOADS_DIRECTORY);
 app.use(multer({ dest: uploadsPath, limits: { fieldSize: 500 * 1024 * 1024 } }).single('avatar'));
-// Debug: log whenever the server receives a multipart file (avatar or otherwise)
-app.use((req, _res, next) => {
-    try {
-        if (req.file) {
-            const info = {
-                route: req.originalUrl,
-                method: req.method,
-                name: req.file.originalname,
-                mime: req.file.mimetype,
-                size: req.file.size,
-                dest: req.file.destination,
-                temp: req.file.filename,
-            };
-            console.log('[UPLOAD-SEEN]', info);
-        }
-    } catch (_) { /* ignore */ }
-    next();
-});
 app.use(multerMonkeyPatch);
 
 app.get('/version', async function (_, response) {

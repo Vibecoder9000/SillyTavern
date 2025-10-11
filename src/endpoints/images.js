@@ -70,7 +70,6 @@ router.post('/upload', async (request, response) => {
         ensureDirectoryExistence(pathToNewFile);
         const imageBuffer = Buffer.from(image, 'base64');
         await fs.promises.writeFile(pathToNewFile, new Uint8Array(imageBuffer));
-        // upload saved; no debug logging here to keep server unchanged for extension PR
         response.send({ path: clientRelativePath(request.user.directories.root, pathToNewFile) });
     } catch (error) {
         console.error(error);
