@@ -58,7 +58,7 @@ import {
     getConfigValue,
 } from './util.js';
 import { UPLOADS_DIRECTORY } from './constants.js';
-import { ensureThumbnailCache } from './endpoints/thumbnails.js';
+import { syncBackgroundsMetadata } from './endpoints/backgrounds-manager.js';
 
 // Routers
 import { router as usersPublicRouter } from './endpoints/users-public.js';
@@ -266,7 +266,10 @@ async function preSetupTasks() {
 
     const directories = await getUserDirectoriesList();
     await checkForNewContent(directories);
-    await ensureThumbnailCache(directories);
+
+    for (const userDirectories of directories) {
+        await syncBackgroundsMetadata(userDirectories);
+    }
     await diskCache.verify(directories);
     migrateFlatSecrets(directories);
     cleanUploads();

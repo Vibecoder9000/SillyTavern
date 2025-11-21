@@ -1,76 +1,280 @@
-import fs from 'node:fs';
+import fsp from 'node:fs/promises';
 import path from 'node:path';
 
 import express from 'express';
 import sanitize from 'sanitize-filename';
 
-import { dimensions, invalidateThumbnail } from './thumbnails.js';
-import { getImages } from '../util.js';
+import writeFileAtomic from 'write-file-atomic';
+import { invalidateThumbnail, dimensions, generateThumbnail, SKIPPED_EXTENSIONS_FOR_JIMP } from './thumbnails.js';
 import { getFileNameValidationFunction } from '../middleware/validateFileName.js';
+import { generateSingleFileMetadata } from './backgrounds-manager.js';
+
+/**
+ * Manages locked, atomic operations on the backgrounds.json file.
+ */
+class BackgroundsMetadataManager {
+    /**
+     * @param {object} userDirectories The user's directory paths.
+     */
+    constructor(userDirectories) {
+        this.jsonPath = path.join(userDirectories.root, 'backgrounds.json');
+    }
+
+    /**
+     * Safely reads the metadata file with a lock.
+     * @returns {Promise<object>} The parsed metadata.
+     */
+    async read() {
+        try {
+            const rawData = await fsp.readFile(this.jsonPath, 'utf8');
+            return JSON.parse(rawData);
+        } catch (error) {
+            if (error.code === 'ENOENT' || error instanceof SyntaxError) {
+                return { version: 1, images: {}, folders: [], tags: [] };
+            }
+            throw error;
+        }
+    }
+
+    /**
+     * Safely updates the metadata file by applying a transformation function.
+     * This method handles locking, reading, executing the update, and writing the result.
+     * @param {function(object): (any | Promise<any>)} updateFn A function that receives the metadata,
+     *   modifies it, and can optionally return a value.
+     * @returns {Promise<any>} The return value of the updateFn.
+     */
+    async update(updateFn) {
+        let metadata;
+        try {
+            const rawData = await fsp.readFile(this.jsonPath, 'utf8');
+            metadata = JSON.parse(rawData);
+        } catch (error) {
+            if (error.code === 'ENOENT' || error instanceof SyntaxError) {
+                metadata = { version: 1, images: {}, folders: [], tags: [] };
+            } else {
+                throw error;
+            }
+        }
+
+        const result = await updateFn(metadata);
+        const jsonString = JSON.stringify(metadata, null, 4);
+        await writeFileAtomic(this.jsonPath, jsonString, 'utf8');
+        return result;
+    }
+}
 
 export const router = express.Router();
 
-router.post('/all', function (request, response) {
-    const images = getImages(request.user.directories.backgrounds);
-    const config = { width: dimensions.bg[0], height: dimensions.bg[1] };
-    response.json({ images, config });
+router.post('/all', async function (request, response) {
+    try {
+        const manager = new BackgroundsMetadataManager(request.user.directories);
+        const metadata = await manager.read();
+
+        // The frontend expects an array of filenames.
+        const allImages = Object.keys(metadata.images);
+        const config = { width: dimensions.bg[0], height: dimensions.bg[1] };
+
+        response.json({ images: allImages, config });
+
+    } catch (error) {
+        console.error('Failed to read or parse backgrounds.json:', error);
+        response.json({ images: [] });
+    }
 });
 
-router.post('/delete', getFileNameValidationFunction('bg'), function (request, response) {
-    if (!request.body) return response.sendStatus(400);
-
-    if (request.body.bg !== sanitize(request.body.bg)) {
-        console.error('Malicious bg name prevented');
-        return response.sendStatus(403);
+router.post('/delete', getFileNameValidationFunction('bg'), async function (request, response) {
+    if (!request.body || !request.body.bg) {
+        return response.status(400).send('Background filename not provided.');
     }
-
-    const fileName = path.join(request.user.directories.backgrounds, sanitize(request.body.bg));
-
-    if (!fs.existsSync(fileName)) {
-        console.error('BG file not found');
-        return response.sendStatus(400);
-    }
-
-    fs.unlinkSync(fileName);
-    invalidateThumbnail(request.user.directories, 'bg', request.body.bg);
-    return response.send('ok');
-});
-
-router.post('/rename', function (request, response) {
-    if (!request.body) return response.sendStatus(400);
-
-    const oldFileName = path.join(request.user.directories.backgrounds, sanitize(request.body.old_bg));
-    const newFileName = path.join(request.user.directories.backgrounds, sanitize(request.body.new_bg));
-
-    if (!fs.existsSync(oldFileName)) {
-        console.error('BG file not found');
-        return response.sendStatus(400);
-    }
-
-    if (fs.existsSync(newFileName)) {
-        console.error('New BG file already exists');
-        return response.sendStatus(400);
-    }
-
-    fs.copyFileSync(oldFileName, newFileName);
-    fs.unlinkSync(oldFileName);
-    invalidateThumbnail(request.user.directories, 'bg', request.body.old_bg);
-    return response.send('ok');
-});
-
-router.post('/upload', function (request, response) {
-    if (!request.body || !request.file) return response.sendStatus(400);
-
-    const img_path = path.join(request.file.destination, request.file.filename);
-    const filename = request.file.originalname;
 
     try {
-        fs.copyFileSync(img_path, path.join(request.user.directories.backgrounds, filename));
-        fs.unlinkSync(img_path);
+        const filename = request.body.bg;
+        const filePath = path.join(request.user.directories.backgrounds, filename);
+
+        const fileExists = await fsp.access(filePath).then(() => true).catch(() => false);
+        if (!fileExists) {
+            console.error('BG file not found');
+            return response.sendStatus(400);
+        }
+
+        await fsp.unlink(filePath);
         invalidateThumbnail(request.user.directories, 'bg', filename);
-        response.send(filename);
+
+        const manager = new BackgroundsMetadataManager(request.user.directories);
+        await manager.update(metadata => {
+            if (metadata.images[filename]) {
+                delete metadata.images[filename];
+            }
+        });
+
+        return response.send('ok');
+
+    } catch (error) {
+        console.error(`Failed to process delete request for ${request.body.bg}:`, error);
+        return response.status(500).send('Failed to delete background.');
+    }
+});
+
+router.post('/rename', async function (request, response) {
+    if (!request.body || !request.body.old_bg || !request.body.new_bg) {
+        return response.status(400).send('Old and new filenames are required.');
+    }
+
+    try {
+        const oldFilename = sanitize(request.body.old_bg);
+        // The original desired name from the user
+        const desiredNewFilename = sanitize(request.body.new_bg);
+        const backgroundsFolderPath = request.user.directories.backgrounds;
+        const manager = new BackgroundsMetadataManager(request.user.directories);
+
+        if (oldFilename === desiredNewFilename) {
+            const metadata = await manager.read();
+            return response.json({ filename: oldFilename, ...metadata.images[oldFilename] });
+        }
+
+        const finalNewFilename = await getUniqueFilename(backgroundsFolderPath, desiredNewFilename);
+
+        // 1. Rename the main background file using the final unique name.
+        const oldFilePath = path.join(backgroundsFolderPath, oldFilename);
+        const newFilePath = path.join(backgroundsFolderPath, finalNewFilename);
+        await fsp.rename(oldFilePath, newFilePath);
+
+        // 2. Rename the corresponding thumbnail file using the final unique name.
+        const thumbnailsFolderPath = request.user.directories.thumbnailsBg;
+        const oldThumbPath = path.join(thumbnailsFolderPath, oldFilename);
+        const newThumbPath = path.join(thumbnailsFolderPath, finalNewFilename);
+
+        try {
+            // Attempt to rename the thumbnail only if it exists.
+            await fsp.rename(oldThumbPath, newThumbPath);
+        } catch (thumbError) {
+            if (thumbError.code !== 'ENOENT') {
+                throw thumbError;
+            }
+        }
+
+        // 3. Update the metadata object using the manager
+        const oldMetadata = await manager.update(metadata => {
+            const data = metadata.images[oldFilename];
+            if (!data) {
+                const err = new Error(`Background '${oldFilename}' not found in metadata.`);
+                err.statusCode = 404;
+                throw err;
+            }
+            delete metadata.images[oldFilename];
+            metadata.images[finalNewFilename] = data;
+            return data;
+        });
+
+        // 4. Respond with the final unique name and its metadata.
+        response.json({ filename: finalNewFilename, ...oldMetadata });
+
+    } catch (error) {
+        // The startup sync process will correct any inconsistencies on the next launch.
+        console.error(`Failed to rename background from ${request.body.old_bg} to ${request.body.new_bg}:`, error);
+        const statusCode = error.statusCode || 500;
+        const message = error.statusCode ? error.message : 'Failed to rename background.';
+        return response.status(statusCode).send(message);
+    }
+});
+
+/**
+ * Checks if a file exists.
+ * @param {string} filePath - The full path to the file.
+ * @returns {Promise<boolean>} True if the file exists, false otherwise.
+ */
+async function fileExists(filePath) {
+    try {
+        await fsp.access(filePath);
+        return true;
+    } catch {
+        return false;
+    }
+}
+
+/**
+ * Generates a unique filename by appending (1), (2), etc. if a conflict is found.
+ * @param {string} directory - The directory where the file will be saved.
+ * @param {string} originalFilename - The original desired filename.
+ * @returns {Promise<string>} A unique filename.
+ */
+async function getUniqueFilename(directory, originalFilename) {
+    const fileExtension = path.extname(originalFilename);
+    const baseName = path.basename(originalFilename, fileExtension);
+
+    let newFilename = originalFilename;
+    let counter = 1;
+
+    while (await fileExists(path.join(directory, newFilename))) {
+        newFilename = `${baseName} (${counter})${fileExtension}`;
+        counter++;
+    }
+
+    return newFilename;
+}
+
+/**
+ * Handles the upload of a new background image.
+ * @param {express.Request & { file: import('multer').File, user: any }} request - The Express request object.
+ *   - `request.file` is provided by Multer and contains the uploaded file's details.
+ *   - `request.user` is middleware-provided and contains user-specific data and directories.
+ * @param {express.Response} response - The Express response object.
+ * @returns {Promise<void>}
+ */
+router.post('/upload', async function (request, response) {
+    if (!request.body || !request.file) {
+        return response.status(400).send('No file uploaded.');
+    }
+
+    let finalBgPath;
+
+    try {
+        const tempPath = request.file.path;
+        const backgroundsFolderPath = request.user.directories.backgrounds;
+
+        const uniqueFilename = await getUniqueFilename(backgroundsFolderPath, request.file.originalname);
+        finalBgPath = path.join(backgroundsFolderPath, uniqueFilename);
+
+        await fsp.rename(tempPath, finalBgPath);
+
+        const fileExtension = path.extname(uniqueFilename).toLowerCase();
+        const isSkippedFormat = SKIPPED_EXTENSIONS_FOR_JIMP.includes(fileExtension);
+
+        const thumbResult = await generateThumbnail(
+            request.user.directories,
+            'bg',
+            uniqueFilename,
+            !isSkippedFormat,
+            null,
+        );
+        const newMetadata = await generateSingleFileMetadata(finalBgPath);
+
+        if (!newMetadata) {
+            throw new Error(`Failed to generate metadata for ${uniqueFilename}.`);
+        }
+
+        if (thumbResult && thumbResult.resolution) {
+            newMetadata.thumbnailResolution = thumbResult.resolution;
+        }
+
+        const manager = new BackgroundsMetadataManager(request.user.directories);
+        await manager.update(metadata => {
+            metadata.images[uniqueFilename] = newMetadata;
+        });
+
+        response.json({ filename: uniqueFilename, ...newMetadata });
+
     } catch (err) {
-        console.error(err);
-        response.sendStatus(500);
+        const originalFilename = request.file?.originalname ?? 'unknown file';
+        console.error(`Background upload failed for ${originalFilename}:`, err);
+
+        if (finalBgPath) {
+            try { await fsp.unlink(finalBgPath); } catch { /* ignore */ }
+        }
+        if (request.file?.path) {
+            try { await fsp.unlink(request.file.path); } catch { /* ignore */ }
+        }
+
+        response.status(500);
     }
 });

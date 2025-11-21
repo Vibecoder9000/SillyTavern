@@ -4,6 +4,10 @@
         "type": "settings"
     },
     {
+        "filename": "backgrounds.json",
+        "type": "backgrounds_metadata"
+    },
+    {
         "filename": "themes/Dark Lite.json",
         "type": "theme"
     },
