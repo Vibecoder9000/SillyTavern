@@ -7,17 +7,17 @@ import sanitize from 'sanitize-filename';
 import writeFileAtomic from 'write-file-atomic';
 import { invalidateThumbnail, dimensions, generateThumbnail, SKIPPED_EXTENSIONS } from './thumbnails.js';
 import { getFileNameValidationFunction } from '../middleware/validateFileName.js';
-import { generateSingleFileMetadata } from './backgrounds-manager.js';
+import { generateSingleFileMetadata, BACKGROUNDS_METADATA_FILE } from './backgrounds-manager.js';
 
 /**
- * Manages locked, atomic operations on the backgrounds.json file.
+ * Manages locked, atomic operations on the backgrounds metadata file.
  */
 class BackgroundsMetadataManager {
     /**
      * @param {object} userDirectories The user's directory paths.
      */
     constructor(userDirectories) {
-        this.jsonPath = path.join(userDirectories.root, 'backgrounds.json');
+        this.jsonPath = path.join(userDirectories.backgrounds, BACKGROUNDS_METADATA_FILE);
     }
 
     /**
@@ -77,7 +77,7 @@ router.post('/all', async function (request, response) {
         response.json({ images: allImages, config });
 
     } catch (error) {
-        console.error('Failed to read or parse backgrounds.json:', error);
+        console.error('Failed to read or parse backgrounds metadata:', error);
         response.json({ images: [] });
     }
 });

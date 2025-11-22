@@ -8,6 +8,7 @@ import { invalidateThumbnail, generateThumbnail, SKIPPED_EXTENSIONS, ALLOWED_IMA
 import { getThumbnailResolution } from '../util.js';
 
 const CONCURRENCY_LIMIT = 10;
+export const BACKGROUNDS_METADATA_FILE = 'index.json';
 
 /**
  * Checks if a buffer contains an animated PNG (APNG) by looking for the 'acTL' chunk.
@@ -138,12 +139,12 @@ async function purgeThumbnailCache(thumbnailsBgPath) {
 }
 
 /**
- * Synchronizes the backgrounds.json metadata file with the files on disk.
+ * Synchronizes the backgrounds metadata file with the files on disk.
  * @param {import('../users.js').UserDirectoryList} userDirectories The directories for a single user.
  */
 export async function syncBackgroundsMetadata(userDirectories) {
     try {
-        const backgroundsJsonPath = path.join(userDirectories.root, 'backgrounds.json');
+        const backgroundsJsonPath = path.join(userDirectories.backgrounds, BACKGROUNDS_METADATA_FILE);
         const backgroundsFolderPath = userDirectories.backgrounds;
         const thumbnailsBgPath = userDirectories.thumbnailsBg;
         const currentResolution = getThumbnailResolution();
