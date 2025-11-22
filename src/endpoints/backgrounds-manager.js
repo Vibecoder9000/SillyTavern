@@ -38,7 +38,7 @@ function shouldSkipServerThumbnailGeneration(filename, imageMeta) {
  * Resizes the image to 1x1 to efficiently get the average color.
  * @param {Buffer} buffer The image buffer.
  * @returns {Promise<string>} The average color as a hex string (e.g., '#RRGGBB').
- */         
+ */
 async function getAverageColorWithJimp(buffer) {
     try {
         const image = await Jimp.read(buffer);
@@ -140,158 +140,160 @@ async function purgeThumbnailCache(thumbnailsBgPath) {
 }
 
 /**
- * Synchronizes the backgrounds metadata file with the files on disk.
- * @param {import('../users.js').UserDirectoryList} userDirectories The directories for a single user.
+ * Synchronizes the backgrounds metadata file with the files on disk for all users.
+ * @param {import('../users.js').UserDirectoryList[]} directoriesList List of user directories.
  */
-export async function syncBackgroundsMetadata(userDirectories) {
-    try {
-        const backgroundsJsonPath = path.join(userDirectories.backgrounds, BACKGROUNDS_METADATA_FILE);
-        const backgroundsFolderPath = userDirectories.backgrounds;
-        const thumbnailsBgPath = userDirectories.thumbnailsBg;
-        const currentResolution = getThumbnailResolution();
-
-        let metadata;
-        let migrationTriggeredByFileIssues = false;
-
+export async function syncBackgroundsMetadata(directoriesList) {
+    for (const userDirectories of directoriesList) {
         try {
-            const rawData = await fs.readFile(backgroundsJsonPath, 'utf8');
-            metadata = JSON.parse(rawData);
+            const backgroundsJsonPath = path.join(userDirectories.backgrounds, BACKGROUNDS_METADATA_FILE);
+            const backgroundsFolderPath = userDirectories.backgrounds;
+            const thumbnailsBgPath = userDirectories.thumbnailsBg;
+            const currentResolution = getThumbnailResolution();
 
-            for (const [filename, img] of Object.entries(metadata.images)) {
-                if (!img.thumbnailResolution && !shouldSkipServerThumbnailGeneration(filename, img)) {
-                    migrationTriggeredByFileIssues = true;
-                    break;
-                }
-            }
+            let metadata;
+            let migrationTriggeredByFileIssues = false;
 
-            if (migrationTriggeredByFileIssues) {
-                await purgeThumbnailCache(thumbnailsBgPath);
-                for (const key in metadata.images) {
-                    if (metadata.images[key].thumbnailResolution) {
-                        delete metadata.images[key].thumbnailResolution;
+            try {
+                const rawData = await fs.readFile(backgroundsJsonPath, 'utf8');
+                metadata = JSON.parse(rawData);
+
+                for (const [filename, img] of Object.entries(metadata.images)) {
+                    if (!img.thumbnailResolution && !shouldSkipServerThumbnailGeneration(filename, img)) {
+                        migrationTriggeredByFileIssues = true;
+                        break;
                     }
                 }
+
+                if (migrationTriggeredByFileIssues) {
+                    await purgeThumbnailCache(thumbnailsBgPath);
+                    for (const key in metadata.images) {
+                        if (metadata.images[key].thumbnailResolution) {
+                            delete metadata.images[key].thumbnailResolution;
+                        }
+                    }
+                }
+            } catch (error) {
+                await purgeThumbnailCache(thumbnailsBgPath);
+                metadata = { version: 1, images: {}, folders: [], tags: [] };
             }
-        } catch (error) {
-            await purgeThumbnailCache(thumbnailsBgPath);
-            metadata = { version: 1, images: {}, folders: [], tags: [] };
-        }
 
-        let imageFilesOnDisk;
-        try {
-            const allFilesOnDisk = await fs.readdir(backgroundsFolderPath);
-            imageFilesOnDisk = allFilesOnDisk.filter(filename => {
-                const ext = path.extname(filename).toLowerCase();
-                return ALLOWED_IMAGE_EXTENSIONS.has(ext);
-            });
-        } catch (error) {
-            console.error(`Could not read backgrounds directory for user at ${userDirectories.root}. Aborting sync.`, error);
-            return;
-        }
-
-        const filesOnDiskSet = new Set(imageFilesOnDisk);
-        const metadataImageKeys = Object.keys(metadata.images);
-        const filesToProcess = [];
-        let hasResolutionChanges = false;
-
-        // Process resolution mismatches and invalidate thumbnails in a single pass
-        for (const filename of metadataImageKeys) {
-            const imageMeta = metadata.images[filename];
-            if (imageMeta?.thumbnailResolution && imageMeta.thumbnailResolution !== currentResolution) {
-                invalidateThumbnail(userDirectories, 'bg', filename);
-                delete metadata.images[filename].thumbnailResolution;
-                hasResolutionChanges = true;
+            let imageFilesOnDisk;
+            try {
+                const allFilesOnDisk = await fs.readdir(backgroundsFolderPath);
+                imageFilesOnDisk = allFilesOnDisk.filter(filename => {
+                    const ext = path.extname(filename).toLowerCase();
+                    return ALLOWED_IMAGE_EXTENSIONS.has(ext);
+                });
+            } catch (error) {
+                console.error(`Could not read backgrounds directory for user at ${userDirectories.root}. Aborting sync.`, error);
+                return;
             }
-        }
 
-        for (const filename of imageFilesOnDisk) {
-            const imageMeta = metadata.images[filename];
-            const isNew = !imageMeta;
+            const filesOnDiskSet = new Set(imageFilesOnDisk);
+            const metadataImageKeys = Object.keys(metadata.images);
+            const filesToProcess = [];
+            let hasResolutionChanges = false;
 
-            const needsUpdate = imageMeta && (
-                imageMeta.addedTimestamp === undefined ||
+            // Process resolution mismatches and invalidate thumbnails in a single pass
+            for (const filename of metadataImageKeys) {
+                const imageMeta = metadata.images[filename];
+                if (imageMeta?.thumbnailResolution && imageMeta.thumbnailResolution !== currentResolution) {
+                    invalidateThumbnail(userDirectories, 'bg', filename);
+                    delete metadata.images[filename].thumbnailResolution;
+                    hasResolutionChanges = true;
+                }
+            }
+
+            for (const filename of imageFilesOnDisk) {
+                const imageMeta = metadata.images[filename];
+                const isNew = !imageMeta;
+
+                const needsUpdate = imageMeta && (
+                    imageMeta.addedTimestamp === undefined ||
                 (imageMeta.thumbnailResolution === undefined && !shouldSkipServerThumbnailGeneration(filename, imageMeta))
-            );
+                );
 
-            if (isNew || (needsUpdate && !shouldSkipServerThumbnailGeneration(filename, imageMeta))) {
-                filesToProcess.push(filename);
+                if (isNew || (needsUpdate && !shouldSkipServerThumbnailGeneration(filename, imageMeta))) {
+                    filesToProcess.push(filename);
+                }
             }
-        }
 
-        const filesToDelete = metadataImageKeys.filter(filename => !filesOnDiskSet.has(filename));
-        const hasChanges = filesToProcess.length > 0 || filesToDelete.length > 0 || hasResolutionChanges;
+            const filesToDelete = metadataImageKeys.filter(filename => !filesOnDiskSet.has(filename));
+            const hasChanges = filesToProcess.length > 0 || filesToDelete.length > 0 || hasResolutionChanges;
 
-        if (!hasChanges) {
-            return;
-        }
+            if (!hasChanges) {
+                return;
+            }
 
-        if (filesToProcess.length > 0) {
-            const limit = pLimit(CONCURRENCY_LIMIT);
+            if (filesToProcess.length > 0) {
+                const limit = pLimit(CONCURRENCY_LIMIT);
 
-            const tasks = filesToProcess.map(filename => limit(async () => {
-                const filePath = path.join(backgroundsFolderPath, filename);
-                let updatePayload = {};
-                let currentImageMeta = metadata.images[filename];
+                const tasks = filesToProcess.map(filename => limit(async () => {
+                    const filePath = path.join(backgroundsFolderPath, filename);
+                    let updatePayload = {};
+                    let currentImageMeta = metadata.images[filename];
 
-                const forceMetadataRegen =
+                    const forceMetadataRegen =
                     !currentImageMeta ||
                     currentImageMeta.isAnimated === undefined;
 
-                if (forceMetadataRegen) {
-                    const newMetadata = await generateSingleFileMetadata(filePath);
-                    if (newMetadata) {
-                        updatePayload.newMetadata = newMetadata;
-                        currentImageMeta = { ...currentImageMeta, ...newMetadata };
-                    }
-                } else if (currentImageMeta.addedTimestamp === undefined) {
-                    try {
-                        const stats = await fs.stat(filePath);
-                        updatePayload.addedTimestamp = Math.floor(stats.birthtimeMs || stats.mtimeMs);
-                    } catch {
-                        updatePayload.addedTimestamp = Date.now();
-                    }
-                }
-
-                if (currentImageMeta && currentImageMeta.thumbnailResolution === undefined && !shouldSkipServerThumbnailGeneration(filename, currentImageMeta)) {
-                    const thumbResult = await generateThumbnail(userDirectories, 'bg', filename, false, currentImageMeta.isAnimated);
-                    if (thumbResult.path && thumbResult.resolution) {
-                        updatePayload.thumbnailResolution = thumbResult.resolution;
-                    }
-                }
-                return { filename, ...updatePayload };
-            }));
-
-            const results = await Promise.allSettled(tasks);
-
-            results.forEach(result => {
-                if (result.status === 'fulfilled' && result.value) {
-                    const { filename, newMetadata, addedTimestamp, thumbnailResolution } = result.value;
-                    if (newMetadata) {
-                        metadata.images[filename] = newMetadata;
-                    }
-                    if (metadata.images[filename]) {
-                        if (addedTimestamp) {
-                            metadata.images[filename].addedTimestamp = addedTimestamp;
+                    if (forceMetadataRegen) {
+                        const newMetadata = await generateSingleFileMetadata(filePath);
+                        if (newMetadata) {
+                            updatePayload.newMetadata = newMetadata;
+                            currentImageMeta = { ...currentImageMeta, ...newMetadata };
                         }
-                        if (thumbnailResolution) {
-                            metadata.images[filename].thumbnailResolution = thumbnailResolution;
+                    } else if (currentImageMeta.addedTimestamp === undefined) {
+                        try {
+                            const stats = await fs.stat(filePath);
+                            updatePayload.addedTimestamp = Math.floor(stats.birthtimeMs || stats.mtimeMs);
+                        } catch {
+                            updatePayload.addedTimestamp = Date.now();
                         }
                     }
-                }
-            });
-        }
 
+                    if (currentImageMeta && currentImageMeta.thumbnailResolution === undefined && !shouldSkipServerThumbnailGeneration(filename, currentImageMeta)) {
+                        const thumbResult = await generateThumbnail(userDirectories, 'bg', filename, false, currentImageMeta.isAnimated);
+                        if (thumbResult.path && thumbResult.resolution) {
+                            updatePayload.thumbnailResolution = thumbResult.resolution;
+                        }
+                    }
+                    return { filename, ...updatePayload };
+                }));
 
-        if (filesToDelete.length > 0) {
-            for (const filename of filesToDelete) {
-                delete metadata.images[filename];
+                const results = await Promise.allSettled(tasks);
+
+                results.forEach(result => {
+                    if (result.status === 'fulfilled' && result.value) {
+                        const { filename, newMetadata, addedTimestamp, thumbnailResolution } = result.value;
+                        if (newMetadata) {
+                            metadata.images[filename] = newMetadata;
+                        }
+                        if (metadata.images[filename]) {
+                            if (addedTimestamp) {
+                                metadata.images[filename].addedTimestamp = addedTimestamp;
+                            }
+                            if (thumbnailResolution) {
+                                metadata.images[filename].thumbnailResolution = thumbnailResolution;
+                            }
+                        }
+                    }
+                });
             }
+
+
+            if (filesToDelete.length > 0) {
+                for (const filename of filesToDelete) {
+                    delete metadata.images[filename];
+                }
+            }
+
+            const jsonString = JSON.stringify(metadata, null, 4);
+            await writeFileAtomic(backgroundsJsonPath, jsonString, 'utf8');
+
+        } catch (error) {
+            console.error(`[Background Sync] An error occurred during synchronization for ${userDirectories.root}:`, error);
         }
-
-        const jsonString = JSON.stringify(metadata, null, 4);
-        await writeFileAtomic(backgroundsJsonPath, jsonString, 'utf8');
-
-    } catch (error) {
-        console.error('[Background Sync] An error occurred during startup synchronization:', error);
     }
 }

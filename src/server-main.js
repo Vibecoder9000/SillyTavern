@@ -267,9 +267,7 @@ async function preSetupTasks() {
     const directories = await getUserDirectoriesList();
     await checkForNewContent(directories);
 
-    for (const userDirectories of directories) {
-        await syncBackgroundsMetadata(userDirectories);
-    }
+    await syncBackgroundsMetadata(directories);
     await diskCache.verify(directories);
     migrateFlatSecrets(directories);
     cleanUploads();
