@@ -106,7 +106,6 @@ export function getConfigValue(key, defaultValue = null, typeConverter = null) {
     }
 }
 
-
 /**
  * THIS FUNCTION IS DEPRECATED AND ONLY EXISTS FOR BACKWARDS COMPATIBILITY. DON'T USE IT.
  * @param {any} _key Unused
