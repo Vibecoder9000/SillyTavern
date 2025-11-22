@@ -5,11 +5,23 @@ import { imageSize } from 'image-size';
 import writeFileAtomic from 'write-file-atomic';
 import { Jimp } from '../jimp.js';
 import { invalidateThumbnail, generateThumbnail, SKIPPED_EXTENSIONS, ALLOWED_IMAGE_EXTENSIONS } from './thumbnails.js';
-import { getThumbnailResolution } from '../util.js';
+import { getConfigValue } from '../util.js';
 import pLimit from 'p-limit';
 
 const CONCURRENCY_LIMIT = 10;
 export const BACKGROUNDS_METADATA_FILE = 'index.json';
+
+/**
+ * Gets the configured background thumbnail resolution.
+ * @returns {number} Thumbnail resolution (width * height)
+ */
+export function getBackgroundThumbnailResolution() {
+    const dimensions = getConfigValue('thumbnails.dimensions.bg', [160, 90]);
+    if (Array.isArray(dimensions) && dimensions.length >= 2) {
+        return Number(dimensions[0]) * Number(dimensions[1]);
+    }
+    return 160 * 90;
+}
 
 /**
  * Checks if a buffer contains an animated PNG (APNG) by looking for the 'acTL' chunk.
@@ -149,7 +161,7 @@ export async function syncBackgroundsMetadata(directoriesList) {
             const backgroundsJsonPath = path.join(userDirectories.backgrounds, BACKGROUNDS_METADATA_FILE);
             const backgroundsFolderPath = userDirectories.backgrounds;
             const thumbnailsBgPath = userDirectories.thumbnailsBg;
-            const currentResolution = getThumbnailResolution();
+            const currentResolution = getBackgroundThumbnailResolution();
 
             let metadata;
             let migrationTriggeredByFileIssues = false;

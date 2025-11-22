@@ -7,7 +7,8 @@ import { Jimp, JimpMime } from '../jimp.js';
 import { sync as writeFileAtomicSync } from 'write-file-atomic';
 import { imageSize as sizeOf } from 'image-size';
 
-import { getConfigValue, getThumbnailResolution, invalidateFirefoxCache } from '../util.js';
+import { getConfigValue, invalidateFirefoxCache } from '../util.js';
+import { getBackgroundThumbnailResolution } from './backgrounds-manager.js';
 
 export const publicRouter = express.Router();
 export const apiRouter = express.Router();
@@ -137,7 +138,7 @@ export async function generateThumbnail(directories, type, file, forceGenerate =
                     const dimensions = sizeOf(buffer);
                     const ratio = (dimensions.height > 0) ? (dimensions.width / dimensions.height) : 1.0;
                     // When a thumbnail exists, return the current resolution from config so the JSON can be updated.
-                    const resolution = getThumbnailResolution();
+                    const resolution = getBackgroundThumbnailResolution();
                     return { path: pathToCachedFile, aspectRatio: ratio, resolution };
                 }
             } catch (e) {
@@ -215,7 +216,7 @@ async function processSingleImage(file, originalFolder, thumbnailFolder, type) {
             const thumbHeight = Math.round(Math.sqrt(targetPixelArea / aspectRatio));
 
             thumbImage.resize({ w: thumbWidth, h: thumbHeight, mode: Jimp.RESIZE_BILINEAR });
-            thumbnailResolution = getThumbnailResolution();
+            thumbnailResolution = getBackgroundThumbnailResolution();
         } else if (type === 'avatar' || type === 'persona') {
             // Crop and resize to fixed dimensions
             const [width, height] = dimensions[type];

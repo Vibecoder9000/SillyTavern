@@ -106,17 +106,6 @@ export function getConfigValue(key, defaultValue = null, typeConverter = null) {
     }
 }
 
-/**
- * Gets the configured thumbnail resolution.
- * @returns {number} Thumbnail resolution (width * height)
- */
-export function getThumbnailResolution() {
-    const dimensions = getConfigValue('thumbnails.dimensions.bg', [160, 90]);
-    if (Array.isArray(dimensions) && dimensions.length >= 2) {
-        return Number(dimensions[0]) * Number(dimensions[1]);
-    }
-    return 160 * 90;
-}
 
 /**
  * THIS FUNCTION IS DEPRECATED AND ONLY EXISTS FOR BACKWARDS COMPATIBILITY. DON'T USE IT.
