@@ -12,7 +12,8 @@ import { getConfigValue, getThumbnailResolution, invalidateFirefoxCache } from '
 export const publicRouter = express.Router();
 export const apiRouter = express.Router();
 
-export const SKIPPED_EXTENSIONS_FOR_JIMP = ['.apng', '.mp4', '.webm', '.avi', '.mkv', '.flv', '.gif'];
+export const SKIPPED_EXTENSIONS = ['.apng', '.mp4', '.webm', '.avi', '.mkv', '.flv', '.gif'];
+export const ALLOWED_IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.tif', '.tiff']);
 
 const quality = Math.min(100, Math.max(1, parseInt(getConfigValue('thumbnails.quality', 95, 'number'))));
 const pngFormat = String(getConfigValue('thumbnails.format', 'jpg')).toLowerCase().trim() === 'png';
@@ -161,7 +162,7 @@ export async function generateThumbnail(directories, type, file, forceGenerate =
             }
         }
 
-        if (SKIPPED_EXTENSIONS_FOR_JIMP.includes(fileExtension)) {
+        if (SKIPPED_EXTENSIONS.includes(fileExtension)) {
             return { path: null, aspectRatio: null, resolution: null };
         }
 
@@ -264,7 +265,7 @@ publicRouter.get('/', async function (request, response) {
 
         const animatedEnabled = animated === 'true';
         const fileExtension = path.extname(file).toLowerCase();
-        const isAnimatedFormat = SKIPPED_EXTENSIONS_FOR_JIMP.includes(fileExtension);
+        const isAnimatedFormat = SKIPPED_EXTENSIONS.includes(fileExtension);
 
         // Serve original for animated formats or GIFs
         if (animatedEnabled && isAnimatedFormat) {

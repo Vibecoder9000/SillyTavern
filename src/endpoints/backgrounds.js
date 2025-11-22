@@ -5,7 +5,7 @@ import express from 'express';
 import sanitize from 'sanitize-filename';
 
 import writeFileAtomic from 'write-file-atomic';
-import { invalidateThumbnail, dimensions, generateThumbnail, SKIPPED_EXTENSIONS_FOR_JIMP } from './thumbnails.js';
+import { invalidateThumbnail, dimensions, generateThumbnail, SKIPPED_EXTENSIONS } from './thumbnails.js';
 import { getFileNameValidationFunction } from '../middleware/validateFileName.js';
 import { generateSingleFileMetadata } from './backgrounds-manager.js';
 
@@ -238,7 +238,7 @@ router.post('/upload', async function (request, response) {
         await fsp.rename(tempPath, finalBgPath);
 
         const fileExtension = path.extname(uniqueFilename).toLowerCase();
-        const isSkippedFormat = SKIPPED_EXTENSIONS_FOR_JIMP.includes(fileExtension);
+        const isSkippedFormat = SKIPPED_EXTENSIONS.includes(fileExtension);
 
         const thumbResult = await generateThumbnail(
             request.user.directories,

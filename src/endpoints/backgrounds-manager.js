@@ -4,7 +4,7 @@ import crypto from 'node:crypto';
 import { imageSize } from 'image-size';
 import writeFileAtomic from 'write-file-atomic';
 import { Jimp } from '../jimp.js';
-import { invalidateThumbnail, generateThumbnail, SKIPPED_EXTENSIONS_FOR_JIMP } from './thumbnails.js';
+import { invalidateThumbnail, generateThumbnail, SKIPPED_EXTENSIONS, ALLOWED_IMAGE_EXTENSIONS } from './thumbnails.js';
 import { getThumbnailResolution } from '../util.js';
 
 const CONCURRENCY_LIMIT = 10;
@@ -26,7 +26,7 @@ function isAnimatedApng(buffer) {
  */
 function shouldSkipServerThumbnailGeneration(filename, imageMeta) {
     const fileExtension = path.extname(filename).toLowerCase();
-    return SKIPPED_EXTENSIONS_FOR_JIMP.includes(fileExtension) ||
+    return SKIPPED_EXTENSIONS.includes(fileExtension) ||
            (imageMeta && imageMeta.isAnimated) ||
            ((fileExtension === '.png' || fileExtension === '.webp') && imageMeta && !imageMeta.thumbnailResolution);
 }
@@ -146,7 +146,6 @@ export async function syncBackgroundsMetadata(userDirectories) {
         const backgroundsJsonPath = path.join(userDirectories.root, 'backgrounds.json');
         const backgroundsFolderPath = userDirectories.backgrounds;
         const thumbnailsBgPath = userDirectories.thumbnailsBg;
-        const ALLOWED_IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.tif', '.tiff']);
         const currentResolution = getThumbnailResolution();
 
         let metadata;
