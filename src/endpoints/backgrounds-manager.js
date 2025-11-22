@@ -66,58 +66,50 @@ async function getAverageColorWithJimp(buffer) {
  * @returns {Promise<object>} A metadata object. Throws an error if processing fails.
  */
 export async function generateSingleFileMetadata(filePath) {
-    try {
-        const buffer = await fs.readFile(filePath);
-        const hash = crypto.createHash('sha256').update(buffer).digest('hex');
-        const dimensions = imageSize(buffer);
-        if (!dimensions || !dimensions.width || !dimensions.height) {
-            throw new Error('Could not determine image dimensions.');
-        }
-        const aspectRatio = dimensions.width / dimensions.height;
-        let isAnimated = false;
-
-        // Read a small portion of the buffer to check for animation indicators efficiently.
-        const headerBuffer = buffer.length > 200 ? buffer.subarray(0, 200) : buffer;
-
-        switch (dimensions.type) {
-            case 'gif':
-                isAnimated = true; // GIFs are treated as animated.
-                break;
-            case 'png':
-                isAnimated = isAnimatedApng(buffer);
-                break;
-            case 'webp':
-                // Check for 'ANIM' or 'ANMF' chunks in the header for animated WebP.
-                isAnimated = headerBuffer.includes('ANIM') || headerBuffer.includes('ANMF');
-                break;
-            default:
-                isAnimated = false;
-        }
-
-        let hexColor;
-        if (isAnimated) {
-            hexColor = '#808080';
-        } else {
-            // Only process non-animated images to avoid decoding errors.
-            hexColor = await getAverageColorWithJimp(buffer);
-        }
-
-        return {
-            hash,
-            aspectRatio: parseFloat(aspectRatio.toFixed(4)),
-            isAnimated,
-            dominantColor: hexColor,
-            tags: [],
-            folderIds: [],
-            addedTimestamp: Date.now(),
-        };
-    } catch (error) {
-        if (error.code === 'ENAMETOOLONG') {
-            console.log(`[Backgrounds] Skipped file with excessively long name: ${path.basename(filePath)}`);
-        }
-        // Re-throw the error to ensure metadata generation failures are propagated.
-        throw error;
+    const buffer = await fs.readFile(filePath);
+    const hash = crypto.createHash('sha256').update(buffer).digest('hex');
+    const dimensions = imageSize(buffer);
+    if (!dimensions || !dimensions.width || !dimensions.height) {
+        throw new Error('Could not determine image dimensions.');
     }
+    const aspectRatio = dimensions.width / dimensions.height;
+    let isAnimated = false;
+
+    // Read a small portion of the buffer to check for animation indicators efficiently.
+    const headerBuffer = buffer.length > 200 ? buffer.subarray(0, 200) : buffer;
+
+    switch (dimensions.type) {
+        case 'gif':
+            isAnimated = true; // GIFs are treated as animated.
+            break;
+        case 'png':
+            isAnimated = isAnimatedApng(buffer);
+            break;
+        case 'webp':
+            // Check for 'ANIM' or 'ANMF' chunks in the header for animated WebP.
+            isAnimated = headerBuffer.includes('ANIM') || headerBuffer.includes('ANMF');
+            break;
+        default:
+            isAnimated = false;
+    }
+
+    let hexColor;
+    if (isAnimated) {
+        hexColor = '#808080';
+    } else {
+        // Only process non-animated images to avoid decoding errors.
+        hexColor = await getAverageColorWithJimp(buffer);
+    }
+
+    return {
+        hash,
+        aspectRatio: parseFloat(aspectRatio.toFixed(4)),
+        isAnimated,
+        dominantColor: hexColor,
+        tags: [],
+        folderIds: [],
+        addedTimestamp: Date.now(),
+    };
 }
 
 /**
