@@ -6,6 +6,7 @@ import writeFileAtomic from 'write-file-atomic';
 import { Jimp } from '../jimp.js';
 import { invalidateThumbnail, generateThumbnail, SKIPPED_EXTENSIONS, ALLOWED_IMAGE_EXTENSIONS } from './thumbnails.js';
 import { getThumbnailResolution } from '../util.js';
+import pLimit from 'p-limit';
 
 const CONCURRENCY_LIMIT = 10;
 export const BACKGROUNDS_METADATA_FILE = 'index.json';
@@ -37,7 +38,7 @@ function shouldSkipServerThumbnailGeneration(filename, imageMeta) {
  * Resizes the image to 1x1 to efficiently get the average color.
  * @param {Buffer} buffer The image buffer.
  * @returns {Promise<string>} The average color as a hex string (e.g., '#RRGGBB').
- */
+ */         
 async function getAverageColorWithJimp(buffer) {
     try {
         const image = await Jimp.read(buffer);
@@ -225,62 +226,59 @@ export async function syncBackgroundsMetadata(userDirectories) {
         }
 
         if (filesToProcess.length > 0) {
-            const totalFiles = filesToProcess.length;
+            const limit = pLimit(CONCURRENCY_LIMIT);
 
-            for (let i = 0; i < totalFiles; i += CONCURRENCY_LIMIT) {
-                const batchFiles = filesToProcess.slice(i, i + CONCURRENCY_LIMIT);
-                const tasks = batchFiles.map(filename => (async () => {
-                    const filePath = path.join(backgroundsFolderPath, filename);
-                    let updatePayload = {};
-                    let currentImageMeta = metadata.images[filename];
+            const tasks = filesToProcess.map(filename => limit(async () => {
+                const filePath = path.join(backgroundsFolderPath, filename);
+                let updatePayload = {};
+                let currentImageMeta = metadata.images[filename];
 
-                    const forceMetadataRegen =
-                        !currentImageMeta ||
-                        currentImageMeta.isAnimated === undefined;
+                const forceMetadataRegen =
+                    !currentImageMeta ||
+                    currentImageMeta.isAnimated === undefined;
 
-                    if (forceMetadataRegen) {
-                        const newMetadata = await generateSingleFileMetadata(filePath);
-                        if (newMetadata) {
-                            updatePayload.newMetadata = newMetadata;
-                            currentImageMeta = { ...currentImageMeta, ...newMetadata };
+                if (forceMetadataRegen) {
+                    const newMetadata = await generateSingleFileMetadata(filePath);
+                    if (newMetadata) {
+                        updatePayload.newMetadata = newMetadata;
+                        currentImageMeta = { ...currentImageMeta, ...newMetadata };
+                    }
+                } else if (currentImageMeta.addedTimestamp === undefined) {
+                    try {
+                        const stats = await fs.stat(filePath);
+                        updatePayload.addedTimestamp = Math.floor(stats.birthtimeMs || stats.mtimeMs);
+                    } catch {
+                        updatePayload.addedTimestamp = Date.now();
+                    }
+                }
+
+                if (currentImageMeta && currentImageMeta.thumbnailResolution === undefined && !shouldSkipServerThumbnailGeneration(filename, currentImageMeta)) {
+                    const thumbResult = await generateThumbnail(userDirectories, 'bg', filename, false, currentImageMeta.isAnimated);
+                    if (thumbResult.path && thumbResult.resolution) {
+                        updatePayload.thumbnailResolution = thumbResult.resolution;
+                    }
+                }
+                return { filename, ...updatePayload };
+            }));
+
+            const results = await Promise.allSettled(tasks);
+
+            results.forEach(result => {
+                if (result.status === 'fulfilled' && result.value) {
+                    const { filename, newMetadata, addedTimestamp, thumbnailResolution } = result.value;
+                    if (newMetadata) {
+                        metadata.images[filename] = newMetadata;
+                    }
+                    if (metadata.images[filename]) {
+                        if (addedTimestamp) {
+                            metadata.images[filename].addedTimestamp = addedTimestamp;
                         }
-                    } else if (currentImageMeta.addedTimestamp === undefined) {
-                        try {
-                            const stats = await fs.stat(filePath);
-                            updatePayload.addedTimestamp = Math.floor(stats.birthtimeMs || stats.mtimeMs);
-                        } catch {
-                            updatePayload.addedTimestamp = Date.now();
+                        if (thumbnailResolution) {
+                            metadata.images[filename].thumbnailResolution = thumbnailResolution;
                         }
                     }
-
-                    if (currentImageMeta && currentImageMeta.thumbnailResolution === undefined && !shouldSkipServerThumbnailGeneration(filename, currentImageMeta)) {
-                        const thumbResult = await generateThumbnail(userDirectories, 'bg', filename, false, currentImageMeta.isAnimated);
-                        if (thumbResult.path && thumbResult.resolution) {
-                            updatePayload.thumbnailResolution = thumbResult.resolution;
-                        }
-                    }
-                    return { filename, ...updatePayload };
-                })());
-
-                const batchResults = await Promise.allSettled(tasks);
-
-                batchResults.forEach(result => {
-                    if (result.status === 'fulfilled' && result.value) {
-                        const { filename, newMetadata, addedTimestamp, thumbnailResolution } = result.value;
-                        if (newMetadata) {
-                            metadata.images[filename] = newMetadata;
-                        }
-                        if (metadata.images[filename]) {
-                            if (addedTimestamp) {
-                                metadata.images[filename].addedTimestamp = addedTimestamp;
-                            }
-                            if (thumbnailResolution) {
-                                metadata.images[filename].thumbnailResolution = thumbnailResolution;
-                            }
-                        }
-                    }
-                });
-            }
+                }
+            });
         }
 
 
