@@ -29,10 +29,7 @@ class BackgroundsMetadataManager {
             const rawData = await fsp.readFile(this.jsonPath, 'utf8');
             return JSON.parse(rawData);
         } catch (error) {
-            if (error.code === 'ENOENT' || error instanceof SyntaxError) {
-                return { version: 1, images: {}, folders: [], tags: [] };
-            }
-            throw error;
+            return { version: 1, images: {}, folders: [], tags: [] };
         }
     }
 
