@@ -44,18 +44,7 @@ class BackgroundsMetadataManager {
      * @returns {Promise<any>} The return value of the updateFn.
      */
     async update(updateFn) {
-        let metadata;
-        try {
-            const rawData = await fsp.readFile(this.jsonPath, 'utf8');
-            metadata = JSON.parse(rawData);
-        } catch (error) {
-            if (error.code === 'ENOENT' || error instanceof SyntaxError) {
-                metadata = { version: 1, images: {}, folders: [], tags: [] };
-            } else {
-                throw error;
-            }
-        }
-
+        const metadata = await this.read();
         const result = await updateFn(metadata);
         const jsonString = JSON.stringify(metadata, null, 4);
         await writeFileAtomic(this.jsonPath, jsonString, 'utf8');
