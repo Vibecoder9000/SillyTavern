@@ -12,6 +12,26 @@ const CONCURRENCY_LIMIT = 10;
 export const BACKGROUNDS_METADATA_FILE = 'index.json';
 
 /**
+ * @typedef {Object} BackgroundImageMetadata
+ * @property {string} hash - SHA-256 hash of the image file.
+ * @property {number} aspectRatio - Aspect ratio (width / height) of the image.
+ * @property {boolean} isAnimated - Whether the image is animated.
+ * @property {string} dominantColor - Dominant color in hex format (e.g., '#RRGGBB').
+ * @property {string[]} tags - Array of tags associated with the image.
+ * @property {string[]} folderIds - Array of folder IDs the image belongs to.
+ * @property {number} addedTimestamp - Timestamp when the image was added.
+ * @property {number} [thumbnailResolution] - Optional thumbnail resolution (width * height).
+ */
+
+/**
+ * @typedef {Object} BackgroundsMetadata
+ * @property {number} version - Metadata version.
+ * @property {Object.<string, BackgroundImageMetadata>} images - Mapping of filenames to their metadata.
+ * @property {string[]} folders - Array of folder IDs.
+ * @property {string[]} tags - Array of tags.
+ */
+
+/**
  * Gets the configured background thumbnail resolution.
  * @returns {number} Thumbnail resolution (width * height)
  */
