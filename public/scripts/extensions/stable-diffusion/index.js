@@ -2865,7 +2865,7 @@ function getCharacterAvatarUrl() {
     if (context.groupId) {
         const groupMembers = context.groups.find(x => x.id === context.groupId)?.members;
         const lastMessageAvatar = context.chat?.filter(x => !x.is_system && !x.is_user)?.slice(-1)[0]?.original_avatar;
-        const randomMemberAvatar = Array.isArray(groupMembers) ? groupMembers[Math.floor(Math.random() * groupMembers.length)]?.avatar : null;
+        const randomMemberAvatar = Array.isArray(groupMembers) ? groupMembers[Math.floor(Math.random() * groupMembers.length)] : null;
         const avatarToUse = lastMessageAvatar || randomMemberAvatar;
         return formatCharacterAvatar(avatarToUse);
     } else {
@@ -4499,6 +4499,10 @@ async function generateMediaSwipe(mediaAttachment, message, onStart, onComplete,
  */
 async function onImageSwiped({ message, element, direction }) {
     const { powerUserSettings, accountStorage } = getContext();
+
+    if (!isValidState()) {
+        return;
+    }
 
     if (!message || direction !== SWIPE_DIRECTION.RIGHT || powerUserSettings.image_overswipe !== IMAGE_OVERSWIPE.GENERATE) {
         return;
