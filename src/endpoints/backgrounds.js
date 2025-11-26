@@ -142,9 +142,7 @@ router.post('/rename', async function (request, response) {
         const oldMetadata = await manager.update(metadata => {
             const data = metadata.images[oldFilename];
             if (!data) {
-                const err = new Error(`Background '${oldFilename}' not found in metadata.`);
-                err.statusCode = 404;
-                throw err;
+                throw new Error(`Background '${oldFilename}' not found in metadata.`);
             }
             delete metadata.images[oldFilename];
             metadata.images[finalNewFilename] = data;
@@ -157,9 +155,7 @@ router.post('/rename', async function (request, response) {
     } catch (error) {
         // The startup sync process will correct any inconsistencies on the next launch.
         console.error(`Failed to rename background from ${request.body.old_bg} to ${request.body.new_bg}:`, error);
-        const statusCode = error.statusCode || 500;
-        const message = error.statusCode ? error.message : 'Failed to rename background.';
-        return response.status(statusCode).send(message);
+        return response.status(500).send(error.message || 'Failed to rename background.');
     }
 });
 
