@@ -77,8 +77,7 @@ router.post('/delete', getFileNameValidationFunction('bg'), async function (requ
         const filename = request.body.bg;
         const filePath = path.join(request.user.directories.backgrounds, filename);
 
-        const fileExists = await fsp.access(filePath).then(() => true).catch(() => false);
-        if (!fileExists) {
+        if (!(await fileExists(filePath))) {
             console.error('BG file not found');
             return response.sendStatus(400);
         }
