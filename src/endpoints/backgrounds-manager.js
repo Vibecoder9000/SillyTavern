@@ -61,8 +61,8 @@ function isAnimatedApng(buffer) {
 function shouldSkipServerThumbnailGeneration(filename, imageMeta) {
     const fileExtension = path.extname(filename).toLowerCase();
     return SKIPPED_EXTENSIONS.includes(fileExtension) ||
-           (imageMeta && imageMeta.isAnimated) ||
-           ((fileExtension === '.png' || fileExtension === '.webp') && imageMeta && !imageMeta.thumbnailResolution);
+           (imageMeta?.isAnimated) ||
+           ((fileExtension === '.png' || fileExtension === '.webp') && !imageMeta?.thumbnailResolution);
 }
 
 /**
