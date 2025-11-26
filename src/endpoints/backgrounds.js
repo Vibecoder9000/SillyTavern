@@ -198,7 +198,7 @@ async function getUniqueFilename(directory, originalFilename) {
 
 /**
  * Handles the upload of a new background image.
- * @param {express.Request & { file: import('multer').File, user: any }} request - The Express request object.
+ * @param {express.Request} request - The Express request object.
  *   - `request.file` is provided by Multer and contains the uploaded file's details.
  *   - `request.user` is middleware-provided and contains user-specific data and directories.
  * @param {express.Response} response - The Express response object.
