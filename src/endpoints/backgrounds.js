@@ -8,6 +8,7 @@ import writeFileAtomic from 'write-file-atomic';
 import { invalidateThumbnail, dimensions, generateThumbnail, SKIPPED_EXTENSIONS } from './thumbnails.js';
 import { getFileNameValidationFunction } from '../middleware/validateFileName.js';
 import { generateSingleFileMetadata, BACKGROUNDS_METADATA_FILE } from './backgrounds-manager.js';
+import { getUniqueName } from '../util.js';
 
 /**
  * Manages locked, atomic operations on the backgrounds metadata file.
@@ -183,15 +184,16 @@ async function getUniqueFilename(directory, originalFilename) {
     const fileExtension = path.extname(originalFilename);
     const baseName = path.basename(originalFilename, fileExtension);
 
-    let newFilename = originalFilename;
-    let counter = 1;
+    // Create a set of existing filenames to check synchronously
+    const dirContent = await fsp.readdir(directory);
+    const existingFiles = new Set(dirContent);
 
-    while (await fileExists(path.join(directory, newFilename))) {
-        newFilename = `${baseName} (${counter})${fileExtension}`;
-        counter++;
-    }
+    // Use the getUniqueName utility function with a synchronous existence check
+    const uniqueBaseName = getUniqueName(baseName, (name) => {
+        return existingFiles.has(`${name}${fileExtension}`);
+    });
 
-    return newFilename;
+    return `${uniqueBaseName}${fileExtension}`;
 }
 
 /**
