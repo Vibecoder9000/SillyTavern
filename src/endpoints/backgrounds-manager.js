@@ -97,7 +97,7 @@ async function getAverageColorWithJimp(buffer) {
 /**
  * Generates all necessary metadata for a single background file.
  * @param {string} filePath - The full path to the background file.
-s * @returns {Promise<BackgroundImageMetadata>} A metadata object. Throws an error if processing fails.
+ * @returns {Promise<BackgroundImageMetadata>} A metadata object. Throws an error if processing fails.
  */
 export async function generateSingleFileMetadata(filePath) {
     const buffer = await fs.readFile(filePath);
