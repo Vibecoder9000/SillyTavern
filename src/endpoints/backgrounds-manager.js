@@ -66,7 +66,7 @@ export function isAnimatedWebP(buffer) {
 /**
  * Determines if a file should skip server-side thumbnail generation.
  * @param {string} filename - The filename to check.
- * @param {object} [imageMeta] - Optional metadata for the image.
+ * @param {BackgroundImageMetadata} [imageMeta] - Optional metadata for the image.
  * @returns {boolean} True if thumbnail generation should be skipped.
  */
 function shouldSkipServerThumbnailGeneration(filename, imageMeta) {
