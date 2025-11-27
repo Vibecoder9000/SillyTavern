@@ -143,6 +143,14 @@ export async function generateSingleFileMetadata(filePath) {
         hexColor = await getAverageColorWithJimp(buffer);
     }
 
+    let addedTimestamp;
+    try {
+        const stats = await fs.stat(filePath);
+        addedTimestamp = Math.floor(stats.birthtimeMs || stats.mtimeMs);
+    } catch {
+        addedTimestamp = Date.now();
+    }
+
     return {
         hash,
         aspectRatio: parseFloat(aspectRatio.toFixed(4)),
@@ -150,7 +158,7 @@ export async function generateSingleFileMetadata(filePath) {
         dominantColor: hexColor,
         tags: [],
         folderIds: [],
-        addedTimestamp: Date.now(),
+        addedTimestamp,
     };
 }
 
