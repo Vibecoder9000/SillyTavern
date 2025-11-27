@@ -106,7 +106,7 @@ export function invalidateThumbnail(directories, type, file) {
  */
 export async function generateThumbnail(directories, type, file, forceGenerate = false, isKnownAnimated = null) {
     // If the caller has already determined the file is animated, skip processing.
-    if (isKnownAnimated === true) {
+    if (isKnownAnimated) {
         return { path: null, aspectRatio: null, resolution: null };
     }
 
