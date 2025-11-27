@@ -221,7 +221,7 @@ router.post('/upload', async function (request, response) {
         await fsp.rename(tempPath, finalBgPath);
 
         const fileExtension = path.extname(uniqueFilename).toLowerCase();
-        const isSkippedFormat = SKIPPED_EXTENSIONS.includes(fileExtension);
+        const isSkippedFormat = SKIPPED_EXTENSIONS.has(fileExtension);
 
         const thumbResult = await generateThumbnail(
             request.user.directories,
