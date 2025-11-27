@@ -8,7 +8,7 @@ import { sync as writeFileAtomicSync } from 'write-file-atomic';
 import { imageSize as sizeOf } from 'image-size';
 
 import { getConfigValue, invalidateFirefoxCache } from '../util.js';
-import { getBackgroundThumbnailResolution } from './backgrounds-manager.js';
+import { getBackgroundThumbnailResolution, isAnimatedWebP } from './backgrounds-manager.js';
 
 export const publicRouter = express.Router();
 export const apiRouter = express.Router();
@@ -156,8 +156,8 @@ export async function generateThumbnail(directories, type, file, forceGenerate =
         // If isKnownAnimated is false, we assume the caller knows it is static and skip this check.
         if (fileExtension === '.webp' && isKnownAnimated !== false) {
             const buffer = fs.readFileSync(pathToOriginalFile);
-            const isAnimatedWebP = buffer.indexOf('ANIM') !== -1 || buffer.indexOf('ANMF') !== -1;
-            if (isAnimatedWebP) {
+            const isAnimated = isAnimatedWebP(buffer);
+            if (isAnimated) {
                 // The client is expected to handle it.
                 return { path: null, aspectRatio: null, resolution: null };
             }

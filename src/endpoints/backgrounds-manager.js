@@ -53,6 +53,17 @@ function isAnimatedApng(buffer) {
 }
 
 /**
+ * Checks if a WebP buffer is animated by looking for 'ANIM' or 'ANMF' chunks.
+ * @param {Buffer} buffer The WebP file buffer (can be full file or header)
+ * @returns {boolean} True if the WebP is animated
+ */
+export function isAnimatedWebP(buffer) {
+    // Read a small portion of the buffer to check for animation indicators efficiently
+    const headerBuffer = buffer.length > 200 ? buffer.subarray(0, 200) : buffer;
+    return headerBuffer.includes('ANIM') || headerBuffer.includes('ANMF');
+}
+
+/**
  * Determines if a file should skip server-side thumbnail generation.
  * @param {string} filename - The filename to check.
  * @param {object} [imageMeta] - Optional metadata for the image.
@@ -109,9 +120,6 @@ export async function generateSingleFileMetadata(filePath) {
     const aspectRatio = dimensions.width / dimensions.height;
     let isAnimated = false;
 
-    // Read a small portion of the buffer to check for animation indicators efficiently.
-    const headerBuffer = buffer.length > 200 ? buffer.subarray(0, 200) : buffer;
-
     switch (dimensions.type) {
         case 'gif':
             isAnimated = true; // GIFs are treated as animated.
@@ -121,7 +129,7 @@ export async function generateSingleFileMetadata(filePath) {
             break;
         case 'webp':
             // Check for 'ANIM' or 'ANMF' chunks in the header for animated WebP.
-            isAnimated = headerBuffer.includes('ANIM') || headerBuffer.includes('ANMF');
+            isAnimated = isAnimatedWebP(buffer);
             break;
         default:
             isAnimated = false;
