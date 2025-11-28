@@ -130,13 +130,8 @@ router.post('/rename', async function (request, response) {
         const oldThumbPath = path.join(thumbnailsFolderPath, oldFilename);
         const newThumbPath = path.join(thumbnailsFolderPath, finalNewFilename);
 
-        try {
-            // Attempt to rename the thumbnail only if it exists.
+        if (await fileExists(oldThumbPath)) {
             await fsp.rename(oldThumbPath, newThumbPath);
-        } catch (thumbError) {
-            if (thumbError.code !== 'ENOENT') {
-                throw thumbError;
-            }
         }
 
         // 3. Update the metadata object using the manager
@@ -251,11 +246,11 @@ router.post('/upload', async function (request, response) {
         const originalFilename = request.file?.originalname ?? 'unknown file';
         console.error(`Background upload failed for ${originalFilename}:`, err);
 
-        if (finalBgPath) {
-            try { await fsp.unlink(finalBgPath); } catch { /* ignore */ }
+        if (finalBgPath && await fileExists(finalBgPath)) {
+            await fsp.unlink(finalBgPath);
         }
-        if (request.file?.path) {
-            try { await fsp.unlink(request.file.path); } catch { /* ignore */ }
+        if (request.file?.path && await fileExists(request.file.path)) {
+            await fsp.unlink(request.file.path);
         }
 
         response.status(500);
