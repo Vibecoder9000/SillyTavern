@@ -253,6 +253,6 @@ router.post('/upload', async function (request, response) {
             await fsp.unlink(request.file.path);
         }
 
-        response.status(500);
+        response.sendStatus(500);
     }
 });
