@@ -56,7 +56,7 @@ router.post('/all', async function (request, response) {
     try {
         // Sync metadata with files on disk
         await syncBackgroundsMetadata([request.user.directories]);
-        
+
         const manager = new BackgroundsMetadataManager(request.user.directories);
         const metadata = await manager.read();
 
