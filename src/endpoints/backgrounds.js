@@ -7,7 +7,7 @@ import sanitize from 'sanitize-filename';
 import writeFileAtomic from 'write-file-atomic';
 import { invalidateThumbnail, dimensions, generateThumbnail, SKIPPED_EXTENSIONS } from './thumbnails.js';
 import { getFileNameValidationFunction } from '../middleware/validateFileName.js';
-import { generateSingleFileMetadata, BACKGROUNDS_METADATA_FILE } from './backgrounds-manager.js';
+import { generateSingleFileMetadata, BACKGROUNDS_METADATA_FILE, syncBackgroundsMetadata } from './backgrounds-manager.js';
 import { getUniqueName } from '../util.js';
 
 /**
@@ -54,6 +54,9 @@ export const router = express.Router();
 
 router.post('/all', async function (request, response) {
     try {
+        // Sync metadata with files on disk
+        await syncBackgroundsMetadata([request.user.directories]);
+        
         const manager = new BackgroundsMetadataManager(request.user.directories);
         const metadata = await manager.read();
 
