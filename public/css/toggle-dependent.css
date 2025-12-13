@@ -477,12 +477,9 @@ body.expandMessageActions .mes .mes_buttons .extraMesButtonsHint {
     display: none !important;
 }
 
-#smooth_streaming:not(:checked)~#smooth_streaming_speed_control {
+#smooth_streaming_control:has(#smooth_streaming:not(:checked))~#smooth_streaming_speed_control,
+#smooth_streaming_control:has(#smooth_streaming:not(:checked))~#smooth_streaming_no_think_control {
     display: none;
-}
-
-#smooth_streaming:checked~#smooth_streaming_speed_control {
-    display: block;
 }
 
 .mdhotkey_icon {
@@ -549,4 +546,26 @@ div[name="UserSettingsFirstColumn"] [data-cc-toggle="false"]>.icon-unsupported,
 #openai_settings [data-cc-toggle="false"]>.icon-unsupported {
     color: var(--golden);
     display: inline-block;
+}
+
+#advanced-formatting-cc-notice {
+    display: none;
+    gap: 5px;
+    align-items: baseline;
+    margin: 5px 0;
+    padding: 5px 10px;
+}
+
+#top-settings-holder:has(#main_api option[value="openai"]:checked) #advanced-formatting-cc-notice {
+    display: flex;
+}
+
+#top-settings-holder:has(#main_api option[value="openai"]:checked) #AdvancedFormatting [data-cc-null] {
+    opacity: 0.5;
+    filter: grayscale(0.5);
+    cursor: not-allowed;
+}
+
+#request_images_block:has(#openai_request_images:not(:checked)) #request_images_settings {
+    display: none;
 }

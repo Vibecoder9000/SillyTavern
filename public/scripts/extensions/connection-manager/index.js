@@ -1,6 +1,6 @@
 import { DOMPurify, Fuse } from '../../../lib.js';
 
-import { event_types, eventSource, main_api, saveSettingsDebounced } from '../../../script.js';
+import { event_types, eventSource, main_api, online_status, saveSettingsDebounced } from '../../../script.js';
 import { extension_settings, renderExtensionTemplateAsync } from '../../extensions.js';
 import { callGenericPopup, Popup, POPUP_RESULT, POPUP_TYPE } from '../../popup.js';
 import { SlashCommand } from '../../slash-commands/SlashCommand.js';
@@ -11,7 +11,7 @@ import { SlashCommandDebugController } from '../../slash-commands/SlashCommandDe
 import { enumTypes, SlashCommandEnumValue } from '../../slash-commands/SlashCommandEnumValue.js';
 import { SlashCommandParser } from '../../slash-commands/SlashCommandParser.js';
 import { SlashCommandScope } from '../../slash-commands/SlashCommandScope.js';
-import { collapseSpaces, getUniqueName, isFalseBoolean, uuidv4 } from '../../utils.js';
+import { collapseSpaces, getUniqueName, isFalseBoolean, uuidv4, waitUntilCondition } from '../../utils.js';
 import { t } from '../../i18n.js';
 import { getSecretLabelById } from '../../secrets.js';
 
@@ -43,6 +43,7 @@ const CC_COMMANDS = [
     'reasoning-template',
     'prompt-post-processing',
     'secret-id',
+    'regex-preset',
 ];
 
 const TC_COMMANDS = [
@@ -60,6 +61,7 @@ const TC_COMMANDS = [
     'start-reply-with',
     'reasoning-template',
     'secret-id',
+    'regex-preset',
 ];
 
 const FANCY_NAMES = {
@@ -79,6 +81,7 @@ const FANCY_NAMES = {
     'reasoning-template': 'Reasoning Template',
     'prompt-post-processing': 'Prompt Post-Processing',
     'secret-id': 'Secret',
+    'regex-preset': 'Regex Preset',
 };
 
 /**
@@ -164,6 +167,12 @@ const profilesProvider = () => [
  * @property {string} [stop-strings] Custom Stopping Strings
  * @property {string} [start-reply-with] Start Reply With
  * @property {string} [reasoning-template] Reasoning Template
+ * @property {string} [prompt-post-processing] Prompt Post-Processing
+ * @property {string} [sysprompt] System Prompt Name
+ * @property {string} [sysprompt-state] Use System Prompt
+ * @property {string} [api-url] Server URL
+ * @property {string} [secret-id] Secret ID
+ * @property {string} [regex-preset] Regex Preset ID
  * @property {string[]} [exclude] Commands to exclude
  */
 
@@ -277,7 +286,7 @@ async function createConnectionProfile(forceName = null) {
     });
     const isNameTaken = (n) => extension_settings.connectionManager.profiles.some(p => p.name === n);
     const suggestedName = getUniqueName(collapseSpaces(`${profile.api ?? ''} ${profile.model ?? ''} - ${profile.preset ?? ''}`), isNameTaken);
-    let name = forceName ?? await callGenericPopup(template, POPUP_TYPE.INPUT, suggestedName, { rows: 2 });
+    let name = forceName ?? await callGenericPopup(template, POPUP_TYPE.INPUT, suggestedName);
     // If it's cancelled, it will be false
     if (!name) {
         return null;
@@ -351,6 +360,14 @@ function makeFancyProfile(profile) {
         // UUID is not very useful in the UI, so we replace it with a label (if available)
         if (key === 'secret-id') {
             const label = getSecretLabelById(profile[key]);
+            if (label) {
+                acc[value] = label;
+                return acc;
+            }
+        }
+
+        if (key === 'regex-preset') {
+            const label = extension_settings.regex_presets?.find(p => p.id === profile[key])?.name;
             if (label) {
                 acc[value] = label;
                 return acc;
@@ -590,7 +607,6 @@ async function renderDetailsContent(detailsContent) {
         }, {});
         const template = $(await renderExtensionTemplateAsync(MODULE_NAME, 'edit', { name: profile.name, settings }));
         let newName = await callGenericPopup(template, POPUP_TYPE.INPUT, profile.name, {
-            rows: 2,
             customButtons: [{
                 text: t`Save and Update`,
                 classes: ['popup-button-ok'],
@@ -673,6 +689,13 @@ async function renderDetailsContent(detailsContent) {
                 defaultValue: 'true',
                 enumList: commonEnumProviders.boolean('trueFalse')(),
             }),
+            SlashCommandNamedArgument.fromProps({
+                name: 'timeout',
+                description: 'Maximum time to wait for the API connection to be established, in milliseconds. Set to 0 to disable. Only applies when await=true.',
+                isRequired: false,
+                typeList: [ARGUMENT_TYPE.NUMBER],
+                defaultValue: '2000',
+            }),
         ],
         callback: async (args, value) => {
             if (!value || typeof value !== 'string') {
@@ -704,6 +727,13 @@ async function renderDetailsContent(detailsContent) {
 
             if (shouldAwait) {
                 await awaitPromise;
+
+                // We should also await the connection to be established
+                const parsedTimeout = parseInt(args?.timeout?.toString());
+                const timeout = !isNaN(parsedTimeout) ? Math.max(0, parsedTimeout) : 2000;
+                if (timeout > 0) {
+                    await waitUntilCondition(() => online_status !== 'no_connection', timeout, 100, { rejectOnTimeout: false });
+                }
             }
 
             return profile.name;

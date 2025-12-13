@@ -15,6 +15,7 @@ import { commonEnumProviders, enumIcons } from './slash-commands/SlashCommandCom
 import { enumTypes, SlashCommandEnumValue } from './slash-commands/SlashCommandEnumValue.js';
 import { SlashCommandParser } from './slash-commands/SlashCommandParser.js';
 import { textgen_types, textgenerationwebui_settings } from './textgen-settings.js';
+import { applyStreamFadeIn } from './util/stream-fadein.js';
 import { copyText, escapeRegex, isFalseBoolean, isTrueBoolean, setDatasetProperty, trimSpaces } from './utils.js';
 
 /**
@@ -50,8 +51,8 @@ const UI = {
 
 /**
  * Enum representing the type of the reasoning for a message (where it came from)
- * @enum {string}
  * @readonly
+ * @enum {string}
  */
 export const ReasoningType = {
     Model: 'model',
@@ -100,6 +101,8 @@ export function extractReasoningFromData(data, {
             switch (textGenType ?? textgenerationwebui_settings.type) {
                 case textgen_types.OPENROUTER:
                     return data?.choices?.[0]?.reasoning ?? '';
+                case textgen_types.OLLAMA:
+                    return data?.thinking ?? '';
             }
             break;
 
@@ -124,6 +127,11 @@ export function extractReasoningFromData(data, {
                 case chat_completion_sources.POLLINATIONS:
                 case chat_completion_sources.MOONSHOT:
                 case chat_completion_sources.COMETAPI:
+                case chat_completion_sources.CHUTES:
+                case chat_completion_sources.ELECTRONHUB:
+                case chat_completion_sources.NANOGPT:
+                case chat_completion_sources.SILICONFLOW:
+                case chat_completion_sources.ZAI:
                 case chat_completion_sources.CUSTOM: {
                     return data?.choices?.[0]?.message?.reasoning_content
                         ?? data?.choices?.[0]?.message?.reasoning
@@ -181,8 +189,8 @@ export function updateReasoningUI(messageIdOrElement, { reset = false } = {}) {
 
 /**
  * Enum for representing the state of reasoning
- * @enum {string}
  * @readonly
+ * @enum {string}
  */
 export const ReasoningState = {
     None: 'none',
@@ -405,7 +413,7 @@ export class ReasoningHandler {
         if (!power_user.reasoning.prefix || !power_user.reasoning.suffix)
             return mesChanged;
 
-        /** @type {{ mes: string, [key: string]: any}} */
+        /** @type {ChatMessage} */
         const message = chat[messageId];
         if (!message) return mesChanged;
 
@@ -495,7 +503,12 @@ export class ReasoningHandler {
         // Update the reasoning message
         const reasoning = trimSpaces(this.reasoningDisplayText ?? this.reasoning);
         const displayReasoning = messageFormatting(reasoning, '', false, false, messageId, {}, true);
-        this.messageReasoningContentDom.innerHTML = displayReasoning;
+
+        if (power_user.stream_fade_in) {
+            applyStreamFadeIn(this.messageReasoningContentDom, displayReasoning);
+        } else {
+            this.messageReasoningContentDom.innerHTML = displayReasoning;
+        }
 
         // Update tooltip for hidden reasoning edit
         /** @type {HTMLElement} */
@@ -1209,23 +1222,38 @@ export function removeReasoningFromString(str) {
 }
 
 /**
- * Parses reasoning from a string using the power user reasoning settings.
+ * Returns the reasoning template object from its name
+ * @param {string} name of the template
+ * @returns {ReasoningTemplate} the reasoning template object
+ * @throws {Error}
+ */
+export function getReasoningTemplateByName(name) {
+    const template = reasoning_templates.find(p => p.name === name);
+    if (!template) throw new Error(`Unknown reasoning template name: "${name}"`);
+    return template;
+}
+
+/**
+ * Parses reasoning from a string using the power user reasoning settings or optional template.
  * @typedef {Object} ParsedReasoning
  * @property {string} reasoning Reasoning block
  * @property {string} content Message content
  * @param {string} str Content of the message
  * @param {Object} options Optional arguments
  * @param {boolean} [options.strict=true] Whether the reasoning block **has** to be at the beginning of the provided string (excluding whitespaces), or can be anywhere in it
+ * @param {ReasoningTemplate} template Optional reasoning template to use instead of power_user.reasoning
  * @returns {ParsedReasoning|null} Parsed reasoning block and message content
  */
-export function parseReasoningFromString(str, { strict = true } = {}) {
+export function parseReasoningFromString(str, { strict = true } = {}, template = null) {
+    template = template ?? power_user.reasoning;  // if no template given, use the currently selected template
+
     // Both prefix and suffix must be defined
-    if (!power_user.reasoning.prefix || !power_user.reasoning.suffix) {
+    if (!template.prefix || !template.suffix) {
         return null;
     }
 
     try {
-        const regex = new RegExp(`${(strict ? '^\\s*?' : '')}${escapeRegex(power_user.reasoning.prefix)}(.*?)${escapeRegex(power_user.reasoning.suffix)}`, 's');
+        const regex = new RegExp(`${(strict ? '^\\s*?' : '')}${escapeRegex(template.prefix)}(.*?)${escapeRegex(template.suffix)}`, 's');
 
         let didReplace = false;
         let reasoning = '';
@@ -1250,7 +1278,7 @@ export function parseReasoningFromString(str, { strict = true } = {}) {
 /**
  * Parse reasoning in an array of swipe strings if auto-parsing is enabled.
  * @param {string[]} swipes Array of swipe strings
- * @param {{extra: ReasoningMessageExtra}[]} swipeInfoArray Array of swipe info objects
+ * @param {{extra: Partial<ReasoningMessageExtra>}[]} swipeInfoArray Array of swipe info objects
  * @param {number?} duration Duration of the reasoning
  * @typedef {object} ReasoningMessageExtra Extra reasoning data
  * @property {string} reasoning Reasoning block
@@ -1348,6 +1376,29 @@ function registerReasoningAppEvents() {
     for (const event of [event_types.GENERATION_STOPPED, event_types.GENERATION_ENDED, event_types.CHAT_CHANGED]) {
         eventSource.on(event, () => PromptReasoning.clearLatest());
     }
+
+    eventSource.makeFirst(event_types.IMPERSONATE_READY, async () => {
+        if (!power_user.reasoning.auto_parse) {
+            return;
+        }
+
+        const sendTextArea = /** @type {HTMLTextAreaElement} */ (document.getElementById('send_textarea'));
+
+        if (!sendTextArea) {
+            console.warn('[Reasoning] Send textarea not found');
+            return;
+        }
+
+        console.debug('[Reasoning] Auto-parsing reasoning block for impersonation');
+
+        if (!sendTextArea.value) {
+            console.debug('[Reasoning] Reasoning is empty, skipping');
+            return;
+        }
+
+        sendTextArea.value = removeReasoningFromString(sendTextArea.value);
+        sendTextArea.dispatchEvent(new Event('input', { bubbles: true }));
+    });
 }
 
 /**

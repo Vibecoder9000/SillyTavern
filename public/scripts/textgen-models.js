@@ -24,67 +24,71 @@ export let openRouterModels = [];
  * @type {string[]}
  */
 const OPENROUTER_PROVIDERS = [
-    // An alphabetically separate set of very-dead providers is kept at the top of the list in the docs.
-    // These do not appear outside the docs: Anyscale, Cent-ML, HuggingFace ... SF Compute, Together 2, 01.AI
-    // As a visual check, AI21 is the topmost provider in the sidebar of https://openrouter.ai/models, thus we want to copy from this point and below.
     // Providers endpoint: https://openrouter.ai/api/v1/providers
+    // The list should resemble the sidebar from https://openrouter.ai/models
+    // Their docs no longer displays the list, which had "super dead" ones at top, thankfully gone from /v1/providers
     'AI21',
     'AionLabs',
     'Alibaba',
     'Amazon Bedrock',
+    'Amazon Nova',
     'Anthropic',
+    'Arcee AI',
     'AtlasCloud',
-    'Atoma',
     'Avian',
     'Azure',
     'BaseTen',
+    'Black Forest Labs',
+    'BytePlus',
     'Cerebras',
     'Chutes',
+    'Cirrascale',
+    'Clarifai',
     'Cloudflare',
     'Cohere',
-    'CrofAI',
     'Crusoe',
     'DeepInfra',
     'DeepSeek',
-    'Enfer',
+    'FakeProvider',
     'Featherless',
     'Fireworks',
     'Friendli',
     'GMICloud',
     'Google',
     'Google AI Studio',
+    'GoPomelo',
     'Groq',
     'Hyperbolic',
     'Inception',
     'InferenceNet',
     'Infermatic',
     'Inflection',
-    'InoCloud',
-    'Kluster',
-    'Lambda',
     'Liquid',
     'Mancer 2',
-    'Meta',
     'Minimax',
     'Mistral',
+    'ModelRun',
+    'Modular',
     'Moonshot AI',
     'Morph',
     'NCompass',
     'Nebius',
     'NextBit',
-    'Nineteen',
     'Novita',
+    'Nvidia',
     'OpenAI',
     'OpenInference',
     'Parasail',
     'Perplexity',
     'Phala',
+    'Relace',
     'SambaNova',
+    'SiliconFlow',
     'Stealth',
+    'StreamLake',
     'Switchpoint',
     'Targon',
     'Together',
-    'Ubicloud',
     'Venice',
     'WandB',
     'xAI',
@@ -927,15 +931,9 @@ export function getCurrentOpenRouterModelTokenizer() {
 export function getCurrentDreamGenModelTokenizer() {
     const modelId = textgen_settings.dreamgen_model;
     const model = dreamGenModels.find(x => x.id === modelId);
-    if (model.id.startsWith('opus-v1-sm')) {
+    if (model.id.startsWith('lucid-v1-medium') || model.id.startsWith('lucid-v1-base')) {
         return tokenizers.MISTRAL;
-    } else if (model.id.startsWith('opus-v1-lg')) {
-        return tokenizers.YI;
-    } else if (model.id.startsWith('opus-v1-xl')) {
-        return tokenizers.LLAMA;
-    } else if (model.id.startsWith('lucid-v1-medium')) {
-        return tokenizers.NEMO;
-    } else if (model.id.startsWith('lucid-v1-extra-large')) {
+    } else if (model.id.startsWith('lucid-v1-extra-large') || model.id.startsWith('lucid-v1-max')) {
         return tokenizers.LLAMA3;
     } else {
         return tokenizers.MISTRAL;

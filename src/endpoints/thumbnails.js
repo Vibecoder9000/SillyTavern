@@ -10,7 +10,9 @@ import { sync as writeFileAtomicSync } from 'write-file-atomic';
 import { imageSize as sizeOf } from 'image-size';
 import { UPLOADS_DIRECTORY } from '../constants.js';
 
-import { getImages, getConfigValue, getThumbnailResolution } from '../util.js';
+import { getImages, getConfigValue, getThumbnailResolution, invalidateFirefoxCache } from '../util.js';
+import mime from 'mime-types';
+const fsPromises = fs.promises;
 
 export const publicRouter = express.Router();
 export const apiRouter = express.Router();
@@ -370,7 +372,23 @@ publicRouter.get('/', async function (request, response) {
         };
 
         if (!thumbnailsEnabled) {
-            return serveOriginal();
+            const folder = getOriginalFolder(request.user.directories, type);
+
+            if (folder === undefined) {
+                return response.sendStatus(400);
+            }
+
+            const pathToOriginalFile = path.join(folder, file);
+            if (!fs.existsSync(pathToOriginalFile)) {
+                return response.sendStatus(404);
+            }
+            const contentType = mime.lookup(pathToOriginalFile) || 'image/png';
+            const originalFile = await fsPromises.readFile(pathToOriginalFile);
+            response.setHeader('Content-Type', contentType);
+
+            invalidateFirefoxCache(pathToOriginalFile, request, response);
+
+            return response.send(originalFile);
         }
 
         const animatedEnabled = animated === 'true';
@@ -393,20 +411,34 @@ publicRouter.get('/', async function (request, response) {
         }
 
         if (fs.existsSync(pathToCachedFile)) {
-            return response.sendFile(path.resolve(pathToCachedFile));
+            const contentType = mime.lookup(pathToCachedFile) || 'image/jpeg';
+            const cachedFile = await fsPromises.readFile(pathToCachedFile);
+            response.setHeader('Content-Type', contentType);
+
+            invalidateFirefoxCache(file, request, response);
+
+            return response.send(cachedFile);
         }
 
         // Serve whole gif disregarding toggle
         if (fileExtension === '.gif') {
-            return serveOriginal();
+            const folder = getOriginalFolder(request.user.directories, type);
+            const pathToOriginalFile = path.join(folder, file);
+
+            if (fs.existsSync(pathToOriginalFile)) {
+                const contentType = mime.lookup(pathToOriginalFile) || 'image/png';
+                const originalFile = await fsPromises.readFile(pathToOriginalFile);
+                response.setHeader('Content-Type', contentType);
+                invalidateFirefoxCache(file, request, response);
+                return response.send(originalFile);
+            }
         }
 
         // Do NOT fall back to the original file. Send a 404 so the frontend can
         // display a placeholder, respecting the user's choice to not load animated files.
         return response.sendStatus(404);
 
-    } catch (error)
-    {
+    } catch (error) {
         console.error('Failed getting thumbnail', error);
         return response.sendStatus(500);
     }

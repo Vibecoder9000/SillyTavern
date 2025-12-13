@@ -39,12 +39,13 @@ export async function getMultimodalCaption(base64Img, prompt) {
     const base64Bytes = base64Img.length * 0.75;
     const compressionLimit = 2 * 1024 * 1024;
     const safeMimeTypes = ['image/jpeg', 'image/png', 'image/webp'];
-    const mimeType = base64Img?.split(';')?.[0]?.split(':')?.[1];
+    const mimeType = base64Img?.split(';')?.[0]?.split(':')?.[1] || 'image/jpeg';
+    const isImage = mimeType.startsWith('image/');
     const thumbnailNeeded = ['google', 'openrouter', 'mistral', 'groq', 'vertexai'].includes(extension_settings.caption.multimodal_api);
-    if ((thumbnailNeeded && base64Bytes > compressionLimit) || isOoba || isKoboldCpp) {
+    if ((isImage && thumbnailNeeded && base64Bytes > compressionLimit) || isOoba || isKoboldCpp) {
         const maxSide = 2048;
         base64Img = await createThumbnail(base64Img, maxSide, maxSide);
-    } else if (!safeMimeTypes.includes(mimeType)) {
+    } else if (isImage && !safeMimeTypes.includes(mimeType)) {
         base64Img = await createThumbnail(base64Img, null, null);
     }
 
@@ -246,6 +247,18 @@ function throwIfInvalidModel(useReverseProxy) {
     if (multimodalApi === 'nanogpt' && !secret_state[SECRET_KEYS.NANOGPT]) {
         throw new Error('NanoGPT API key is not set.');
     }
+
+    if (multimodalApi === 'electronhub' && !secret_state[SECRET_KEYS.ELECTRONHUB]) {
+        throw new Error('Electron Hub API key is not set.');
+    }
+
+    if (multimodalApi === 'chutes' && !secret_state[SECRET_KEYS.CHUTES]) {
+        throw new Error('Chutes API key is not set.');
+    }
+
+    if (multimodalApi === 'zai' && !secret_state[SECRET_KEYS.ZAI]) {
+        throw new Error('Z.AI API key is not set.');
+    }
 }
 
 /**
@@ -379,7 +392,7 @@ export class ConnectionManagerRequestService {
             throw new Error('Connection Manager is not available');
         }
 
-        const profile = context.extensionSettings.connectionManager.profiles.find((p) => p.id === profileId);
+        const profile = this.getProfile(profileId);
         const selectedApiMap = this.validateProfile(profile);
 
         try {
@@ -399,8 +412,11 @@ export class ConnectionManagerRequestService {
                         model: profile.model,
                         chat_completion_source: selectedApiMap.source,
                         custom_url: profile['api-url'],
+                        vertexai_region: profile['api-url'],
+                        zai_endpoint: profile['api-url'],
                         reverse_proxy: proxyPreset?.url,
                         proxy_password: proxyPreset?.password,
+                        custom_prompt_post_processing: profile['prompt-post-processing'],
                         ...overridePayload,
                     }, {
                         presetName: includePreset ? profile.preset : undefined,
@@ -435,6 +451,38 @@ export class ConnectionManagerRequestService {
     }
 
     /**
+    * If using text completion, return a formatted prompt string given an array of messages, a given profile ID, and optional instruct settings.
+    * If using chat completion, simply return the given prompt as-is.
+    * @param {ChatCompletionMessage[]} prompt An array of prompt messages.
+    * @param {string} profileId ID of a given connection profile (from which to infer a completion preset).
+    * @param {InstructSettings} instructSettings optional instruct settings
+    */
+    static constructPrompt(prompt, profileId, instructSettings = null) {
+        const context = SillyTavern.getContext();
+        const profile = this.getProfile(profileId);
+        const selectedApiMap = this.validateProfile(profile);
+        const instructName = profile.instruct;
+
+        switch (selectedApiMap.selected) {
+            case 'openai': {
+                if (!selectedApiMap.source) {
+                    throw new Error(`API type ${selectedApiMap.selected} does not support chat completions`);
+                }
+                return prompt;
+            }
+            case 'textgenerationwebui': {
+                if (!selectedApiMap.type) {
+                    throw new Error(`API type ${selectedApiMap.selected} does not support text completions`);
+                }
+                return context.TextCompletionService.constructPrompt(prompt, instructName, instructSettings);
+            }
+            default: {
+                throw new Error(`Unknown API type ${selectedApiMap.selected}`);
+            }
+        }
+    }
+
+    /**
      * Respects allowed types.
      * @returns {import('./connection-manager/index.js').ConnectionProfile[]}
      */
@@ -446,6 +494,18 @@ export class ConnectionManagerRequestService {
 
         const profiles = context.extensionSettings.connectionManager.profiles;
         return profiles.filter((p) => this.isProfileSupported(p));
+    }
+
+    /**
+     * Return profile data given the profile ID
+     * @param {string} profileId
+     * @returns {import('./connection-manager/index.js').ConnectionProfile?} [profile]
+     * @throws {Error}
+     */
+    static getProfile(profileId) {
+        const profile = SillyTavern.getContext().extensionSettings.connectionManager.profiles.find((p) => p.id === profileId);
+        if (!profile) throw new Error(`Profile not found (ID: ${profileId})`);
+        return profile;
     }
 
     /**

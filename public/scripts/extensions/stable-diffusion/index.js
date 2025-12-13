@@ -28,6 +28,7 @@ import {
 } from '../../extensions.js';
 import { selected_group } from '../../group-chats.js';
 import {
+    clamp,
     debounce,
     deepMerge,
     delay,
@@ -51,7 +52,7 @@ import {
     SlashCommandArgument,
     SlashCommandNamedArgument,
 } from '../../slash-commands/SlashCommandArgument.js';
-import { debounce_timeout, VIDEO_EXTENSIONS } from '../../constants.js';
+import { debounce_timeout, IMAGE_OVERSWIPE, MEDIA_DISPLAY, MEDIA_SOURCE, MEDIA_TYPE, SCROLL_BEHAVIOR, SWIPE_DIRECTION, VIDEO_EXTENSIONS } from '../../constants.js';
 import { SlashCommandEnumValue } from '../../slash-commands/SlashCommandEnumValue.js';
 import { callGenericPopup, Popup, POPUP_TYPE } from '../../popup.js';
 import { commonEnumProviders } from '../../slash-commands/SlashCommandCommonEnumsProvider.js';
@@ -66,8 +67,6 @@ const MODULE_NAME = 'sd';
 // This is a 1x1 transparent PNG
 const PNG_PIXEL = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=';
 const CUSTOM_STOP_EVENT = 'sd_stop_generation';
-const clamp = (value, min, max) => Math.min(Math.max(value, min), max);
-
 const sources = {
     extras: 'extras',
     horde: 'horde',
@@ -82,6 +81,8 @@ const sources = {
     pollinations: 'pollinations',
     stability: 'stability',
     huggingface: 'huggingface',
+    chutes: 'chutes',
+    electronhub: 'electronhub',
     nanogpt: 'nanogpt',
     bfl: 'bfl',
     falai: 'falai',
@@ -310,6 +311,7 @@ const defaultSettings = {
     // OpenAI settings
     openai_style: 'vivid',
     openai_quality: 'standard',
+    openai_duration: '8',
 
     style: 'Default',
     styles: defaultStyles,
@@ -336,6 +338,7 @@ const defaultSettings = {
     // Google settings
     google_api: 'makersuite',
     google_enhance: true,
+    google_duration: 6,
 };
 
 const writePromptFieldsDebounced = debounce(writePromptFields, debounce_timeout.relaxed);
@@ -467,6 +470,12 @@ async function loadSettings() {
         extension_settings.sd.styles = defaultStyles;
     }
 
+    // Preserve an original seed if exists
+    if (extension_settings.sd.original_seed >= 0) {
+        extension_settings.sd.seed = extension_settings.sd.original_seed;
+        delete extension_settings.sd.original_seed;
+    }
+
     $('#sd_source').val(extension_settings.sd.source);
     $('#sd_scale').val(extension_settings.sd.scale).trigger('input');
     $('#sd_steps').val(extension_settings.sd.steps).trigger('input');
@@ -501,6 +510,7 @@ async function loadSettings() {
     $('#sd_interactive_mode').prop('checked', extension_settings.sd.interactive_mode);
     $('#sd_openai_style').val(extension_settings.sd.openai_style);
     $('#sd_openai_quality').val(extension_settings.sd.openai_quality);
+    $('#sd_openai_duration').val(extension_settings.sd.openai_duration);
     $('#sd_comfy_url').val(extension_settings.sd.comfy_url);
     $('#sd_comfy_prompt').val(extension_settings.sd.comfy_prompt);
     $('#sd_snap').prop('checked', extension_settings.sd.snap);
@@ -518,6 +528,7 @@ async function loadSettings() {
     $('#sd_bfl_upsampling').prop('checked', extension_settings.sd.bfl_upsampling);
     $('#sd_google_api').val(extension_settings.sd.google_api);
     $('#sd_google_enhance').prop('checked', extension_settings.sd.google_enhance);
+    $('#sd_google_duration').val(extension_settings.sd.google_duration);
 
     for (const style of extension_settings.sd.styles) {
         const option = document.createElement('option');
@@ -722,7 +733,7 @@ async function onSaveStyleClick() {
 async function refinePrompt(prompt, isNegative) {
     if (extension_settings.sd.refine_mode) {
         const text = isNegative ? '<h3>Review and edit the <i>negative</i> prompt:</h3>' : '<h3>Review and edit the prompt:</h3>';
-        const refinedPrompt = await callGenericPopup(text + 'Press "Cancel" to abort the image generation.', POPUP_TYPE.INPUT, prompt.trim(), { rows: 5, okButton: 'Continue' });
+        const refinedPrompt = await callGenericPopup(text + 'Press "Cancel" to abort the image generation.', POPUP_TYPE.INPUT, prompt.trim(), { rows: 8, okButton: 'Continue' });
 
         if (refinedPrompt) {
             return String(refinedPrompt);
@@ -1015,6 +1026,11 @@ async function onOpenAiQualitySelect() {
     saveSettingsDebounced();
 }
 
+async function onOpenAiDurationSelect() {
+    extension_settings.sd.openai_duration = String($('#sd_openai_duration').find(':selected').val());
+    saveSettingsDebounced();
+}
+
 async function onViewAnlasClick() {
     const result = await loadNovelSubscriptionData();
 
@@ -1270,8 +1286,17 @@ async function validateComfyUrl() {
 }
 
 async function onModelChange() {
-    extension_settings.sd.model = $('#sd_model').find(':selected').val();
+    const selectedModel = $('#sd_model').find(':selected');
+    extension_settings.sd.model = selectedModel.val();
     saveSettingsDebounced();
+
+    if (extension_settings.sd.model && extension_settings.sd.source === sources.electronhub) {
+        const cachedModel = selectedModel.data('model');
+        const models = cachedModel ? [cachedModel] : await loadElectronHubModels();
+        ensureElectronHubQualitySelect(models);
+    }
+
+    switchModelSpecificControls(extension_settings.sd.model);
 
     const cloudSources = [
         sources.horde,
@@ -1282,11 +1307,13 @@ async function onModelChange() {
         sources.pollinations,
         sources.stability,
         sources.huggingface,
+        sources.electronhub,
         sources.nanogpt,
         sources.bfl,
         sources.falai,
         sources.xai,
         sources.google,
+        sources.chutes,
     ];
 
     if (cloudSources.includes(extension_settings.sd.source)) {
@@ -1499,6 +1526,12 @@ async function loadSamplers() {
         case sources.huggingface:
             samplers = ['N/A'];
             break;
+        case sources.chutes:
+            samplers = ['N/A'];
+            break;
+        case sources.electronhub:
+            samplers = ['N/A'];
+            break;
         case sources.nanogpt:
             samplers = ['N/A'];
             break;
@@ -1530,7 +1563,7 @@ async function loadSamplers() {
 async function loadHordeSamplers() {
     const result = await fetch('/api/horde/sd-samplers', {
         method: 'POST',
-        headers: getRequestHeaders(),
+        headers: getRequestHeaders({ omitContentType: true }),
     });
 
     if (result.ok) {
@@ -1693,7 +1726,13 @@ async function loadModels() {
             models = await loadStabilityModels();
             break;
         case sources.huggingface:
-            models = [{ value: '', text: '<Enter Model ID above>' }];
+            models = [{ value: '', text: t`<Enter Model ID above>` }];
+            break;
+        case sources.chutes:
+            models = await loadChutesModels();
+            break;
+        case sources.electronhub:
+            models = await loadElectronHubModels();
             break;
         case sources.nanogpt:
             models = await loadNanoGPTModels();
@@ -1712,17 +1751,85 @@ async function loadModels() {
             break;
     }
 
+    if (extension_settings.sd.source === sources.electronhub) {
+        ensureElectronHubQualitySelect(models);
+    }
+
+    switchModelSpecificControls(extension_settings.sd.model);
+
     for (const model of models) {
         const option = document.createElement('option');
         option.innerText = model.text;
         option.value = model.value;
         option.selected = model.value === extension_settings.sd.model;
+        $(option).data('model', model);
         $('#sd_model').append(option);
     }
 
     if (!extension_settings.sd.model && models.length > 0) {
         extension_settings.sd.model = models[0].value;
         $('#sd_model').val(extension_settings.sd.model).trigger('change');
+    }
+}
+
+/**
+ * Show or hide model-specific controls based on the selected model.
+ * @param {string} modelId Model ID
+ */
+function switchModelSpecificControls(modelId) {
+    const modelControls = $('.sd_settings [data-sd-model]');
+    modelControls.hide();
+
+    if (!modelId) {
+        return;
+    }
+
+    modelControls.each(function () {
+        const models = String($(this).attr('data-sd-model') || '').split(',').map(m => m.trim());
+        $(this).toggle(models.includes(modelId));
+    });
+}
+
+/**
+ * Ensure the Electron Hub quality select is populated based on the selected model.
+ * @param {any[]} models Array of models
+ */
+function ensureElectronHubQualitySelect(models) {
+    try {
+        const modelId = String(extension_settings.sd.model || '');
+        if (!modelId) return;
+
+        const model = Array.isArray(models) ? models.find(m => String(m?.id) === modelId) : undefined;
+        const qualities = Array.isArray(model?.qualities) ? model.qualities : undefined;
+
+        const $qualityRow = $('#sd_electronhub_quality_row');
+        const $select = $('#sd_electronhub_quality');
+
+        $qualityRow.toggle(!!qualities && qualities.length > 0);
+        $select.empty();
+
+        if (!qualities || qualities.length === 0) {
+            extension_settings.sd.electronhub_quality = undefined;
+            saveSettingsDebounced();
+            return;
+        }
+
+        for (const q of qualities) {
+            const opt = document.createElement('option');
+            opt.value = String(q);
+            opt.textContent = String(q);
+            opt.selected = String(q) === String(extension_settings.sd.electronhub_quality || '');
+            $select.append(opt);
+        }
+
+        if (!$select.val()) {
+            const first = String(qualities[0]);
+            extension_settings.sd.electronhub_quality = first;
+            $select.val(first);
+            saveSettingsDebounced();
+        }
+    } catch (e) {
+        console.error(e);
     }
 }
 
@@ -1752,7 +1859,7 @@ async function loadFalaiModels() {
 
     const result = await fetch('/api/sd/falai/models', {
         method: 'POST',
-        headers: getRequestHeaders(),
+        headers: getRequestHeaders({ omitContentType: true }),
     });
 
     if (result.ok) {
@@ -1771,7 +1878,7 @@ async function loadXAIModels() {
 async function loadPollinationsModels() {
     const result = await fetch('/api/sd/pollinations/models', {
         method: 'POST',
-        headers: getRequestHeaders(),
+        headers: getRequestHeaders({ omitContentType: true }),
     });
 
     if (result.ok) {
@@ -1789,11 +1896,65 @@ async function loadTogetherAIModels() {
 
     const result = await fetch('/api/sd/together/models', {
         method: 'POST',
-        headers: getRequestHeaders(),
+        headers: getRequestHeaders({ omitContentType: true }),
     });
 
     if (result.ok) {
         return await result.json();
+    }
+
+    return [];
+}
+
+async function loadChutesModels() {
+    if (!secret_state[SECRET_KEYS.CHUTES]) {
+        console.debug('Chutes API key is not set.');
+        return [];
+    }
+
+    const result = await fetch('/api/sd/chutes/models', {
+        method: 'POST',
+        headers: getRequestHeaders({ omitContentType: true }),
+    });
+
+    if (result.ok) {
+        const models = await result.json();
+        console.debug('Loaded Chutes image models:', models);
+        return models;
+    }
+
+    console.warn('Failed to load Chutes models:', result.status);
+    return [];
+}
+
+async function loadElectronHubModels() {
+    if (!secret_state[SECRET_KEYS.ELECTRONHUB]) {
+        console.debug('Electron Hub API key is not set.');
+        return [];
+    }
+
+    const result = await fetch('/api/sd/electronhub/models', {
+        method: 'POST',
+        headers: getRequestHeaders({ omitContentType: true }),
+    });
+
+    function getModelName(model) {
+        const name = String(model?.name || model?.id || '');
+        const premium = model?.premium_model ? ' | Premium' : '';
+        let price = 'Unknown';
+        if (model?.pricing?.type === 'per_image') {
+            const coeff = Number(model.pricing.coefficient);
+            if (!isNaN(coeff)) {
+                price = `$${coeff}/image`;
+            }
+        }
+        return `${name} | ${price}${premium}`;
+    }
+
+    if (result.ok) {
+        /** @type {any[]} */
+        const data = await result.json();
+        return Array.isArray(data) ? data.map(m => ({ ...m, text: getModelName(m) })) : [];
     }
 
     return [];
@@ -1807,7 +1968,7 @@ async function loadNanoGPTModels() {
 
     const result = await fetch('/api/sd/nanogpt/models', {
         method: 'POST',
-        headers: getRequestHeaders(),
+        headers: getRequestHeaders({ omitContentType: true }),
     });
 
     if (result.ok) {
@@ -1820,7 +1981,7 @@ async function loadNanoGPTModels() {
 async function loadHordeModels() {
     const result = await fetch('/api/horde/sd-models', {
         method: 'POST',
-        headers: getRequestHeaders(),
+        headers: getRequestHeaders({ omitContentType: true }),
     });
 
 
@@ -1944,6 +2105,8 @@ async function loadOpenAiModels() {
         { value: 'gpt-image-1', text: 'gpt-image-1' },
         { value: 'dall-e-3', text: 'dall-e-3' },
         { value: 'dall-e-2', text: 'dall-e-2' },
+        { value: 'sora-2', text: 'sora-2' },
+        { value: 'sora-2-pro', text: 'sora-2-pro' },
     ];
 }
 
@@ -1952,7 +2115,7 @@ async function loadAimlapiModels() {
 
     const result = await fetch('/api/sd/aimlapi/models', {
         method: 'POST',
-        headers: getRequestHeaders(),
+        headers: getRequestHeaders({ omitContentType: true }),
     });
 
     if (!result.ok) {
@@ -2041,6 +2204,9 @@ async function loadNovelModels() {
 
 async function loadGoogleModels() {
     return [
+        'imagen-4.0-generate-001',
+        'imagen-4.0-ultra-generate-001',
+        'imagen-4.0-fast-generate-001',
         'imagen-4.0-generate-preview-06-06',
         'imagen-4.0-fast-generate-preview-06-06',
         'imagen-4.0-ultra-generate-preview-06-06',
@@ -2051,6 +2217,13 @@ async function loadGoogleModels() {
         'imagegeneration@006',
         'imagegeneration@005',
         'imagegeneration@002',
+        'veo-3.1-generate-preview',
+        'veo-3.1-fast-generate-preview',
+        'veo-3.0-generate-001',
+        'veo-3.0-fast-generate-001',
+        'veo-2.0-generate-001',
+        'veo-2.0-generate-exp',
+        'veo-2.0-generate-preview',
     ].map(name => ({ value: name, text: name }));
 }
 
@@ -2122,6 +2295,12 @@ async function loadSchedulers() {
             schedulers = ['N/A'];
             break;
         case sources.huggingface:
+            schedulers = ['N/A'];
+            break;
+        case sources.chutes:
+            schedulers = ['N/A'];
+            break;
+        case sources.electronhub:
             schedulers = ['N/A'];
             break;
         case sources.nanogpt:
@@ -2219,6 +2398,12 @@ async function loadVaes() {
             vaes = ['N/A'];
             break;
         case sources.huggingface:
+            vaes = ['N/A'];
+            break;
+        case sources.chutes:
+            vaes = ['N/A'];
+            break;
+        case sources.electronhub:
             vaes = ['N/A'];
             break;
         case sources.nanogpt:
@@ -2708,7 +2893,7 @@ function getCharacterAvatarUrl() {
     if (context.groupId) {
         const groupMembers = context.groups.find(x => x.id === context.groupId)?.members;
         const lastMessageAvatar = context.chat?.filter(x => !x.is_system && !x.is_user)?.slice(-1)[0]?.original_avatar;
-        const randomMemberAvatar = Array.isArray(groupMembers) ? groupMembers[Math.floor(Math.random() * groupMembers.length)]?.avatar : null;
+        const randomMemberAvatar = Array.isArray(groupMembers) ? groupMembers[Math.floor(Math.random() * groupMembers.length)] : null;
         const avatarToUse = lastMessageAvatar || randomMemberAvatar;
         return formatCharacterAvatar(avatarToUse);
     } else {
@@ -2750,10 +2935,16 @@ async function generatePrompt(quietPrompt) {
  */
 async function sendGenerationRequest(generationType, prompt, additionalNegativePrefix, characterName, callback, initiator, signal) {
     const noCharPrefix = [generationMode.FREE, generationMode.BACKGROUND, generationMode.USER, generationMode.USER_MULTIMODAL, generationMode.FREE_EXTENDED];
-    const prefix = noCharPrefix.includes(generationType)
+    const isCharChat = this_chid !== undefined && !selected_group;
+    const ignoreNoCharForSwipe = initiator === initiators.swipe && isCharChat;
+
+    const skipCharPrefix = !ignoreNoCharForSwipe && noCharPrefix.includes(generationType);
+
+    const prefix = skipCharPrefix
         ? extension_settings.sd.prompt_prefix
         : combinePrefixes(extension_settings.sd.prompt_prefix, getCharacterPrefix());
-    const negativePrefix = noCharPrefix.includes(generationType)
+
+    const negativePrefix = skipCharPrefix
         ? extension_settings.sd.negative_prompt
         : combinePrefixes(extension_settings.sd.negative_prompt, getCharacterNegativePrefix());
 
@@ -2803,6 +2994,12 @@ async function sendGenerationRequest(generationType, prompt, additionalNegativeP
                 break;
             case sources.huggingface:
                 result = await generateHuggingFaceImage(prefixedPrompt, signal);
+                break;
+            case sources.chutes:
+                result = await generateChutesImage(prefixedPrompt, negativePrompt, signal);
+                break;
+            case sources.electronhub:
+                result = await generateElectronHubImage(prefixedPrompt, signal);
                 break;
             case sources.nanogpt:
                 result = await generateNanoGPTImage(prefixedPrompt, negativePrompt, signal);
@@ -3004,6 +3201,56 @@ function getClosestAspectRatio(width, height, source) {
     }
 
     return closestAspectRatio;
+}
+
+/**
+ * Get closest size for Electron Hub
+ * @param {number} width - The width of the image
+ * @param {number} height - The height of the image
+ * @returns {Promise<string>} - The closest size
+ */
+async function getClosestSize(width, height) {
+    const response = await fetch('/api/sd/electronhub/sizes', {
+        method: 'POST',
+        headers: getRequestHeaders(),
+        body: JSON.stringify({
+            model: extension_settings.sd.model,
+        }),
+    });
+    if (!response.ok) {
+        const text = await response.text();
+        throw new Error(text);
+    }
+    const result = await response.json();
+    const sizesData = result.sizes;
+
+    const closestSize = sizesData.reduce((closest, size) => {
+        if (!size || typeof size !== 'string') {
+            return closest;
+        }
+        const sizeParts = size.split('x');
+        if (sizeParts.length !== 2) {
+            return closest;
+        }
+
+        const sizeWidth = Number(sizeParts[0]);
+        const sizeHeight = Number(sizeParts[1]);
+        const targetWidth = Number(width);
+        const targetHeight = Number(height);
+
+        if (isNaN(sizeWidth) || isNaN(sizeHeight) || isNaN(targetWidth) || isNaN(targetHeight)) {
+            return closest;
+        }
+
+        const sizeArea = sizeWidth * sizeHeight;
+        const targetArea = targetWidth * targetHeight;
+        const diff = Math.abs(sizeArea - targetArea);
+
+        return diff < closest.diff ? { size, diff } : closest;
+    }, { size: null, diff: Infinity });
+
+    const size = closestSize.size;
+    return size;
 }
 
 /**
@@ -3332,6 +3579,7 @@ async function generateOpenAiImage(prompt, signal) {
     const isDalle2 = extension_settings.sd.model === 'dall-e-2';
     const isDalle3 = extension_settings.sd.model === 'dall-e-3';
     const isGptImg = extension_settings.sd.model === 'gpt-image-1';
+    const isSora2 = /sora-2/.test(extension_settings.sd.model);
 
     if (isDalle2 && prompt.length > dalle2PromptLimit) {
         prompt = prompt.substring(0, dalle2PromptLimit);
@@ -3368,6 +3616,30 @@ async function generateOpenAiImage(prompt, signal) {
     if (isDalle2 && (extension_settings.sd.width <= 512 && extension_settings.sd.height <= 512)) {
         width = 512;
         height = 512;
+    }
+
+    if (isSora2) {
+        width = aspectRatio >= 1 ? 1280 : 720;
+        height = aspectRatio >= 1 ? 720 : 1280;
+
+        const videoResult = await fetch('/api/openai/generate-video', {
+            method: 'POST',
+            headers: getRequestHeaders(),
+            signal: signal,
+            body: JSON.stringify({
+                prompt: prompt,
+                model: extension_settings.sd.model,
+                size: `${width}x${height}`,
+                seconds: extension_settings.sd.openai_duration,
+            }),
+        });
+
+        if (!videoResult.ok) {
+            throw new Error(await videoResult.text());
+        }
+
+        const { format, data } = await videoResult.json();
+        return { format, data };
     }
 
     const result = await fetch('/api/openai/generate-image', {
@@ -3557,6 +3829,68 @@ async function generateHuggingFaceImage(prompt, signal) {
 }
 
 /**
+ * Generates an image using the Chutes API.
+ * @param {string} prompt - The main instruction used to guide the image generation.
+ * @param {string} negativePrompt - The instruction used to restrict the image generation.
+ * @param {AbortSignal} signal - An AbortSignal object that can be used to cancel the request.
+ * @returns {Promise<{format: string, data: string}>} - A promise that resolves when the image generation and processing are complete.
+ */
+async function generateChutesImage(prompt, negativePrompt, signal) {
+    const result = await fetch('/api/sd/chutes/generate', {
+        method: 'POST',
+        headers: getRequestHeaders(),
+        signal: signal,
+        body: JSON.stringify({
+            model: extension_settings.sd.model,
+            prompt: prompt,
+            negative_prompt: negativePrompt,
+            width: extension_settings.sd.width,
+            height: extension_settings.sd.height,
+            steps: extension_settings.sd.steps,
+            guidance_scale: extension_settings.sd.scale,
+        }),
+    });
+
+    if (result.ok) {
+        const data = await result.json();
+        return { format: 'jpg', data: data.image };
+    } else {
+        const text = await result.text();
+        throw new Error(text);
+    }
+}
+
+/**
+ * Generates an image using the Electron Hub API.
+ * @param {string} prompt - The main instruction used to guide the image generation.
+ * @param {AbortSignal} signal - An AbortSignal object that can be used to cancel the request.
+ * @returns {Promise<{format: string, data: string}>} - A promise that resolves when the image generation and processing are complete.
+ */
+async function generateElectronHubImage(prompt, signal) {
+    const size = await getClosestSize(extension_settings.sd.width, extension_settings.sd.height);
+
+    const result = await fetch('/api/sd/electronhub/generate', {
+        method: 'POST',
+        headers: getRequestHeaders(),
+        signal: signal,
+        body: JSON.stringify({
+            model: extension_settings.sd.model,
+            prompt: prompt,
+            size: size,
+            quality: String(extension_settings.sd.electronhub_quality || '').trim() || undefined,
+        }),
+    });
+
+    if (result.ok) {
+        const data = await result.json();
+        return { format: 'jpg', data: data.image };
+    } else {
+        const text = await result.text();
+        throw new Error(text);
+    }
+}
+
+/**
  * Generates an image using the NanoGPT API.
  * @param {string} prompt - The main instruction used to guide the image generation.
  * @param {string} negativePrompt - The instruction used to restrict the image generation.
@@ -3691,6 +4025,38 @@ async function generateFalaiImage(prompt, negativePrompt, signal) {
  * @returns {Promise<{format: string, data: string}>} A promise that resolves when the image generation and processing are complete.
  */
 async function generateGoogleImage(prompt, negativePrompt, signal) {
+    const isVeo = /^veo-/.test(extension_settings.sd.model);
+
+    if (isVeo) {
+        const aspectRatio = extension_settings.sd.width / extension_settings.sd.height;
+        const maxPromptLength = 3000; // 1024 tokens approx.
+        const videoResult = await fetch('/api/google/generate-video', {
+            method: 'POST',
+            headers: getRequestHeaders(),
+            signal: signal,
+            body: JSON.stringify({
+                prompt: prompt.slice(0, maxPromptLength),
+                aspect_ratio: aspectRatio >= 1 ? '16:9' : '9:16',
+                seconds: extension_settings.sd.google_duration,
+                negative_prompt: negativePrompt,
+                model: extension_settings.sd.model,
+                api: extension_settings.sd.google_api || 'makersuite',
+                seed: extension_settings.sd.seed >= 0 ? extension_settings.sd.seed : undefined,
+                vertexai_auth_mode: oai_settings.vertexai_auth_mode,
+                vertexai_region: oai_settings.vertexai_region,
+                vertexai_express_project_id: oai_settings.vertexai_express_project_id,
+            }),
+        });
+
+        if (!videoResult.ok) {
+            const text = await videoResult.text();
+            throw new Error(text);
+        }
+
+        const data = await videoResult.json();
+        return { format: 'mp4', data: data.video };
+    }
+
     const result = await fetch('/api/google/generate-image', {
         method: 'POST',
         headers: getRequestHeaders(),
@@ -3873,6 +4239,17 @@ async function sendMessage(prompt, image, generationType, additionalNegativePref
     const name = context.groupId ? systemUserName : context.name2;
     const template = extension_settings.sd.prompts[generationMode.MESSAGE] || '{{prompt}}';
     const messageText = substituteParamsExtended(template, { char: name, prompt: prompt, prefixedPrompt: prefixedPrompt });
+    const mediaType = isVideo(format) ? MEDIA_TYPE.VIDEO : MEDIA_TYPE.IMAGE;
+    /** @type {MediaAttachment} */
+    const mediaAttachment = {
+        url: image,
+        type: mediaType,
+        title: prompt,
+        generation_type: generationType,
+        negative: additionalNegativePrefix,
+        source: MEDIA_SOURCE.GENERATED,
+    };
+    /** @type {ChatMessage} */
     const message = {
         name: name,
         is_user: false,
@@ -3880,26 +4257,19 @@ async function sendMessage(prompt, image, generationType, additionalNegativePref
         send_date: getMessageTimeStamp(),
         mes: messageText,
         extra: {
-            image: image,
-            title: prompt,
-            generationType: generationType,
-            negative: additionalNegativePrefix,
+            media: [mediaAttachment],
+            media_display: MEDIA_DISPLAY.GALLERY,
+            media_index: 0,
             inline_image: false,
-            image_swipes: [image],
         },
     };
-    if (isVideo(format)) {
-        message.extra.video = image;
-        delete message.extra.image;
-        delete message.extra.image_swipes;
-        delete message.extra.inline_image;
-    }
     context.chat.push(message);
     const messageId = context.chat.length - 1;
     await eventSource.emit(event_types.MESSAGE_RECEIVED, messageId, 'extension');
     context.addOneMessage(message);
     await eventSource.emit(event_types.CHARACTER_MESSAGE_RENDERED, messageId, 'extension');
     await context.saveChat();
+    setTimeout(() => context.scrollOnMediaLoad(), debounce_timeout.short);
 }
 
 /**
@@ -3937,7 +4307,7 @@ async function addSDGenButtons() {
         placement: 'top',
     });
 
-    $(document).on('click', '.sd_message_gen', sdMessageButton);
+    $(document).on('click', '.sd_message_gen', (e) => sdMessageButton($(e.currentTarget), { animate: false }));
 
     $(document).on('click touchend', function (e) {
         const target = $(e.target);
@@ -4006,6 +4376,10 @@ function isValidState() {
             return secret_state[SECRET_KEYS.STABILITY];
         case sources.huggingface:
             return secret_state[SECRET_KEYS.HUGGINGFACE];
+        case sources.chutes:
+            return secret_state[SECRET_KEYS.CHUTES];
+        case sources.electronhub:
+            return secret_state[SECRET_KEYS.ELECTRONHUB];
         case sources.nanogpt:
             return secret_state[SECRET_KEYS.NANOGPT];
         case sources.bfl:
@@ -4021,98 +4395,89 @@ function isValidState() {
 
 let buttonAbortController = null;
 
-async function sdMessageButton(e) {
+/**
+ * "Paintbrush" button handler to generate a new image for a message.
+ * @param {JQuery<HTMLElement>} $icon The click target.
+ * @param {Object} [options] Additional options for image generation.
+ * @param {boolean} [options.animate] Whether to animate the media during generation.
+ * @returns {Promise<void>} A promise that resolves when the image generation process is complete.
+ */
+async function sdMessageButton($icon, { animate } = {}) {
+    /**
+     * Sets the icon to indicate busy or idle state.
+     * @param {boolean} isBusy Whether the icon should indicate a busy state.
+     */
     function setBusyIcon(isBusy) {
-        $icon.toggleClass('fa-paintbrush', !isBusy);
-        $icon.toggleClass(busyClass, isBusy);
+        $icon.toggleClass(classes.idle, !isBusy);
+        $icon.toggleClass(classes.busy, isBusy);
+        $media.toggleClass(classes.animation, isBusy);
     }
 
-    const busyClass = 'fa-hourglass';
-    const context = getContext();
-    const $icon = $(e.currentTarget);
-    const $mes = $icon.closest('.mes');
-    const message_id = $mes.attr('mesid');
-    const message = context.chat[message_id];
-    const characterFileName = context.groupId
-        ? context.groups[Object.keys(context.groups).filter(x => context.groups[x].id === context.groupId)[0]]?.id?.toString()
-        : context.characters[context.characterId]?.name;
-    const messageText = message?.mes;
-    const hasSavedImage = message?.extra?.image && message?.extra?.title;
-    const hasSavedNegative = message?.extra?.negative;
+    let $media = jQuery();
 
-    if ($icon.hasClass(busyClass)) {
+    const classes = { busy: 'fa-hourglass', idle: 'fa-paintbrush', animation: 'fa-fade' };
+    const context = getContext();
+
+    if ($icon.hasClass(classes.busy)) {
         buttonAbortController?.abort('Aborted by user');
         console.log('Previous image is still being generated...');
         return;
     }
 
-    let dimensions = null;
+    const messageElement = $icon.closest('.mes');
+    const messageId = Number(messageElement.attr('mesid'));
+
+    /** @type {ChatMessage} */
+    const message = context.chat[messageId];
+
+    if (!message) {
+        console.error('Could not find message for SD generation button');
+        return;
+    }
+
+    if (!message.extra || typeof message.extra !== 'object') {
+        message.extra = {};
+    }
+
+    if (!Array.isArray(message.extra.media)) {
+        message.extra.media = [];
+    }
+
+    if (!message.extra.media.length && !message.extra.media_display) {
+        message.extra.media_display = MEDIA_DISPLAY.GALLERY;
+    }
+
+    /** @type {MediaAttachment} */
+    const selectedMedia = message.extra.media.length > 0
+        ? (message.extra.media[message.extra.media_index] ?? message.extra.media[message.extra.media.length - 1])
+        : { url: '', title: message.mes, type: MEDIA_TYPE.IMAGE, generation_type: generationMode.FREE };
+
+    if (animate && message.extra.media.length > 0) {
+        const index = message.extra.media.indexOf(selectedMedia);
+        $media = messageElement.find(`.mes_media_container[data-index="${index}"]`).find('.mes_img, .mes_video');
+    }
+
     buttonAbortController = new AbortController();
+    const newMediaAttachment = await generateMediaSwipe(
+        selectedMedia,
+        message,
+        () => setBusyIcon(true),
+        () => setBusyIcon(false),
+        buttonAbortController,
+    );
 
-    try {
-        setBusyIcon(true);
-        if (hasSavedImage) {
-            const prompt = await refinePrompt(message.extra.title, false);
-            const negative = hasSavedNegative ? await refinePrompt(message.extra.negative, true) : '';
-            message.extra.title = prompt;
-
-            const generationType = message?.extra?.generationType ?? generationMode.FREE;
-            console.log('Regenerating an image, using existing prompt:', prompt);
-            dimensions = setTypeSpecificDimensions(generationType);
-            await sendGenerationRequest(generationType, prompt, negative, characterFileName, saveGeneratedImage, initiators.action, buttonAbortController?.signal);
-        }
-        else {
-            console.log('doing /sd raw last');
-            await generatePicture(initiators.action, {}, 'raw_last', messageText, saveGeneratedImage);
-        }
-    }
-    catch (error) {
-        console.error('Could not generate inline image: ', error);
-    }
-    finally {
-        setBusyIcon(false);
-
-        if (dimensions) {
-            restoreOriginalDimensions(dimensions);
-        }
+    if (!newMediaAttachment) {
+        return;
     }
 
-    function saveGeneratedImage(prompt, image, generationType, negative, _initiator, _prefixedPrompt, format) {
-        // Some message sources may not create the extra object
-        if (typeof message.extra !== 'object' || message.extra === null) {
-            message.extra = {};
-        }
+    // If already contains an image and it's not inline - leave it as is
+    message.extra.inline_image = !(message.extra.media.length && !message.extra.inline_image);
+    message.extra.media.push(newMediaAttachment);
+    message.extra.media_index = message.extra.media.length - 1;
 
-        // Add image to the swipe list if it's not already there
-        if (!Array.isArray(message.extra.image_swipes)) {
-            message.extra.image_swipes = [];
-        }
+    appendMediaToMessage(message, messageElement, SCROLL_BEHAVIOR.KEEP);
 
-        const swipes = message.extra.image_swipes;
-
-        if (message.extra.image && !swipes.includes(message.extra.image)) {
-            swipes.push(message.extra.image);
-        }
-
-        const isVideoFormat = isVideo(format);
-
-        if (isVideoFormat) {
-            message.extra.video = image;
-        } else {
-            swipes.push(image);
-
-            // If already contains an image and it's not inline - leave it as is
-            message.extra.inline_image = !(message.extra.image && !message.extra.inline_image);
-            message.extra.image = image;
-        }
-
-        message.extra.title = prompt;
-        message.extra.generationType = generationType;
-        message.extra.negative = negative;
-        appendMediaToMessage(message, $mes);
-
-        return context.saveChat();
-    }
+    await context.saveChat();
 }
 
 async function onCharacterPromptShareInput() {
@@ -4142,97 +4507,103 @@ async function writePromptFields(characterId) {
 }
 
 /**
- * Switches an image to the next or previous one in the swipe list.
- * @param {object} args Event arguments
- * @param {any} args.message Message object
- * @param {JQuery<HTMLElement>} args.element Message element
- * @param {string} args.direction Swipe direction
- * @returns {Promise<void>}
+ * Generates a new media attachment based on the provided media attachment metadata.
+ * @param {MediaAttachment} mediaAttachment - The media attachment metadata.
+ * @param {ChatMessage} message - The chat message containing the media attachment.
+ * @param {Function} onStart - Callback function to be called when generation starts.
+ * @param {Function} onComplete - Callback function to be called when generation completes.
+ * @param {AbortController} abortController - An AbortController to handle cancellation of the generation process.
+ * @returns {Promise<MediaAttachment|null>} - A promise that resolves to the newly generated media attachment, or null if generation failed or was aborted.
+ */
+async function generateMediaSwipe(mediaAttachment, message, onStart, onComplete, abortController = new AbortController()) {
+    const stopButton = document.getElementById('sd_stop_gen');
+    const stopListener = () => abortController.abort('Aborted by user');
+    const generationType = mediaAttachment.generation_type ?? message?.extra?.generationType ?? generationMode.FREE;
+    const dimensions = setTypeSpecificDimensions(generationType);
+    extension_settings.sd.original_seed = extension_settings.sd.seed;
+    extension_settings.sd.seed = extension_settings.sd.seed >= 0 ? Math.round(Math.random() * (Math.pow(2, 32) - 1)) : -1;
+
+    /** @type {MediaAttachment} */
+    const result = {
+        url: '',
+        type: MEDIA_TYPE.IMAGE,
+        source: MEDIA_SOURCE.GENERATED,
+    };
+
+    try {
+        $(stopButton).show();
+        eventSource.once(CUSTOM_STOP_EVENT, stopListener);
+        const callback = (_a, _b, _c, _d, _e, _f, format) => { result.type = isVideo(format) ? MEDIA_TYPE.VIDEO : MEDIA_TYPE.IMAGE; };
+        const savedPrompt = mediaAttachment.title ?? message.extra.title ?? '';
+        const prompt = await refinePrompt(savedPrompt, false);
+        const savedNegative = mediaAttachment.negative ?? message.extra.negative ?? '';
+        const negative = savedNegative ? await refinePrompt(savedNegative, true) : '';
+
+        const context = getContext();
+        const characterName = context.groupId
+            ? context.groups[Object.keys(context.groups).filter(x => context.groups[x].id === context.groupId)[0]]?.id?.toString()
+            : context.characters[context.characterId]?.name;
+
+        onStart();
+        result.url = await sendGenerationRequest(generationType, prompt, negative, characterName, callback, initiators.swipe, abortController.signal);
+        result.generation_type = generationType;
+        result.title = prompt;
+        result.negative = negative;
+    } finally {
+        onComplete();
+        $(stopButton).hide();
+        eventSource.removeListener(CUSTOM_STOP_EVENT, stopListener);
+        restoreOriginalDimensions(dimensions);
+        extension_settings.sd.seed = extension_settings.sd.original_seed;
+        delete extension_settings.sd.original_seed;
+    }
+
+    if (!result.url) {
+        return null;
+    }
+
+    return result;
+}
+
+/**
+ * Handles the image swipe event to potentially generate a new image.
+ * @param {object} param Parameters object
+ * @param {ChatMessage} param.message Message object
+ * @param {JQuery<HTMLElement>} param.element Message element
+ * @param {string} param.direction Swipe direction
  */
 async function onImageSwiped({ message, element, direction }) {
-    const context = getContext();
-    const animationClass = 'fa-fade';
-    const messageImg = element.find('.mes_img');
+    const { powerUserSettings, accountStorage } = getContext();
 
-    // Current image is already animating
-    if (messageImg.hasClass(animationClass)) {
+    if (!isValidState()) {
         return;
     }
 
-    const swipes = message?.extra?.image_swipes;
-
-    if (!Array.isArray(swipes)) {
-        console.warn('No image swipes found in the message');
+    if (!message || direction !== SWIPE_DIRECTION.RIGHT || powerUserSettings.image_overswipe !== IMAGE_OVERSWIPE.GENERATE) {
         return;
     }
 
-    const currentIndex = swipes.indexOf(message.extra.image);
-
-    if (currentIndex === -1) {
-        console.warn('Current image not found in the swipes');
+    const media = message?.extra?.media;
+    if (!Array.isArray(media) || media.length === 0) {
         return;
     }
 
-    // Switch to previous image or wrap around if at the beginning
-    if (direction === 'left') {
-        const newIndex = currentIndex === 0 ? swipes.length - 1 : currentIndex - 1;
-        message.extra.image = swipes[newIndex];
-
-        // Update the image in the message
-        appendMediaToMessage(message, element, false);
+    const shouldGenerate = message?.extra?.media_index === media.length - 1;
+    if (!shouldGenerate) {
+        return;
     }
 
-    // Switch to next image or generate a new one if at the end
-    if (direction === 'right') {
-        const newIndex = currentIndex === swipes.length - 1 ? swipes.length : currentIndex + 1;
-
-        if (newIndex === swipes.length) {
-            const abortController = new AbortController();
-            const swipeControls = element.find('.mes_img_swipes');
-            const stopButton = document.getElementById('sd_stop_gen');
-            const stopListener = () => abortController.abort('Aborted by user');
-            const generationType = message?.extra?.generationType ?? generationMode.FREE;
-            const dimensions = setTypeSpecificDimensions(generationType);
-            const originalSeed = extension_settings.sd.seed;
-            extension_settings.sd.seed = extension_settings.sd.seed >= 0 ? Math.round(Math.random() * (Math.pow(2, 32) - 1)) : -1;
-            let imagePath = '';
-
-            try {
-                $(stopButton).show();
-                eventSource.once(CUSTOM_STOP_EVENT, stopListener);
-                const callback = () => { };
-                const hasNegative = message.extra.negative;
-                const prompt = await refinePrompt(message.extra.title, false);
-                const negativePromptPrefix = hasNegative ? await refinePrompt(message.extra.negative, true) : '';
-                message.extra.title = prompt;
-                const characterName = context.groupId
-                    ? context.groups[Object.keys(context.groups).filter(x => context.groups[x].id === context.groupId)[0]]?.id?.toString()
-                    : context.characters[context.characterId]?.name;
-
-                messageImg.addClass(animationClass);
-                swipeControls.hide();
-                imagePath = await sendGenerationRequest(generationType, prompt, negativePromptPrefix, characterName, callback, initiators.swipe, abortController.signal);
-            } finally {
-                $(stopButton).hide();
-                messageImg.removeClass(animationClass);
-                swipeControls.show();
-                eventSource.removeListener(CUSTOM_STOP_EVENT, stopListener);
-                restoreOriginalDimensions(dimensions);
-                extension_settings.sd.seed = originalSeed;
-            }
-
-            if (!imagePath) {
-                return;
-            }
-
-            swipes.push(imagePath);
-        }
-
-        message.extra.image = swipes[newIndex];
-        appendMediaToMessage(message, element, false);
+    const key = 'imageSwipeNoticeShown';
+    const hasSeenNotice = accountStorage.getItem(key);
+    if (!hasSeenNotice) {
+        await Popup.show.text(
+            t`Image Generation Notice`,
+            t`To disable generation on image swipes, change the "Image Swipe Behavior" setting in the User Settings panel. This message will not be shown again.`,
+        );
+        accountStorage.setItem(key, 'true');
     }
 
-    await context.saveChat();
+    await sdMessageButton(element.find('.sd_message_gen'), { animate: true });
 }
 
 /**
@@ -4668,6 +5039,7 @@ jQuery(async () => {
     $('#sd_interactive_mode').on('input', onInteractiveModeInput);
     $('#sd_openai_style').on('change', onOpenAiStyleSelect);
     $('#sd_openai_quality').on('change', onOpenAiQualitySelect);
+    $('#sd_openai_duration').on('input', onOpenAiDurationSelect);
     $('#sd_multimodal_captioning').on('input', onMultimodalCaptioningInput);
     $('#sd_snap').on('input', onSnapInput);
     $('#sd_clip_skip').on('input', onClipSkipInput);
@@ -4690,6 +5062,14 @@ jQuery(async () => {
     });
     $('#sd_google_enhance').on('input', function () {
         extension_settings.sd.google_enhance = $(this).prop('checked');
+        saveSettingsDebounced();
+    });
+    $('#sd_google_duration').on('input', function () {
+        extension_settings.sd.google_duration = Number($(this).val());
+        saveSettingsDebounced();
+    });
+    $('#sd_electronhub_quality').on('change', function () {
+        extension_settings.sd.electronhub_quality = String($(this).val());
         saveSettingsDebounced();
     });
 
@@ -4715,9 +5095,8 @@ jQuery(async () => {
         }
     });
 
-    eventSource.on(event_types.IMAGE_SWIPED, onImageSwiped);
-
     eventSource.on(event_types.CHAT_CHANGED, onChatChanged);
+    eventSource.on(event_types.IMAGE_SWIPED, onImageSwiped);
 
     [event_types.SECRET_WRITTEN, event_types.SECRET_DELETED, event_types.SECRET_ROTATED].forEach(event => {
         eventSource.on(event, async (/** @type {string} */ key) => {

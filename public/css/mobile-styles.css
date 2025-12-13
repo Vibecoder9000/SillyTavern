@@ -10,6 +10,18 @@
         flex-basis: 100%;
     }
 
+    #rm_button_panel_pin_div,
+    #lm_button_panel_pin_div {
+        display: none;
+    }
+
+    #rm_button_characters {
+        font-size: var(--topBarIconSize);
+    }
+
+    #CharListButtonAndHotSwaps {
+        align-items: center;
+    }
 
     #send_form.compact #leftSendForm,
     #send_form.compact #rightSendForm {
@@ -19,6 +31,15 @@
 
     #sheldWidthToggleBlock {
         display: none;
+    }
+
+    #bg_menu_content,
+    #bg_custom_content {
+        grid-template-columns: repeat(var(--bg-thumb-columns, 3), 1fr);
+    }
+
+    .bg_list {
+        width: unset;
     }
 
     .bg_button {
@@ -62,6 +83,15 @@
         right: 4px;
         left: auto;
         width: fit-content;
+    }
+
+    #bg_tabs .bg_tabs_list .bg_tab_button {
+        min-width: 6em;
+    }
+
+    #add_background_button_top>span,
+    #auto_background>span {
+        display: none;
     }
 
     #extensions_settings,
@@ -477,6 +507,7 @@
         max-width: 100dvw;
     }
 
+
 }
 
 /*landscape mode phones and ipads*/
@@ -546,6 +577,7 @@
     #add-folder-button .BGSampleTitle {
         display: block;
     }
+
 
     .tag.excluded:after {
         top: unset;

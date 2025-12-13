@@ -48,6 +48,7 @@ import { router as azureRouter } from './endpoints/azure.js';
 import { router as minimaxRouter } from './endpoints/minimax.js';
 import { router as dataMaidRouter } from './endpoints/data-maid.js';
 import { router as toolsRouter } from './endpoints/tools.js';
+import { router as backupsRouter } from './endpoints/backups.js';
 
 /**
  * @typedef {object} ServerStartupResult
@@ -177,6 +178,7 @@ export function setupPrivateEndpoints(app) {
     app.use('/api/azure', azureRouter);
     app.use('/api/minimax', minimaxRouter);
     app.use('/api/data-maid', dataMaidRouter);
+    app.use('/api/backups', backupsRouter);
 }
 
 /**
@@ -235,9 +237,11 @@ export class ServerStartup {
     #createHttpsServer(url, ipVersion) {
         this.#verifySslOptions();
         return new Promise((resolve, reject) => {
+            /** @type {import('https').ServerOptions} */
             const sslOptions = {
                 cert: fs.readFileSync(this.cliArgs.certPath),
                 key: fs.readFileSync(this.cliArgs.keyPath),
+                passphrase: String(this.cliArgs.keyPassphrase ?? ''),
             };
             const server = https.createServer(sslOptions, this.app);
             server.on('error', reject);

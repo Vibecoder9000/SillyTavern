@@ -45,6 +45,7 @@ import multerMonkeyPatch from './middleware/multerMonkeyPatch.js';
 import initRequestProxy from './request-proxy.js';
 import cacheBuster from './middleware/cacheBuster.js';
 import corsProxyMiddleware from './middleware/corsProxy.js';
+import hostWhitelistMiddleware from './middleware/hostWhitelist.js';
 import {
     getVersion,
     color,
@@ -69,6 +70,7 @@ import { syncBackgroundsMetadata } from './endpoints/backgrounds-manager.js';
 import { redirectDeprecatedEndpoints, ServerStartup, setupPrivateEndpoints } from './server-startup.js';
 import { diskCache } from './endpoints/characters.js';
 import { migrateFlatSecrets } from './endpoints/secrets.js';
+import { migrateGroupChatsMetadataFormat } from './endpoints/groups.js';
 
 // Work around a node v20.0.0, v20.1.0, and v20.2.0 bug. The issue was fixed in v20.3.0.
 // https://github.com/nodejs/node/issues/47822#issuecomment-1564708870
@@ -117,6 +119,8 @@ if (cliArgs.whitelistMode) {
     const whitelistMiddleware = await getWhitelistMiddleware();
     app.use(whitelistMiddleware);
 }
+
+app.use(hostWhitelistMiddleware);
 
 if (cliArgs.listen) {
     app.use(accessLoggerMiddleware());
@@ -271,6 +275,7 @@ async function preSetupTasks() {
     console.log();
 
     const directories = await getUserDirectoriesList();
+    await migrateGroupChatsMetadataFormat(directories);
     await checkForNewContent(directories);
 
     for (const userDirectories of directories) {
