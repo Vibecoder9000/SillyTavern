@@ -857,7 +857,7 @@ export class ToolManager {
      */
     static findAndParseNativeToolCall(text) {
         const thinkMatch = text.match(/<think>([\s\S]*?)<\/think>/);
-        const reasoning = thinkMatch ? thinkMatch[1].trim() : '';
+        const reasoning = thinkMatch ? thinkMatch[1] : '';
 
         const toolTagIndex = text.indexOf('<tool>');
         if (toolTagIndex === -1) {
@@ -869,9 +869,9 @@ export class ToolManager {
         const textBeforeTool = text.substring(0, toolTagIndex);
         if (thinkMatch) {
             // Remove the <think>...</think> block from the text before <tool>
-            prefixText = textBeforeTool.replace(/<think>[\s\S]*?<\/think>/, '').trim();
+            prefixText = textBeforeTool.replace(/<think>[\s\S]*?<\/think>/, '');
         } else {
-            prefixText = textBeforeTool.trim();
+            prefixText = textBeforeTool;
         }
 
         // Start searching for the JSON object after the <tool> tag.
@@ -919,8 +919,7 @@ export class ToolManager {
     }
 
     /**
-     * Reconstructs a tool call into a canonical, well-formed string.
-     * This ensures consistency regardless of how the model was stopped.
+     * Reconstructs the message from the parsed tool call to be displayed in the chat.
      * @param {object} parsedTool The result from findAndParseNativeToolCall.
      * @returns {string} The canonical tool call string.
      */
@@ -930,11 +929,14 @@ export class ToolManager {
 
         // Include any text that appeared before the tool call
         if (prefix_text) {
-            result += `${prefix_text}\n\n`;
+            result += prefix_text;
+            if (!prefix_text.endsWith('\n')) {
+                result += '\n';
+            }
         }
 
         if (reasoning) {
-            result += `<think>\n${reasoning}\n</think>\n`;
+            result += `<think>${reasoning}</think>\n`;
         }
 
         const toolJsonString = JSON.stringify(tool_call, null, 2);
