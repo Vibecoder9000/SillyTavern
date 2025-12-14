@@ -1959,8 +1959,37 @@ function getMessageFromTemplate({
 export function updateMessageBlock(messageId, message, { rerenderMessage = true } = {}) {
     const messageElement = chatElement.find(`[mesid="${messageId}"]`);
     if (rerenderMessage) {
-        const text = message?.extra?.display_text ?? message.mes;
-        messageElement.find('.mes_text').html(messageFormatting(text, message.name, message.is_system, message.is_user, messageId, {}, false));
+        if (message.extra?.is_tool_call && message.extra?.tool_call_info) {
+            const toolInfo = message.extra.tool_call_info;
+            let html = '';
+            if (message.extra.prefix_text) {
+                html += `<p>${DOMPurify.sanitize(message.extra.prefix_text)}</p>`;
+            }
+            html += '<h4><i class="fa-solid fa-cogs"></i> Tool Call</h4>';
+            html += `<div class="tool-action"><p><b>Action:</b> <code>${DOMPurify.sanitize(toolInfo.tool)}</code></p>`;
+            html += `<p><b>Arguments:</b></p><pre><code>${DOMPurify.sanitize(JSON.stringify(toolInfo.args, null, 2))}</code></pre></div>`;
+
+            if (power_user.tool_execution_mode === 'manual') {
+                html += `<button class="tool-execute-button" data-tool-name="${DOMPurify.sanitize(toolInfo.tool)}" data-message-id="${messageId}"><i class="fa-solid fa-play"></i> Execute Tool</button>`;
+            }
+
+            messageElement.find('.mes_text').html(html);
+        } else {
+            const text = message?.extra?.display_text ?? message.mes;
+            messageElement.find('.mes_text').html(messageFormatting(text, message.name, message.is_system, message.is_user, messageId, {}, false));
+        }
+    }
+
+    if (message.extra?.is_tool_call) {
+        messageElement.addClass('tool-call-message');
+    } else {
+        messageElement.removeClass('tool-call-message');
+    }
+
+    if (message.extra?.is_tool_result) {
+        messageElement.addClass('tool-result-message');
+    } else {
+        messageElement.removeClass('tool-result-message');
     }
 
     updateReasoningUI(messageElement);
@@ -2544,6 +2573,11 @@ export function addOneMessage(mes, { type = 'normal', insertAfter = null, scroll
         html += '<h4><i class="fa-solid fa-cogs"></i> Tool Call</h4>';
         html += `<div class="tool-action"><p><b>Action:</b> <code>${DOMPurify.sanitize(toolInfo.tool)}</code></p>`;
         html += `<p><b>Arguments:</b></p><pre><code>${DOMPurify.sanitize(JSON.stringify(toolInfo.args, null, 2))}</code></pre></div>`;
+
+        if (power_user.tool_execution_mode === 'manual') {
+            html += `<button class="tool-execute-button" data-tool-name="${DOMPurify.sanitize(toolInfo.tool)}" data-message-id="${newMessageId}"><i class="fa-solid fa-play"></i> Execute Tool</button>`;
+        }
+
         newMessage.find('.mes_text').html(html);
     }
     else if (mes.extra?.is_tool_result) {
@@ -3666,6 +3700,16 @@ class StreamingProcessor {
                 unblockGeneration();
                 generatedPromptCache = '';
                 return;
+            } else {
+                if (chat[messageId].extra?.is_tool_call) {
+                    delete chat[messageId].extra.is_tool_call;
+                    delete chat[messageId].extra.tool_call_info;
+                    delete chat[messageId].extra.reasoning;
+                    delete chat[messageId].extra.prefix_text;
+                    // Use a more specific selector to avoid issues
+                    const messageElement = chatElement.find(`.mes[mesid="${messageId}"]`);
+                    messageElement.removeClass('tool-call-message');
+                }
             }
         }
 
@@ -5505,6 +5549,16 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
 
                 const newOptions = { automatic_trigger, force_name2, quiet_prompt, quietToLoud, skipWIAN, force_chid, signal, quietImage, quietName, jsonSchema, depth: depth + 1 };
                 return Generate('normal', newOptions, dryRun);
+            } else {
+                const lastMsg = chat[chat.length - 1];
+                if (lastMsg?.extra?.is_tool_call) {
+                    delete lastMsg.extra.is_tool_call;
+                    delete lastMsg.extra.tool_call_info;
+                    delete lastMsg.extra.reasoning;
+                    delete lastMsg.extra.prefix_text;
+                    const messageElement = $('#chat .mes').last();
+                    messageElement.removeClass('tool-call-message');
+                }
             }
         }
 
