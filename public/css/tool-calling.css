@@ -60,3 +60,41 @@ body.hide-tool-messages .tool-call-message,
 body.hide-tool-messages .tool-result-message {
     display: none;
 }
+
+/* Manual Tool Execution Button */
+.tool-execute-button {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 16px;
+    margin-top: 10px;
+    background: linear-gradient(135deg, var(--SmartThemeQuoteColor, #4a9) 0%, var(--SmartThemeBotMesBlurTintColor, #3a8) 100%);
+    color: var(--SmartThemeBodyColor, #fff);
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 0.9em;
+    font-weight: 500;
+    transition: all 0.2s ease;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+}
+
+.tool-execute-button:hover {
+    filter: brightness(1.1);
+    box-shadow: 0 3px 6px rgba(0, 0, 0, 0.3);
+    transform: translateY(-1px);
+}
+
+.tool-execute-button:active {
+    transform: translateY(0);
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+}
+
+.tool-execute-button i {
+    font-size: 0.85em;
+}
+
+.tool-execute-button.executing {
+    opacity: 0.7;
+    pointer-events: none;
+}

@@ -3591,6 +3591,25 @@ class StreamingProcessor {
                     messageElement.find('.mes_text').html(html);
                 }
 
+                // Check for manual execution mode
+                if (power_user.tool_execution_mode === 'manual') {
+                    // Add execute button for manual mode
+                    const messageElement = $(`#chat .mes[mesid="${messageId}"]`);
+                    if (messageElement.length) {
+                        const buttonHtml = `<button class="tool-execute-button" data-tool-name="${DOMPurify.sanitize(parsedTool.tool_call.tool)}" data-message-id="${messageId}"><i class="fa-solid fa-play"></i> Execute Tool</button>`;
+                        messageElement.find('.mes_text').append(buttonHtml);
+                    }
+
+                    // Save tool call info for later execution and save chat
+                    await saveChatConditional();
+
+                    this.markUIGenStopped();
+                    unblockGeneration();
+                    generatedPromptCache = '';
+                    return;
+                }
+
+                // Auto mode: execute tool immediately
                 const toolResult = await ToolManager.invokeFunctionTool(parsedTool.tool_call.tool, parsedTool.tool_call.args, this.abortController.signal);
 
                 let resultMessage;
@@ -3607,7 +3626,7 @@ class StreamingProcessor {
                             extra: { is_tool_result: true, image: `/api/files/download/${parsed.filepath}` },
                         };
                         stopGeneration = true;
-                    } 
+                    }
                     else if (parsed.type === 'video_display' && parsed.filepath) {
                         resultMessage = {
                             name: systemUserName,
@@ -3619,7 +3638,7 @@ class StreamingProcessor {
                         stopGeneration = true;
                     }
                 } catch (e) {
-                    console.error("[Streaming] Failed to parse special tool result:", e);
+                    console.error('[Streaming] Failed to parse special tool result:', e);
                 }
 
                 if (!resultMessage) {
@@ -5415,6 +5434,24 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
                     messageElement.find('.mes_text').html(html);
                 }
 
+                // Check for manual execution mode
+                const messageId = chat.length - 1;
+                if (power_user.tool_execution_mode === 'manual') {
+                    // Add execute button for manual mode
+                    const messageElement = $('#chat .mes').last();
+                    if (messageElement.length) {
+                        const buttonHtml = `<button class="tool-execute-button" data-tool-name="${DOMPurify.sanitize(parsedTool.tool_call.tool)}" data-message-id="${messageId}"><i class="fa-solid fa-play"></i> Execute Tool</button>`;
+                        messageElement.find('.mes_text').append(buttonHtml);
+                    }
+
+                    // Save chat and stop here - user will click the button to continue
+                    await saveChatConditional();
+                    unblockGeneration(type);
+                    generatedPromptCache = '';
+                    return;
+                }
+
+                // Auto mode: execute tool immediately
                 const toolResult = await ToolManager.invokeFunctionTool(parsedTool.tool_call.tool, parsedTool.tool_call.args, signal);
 
                 let resultMessage;
@@ -5443,7 +5480,7 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
                         stopGeneration = true;
                     }
                 } catch (e) {
-                    console.error("[Non-Streaming] Failed to parse special tool result:", e);
+                    console.error('[Non-Streaming] Failed to parse special tool result:', e);
                 }
 
                 if (!resultMessage) {
@@ -12835,6 +12872,91 @@ jQuery(async function () {
     $(document).on('click', '.open_characters_library', async function () {
         await getCharacters();
         await eventSource.emit(event_types.OPEN_CHARACTER_LIBRARY);
+    });
+
+    // Manual tool execution button handler
+    $(document).on('click', '.tool-execute-button', async function () {
+        const button = $(this);
+        const messageId = parseInt(button.data('message-id'));
+        const message = chat[messageId];
+
+        if (!message?.extra?.tool_call_info) {
+            toastr.error('Tool call information not found');
+            return;
+        }
+
+        // Prevent double-clicking
+        if (button.hasClass('executing')) {
+            return;
+        }
+
+        button.addClass('executing');
+        button.html('<i class="fa-solid fa-spinner fa-spin"></i> Executing...');
+
+        try {
+            const toolInfo = message.extra.tool_call_info;
+            const toolResult = await ToolManager.invokeFunctionTool(toolInfo.tool, toolInfo.args, undefined);
+
+            let resultMessage;
+            let stopGeneration = false;
+            try {
+                const parsed = typeof toolResult === 'string' ? JSON.parse(toolResult) : toolResult;
+
+                if (parsed.type === 'image_display' && parsed.filepath) {
+                    resultMessage = {
+                        name: systemUserName,
+                        is_user: false,
+                        is_system: true,
+                        mes: '<tool_result>\nImage displayed to user.\n</tool_result>',
+                        extra: { is_tool_result: true, image: `/api/files/download/${parsed.filepath}` },
+                    };
+                    stopGeneration = true;
+                }
+                else if (parsed.type === 'video_display' && parsed.filepath) {
+                    resultMessage = {
+                        name: systemUserName,
+                        is_user: false,
+                        is_system: true,
+                        mes: '<tool_result>\nVideo displayed to user.\n</tool_result>',
+                        extra: { is_tool_result: true, video: `/api/files/download/${parsed.filepath}` },
+                    };
+                    stopGeneration = true;
+                }
+            } catch (e) {
+                console.error('[Manual Tool Execution] Failed to parse special tool result:', e);
+            }
+
+            if (!resultMessage) {
+                const cappedToolResult = await capToolOutput(String(toolResult));
+                resultMessage = {
+                    name: systemUserName,
+                    is_user: false,
+                    is_system: true,
+                    mes: `<tool_result>\n${cappedToolResult}\n</tool_result>`,
+                    extra: { is_tool_result: true, tool_result_content: cappedToolResult },
+                };
+            }
+
+            // Remove the execute button from the UI
+            button.remove();
+
+            // Add the result message to chat
+            chat.push(resultMessage);
+            addOneMessage(resultMessage);
+            await saveChatConditional();
+
+            // Continue generation unless it's a stop-generating tool
+            if (!stopGeneration) {
+                // Get the current depth from the message or default to 0
+                const currentDepth = message.extra?.depth || 0;
+                Generate('normal', { depth: currentDepth + 1 });
+            }
+        } catch (error) {
+            console.error('[Manual Tool Execution] Error:', error);
+            toastr.error('Failed to execute tool: ' + String(error));
+            button.removeClass('executing');
+            button.html('<i class="fa-solid fa-play"></i> Execute Tool');
+        }
     });
 
     // Added here to prevent execution before script.js is loaded and get rid of quirky timeouts

@@ -344,6 +344,7 @@ export const power_user = {
     click_to_edit: false,
     hide_tool_messages: false,
     enable_dangerous_tools: false,
+    tool_execution_mode: 'auto',
     media_display: MEDIA_DISPLAY.LIST,
     image_overswipe: IMAGE_OVERSWIPE.GENERATE,
 };
@@ -1782,6 +1783,7 @@ export async function loadPowerUserSettings(settings, data) {
     $('#hide_tool_messages').prop('checked', power_user.hide_tool_messages);
     $('body').toggleClass('hide-tool-messages', power_user.hide_tool_messages);
     $('#enable_dangerous_tools').prop('checked', power_user.enable_dangerous_tools);
+    $('#tool_execution_mode').val(power_user.tool_execution_mode);
     $('#media_display').val(power_user.media_display);
     $('#image_overswipe').val(power_user.image_overswipe);
 
@@ -4182,6 +4184,11 @@ jQuery(() => {
     $('#enable_dangerous_tools').on('input', function () {
         power_user.enable_dangerous_tools = !!$(this).prop('checked');
         eventSource.emit(event_types.DANGEROUS_TOOLS_TOGGLED);
+        saveSettingsDebounced();
+    });
+
+    $('#tool_execution_mode').on('change', function () {
+        power_user.tool_execution_mode = $(this).val().toString();
         saveSettingsDebounced();
     });
 
