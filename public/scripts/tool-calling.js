@@ -864,6 +864,16 @@ export class ToolManager {
             return null;
         }
 
+        // Calculate prefix text: everything before <tool> that isn't part of <think> block
+        let prefixText = '';
+        const textBeforeTool = text.substring(0, toolTagIndex);
+        if (thinkMatch) {
+            // Remove the <think>...</think> block from the text before <tool>
+            prefixText = textBeforeTool.replace(/<think>[\s\S]*?<\/think>/, '').trim();
+        } else {
+            prefixText = textBeforeTool.trim();
+        }
+
         // Start searching for the JSON object after the <tool> tag.
         const jsonStartIndex = text.indexOf('{', toolTagIndex);
         if (jsonStartIndex === -1) {
@@ -896,6 +906,7 @@ export class ToolManager {
                     return {
                         tool_call: parsed,
                         reasoning: reasoning,
+                        prefix_text: prefixText,
                         original_text: text,
                     };
                 }
@@ -914,8 +925,13 @@ export class ToolManager {
      * @returns {string} The canonical tool call string.
      */
     static formatNativeToolCallForDisplay(parsedTool) {
-        const { tool_call, reasoning } = parsedTool;
+        const { tool_call, reasoning, prefix_text } = parsedTool;
         let result = '';
+
+        // Include any text that appeared before the tool call
+        if (prefix_text) {
+            result += `${prefix_text}\n\n`;
+        }
 
         if (reasoning) {
             result += `<think>\n${reasoning}\n</think>\n`;
@@ -1513,6 +1529,13 @@ Here are the available tools:`);
 export function initToolCalling() {
     eventSource.on(event_types.DANGEROUS_TOOLS_TOGGLED, () => {
         // Only refresh the native tool commands if the feature is currently active.
+        if (oai_settings.native_tool_calling) {
+            ToolManager.registerNativeToolCommand();
+        }
+    });
+
+    // Refresh tool registration after all settings (including power_user) have been loaded.
+    eventSource.on(event_types.SETTINGS_LOADED_AFTER, () => {
         if (oai_settings.native_tool_calling) {
             ToolManager.registerNativeToolCommand();
         }

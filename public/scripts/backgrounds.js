@@ -90,6 +90,7 @@ export let background_settings = {
     url: generateUrlParameter('__transparent.png', false),
     fitting: 'classic',
     animation: true,
+    sortOrder: 'alpha',
 };
 
 /**
@@ -925,13 +926,16 @@ export function loadBackgroundSettings(settings) {
     }
     if (!backgroundSettings.fitting) backgroundSettings.fitting = 'classic';
     if (!Object.hasOwn(backgroundSettings, 'animation')) backgroundSettings.animation = true;
+    if (!backgroundSettings.sortOrder) backgroundSettings.sortOrder = 'alpha';
     background_settings.animation = backgroundSettings.animation;
+    background_settings.sortOrder = backgroundSettings.sortOrder;
 
     setBackground(backgroundSettings.name, backgroundSettings.url);
 
     setFittingClass(backgroundSettings.fitting);
     $('#background_fitting').val(backgroundSettings.fitting);
     $('#background_thumbnails_animation').prop('checked', background_settings.animation);
+    $('#bg-sort-order').val(background_settings.sortOrder);
 }
 
 /**
@@ -2528,7 +2532,7 @@ export async function initBackgrounds() {
         }
     }, 150);
 
-    backgroundSelector.sortOrder = $('#bg-sort-order').val();
+    backgroundSelector.sortOrder = background_settings.sortOrder;
     const drawerElement = document.getElementById('Backgrounds');
 
     if (drawerElement) {
@@ -2716,8 +2720,11 @@ export async function initBackgrounds() {
     $('#bg-filter').off('input').on('input', onBackgroundFilterInput);
 
     $('#bg-sort-order').off('input').on('input', function () {
+        const newSortOrder = $(this).val();
+        background_settings.sortOrder = newSortOrder;
+        saveSettingsDebounced();
         if (backgroundSelector) {
-            backgroundSelector.sortOrder = $(this).val();
+            backgroundSelector.sortOrder = newSortOrder;
             backgroundSelector.search($('#bg-filter').val() || '');
         }
     });

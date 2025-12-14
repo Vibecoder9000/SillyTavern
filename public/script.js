@@ -2537,7 +2537,11 @@ export function addOneMessage(mes, { type = 'normal', insertAfter = null, scroll
     if (mes.extra?.is_tool_call) {
         const toolInfo = mes.extra.tool_call_info;
         newMessage.addClass('tool-call-message');
-        let html = '<h4><i class="fa-solid fa-cogs"></i> Tool Call</h4>';
+        let html = '';
+        if (mes.extra.prefix_text) {
+            html += `<p>${DOMPurify.sanitize(mes.extra.prefix_text)}</p>`;
+        }
+        html += '<h4><i class="fa-solid fa-cogs"></i> Tool Call</h4>';
         html += `<div class="tool-action"><p><b>Action:</b> <code>${DOMPurify.sanitize(toolInfo.tool)}</code></p>`;
         html += `<p><b>Arguments:</b></p><pre><code>${DOMPurify.sanitize(JSON.stringify(toolInfo.args, null, 2))}</code></pre></div>`;
         newMessage.find('.mes_text').html(html);
@@ -3570,14 +3574,18 @@ class StreamingProcessor {
                 // Reconstruct the message to ensure it's well-formed and doesn't contain partial tags.
                 const formattedToolCall = ToolManager.formatNativeToolCallForDisplay(parsedTool);
                 chat[messageId].mes = formattedToolCall;
-                chat[messageId].extra = { is_tool_call: true, tool_call_info: parsedTool.tool_call, reasoning: parsedTool.reasoning };
+                chat[messageId].extra = { is_tool_call: true, tool_call_info: parsedTool.tool_call, reasoning: parsedTool.reasoning, prefix_text: parsedTool.prefix_text };
 
                 // Re-render the message element with the special tool call formatting.
                 const messageElement = $(`#chat .mes[mesid="${messageId}"]`);
                 if (messageElement.length) {
                     const toolInfo = parsedTool.tool_call;
                     messageElement.addClass('tool-call-message');
-                    let html = '<h4><i class="fa-solid fa-cogs"></i> Tool Call</h4>';
+                    let html = '';
+                    if (parsedTool.prefix_text) {
+                        html += `<p>${DOMPurify.sanitize(parsedTool.prefix_text)}</p>`;
+                    }
+                    html += '<h4><i class="fa-solid fa-cogs"></i> Tool Call</h4>';
                     html += `<div class="tool-action"><p><b>Action:</b> <code>${DOMPurify.sanitize(toolInfo.tool)}</code></p>`;
                     html += `<p><b>Arguments:</b></p><pre><code>${DOMPurify.sanitize(JSON.stringify(toolInfo.args, null, 2))}</code></pre></div>`;
                     messageElement.find('.mes_text').html(html);
@@ -5390,14 +5398,18 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
                 // Reconstruct the message to ensure it's well-formed and doesn't contain partial tags.
                 const formattedToolCall = ToolManager.formatNativeToolCallForDisplay(parsedTool);
                 chat[chat.length - 1].mes = formattedToolCall;
-                chat[chat.length - 1].extra = { is_tool_call: true, tool_call_info: parsedTool.tool_call, reasoning: parsedTool.reasoning };
+                chat[chat.length - 1].extra = { is_tool_call: true, tool_call_info: parsedTool.tool_call, reasoning: parsedTool.reasoning, prefix_text: parsedTool.prefix_text };
 
                 // Re-render the message element with the special tool call formatting.
                 const messageElement = $('#chat .mes').last();
                 if (messageElement.length) {
                     const toolInfo = parsedTool.tool_call;
                     messageElement.addClass('tool-call-message');
-                    let html = '<h4><i class="fa-solid fa-cogs"></i> Tool Call</h4>';
+                    let html = '';
+                    if (parsedTool.prefix_text) {
+                        html += `<p>${DOMPurify.sanitize(parsedTool.prefix_text)}</p>`;
+                    }
+                    html += '<h4><i class="fa-solid fa-cogs"></i> Tool Call</h4>';
                     html += `<div class="tool-action"><p><b>Action:</b> <code>${DOMPurify.sanitize(toolInfo.tool)}</code></p>`;
                     html += `<p><b>Arguments:</b></p><pre><code>${DOMPurify.sanitize(JSON.stringify(toolInfo.args, null, 2))}</code></pre></div>`;
                     messageElement.find('.mes_text').html(html);
@@ -6573,7 +6585,7 @@ export async function saveReply({ type, getMessage, fromStreaming = false, title
     }
 
     if (type != 'append' && type != 'continue' && type != 'appendFinal' && chat.length && (chat[chat.length - 1]['swipe_id'] === undefined ||
-        chat[chat.length - 1]['is_user'])) {
+        chat[chat.length - 1]['is_user'] || chat[chat.length - 1]['is_system'])) {
         type = 'normal';
     }
 
@@ -8038,7 +8050,7 @@ function updateMessage(div) {
 
     if (mes.extra?.is_tool_call) {
         // Attempt to parse the JSON to update the structured data for rendering.
-        const jsonMatch = text.match(/{[\s\S]*}/);
+        const jsonMatch = text.match(/\{[\s\S]*\}/);
         if (jsonMatch) {
             try {
                 const parsedJson = JSON.parse(jsonMatch[0]);
@@ -8048,13 +8060,16 @@ function updateMessage(div) {
             }
         }
 
-        // Find the original <think> block from the raw message data.
-        const originalRawMessage = mes.mes;
-        const toolStartIndex = originalRawMessage.indexOf('<tool>');
-        const thinkBlock = (toolStartIndex !== -1) ? originalRawMessage.substring(0, toolStartIndex) : '';
-
-        // Reconstruct the full message with the original think block and the new tool block.
-        mes.mes = thinkBlock + text;
+        // Reconstruct the full message with the stored prefix_text, reasoning, and new tool block.
+        let reconstructedMessage = '';
+        if (mes.extra.prefix_text) {
+            reconstructedMessage += `${mes.extra.prefix_text}\n\n`;
+        }
+        if (mes.extra.reasoning) {
+            reconstructedMessage += `<think>\n${mes.extra.reasoning}\n</think>\n`;
+        }
+        reconstructedMessage += text;
+        mes.mes = reconstructedMessage;
     } else if (mes.extra?.is_tool_result) {
         mes.extra.tool_result_content = text;
         mes.mes = `<tool_result>\n${text}\n</tool_result>`;
@@ -8376,7 +8391,11 @@ async function messageEditDone(div) {
     if (mes.extra?.is_tool_call) {
         const toolInfo = mes.extra.tool_call_info;
         newMessageElement.addClass('tool-call-message');
-        let html = '<h4><i class="fa-solid fa-cogs"></i> Tool Call</h4>';
+        let html = '';
+        if (mes.extra.prefix_text) {
+            html += `<p>${DOMPurify.sanitize(mes.extra.prefix_text)}</p>`;
+        }
+        html += '<h4><i class="fa-solid fa-cogs"></i> Tool Call</h4>';
         html += `<div class="tool-action"><p><b>Action:</b> <code>${DOMPurify.sanitize(toolInfo.tool)}</code></p>`;
         html += `<p><b>Arguments:</b></p><pre><code>${DOMPurify.sanitize(JSON.stringify(toolInfo.args, null, 2))}</code></pre></div>`;
         newMessageElement.find('.mes_text').html(html);
@@ -11914,12 +11933,23 @@ jQuery(async function () {
             if (power_user.trim_spaces) {
                 text = text.trim();
             }
-            $(this)
-                .closest('.mes_block')
-                .find('.mes_text')
-                .append(
-                    '<textarea id=\'curEditTextarea\' class=\'edit_textarea mdHotkeys\'></textarea>',
-                );
+
+            // Set the global edit message ID
+            this_edit_mes_id = edit_mes_id;
+
+            const messageBlock = $(this).closest('.mes_block');
+            const messageText = messageBlock.find('.mes_text');
+
+            // Empty the message text before adding the textarea
+            messageText.empty();
+
+            // Hide regular buttons and show edit buttons
+            messageBlock.find('.mes_buttons').css('display', 'none');
+            messageBlock.find('.mes_edit_buttons').css('display', 'inline-flex');
+
+            messageText.append(
+                '<textarea id=\'curEditTextarea\' class=\'edit_textarea mdHotkeys\'></textarea>',
+            );
             $('#curEditTextarea').val(text);
             let edit_textarea = $(this)
                 .closest('.mes_block')
