@@ -2286,10 +2286,12 @@ export function initChatUtilities() {
         await callGenericPopup(wrapper, POPUP_TYPE.TEXT, '', { wide: true, large: true });
     });
 
-    $(document).on('click', 'body .mes .mes_text', function () {
+    $(document).on('click', 'body .mes .mes_text', function (e) {
         if (!power_user.click_to_edit) return;
         if (window.getSelection().toString()) return;
         if ($('.edit_textarea').length) return;
+        // Don't trigger edit if the user clicked on an interactive element
+        if ($(e.target).closest('a, button, input, textarea, .interactable, .tool-execute-button').length) return;
         $(this).closest('.mes').find('.mes_edit').trigger('click');
     });
 

@@ -12875,7 +12875,9 @@ jQuery(async function () {
     });
 
     // Manual tool execution button handler
-    $(document).on('click', '.tool-execute-button', async function () {
+    $(document).on('click', '.tool-execute-button', async function (e) {
+        e.stopPropagation();
+        e.preventDefault();
         const button = $(this);
         const messageId = parseInt(button.data('message-id'));
         const message = chat[messageId];
