@@ -4400,9 +4400,18 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
     if (oai_settings.native_tool_calling) {
         const agnosticToolPrompt = ToolManager.getNativeToolPrompt();
         if (agnosticToolPrompt) {
-            // Prepend the tool instructions to the main system prompt.
-            system = `${agnosticToolPrompt}\n\n${system}`;
+            if (main_api === 'openai') {
+                // For OpenAI, inject as an extension prompt to append to the main prompt instead of replacing it.
+                // Using BEFORE_PROMPT ensures it appears before other prompts but doesn't override the main system prompt.
+                setExtensionPrompt(inject_ids.TOOL_CALLING, agnosticToolPrompt, extension_prompt_types.BEFORE_PROMPT, 0, false, extension_prompt_roles.SYSTEM);
+            } else {
+                // For non-OpenAI APIs, prepend the tool instructions to the system prompt.
+                system = `${agnosticToolPrompt}\n\n${system}`;
+            }
         }
+    } else {
+        // Clear the tool calling extension prompt if native tool calling is disabled.
+        setExtensionPrompt(inject_ids.TOOL_CALLING, '', extension_prompt_types.BEFORE_PROMPT, 0, false, extension_prompt_roles.SYSTEM);
     }
 
     if (main_api !== 'openai') {
