@@ -13,7 +13,6 @@ import {
     removeMetadata,
     renameMetadata,
     getOrGenerateMetadataBatch,
-    METADATA_FILE,
 } from './image-metadata.js';
 import { getUniqueName } from '../util.js';
 
