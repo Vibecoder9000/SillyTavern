@@ -8,7 +8,7 @@ import { sync as writeFileAtomicSync } from 'write-file-atomic';
 import { imageSize as sizeOf } from 'image-size';
 
 import { getConfigValue, invalidateFirefoxCache } from '../util.js';
-import { getBackgroundThumbnailResolution, isAnimatedWebP } from './backgrounds-manager.js';
+import { getBackgroundThumbnailResolution, isAnimatedWebP } from './image-metadata.js';
 
 export const publicRouter = express.Router();
 export const apiRouter = express.Router();

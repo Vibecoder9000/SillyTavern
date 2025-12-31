@@ -58,7 +58,6 @@ import {
     getConfigValue,
 } from './util.js';
 import { UPLOADS_DIRECTORY } from './constants.js';
-import { syncBackgroundsMetadata } from './endpoints/backgrounds-manager.js';
 
 // Routers
 import { router as usersPublicRouter } from './endpoints/users-public.js';
@@ -268,7 +267,6 @@ async function preSetupTasks() {
     const directories = await getUserDirectoriesList();
     await migrateGroupChatsMetadataFormat(directories);
     await checkForNewContent(directories);
-    await syncBackgroundsMetadata(directories);
     await diskCache.verify(directories);
     migrateFlatSecrets(directories);
     cleanUploads();
