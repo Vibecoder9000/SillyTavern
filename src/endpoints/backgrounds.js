@@ -19,7 +19,7 @@ import { fileExists, getUniqueFilename } from '../util.js';
 export const router = express.Router();
 
 /**
- * GET /all - Returns list of background images with metadata.
+ * POST /all - Returns list of background images with metadata.
  * Generates metadata on-demand for any files missing from the cache.
  */
 router.post('/all', async function (request, response) {
