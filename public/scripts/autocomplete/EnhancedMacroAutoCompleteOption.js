@@ -1,0 +1,1425 @@
+/**
+ * Enhanced macro autocomplete option for the new MacroRegistry-based system.
+ * Reuses rendering logic from MacroBrowser for consistency and DRY.
+ */
+
+import { AutoCompleteOption } from './AutoCompleteOption.js';
+import {
+    formatMacroSignature,
+    createSourceIndicator,
+    createAliasIndicator,
+    renderMacroDetails,
+} from '../macros/MacroBrowser.js';
+import { enumIcons } from '../slash-commands/SlashCommandCommonEnumsProvider.js';
+import { ValidFlagSymbols } from '../macros/engine/MacroFlags.js';
+import { MACRO_VARIABLE_SHORTHAND_PATTERN } from '../macros/engine/MacroLexer.js';
+
+/** @typedef {import('../macros/engine/MacroRegistry.js').MacroDefinition} MacroDefinition */
+
+/**
+ * Macro context passed from the parser to provide cursor position info.
+ * @typedef {Object} MacroAutoCompleteContext
+ * @property {string} fullText - The full macro text being typed (without {{ }}).
+ * @property {number} cursorOffset - Cursor position within the macro text.
+ * @property {string} paddingBefore - Padding before the macro identifier/flags.
+ * @property {string} identifier - The macro identifier (name).
+ * @property {number} identifierStart - Start position of the identifier within the macro text.
+ * @property {string[]} flags - Array of flag symbols typed (e.g., ['!', '?']).
+ * @property {string|null} currentFlag - The flag symbol cursor is currently on (last typed flag), or null.
+ * @property {boolean} isInFlagsArea - Whether cursor is in the flags area (before identifier starts).
+ * @property {string[]} args - Array of arguments typed so far.
+ * @property {number} currentArgIndex - Index of the argument being typed (-1 if on identifier).
+ * @property {boolean} isTypingSeparator - Whether cursor is on a partial separator (single ':').
+ * @property {boolean} hasSpaceAfterIdentifier - Whether there's a space after the identifier (for space-separated args).
+ * @property {boolean} hasSpaceArgContent - Whether there's actual content after the space (not just whitespace).
+ * @property {number} separatorCount - Number of '::' separators found.
+ * @property {boolean} [isInScopedContent] - Whether cursor is in scoped content (after }} but before closing tag).
+ * @property {string} [scopedMacroName] - Name of the scoped macro if in scoped content.
+ * @property {boolean} isVariableShorthand - Whether this is a variable shorthand (starts with . or $).
+ * @property {'.'|'$'|null} variablePrefix - The variable prefix (. for local, $ for global), or null.
+ * @property {string} variableName - The variable name being typed (after the prefix).
+ * @property {string|null} variableOperator - The operator typed (=, ++, --, +=), or null.
+ * @property {string} variableValue - The value after the operator (for = and +=).
+ * @property {boolean} isTypingVariableName - Whether cursor is in the variable name area.
+ * @property {boolean} isTypingOperator - Whether cursor is at/after variable name, ready for operator.
+ * @property {boolean} isTypingValue - Whether cursor is after an operator that requires a value.
+ * @property {boolean} [hasInvalidTrailingChars] - Whether there are invalid characters after the variable name.
+ * @property {string} [invalidTrailingChars] - The invalid trailing characters (for error display).
+ * @property {string} [partialOperator] - Partial operator prefix being typed ('+' or '-').
+ * @property {boolean} [isOperatorComplete] - Whether a complete operator (++ or --) was typed that doesn't need a value.
+ */
+
+/**
+ * @typedef {Object} EnhancedMacroAutoCompleteOptions
+ * @property {boolean} [noBraces=false] - If true, display without {{ }} braces (for use as values, e.g., in {{if}} conditions).
+ * @property {string} [paddingAfter=''] - Whitespace to add before closing }} (for matching opening whitespace style).
+ * @property {boolean} [closeWithBraces=false] - If true, the completion will add }} to close the macro.
+ */
+
+export class EnhancedMacroAutoCompleteOption extends AutoCompleteOption {
+    /** @type {MacroDefinition} */
+    #macro;
+
+    /** @type {MacroAutoCompleteContext|null} */
+    #context = null;
+
+    /** @type {boolean} */
+    #noBraces = false;
+
+    /** @type {string} */
+    #paddingAfter = '';
+
+    /**
+     * @param {MacroDefinition} macro - The macro definition from MacroRegistry.
+     * @param {MacroAutoCompleteContext|EnhancedMacroAutoCompleteOptions|null} [contextOrOptions] - Context for argument hints, or options object.
+     */
+    constructor(macro, contextOrOptions = null) {
+        // Use the macro name as the autocomplete key
+        super(macro.name, enumIcons.macro);
+        this.#macro = macro;
+
+        // Detect if second argument is context or options
+        // Context has 'identifier' property, options may have 'noBraces'
+        if (contextOrOptions && typeof contextOrOptions === 'object') {
+            if ('noBraces' in contextOrOptions || 'paddingAfter' in contextOrOptions || 'closeWithBraces' in contextOrOptions) {
+                // It's an options object
+                const options = /** @type {EnhancedMacroAutoCompleteOptions} */ (contextOrOptions);
+                this.#noBraces = options.noBraces ?? false;
+                this.#paddingAfter = options.paddingAfter ?? '';
+
+                // If noBraces mode with closeWithBraces, complete with name + padding + }}
+                if (options.closeWithBraces) {
+                    this.valueProvider = () => `${macro.name}${this.#paddingAfter}}}`;
+                    this.makeSelectable = true;
+                }
+            } else {
+                // It's a context object
+                this.#context = /** @type {MacroAutoCompleteContext} */ (contextOrOptions);
+            }
+        }
+
+        // nameOffset = 2 to skip the {{ prefix in the display (formatMacroSignature includes braces)
+        // When noBraces is true, nameOffset = 0 since we don't show braces
+        this.nameOffset = this.#noBraces ? 0 : 2;
+
+        // For macros that take no arguments, auto-complete with closing }} (unless already set by options)
+        if (!this.valueProvider) {
+            const takesNoArgs = macro.minArgs === 0 && macro.maxArgs === 0 && macro.list === null;
+            if (takesNoArgs) {
+                this.valueProvider = () => `${macro.name}${this.#paddingAfter}}}`;
+                this.makeSelectable = true; // Required when using valueProvider
+            }
+        }
+    }
+
+    /** @returns {MacroDefinition} */
+    get macro() {
+        return this.#macro;
+    }
+
+    /**
+     * Renders the list item for the autocomplete dropdown.
+     * Tight display: [icon] [signature] [description] [alias icon?] [source icon]
+     * @returns {HTMLElement}
+     */
+    renderItem() {
+        const li = document.createElement('li');
+        li.classList.add('item', 'macro-ac-item');
+        li.setAttribute('data-name', this.name);
+        li.setAttribute('data-option-type', 'macro');
+
+        // Type icon
+        const type = document.createElement('span');
+        type.classList.add('type', 'monospace');
+        type.textContent = '{}';
+        li.append(type);
+
+        // Specs container (for fuzzy highlight compatibility)
+        const specs = document.createElement('span');
+        specs.classList.add('specs');
+
+        // Name with character spans for fuzzy highlighting
+        const nameEl = document.createElement('span');
+        nameEl.classList.add('name', 'monospace');
+
+        // Build signature with individual character spans
+        // When noBraces is true, show just the macro name without {{ }}
+        const sigText = this.#noBraces ? this.#macro.name : formatMacroSignature(this.#macro);
+        for (const char of sigText) {
+            const span = document.createElement('span');
+            span.textContent = char;
+            nameEl.append(span);
+        }
+        specs.append(nameEl);
+        li.append(specs);
+
+        // Stopgap (spacer for flex layout)
+        const stopgap = document.createElement('span');
+        stopgap.classList.add('stopgap');
+        li.append(stopgap);
+
+        // Help text (description)
+        const help = document.createElement('span');
+        help.classList.add('help');
+        const content = document.createElement('span');
+        content.classList.add('helpContent');
+        content.textContent = this.#macro.description || '';
+        help.append(content);
+        li.append(help);
+
+        // Alias indicator icon (if this is an alias)
+        const aliasIcon = createAliasIndicator(this.#macro);
+        if (aliasIcon) {
+            aliasIcon.classList.add('macro-ac-indicator');
+            li.append(aliasIcon);
+        }
+
+        // Source indicator icon
+        const sourceIcon = createSourceIndicator(this.#macro);
+        sourceIcon.classList.add('macro-ac-indicator');
+        li.append(sourceIcon);
+
+        return li;
+    }
+
+    /**
+     * Renders the details panel content.
+     * Reuses renderMacroDetails from MacroBrowser with autocomplete-specific options.
+     * @returns {DocumentFragment}
+     */
+    renderDetails() {
+        const frag = document.createDocumentFragment();
+
+        // Check for arity warnings
+        const warning = this.#getArityWarning();
+        if (warning) {
+            const warningEl = this.#renderWarning(warning);
+            frag.append(warningEl);
+        }
+
+        // Show scoped content info banner if we're in scoped content
+        if (this.#context?.isInScopedContent) {
+            const scopedInfo = this.#renderScopedContentInfo();
+            if (scopedInfo) frag.append(scopedInfo);
+        }
+
+        // Determine current argument index for highlighting
+        const currentArgIndex = this.#context?.currentArgIndex ?? -1;
+
+        // Render argument hint banner if we're typing an argument (and no warning)
+        if (!warning && currentArgIndex >= 0) {
+            const hint = this.#renderArgumentHint();
+            if (hint) frag.append(hint);
+        }
+
+        // Reuse MacroBrowser's renderMacroDetails with options
+        // Don't highlight args if there's a warning
+        const details = renderMacroDetails(this.#macro, { currentArgIndex: warning ? -1 : currentArgIndex });
+
+        // Add class for autocomplete-specific styling overrides
+        details.classList.add('macro-ac-details');
+        frag.append(details);
+
+        return frag;
+    }
+
+    /**
+     * Checks for arity-related warnings based on the current context.
+     * @returns {string|null} Warning message, or null if no warning.
+     */
+    #getArityWarning() {
+        if (!this.#context) return null;
+
+        const argCount = this.#context.args.length;
+        const maxArgs = this.#macro.maxArgs;
+        //const minArgs = this.#macro.minArgs;
+        const hasList = this.#macro.list !== null;
+
+        // Check for too many arguments (only if no list args)
+        if (!hasList && argCount > maxArgs) {
+            return `Too many arguments: this macro accepts ${maxArgs === 0 ? 'no arguments' : `up to ${maxArgs} argument${maxArgs === 1 ? '' : 's'}`}, but ${argCount} provided.`;
+        }
+
+        // Check for space-separated arg on macro that doesn't support it
+        // Space-separated syntax provides 1 arg; with scoped content you can provide a 2nd arg
+        // So it's valid for macros with maxArgs <= 2 (or with list args)
+        if (this.#context.hasSpaceArgContent) {
+            if (maxArgs === 0) {
+                return 'This macro does not accept any arguments. Remove the space or use a different macro.';
+            }
+            if (!hasList && maxArgs > 2) {
+                return `Space-separated syntax only works for macros with up to 2 arguments. Use :: separators instead: {{${this.#macro.name}::arg1::arg2}}`;
+            }
+        }
+
+        // Check if trying to add args to a no-arg macro via ::
+        if (this.#context.separatorCount > 0 && maxArgs === 0) {
+            return 'This macro does not accept any arguments.';
+        }
+
+        return null;
+    }
+
+    /**
+     * Renders a warning banner.
+     * @param {string} message - The warning message.
+     * @returns {HTMLElement}
+     */
+    #renderWarning(message) {
+        const warning = document.createElement('div');
+        warning.classList.add('macro-ac-warning');
+
+        const icon = document.createElement('i');
+        icon.classList.add('fa-solid', 'fa-triangle-exclamation');
+        warning.append(icon);
+
+        const text = document.createElement('span');
+        text.textContent = message;
+        warning.append(text);
+
+        return warning;
+    }
+
+    /**
+     * Renders the scoped content info banner.
+     * Shows when cursor is inside scoped content of an unclosed macro.
+     * @returns {HTMLElement|null}
+     */
+    #renderScopedContentInfo() {
+        if (!this.#context?.isInScopedContent) return null;
+
+        const info = document.createElement('div');
+        info.classList.add('macro-ac-scoped-info');
+
+        const icon = document.createElement('i');
+        icon.classList.add('fa-solid', 'fa-layer-group');
+        info.append(icon);
+
+        const text = document.createElement('span');
+        text.innerHTML = `Typing <strong>scoped content</strong> for <code>{{${this.#context.scopedMacroName}}}</code>. Close with <code>{{/${this.#context.scopedMacroName}}}</code>`;
+        info.append(text);
+
+        return info;
+    }
+
+    /**
+     * Renders the current argument hint banner.
+     * @returns {HTMLElement|null}
+     */
+    #renderArgumentHint() {
+        if (!this.#context || this.#context.currentArgIndex < 0) return null;
+
+        const argIndex = this.#context.currentArgIndex;
+        const isListArg = argIndex >= this.#macro.maxArgs;
+
+        // If we're beyond unnamed args and there's no list, no hint
+        if (isListArg && !this.#macro.list) return null;
+
+        const hint = document.createElement('div');
+        hint.classList.add('macro-ac-arg-hint');
+
+        const icon = document.createElement('i');
+        icon.classList.add('fa-solid', 'fa-arrow-right');
+        hint.append(icon);
+
+        if (isListArg) {
+            // List argument hint
+            const listIndex = argIndex - this.#macro.maxArgs + 1;
+            const text = document.createElement('span');
+            text.innerHTML = `<strong>List item ${listIndex}</strong>`;
+            hint.append(text);
+        } else {
+            // Unnamed argument hint (required or optional)
+            const argDef = this.#macro.unnamedArgDefs[argIndex];
+            let optionalLabel = '';
+            if (argDef?.optional) {
+                optionalLabel = argDef.defaultValue !== undefined
+                    ? ` <em>(optional, default: ${argDef.defaultValue === '' ? '<empty string>' : argDef.defaultValue})</em>`
+                    : ' <em>(optional)</em>';
+            }
+            const text = document.createElement('span');
+            text.innerHTML = `<strong>${argDef?.name || `Argument ${argIndex + 1}`}</strong>${optionalLabel}`;
+            if (argDef?.type) {
+                const typeSpan = document.createElement('code');
+                typeSpan.classList.add('macro-ac-hint-type');
+                if (Array.isArray(argDef.type)) {
+                    typeSpan.textContent = argDef.type.join(' | ');
+                    typeSpan.title = `Accepts: ${argDef.type.join(', ')}`;
+                } else {
+                    typeSpan.textContent = argDef.type;
+                }
+                text.append(' ', typeSpan);
+            }
+            hint.append(text);
+
+            if (argDef?.description) {
+                const descSpan = document.createElement('span');
+                descSpan.classList.add('macro-ac-hint-desc');
+                descSpan.textContent = ` — ${argDef.description}`;
+                hint.append(descSpan);
+            }
+
+            if (argDef?.sampleValue) {
+                const sampleSpan = document.createElement('span');
+                sampleSpan.classList.add('macro-ac-hint-sample');
+                sampleSpan.textContent = ` (e.g. ${argDef.sampleValue})`;
+                hint.append(sampleSpan);
+            }
+        }
+
+        return hint;
+    }
+}
+
+/**
+ * Autocomplete option for macro execution flags.
+ * Shows flag symbol, name, and description.
+ * Uses default AutoCompleteOption rendering for consistent styling.
+ */
+export class MacroFlagAutoCompleteOption extends AutoCompleteOption {
+    /** @type {import('../macros/engine/MacroFlags.js').MacroFlagDefinition} */
+    #flagDef;
+
+    /**
+     * @param {import('../macros/engine/MacroFlags.js').MacroFlagDefinition} flagDef - The flag definition.
+     */
+    constructor(flagDef) {
+        // Use the flag symbol as the name, with a flag icon
+        // Display name includes both symbol and name for clarity
+        super(flagDef.type, '🚩');
+        this.#flagDef = flagDef;
+    }
+
+    /** @returns {import('../macros/engine/MacroFlags.js').MacroFlagDefinition} */
+    get flagDefinition() {
+        return this.#flagDef;
+    }
+
+    /**
+     * Renders the autocomplete list item for this flag.
+     * Uses the same structure as other autocomplete options for consistent styling.
+     * @returns {HTMLElement}
+     */
+    renderItem() {
+        // Use base class makeItem for consistent styling
+        const li = this.makeItem(
+            `${this.#flagDef.type} ${this.#flagDef.name}`, // Display: "? Optional"
+            '🚩',
+            true, // noSlash
+            [], // namedArguments
+            [], // unnamedArguments
+            'void', // returnType
+            this.#flagDef.description + (this.#flagDef.implemented ? '' : ' (planned)'), // helpString
+        );
+        li.setAttribute('data-name', this.name);
+        li.setAttribute('data-option-type', 'flag');
+        return li;
+    }
+
+    /**
+     * Renders the details panel for this flag.
+     * @returns {DocumentFragment}
+     */
+    renderDetails() {
+        const frag = document.createDocumentFragment();
+
+        const details = document.createElement('div');
+        details.classList.add('macro-flag-details');
+
+        // Header with flag symbol and name
+        const header = document.createElement('h3');
+        header.classList.add('macro-flag-details-header');
+        header.innerHTML = `<code>${this.#flagDef.type}</code> ${this.#flagDef.name} Flag`;
+        details.append(header);
+
+        // Description
+        const desc = document.createElement('p');
+        desc.classList.add('macro-flag-details-desc');
+        desc.textContent = this.#flagDef.description;
+        details.append(desc);
+
+        // Status
+        const status = document.createElement('p');
+        status.classList.add('macro-flag-details-status');
+        status.innerHTML = `<strong>Status:</strong> ${this.#flagDef.implemented ? 'Implemented' : 'Planned for future release'}`;
+        details.append(status);
+
+        // Parser effect note
+        if (this.#flagDef.affectsParser) {
+            const parserNote = document.createElement('p');
+            parserNote.classList.add('macro-flag-details-note');
+            parserNote.innerHTML = '<em>This flag affects how the macro is parsed.</em>';
+            details.append(parserNote);
+        }
+
+        frag.append(details);
+        return frag;
+    }
+}
+
+/**
+ * Enum of variable shorthand prefix types.
+ * @readonly
+ * @enum {string}
+ */
+export const VariableShorthandType = Object.freeze({
+    /** Local variable prefix (`.`) */
+    LOCAL: '.',
+    /** Global variable prefix (`$`) */
+    GLOBAL: '$',
+});
+
+/**
+ * @typedef {Object} VariableShorthandDefinition
+ * @property {VariableShorthandType} type - The prefix symbol.
+ * @property {string} name - Human-readable name.
+ * @property {string} description - Description of what this prefix does.
+ * @property {string[]} operations - List of supported operations.
+ */
+
+/**
+ * Definitions for variable shorthand prefixes.
+ * @type {Map<string, VariableShorthandDefinition>}
+ */
+export const VariableShorthandDefinitions = new Map([
+    [VariableShorthandType.LOCAL, {
+        type: VariableShorthandType.LOCAL,
+        name: 'Local Variable',
+        description: 'Access or modify a local variable (scoped to current chat).',
+        operations: ['get', 'set (=)', 'increment (++)', 'decrement (--)', 'add (+=)'],
+    }],
+    [VariableShorthandType.GLOBAL, {
+        type: VariableShorthandType.GLOBAL,
+        name: 'Global Variable',
+        description: 'Access or modify a global variable (shared across all chats).',
+        operations: ['get', 'set (=)', 'increment (++)', 'decrement (--)', 'add (+=)'],
+    }],
+]);
+
+/**
+ * Set of valid variable shorthand prefix symbols.
+ * @type {Set<string>}
+ */
+export const ValidVariableShorthandSymbols = new Set(Object.values(VariableShorthandType));
+
+/**
+ * Regex pattern for valid variable shorthand names.
+ * Must start with a letter, can contain word chars, underscores and hyphens, but must not end with an underscore or hyphen.
+ * Examples: myVar, my-var, my_var, myVar123, my-long-var-name
+ * Invalid: my-, my--, -var, 123var
+ * @type {RegExp}
+ */
+const VARIABLE_SHORTHAND_NAME_PATTERN = new RegExp(`^${MACRO_VARIABLE_SHORTHAND_PATTERN.source}`);
+
+/**
+ * Checks if a variable name is valid for use with variable shorthand syntax.
+ * @param {string} name - The variable name to validate.
+ * @returns {boolean} True if the name is valid for shorthand syntax.
+ */
+export function isValidVariableShorthandName(name) {
+    if (!name || typeof name !== 'string') return false;
+    return VARIABLE_SHORTHAND_NAME_PATTERN.test(name);
+}
+
+/**
+ * Autocomplete option for variable shorthand prefixes.
+ * Shows prefix symbol, name, and description.
+ * This provides entry into the variable shorthand syntax ({{.varName}} or {{$varName}}).
+ */
+export class VariableShorthandAutoCompleteOption extends AutoCompleteOption {
+    /** @type {VariableShorthandDefinition} */
+    #varDef;
+
+    /**
+     * @param {VariableShorthandDefinition} varDef - The variable shorthand definition.
+     */
+    constructor(varDef) {
+        // Use the prefix symbol as the name, with a variable icon
+        super(varDef.type, '📦');
+        this.#varDef = varDef;
+    }
+
+    /** @returns {VariableShorthandDefinition} */
+    get variableDefinition() {
+        return this.#varDef;
+    }
+
+    /**
+     * Renders the autocomplete list item for this variable shorthand.
+     * @returns {HTMLElement}
+     */
+    renderItem() {
+        const li = this.makeItem(
+            `${this.#varDef.type} ${this.#varDef.name}`,
+            '📦',
+            true, // noSlash
+            [], // namedArguments
+            [], // unnamedArguments
+            'any', // returnType
+            this.#varDef.description,
+        );
+        li.setAttribute('data-name', this.name);
+        li.setAttribute('data-option-type', 'variable-shorthand');
+        return li;
+    }
+
+    /**
+     * Renders the details panel for this variable shorthand.
+     * @returns {DocumentFragment}
+     */
+    renderDetails() {
+        const frag = document.createDocumentFragment();
+
+        const details = document.createElement('div');
+        details.classList.add('macro-variable-details');
+
+        // Header with prefix symbol and name
+        const header = document.createElement('h3');
+        header.classList.add('macro-variable-details-header');
+        header.innerHTML = `<code>${this.#varDef.type}</code> ${this.#varDef.name}`;
+        details.append(header);
+
+        // Description
+        const desc = document.createElement('p');
+        desc.classList.add('macro-variable-details-desc');
+        desc.textContent = this.#varDef.description;
+        details.append(desc);
+
+        // Supported operations
+        const opsHeader = document.createElement('p');
+        opsHeader.innerHTML = '<strong>Supported Operations:</strong>';
+        details.append(opsHeader);
+
+        const opsList = document.createElement('ul');
+        opsList.classList.add('macro-variable-details-ops');
+        for (const op of this.#varDef.operations) {
+            const li = document.createElement('li');
+            li.textContent = op;
+            opsList.append(li);
+        }
+        details.append(opsList);
+
+        // Examples
+        const exampleHeader = document.createElement('p');
+        exampleHeader.innerHTML = '<strong>Examples:</strong>';
+        details.append(exampleHeader);
+
+        const exampleList = document.createElement('ul');
+        exampleList.classList.add('macro-variable-details-examples');
+        const prefix = this.#varDef.type;
+        const examples = [
+            `{{${prefix}myvar}} - Get variable value`,
+            `{{${prefix}myvar = value}} - Set variable`,
+            `{{${prefix}counter++}} - Increment`,
+            `{{${prefix}counter--}} - Decrement`,
+            `{{${prefix}myvar += text}} - Append/add`,
+        ];
+        for (const ex of examples) {
+            const li = document.createElement('li');
+            li.innerHTML = `<code>${ex.split(' - ')[0]}</code> - ${ex.split(' - ')[1]}`;
+            exampleList.append(li);
+        }
+        details.append(exampleList);
+
+        frag.append(details);
+        return frag;
+    }
+}
+
+/**
+ * Autocomplete option for a specific variable name.
+ * Shows variable name with scope indicator (local/global).
+ */
+export class VariableNameAutoCompleteOption extends AutoCompleteOption {
+    /** @type {string} */
+    #varName;
+
+    /** @type {'local'|'global'} */
+    #scope;
+
+    /** @type {boolean} */
+    #isNewVariable;
+
+    /** @type {boolean} */
+    #isInvalidName;
+
+    /**
+     * @param {string} varName - The variable name.
+     * @param {'local'|'global'} scope - Whether this is a local or global variable.
+     * @param {boolean} [isNewVariable=false] - Whether this is a "create new variable" option.
+     * @param {boolean} [isInvalidName=false] - Whether this name is invalid for shorthand syntax.
+     */
+    constructor(varName, scope, isNewVariable = false, isInvalidName = false) {
+        const icon = scope === 'local' ? 'L' : 'G';
+        super(varName, icon);
+        this.#varName = varName;
+        this.#scope = scope;
+        this.#isNewVariable = isNewVariable;
+        this.#isInvalidName = isInvalidName;
+    }
+
+    /** @returns {string} */
+    get variableName() {
+        return this.#varName;
+    }
+
+    /** @returns {'local'|'global'} */
+    get scope() {
+        return this.#scope;
+    }
+
+    /** @returns {boolean} */
+    get isNewVariable() {
+        return this.#isNewVariable;
+    }
+
+    /** @returns {boolean} */
+    get isInvalidName() {
+        return this.#isInvalidName;
+    }
+
+    /**
+     * Renders the autocomplete list item for this variable.
+     * @returns {HTMLElement}
+     */
+    renderItem() {
+        const scopeLabel = this.#scope === 'local' ? 'Local' : 'Global';
+        let description;
+        if (this.#isInvalidName) {
+            description = '⚠️ Invalid variable name for shorthand';
+        } else if (this.#isNewVariable) {
+            description = `Define new ${scopeLabel.toLowerCase()} variable`;
+        } else {
+            description = `${scopeLabel} variable`;
+        }
+
+        const li = this.makeItem(
+            this.#varName,
+            this.typeIcon,
+            true, // noSlash
+            [], // namedArguments
+            [], // unnamedArguments
+            'any', // returnType
+            description,
+        );
+        li.setAttribute('data-name', this.name);
+        li.setAttribute('data-option-type', 'variable-name');
+        if (this.#isNewVariable) {
+            li.classList.add('variable-new');
+        }
+        if (this.#isInvalidName) {
+            li.classList.add('variable-invalid');
+        }
+        return li;
+    }
+
+    /**
+     * Renders the details panel for this variable.
+     * @returns {DocumentFragment}
+     */
+    renderDetails() {
+        const frag = document.createDocumentFragment();
+
+        const details = document.createElement('div');
+        details.classList.add('macro-variable-name-details');
+
+        const scopeLabel = this.#scope === 'local' ? 'Local' : 'Global';
+        const prefix = this.#scope === 'local' ? '.' : '$';
+
+        // Show big warning for invalid names
+        if (this.#isInvalidName) {
+            const warningBox = document.createElement('div');
+            warningBox.classList.add('variable-invalid-warning');
+            warningBox.style.cssText = 'background: #ff000033; border: 2px solid #ff0000; border-radius: 4px; padding: 10px; margin-bottom: 10px;';
+
+            const warningHeader = document.createElement('h3');
+            warningHeader.style.cssText = 'color: #ff6b6b; margin: 0 0 8px 0;';
+            warningHeader.textContent = '⚠️ Invalid Variable Name';
+            warningBox.append(warningHeader);
+
+            const warningText = document.createElement('p');
+            warningText.style.cssText = 'margin: 0 0 8px 0;';
+            warningText.innerHTML = `The name <code>${this.#varName}</code> cannot be used with variable shorthand syntax.`;
+            warningBox.append(warningText);
+
+            const rulesText = document.createElement('p');
+            rulesText.style.cssText = 'margin: 0; font-size: 0.9em;';
+            rulesText.innerHTML = '<strong>Valid names must:</strong><br>• Start with a letter (a-z, A-Z)<br>• Contain only letters, numbers, underscores, or hyphens<br>• Not end with an underscore or hyphen';
+            warningBox.append(rulesText);
+
+            details.append(warningBox);
+            frag.append(details);
+            return frag;
+        }
+
+        // Header
+        const header = document.createElement('h3');
+        header.innerHTML = this.#isNewVariable
+            ? `<code>${prefix}${this.#varName}</code> (New ${scopeLabel} Variable)`
+            : `<code>${prefix}${this.#varName}</code> ${scopeLabel} Variable`;
+        details.append(header);
+
+        // Description
+        const desc = document.createElement('p');
+        const variableSuggestion = this.#scope === 'local'
+            ? 'Local variables are scoped to the current chat.'
+            : 'Global variables are shared across all chats.';
+        if (this.#isNewVariable) {
+            desc.textContent = `Creates a new ${scopeLabel.toLowerCase()} variable named "${this.#varName}". ${variableSuggestion}`;
+        } else {
+            desc.textContent = `Access or modify the ${scopeLabel.toLowerCase()} variable "${this.#varName}". ${variableSuggestion}`;
+        }
+        details.append(desc);
+
+        // Usage examples
+        const usageHeader = document.createElement('p');
+        usageHeader.innerHTML = '<strong>Usage:</strong>';
+        details.append(usageHeader);
+
+        const usageList = document.createElement('ul');
+        const examples = [
+            `{{${prefix}${this.#varName}}} - Get value`,
+            `{{${prefix}${this.#varName} = value}} - Set value`,
+            `{{${prefix}${this.#varName}++}} - Increment`,
+            `{{${prefix}${this.#varName}--}} - Decrement`,
+            `{{${prefix}${this.#varName} += text}} - Append/add`,
+        ];
+        for (const ex of examples) {
+            const li = document.createElement('li');
+            li.innerHTML = `<code>${ex.split(' - ')[0]}</code> - ${ex.split(' - ')[1]}`;
+            usageList.append(li);
+        }
+        details.append(usageList);
+
+        frag.append(details);
+        return frag;
+    }
+}
+
+/**
+ * Variable shorthand operators with metadata.
+ * @type {Map<string, { symbol: string, name: string, description: string, needsValue: boolean }>}
+ */
+export const VariableOperatorDefinitions = new Map([
+    ['=', {
+        symbol: '=',
+        name: 'Set',
+        description: 'Set the variable to a new value.',
+        needsValue: true,
+    }],
+    ['++', {
+        symbol: '++',
+        name: 'Increment',
+        description: 'Increment the variable by 1 (numeric).',
+        needsValue: false,
+    }],
+    ['--', {
+        symbol: '--',
+        name: 'Decrement',
+        description: 'Decrement the variable by 1 (numeric).',
+        needsValue: false,
+    }],
+    ['+=', {
+        symbol: '+=',
+        name: 'Add',
+        description: 'Add to the variable (numeric addition or string concatenation).',
+        needsValue: true,
+    }],
+]);
+
+/**
+ * Autocomplete option for a variable operator.
+ * Shows operator symbol, name, and description.
+ */
+export class VariableOperatorAutoCompleteOption extends AutoCompleteOption {
+    /** @type {{ symbol: string, name: string, description: string, needsValue: boolean }} */
+    #operatorDef;
+
+    /**
+     * @param {{ symbol: string, name: string, description: string, needsValue: boolean }} operatorDef - The operator definition.
+     */
+    constructor(operatorDef) {
+        super(operatorDef.symbol, '⚡');
+        this.#operatorDef = operatorDef;
+    }
+
+    /** @returns {{ symbol: string, name: string, description: string, needsValue: boolean }} */
+    get operatorDefinition() {
+        return this.#operatorDef;
+    }
+
+    /**
+     * Renders the autocomplete list item for this operator.
+     * @returns {HTMLElement}
+     */
+    renderItem() {
+        const li = this.makeItem(
+            `${this.#operatorDef.symbol} ${this.#operatorDef.name}`,
+            '⚡',
+            true, // noSlash
+            [], // namedArguments
+            [], // unnamedArguments
+            'void', // returnType
+            this.#operatorDef.description,
+        );
+        li.setAttribute('data-name', this.name);
+        li.setAttribute('data-option-type', 'variable-operator');
+        return li;
+    }
+
+    /**
+     * Renders the details panel for this operator.
+     * @returns {DocumentFragment}
+     */
+    renderDetails() {
+        const frag = document.createDocumentFragment();
+
+        const details = document.createElement('div');
+        details.classList.add('macro-variable-operator-details');
+
+        // Header
+        const header = document.createElement('h3');
+        header.innerHTML = `<code>${this.#operatorDef.symbol}</code> ${this.#operatorDef.name}`;
+        details.append(header);
+
+        // Description
+        const desc = document.createElement('p');
+        desc.textContent = this.#operatorDef.description;
+        details.append(desc);
+
+        // Value note
+        const valueNote = document.createElement('p');
+        valueNote.innerHTML = this.#operatorDef.needsValue
+            ? '<em>This operator requires a value after it.</em>'
+            : '<em>This operator does not take a value.</em>';
+        details.append(valueNote);
+
+        frag.append(details);
+        return frag;
+    }
+}
+
+/**
+ * Autocomplete option for closing a scoped macro.
+ * Suggests {{/macroName}} to close an unclosed scoped macro.
+ */
+export class MacroClosingTagAutoCompleteOption extends AutoCompleteOption {
+    /** @type {string} */
+    #macroName;
+
+    /**
+     * @param {string} macroName - The name of the macro to close.
+     */
+    constructor(macroName) {
+        // The closing tag is what we're suggesting - use /macroName as the name for matching
+        const closingTag = `/${macroName}`;
+        super(closingTag, '{/');
+        this.#macroName = macroName;
+
+        // Custom valueProvider to return the correct replacement text
+        // Autocomplete REPLACES the typed identifier entirely, so return the full closing tag
+        this.valueProvider = () => {
+            // Return full closing tag content (without {{ since that's before the identifier)
+            return `/${macroName}}}`;
+        };
+
+        // Make selectable so TAB completion works (valueProvider alone makes it non-selectable)
+        this.makeSelectable = true;
+
+        // Highest priority - closing tags should always appear at the very top
+        this.sortPriority = 1;
+    }
+
+    /** @returns {string} */
+    get macroName() {
+        return this.#macroName;
+    }
+
+    /**
+     * Renders the autocomplete list item for this closing tag.
+     * Uses the same structure as other macro options for consistent styling.
+     * @returns {HTMLElement}
+     */
+    renderItem() {
+        const li = document.createElement('li');
+        li.classList.add('item', 'macro-ac-item');
+
+        // Type icon (same column as other macros)
+        const type = document.createElement('span');
+        type.classList.add('type', 'monospace');
+        type.textContent = this.typeIcon;
+        li.append(type);
+
+        // Specs container (for fuzzy highlight compatibility)
+        const specs = document.createElement('span');
+        specs.classList.add('specs');
+
+        // Name element with character spans
+        const nameEl = document.createElement('span');
+        nameEl.classList.add('name', 'monospace');
+        // Display full closing tag like other macros show full syntax
+        const displayName = `{{/${this.#macroName}}}`;
+        for (const char of displayName) {
+            const span = document.createElement('span');
+            span.textContent = char;
+            nameEl.append(span);
+        }
+        specs.append(nameEl);
+        li.append(specs);
+
+        // Stopgap (spacer for flex layout)
+        const stopgap = document.createElement('span');
+        stopgap.classList.add('stopgap');
+        li.append(stopgap);
+
+        // Help text (description)
+        const help = document.createElement('span');
+        help.classList.add('help');
+        const content = document.createElement('span');
+        content.classList.add('helpContent');
+        content.textContent = `Close the {{${this.#macroName}}} scoped macro.`;
+        help.append(content);
+        li.append(help);
+
+        return li;
+    }
+
+    /**
+     * Renders the details panel for this closing tag.
+     * @returns {DocumentFragment}
+     */
+    renderDetails() {
+        const frag = document.createDocumentFragment();
+
+        const details = document.createElement('div');
+        details.classList.add('macro-closing-tag-details');
+
+        // Header
+        const header = document.createElement('h3');
+        header.innerHTML = `Close <code>{{${this.#macroName}}}</code>`;
+        details.append(header);
+
+        // Description
+        const desc = document.createElement('p');
+        desc.textContent = `Inserts the closing tag {{/${this.#macroName}}} to complete the scoped macro. The content between the opening and closing tags will be passed as the last argument.`;
+        details.append(desc);
+
+        frag.append(details);
+        return frag;
+    }
+}
+
+/**
+ * Parses the macro text to determine current argument context.
+ * Handles leading whitespace and flags before the identifier.
+ *
+ * @param {string} macroText - The text inside {{ }}, e.g., "roll::1d20" or "!user" or "  description  ".
+ * @param {number} cursorOffset - Cursor position within macroText.
+ * @returns {MacroAutoCompleteContext}
+ */
+export function parseMacroContext(macroText, cursorOffset) {
+    let i = 0;
+
+    // Skip leading whitespace
+    while (i < macroText.length && /\s/.test(macroText[i])) {
+        i++;
+    }
+
+    // Extract flags (special symbols before the identifier)
+    // Track position after each flag to determine which flag cursor is on
+    // Special case: `/` followed by identifier chars is a closing tag, not a flag
+    const flags = [];
+    const flagEndPositions = []; // Position right after each flag (before any whitespace)
+    while (i < macroText.length) {
+        const char = macroText[i];
+        // Check if this looks like a closing tag: `/` followed by an identifier character
+        if (char === '/' && i + 1 < macroText.length && /[a-zA-Z_]/.test(macroText[i + 1])) {
+            // This is a closing tag identifier, not a flag - stop parsing flags
+            break;
+        }
+        if (ValidFlagSymbols.has(char)) {
+            flags.push(char);
+            i++;
+            flagEndPositions.push(i); // Position right after this flag
+            // Skip whitespace between flags
+            while (i < macroText.length && /\s/.test(macroText[i])) {
+                i++;
+            }
+        } else {
+            break;
+        }
+    }
+
+    // Determine which flag cursor is currently on (if any)
+    // The "current" flag is the last one typed when cursor is still in the flags area
+    // This ensures the last typed flag shows at the top of the autocomplete list
+    let currentFlag = null;
+    if (flags.length > 0) {
+        // If cursor is at or after the last flag position but before identifier starts,
+        // the last flag is the "current" one (just typed)
+        const lastFlagEnd = flagEndPositions[flagEndPositions.length - 1];
+        if (cursorOffset >= lastFlagEnd - 1) {
+            currentFlag = flags[flags.length - 1];
+        }
+    }
+
+    // Check for variable shorthand prefix (. or $)
+    // These trigger variable expression mode instead of regular macro parsing
+    /** @type {'.'|'$'|null} */
+    let variablePrefix = null;
+    let variableName = '';
+    /** @type {string|null} */
+    let variableOperator = null;
+    let variableValue = '';
+    let isVariableShorthand = false;
+    let isTypingVariableName = false;
+    let isTypingOperator = false;
+    let isTypingValue = false;
+    let variableNameEnd = i;
+
+    const remainingAfterFlags = macroText.slice(i);
+    if (remainingAfterFlags.startsWith('.') || remainingAfterFlags.startsWith('$')) {
+        isVariableShorthand = true;
+        variablePrefix = /** @type {'.'|'$'} */ (remainingAfterFlags[0]);
+        i++; // Move past the prefix
+
+        // Variable names: start with letter, can have hyphens inside, must not end with hyphen
+        const varNameMatch = macroText.slice(i).match(VARIABLE_SHORTHAND_NAME_PATTERN);
+        if (varNameMatch) {
+            variableName = varNameMatch[0];
+            i += variableName.length;
+        }
+        variableNameEnd = i;
+
+        // Skip whitespace before operator
+        while (i < macroText.length && /\s/.test(macroText[i])) {
+            i++;
+        }
+
+        // Check for operators: ++, --, +=, =
+        // Also track partial operator prefixes for autocomplete
+        const operatorText = macroText.slice(i);
+        let hasInvalidTrailingChars = false;
+        let invalidTrailingChars = '';
+        let partialOperator = '';
+        if (operatorText.startsWith('++')) {
+            variableOperator = '++';
+            i += 2;
+        } else if (operatorText.startsWith('--')) {
+            variableOperator = '--';
+            i += 2;
+        } else if (operatorText.startsWith('+=')) {
+            variableOperator = '+=';
+            i += 2;
+        } else if (operatorText.startsWith('=')) {
+            variableOperator = '=';
+            i += 1;
+        } else if (operatorText.startsWith('+') || operatorText.startsWith('-')) {
+            // Partial operator prefix - user is typing an operator
+            partialOperator = operatorText[0];
+        } else if (operatorText.length > 0 && !/^\s/.test(operatorText)) {
+            // There's non-whitespace after the variable name that isn't a valid operator
+            // This is an invalid trailing character (e.g., $my$ or .var@test)
+            hasInvalidTrailingChars = true;
+            invalidTrailingChars = operatorText.trim();
+        }
+
+        // If operator requires a value (= or +=), parse the value
+        if (variableOperator === '=' || variableOperator === '+=') {
+            // Skip whitespace after operator
+            while (i < macroText.length && /\s/.test(macroText[i])) {
+                i++;
+            }
+            variableValue = macroText.slice(i).trimEnd();
+        }
+
+        // Determine cursor position context for autocomplete
+        const prefixEnd = (macroText.indexOf(variablePrefix) ?? 0) + 1;
+        if (cursorOffset < prefixEnd) {
+            // Cursor is before the prefix - still in flags area conceptually
+            isTypingVariableName = false;
+        } else if (cursorOffset <= variableNameEnd) {
+            // Cursor is in the variable name
+            isTypingVariableName = true;
+        } else if (!variableOperator && !hasInvalidTrailingChars) {
+            // Cursor is after variable name but no operator yet (and no invalid chars)
+            // This includes partial operator prefixes like '+' or '-'
+            isTypingOperator = true;
+        } else if (variableOperator === '=' || variableOperator === '+=') {
+            // Operator that requires value - cursor is in value area
+            isTypingValue = true;
+        }
+        // For ++ and --, the operator is complete (no value needed)
+        // For invalid trailing chars, none of the typing flags will be true
+        const isOperatorComplete = (variableOperator === '++' || variableOperator === '--');
+
+        // Return early for variable shorthand - different structure than regular macros
+        return {
+            fullText: macroText,
+            cursorOffset,
+            paddingBefore: macroText.match(/^\s+/)?.[0] ?? '',
+            identifier: '', // No macro identifier for variable shorthand
+            identifierStart: -1,
+            isInFlagsArea: false,
+            flags,
+            currentFlag,
+            args: [],
+            currentArgIndex: -1,
+            isTypingSeparator: false,
+            hasSpaceAfterIdentifier: false,
+            hasSpaceArgContent: false,
+            separatorCount: 0,
+            // Variable shorthand specific properties
+            isVariableShorthand,
+            variablePrefix,
+            variableName,
+            variableOperator,
+            variableValue,
+            isTypingVariableName,
+            isTypingOperator,
+            isTypingValue,
+            isOperatorComplete,
+            hasInvalidTrailingChars,
+            invalidTrailingChars,
+            partialOperator,
+        };
+    }
+
+    // Regular macro parsing (not variable shorthand)
+    // Now parse the identifier and arguments starting from position i
+    const remainingText = macroText.slice(i);
+    const parts = [];
+    /** @type {{ start: number, end: number }[]} */
+    const separatorPositions = []; // Track positions of :: separators
+    let currentPart = '';
+    let partStart = i;
+    let j = 0;
+
+    while (j < remainingText.length) {
+        if (remainingText[j] === ':' && remainingText[j + 1] === ':') {
+            parts.push({ text: currentPart, start: partStart, end: i + j });
+            separatorPositions.push({ start: i + j, end: i + j + 2 });
+            currentPart = '';
+            j += 2;
+            partStart = i + j;
+        } else {
+            currentPart += remainingText[j];
+            j++;
+        }
+    }
+    // Push the last part
+    parts.push({ text: currentPart, start: partStart, end: macroText.length });
+
+    // Determine if cursor is in the flags area (at or before identifier starts)
+    const identifierStartPos = parts[0]?.start ?? i;
+    const isInFlagsArea = cursorOffset <= identifierStartPos;
+
+    // Check if cursor is on a partial separator (single ':' that might become '::')
+    const isTypingSeparator = remainingText.length > 0 &&
+        cursorOffset > identifierStartPos &&
+        macroText[cursorOffset - 1] === ':' &&
+        macroText[cursorOffset] !== ':' &&
+        (cursorOffset < 2 || macroText[cursorOffset - 2] !== ':');
+
+    // Parse identifier and space-separated argument from the first part
+    // "getvar myvar" -> identifier="getvar", spaceArg="myvar"
+    // "setvar " -> identifier="setvar", spaceArg="" (just whitespace, no content yet)
+    const firstPartText = parts[0]?.text || '';
+    const trimmedFirstPart = firstPartText.trimStart();
+    const firstSpaceInIdentifier = trimmedFirstPart.search(/\s/);
+
+    let identifierOnly;
+    let spaceArgText = '';
+    //let spaceArgStart = -1;
+    let hasSpaceAfterIdentifier = false;
+
+    if (firstSpaceInIdentifier > 0 && separatorPositions.length === 0) {
+        // There's whitespace inside the first part - split identifier from space-arg
+        identifierOnly = trimmedFirstPart.slice(0, firstSpaceInIdentifier);
+        const afterIdentifier = trimmedFirstPart.slice(firstSpaceInIdentifier);
+        // Check if there's actual content after the whitespace (not just spaces or ::)
+        const contentAfterSpace = afterIdentifier.trimStart();
+        hasSpaceAfterIdentifier = afterIdentifier.length > 0; // Has at least a space
+
+        if (contentAfterSpace.length > 0 && !contentAfterSpace.startsWith(':')) {
+            // There's actual argument content after the space
+            spaceArgText = contentAfterSpace;
+            //spaceArgStart = identifierStartPos + firstSpaceInIdentifier + (afterIdentifier.length - contentAfterSpace.length);
+        }
+    } else {
+        identifierOnly = trimmedFirstPart.trimEnd();
+    }
+
+    // Calculate identifier end position (for space-after-identifier detection)
+    const identifierEndPos = identifierStartPos + (firstPartText.length - firstPartText.trimStart().length) + identifierOnly.length;
+
+    // Determine which part the cursor is in
+    let currentArgIndex = -1;
+
+    // Only consider being in an argument if we've passed a separator
+    if (separatorPositions.length > 0) {
+        // Find which argument we're in based on separator positions
+        for (let sepIdx = 0; sepIdx < separatorPositions.length; sepIdx++) {
+            const sep = separatorPositions[sepIdx];
+            if (cursorOffset >= sep.end) {
+                // We're past this separator, so we're in at least this argument
+                currentArgIndex = sepIdx;
+            }
+        }
+    } else if (spaceArgText.length > 0 || (hasSpaceAfterIdentifier && cursorOffset > identifierEndPos)) {
+        // Space-separated arg: either has content, or cursor is past identifier+space
+        currentArgIndex = 0;
+    }
+
+    // If typing a separator, we're still on identifier/previous arg, not the next one
+    if (isTypingSeparator) {
+        currentArgIndex = -1;
+    }
+
+    const leftPadding = macroText.match(/^\s+/)?.[0] ?? '';
+
+    // Clean identifier: strip trailing colons (for partial :: typing)
+    let cleanIdentifier = identifierOnly.replace(/:+$/, '');
+
+    // Build args array - include space-separated arg if present
+    // Trim args like the macro engine does
+    let args = parts.slice(1).map(p => p.text.trim());
+    if (spaceArgText.length > 0) {
+        args = [spaceArgText, ...args];
+    }
+
+    return {
+        fullText: macroText,
+        cursorOffset,
+        paddingBefore: leftPadding,
+        identifier: cleanIdentifier,
+        identifierStart: identifierStartPos,
+        isInFlagsArea,
+        flags,
+        currentFlag,
+        args,
+        currentArgIndex,
+        isTypingSeparator,
+        hasSpaceAfterIdentifier,
+        hasSpaceArgContent: spaceArgText.length > 0,
+        separatorCount: separatorPositions.length,
+        // Default variable shorthand properties (not a variable shorthand)
+        isVariableShorthand: false,
+        variablePrefix: null,
+        variableName: '',
+        variableOperator: null,
+        variableValue: '',
+        isTypingVariableName: false,
+        isTypingOperator: false,
+        isTypingValue: false,
+    };
+}
+
+/**
+ * A simple, generic autocomplete option for displaying basic items with name, symbol, and description.
+ * Useful for simple options like inversion markers, prefixes, etc. without needing a full custom class.
+ *
+ * @extends AutoCompleteOption
+ */
+export class SimpleAutoCompleteOption extends AutoCompleteOption {
+    /** @type {string} */
+    #description;
+
+    /** @type {string|null} */
+    #detailedDescription;
+
+    /**
+     * @param {Object} config - Configuration for the option.
+     * @param {string} config.name - The option name/key (used for matching).
+     * @param {string} [config.symbol=' '] - Icon/symbol shown in the type column.
+     * @param {string} [config.description=''] - Short description shown inline.
+     * @param {string} [config.detailedDescription] - Longer description for details panel (supports HTML). Falls back to description if not provided.
+     * @param {string} [config.type='simple'] - Type identifier for CSS/data attributes.
+     */
+    constructor({ name, symbol = ' ', description = '', detailedDescription = null, type = 'simple' }) {
+        super(name, symbol, type);
+        this.#description = description;
+        this.#detailedDescription = detailedDescription;
+    }
+
+    /** @returns {string} */
+    get description() {
+        return this.#description;
+    }
+
+    /** @returns {string} */
+    get detailedDescription() {
+        return this.#detailedDescription ?? this.#description;
+    }
+
+    /**
+     * @returns {HTMLElement}
+     */
+    renderItem() {
+        const li = document.createElement('li');
+        li.classList.add('item');
+        li.setAttribute('data-name', this.name);
+        li.setAttribute('data-option-type', this.type);
+
+        // Type icon
+        const typeSpan = document.createElement('span');
+        typeSpan.classList.add('type', 'monospace');
+        typeSpan.textContent = this.typeIcon;
+        li.append(typeSpan);
+
+        // Name
+        const specs = document.createElement('span');
+        specs.classList.add('specs');
+        const nameSpan = document.createElement('span');
+        nameSpan.classList.add('name', 'monospace');
+        this.name.split('').forEach(char => {
+            const span = document.createElement('span');
+            span.textContent = char;
+            nameSpan.append(span);
+        });
+        specs.append(nameSpan);
+        li.append(specs);
+
+        // Stopgap
+        const stopgap = document.createElement('span');
+        stopgap.classList.add('stopgap');
+        li.append(stopgap);
+
+        // Help/description
+        const help = document.createElement('span');
+        help.classList.add('help');
+        const content = document.createElement('span');
+        content.classList.add('helpContent');
+        content.textContent = this.#description;
+        help.append(content);
+        li.append(help);
+
+        return li;
+    }
+
+    /**
+     * @returns {DocumentFragment}
+     */
+    renderDetails() {
+        const frag = document.createDocumentFragment();
+
+        // Header with name
+        const specs = document.createElement('div');
+        specs.classList.add('specs');
+        const nameDiv = document.createElement('div');
+        nameDiv.classList.add('name', 'monospace');
+        nameDiv.textContent = this.name;
+        specs.append(nameDiv);
+        frag.append(specs);
+
+        // Description
+        if (this.detailedDescription) {
+            const helpDiv = document.createElement('div');
+            helpDiv.classList.add('help');
+            helpDiv.innerHTML = this.detailedDescription;
+            frag.append(helpDiv);
+        }
+
+        return frag;
+    }
+}

@@ -139,6 +139,7 @@ export const power_user = {
     chat_truncation: 100,
     streaming_fps: 30,
     smooth_streaming: false,
+    smooth_streaming_no_think: false,
     smooth_streaming_speed: 50,
     stream_fade_in: false,
 
@@ -304,6 +305,7 @@ export const power_user = {
     custom_stopping_strings_macro: true,
     fuzzy_search: false,
     encode_tags: false,
+    experimental_macro_engine: false,
     servers: [],
     bogus_folders: false,
     zoomed_avatar_magnification: false,
@@ -346,6 +348,7 @@ export const power_user = {
 
 let themes = [];
 let movingUIPresets = [];
+/** @type {ContextSettings[]} */
 export let context_presets = [];
 
 const storage_keys = {
@@ -1663,6 +1666,7 @@ export async function loadPowerUserSettings(settings, data) {
     $('#persona_allow_multi_connections').prop('checked', power_user.persona_allow_multi_connections);
     $('#persona_auto_lock').prop('checked', power_user.persona_auto_lock);
     $('#encode_tags').prop('checked', power_user.encode_tags);
+    $('#experimental_macro_engine').prop('checked', power_user.experimental_macro_engine);
     $('#example_messages_behavior').val(getExampleMessagesBehavior());
     $(`#example_messages_behavior option[value="${getExampleMessagesBehavior()}"]`).prop('selected', true);
     $('#instruct_derived').parent().find('i').toggleClass('toggleEnabled', !!power_user.instruct_derived);
@@ -1745,6 +1749,7 @@ export async function loadPowerUserSettings(settings, data) {
     $('#streaming_fps_counter').val(power_user.streaming_fps);
 
     $('#smooth_streaming').prop('checked', power_user.smooth_streaming);
+    $('#smooth_streaming_no_think').prop('checked', power_user.smooth_streaming_no_think);
     $('#smooth_streaming_speed').val(power_user.smooth_streaming_speed);
 
     $('#stream_fade_in').prop('checked', power_user.stream_fade_in);
@@ -3550,6 +3555,11 @@ jQuery(() => {
         saveSettingsDebounced();
     });
 
+    $('#smooth_streaming_no_think').on('input', function () {
+        power_user.smooth_streaming_no_think = !!$(this).prop('checked');
+        saveSettingsDebounced();
+    });
+
     $('#smooth_streaming_speed').on('input', function () {
         power_user.smooth_streaming_speed = Number($('#smooth_streaming_speed').val());
         saveSettingsDebounced();
@@ -3999,6 +4009,11 @@ jQuery(() => {
     $('#encode_tags').on('input', async function () {
         power_user.encode_tags = !!$(this).prop('checked');
         await reloadCurrentChat();
+        saveSettingsDebounced();
+    });
+
+    $('#experimental_macro_engine').on('input', function () {
+        power_user.experimental_macro_engine = !!$(this).prop('checked');
         saveSettingsDebounced();
     });
 
