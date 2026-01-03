@@ -14,7 +14,7 @@ import {
     renameMetadata,
     getOrGenerateMetadataBatch,
 } from './image-metadata.js';
-import { getUniqueName } from '../util.js';
+import { fileExists, getUniqueFilename } from '../util.js';
 
 export const router = express.Router();
 
@@ -275,37 +275,3 @@ router.post('/folder-assign', async function (request, response) {
         return response.status(500).send('Failed to assign folders.');
     }
 });
-
-/**
- * Checks if a file exists.
- * @param {string} filePath - The full path to the file.
- * @returns {Promise<boolean>} True if the file exists, false otherwise.
- */
-async function fileExists(filePath) {
-    try {
-        await fsp.access(filePath);
-        return true;
-    } catch {
-        return false;
-    }
-}
-
-/**
- * Generates a unique filename by appending (1), (2), etc. if a conflict is found.
- * @param {string} directory - The directory where the file will be saved.
- * @param {string} originalFilename - The original desired filename.
- * @returns {Promise<string>} A unique filename.
- */
-async function getUniqueFilename(directory, originalFilename) {
-    const fileExtension = path.extname(originalFilename);
-    const baseName = path.basename(originalFilename, fileExtension);
-
-    const dirContent = await fsp.readdir(directory);
-    const existingFiles = new Set(dirContent);
-
-    const uniqueBaseName = getUniqueName(baseName, (name) => {
-        return existingFiles.has(`${name}${fileExtension}`);
-    });
-
-    return `${uniqueBaseName}${fileExtension}`;
-}
