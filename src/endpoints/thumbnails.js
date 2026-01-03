@@ -9,6 +9,7 @@ import { imageSize as sizeOf } from 'image-size';
 
 import { getConfigValue, invalidateFirefoxCache } from '../util.js';
 import { getBackgroundThumbnailResolution, isAnimatedWebP } from './image-metadata.js';
+import { ResizeStrategy } from '@jimp/plugin-resize';
 
 export const publicRouter = express.Router();
 export const apiRouter = express.Router();
@@ -215,7 +216,7 @@ async function processSingleImage(file, originalFolder, thumbnailFolder, type) {
             const thumbWidth = Math.round(Math.sqrt(targetPixelArea * aspectRatio));
             const thumbHeight = Math.round(Math.sqrt(targetPixelArea / aspectRatio));
 
-            thumbImage.resize({ w: thumbWidth, h: thumbHeight, mode: Jimp.RESIZE_BILINEAR });
+            thumbImage.resize({ w: thumbWidth, h: thumbHeight, mode: ResizeStrategy.BILINEAR });
             thumbnailResolution = getBackgroundThumbnailResolution();
         } else if (type === 'avatar' || type === 'persona') {
             // Crop and resize to fixed dimensions

@@ -188,6 +188,7 @@ export async function getOrGenerateMetadata(folderPath, filename) {
  * @returns {Promise<Object.<string, ImageMetadata>>} Map of filename to metadata
  */
 export async function getOrGenerateMetadataBatch(folderPath, filenames) {
+    /** @type {Object.<string, ImageMetadata>} */
     const results = {};
     const index = await readMetadataIndex(folderPath);
     let indexModified = false;
