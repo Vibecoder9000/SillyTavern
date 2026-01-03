@@ -12,7 +12,7 @@ import writeFileAtomic from 'write-file-atomic';
 import { Jimp } from '../jimp.js';
 import { getConfigValue } from '../util.js';
 
-export const METADATA_FILE = 'image-metadata.json';
+export const METADATA_FILE = 'index.json';
 
 /**
  * @typedef {Object} ImageMetadata
