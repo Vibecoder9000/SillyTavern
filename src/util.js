@@ -1,5 +1,6 @@
 import path from 'node:path';
 import fs from 'node:fs';
+import fsp from 'node:fs/promises';
 import http2 from 'node:http2';
 import process from 'node:process';
 import { Readable } from 'node:stream';
@@ -600,7 +601,6 @@ export function getUniqueName(name, exists) {
  * @returns {Promise<boolean>} True if the file exists, false otherwise.
  */
 export async function fileExists(filePath) {
-    const fsp = await import('node:fs/promises');
     try {
         await fsp.access(filePath);
         return true;
@@ -616,7 +616,6 @@ export async function fileExists(filePath) {
  * @returns {Promise<string>} A unique filename.
  */
 export async function getUniqueFilename(directory, originalFilename) {
-    const fsp = await import('node:fs/promises');
     const fileExtension = path.extname(originalFilename);
     const baseName = path.basename(originalFilename, fileExtension);
 
