@@ -759,8 +759,7 @@ async function uploadBackground(formData) {
             throw new Error('Failed to upload background');
         }
 
-        const data = await response.json();
-        const bg = data.filename;
+        const bg = await response.text();
         setBackground(bg, generateUrlParameter(bg, false));
         await getBackgrounds();
         highlightNewBackground(bg);

@@ -48,6 +48,7 @@ import { router as azureRouter } from './endpoints/azure.js';
 import { router as minimaxRouter } from './endpoints/minimax.js';
 import { router as dataMaidRouter } from './endpoints/data-maid.js';
 import { router as backupsRouter } from './endpoints/backups.js';
+import { router as imageMetadataRouter } from './endpoints/image-metadata.js';
 
 /**
  * @typedef {object} ServerStartupResult
@@ -177,6 +178,7 @@ export function setupPrivateEndpoints(app) {
     app.use('/api/minimax', minimaxRouter);
     app.use('/api/data-maid', dataMaidRouter);
     app.use('/api/backups', backupsRouter);
+    app.use('/api/image-metadata', imageMetadataRouter);
 }
 
 /**

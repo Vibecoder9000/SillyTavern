@@ -9,8 +9,9 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { imageSize } from 'image-size';
 import writeFileAtomic from 'write-file-atomic';
+import express from 'express';
 import { Jimp } from '../jimp.js';
-import { getConfigValue } from '../util.js';
+import { getConfigValue, isPathUnderParent } from '../util.js';
 
 export const METADATA_FILE = 'index.json';
 
@@ -281,3 +282,105 @@ export async function renameMetadata(folderPath, oldFilename, newFilename) {
 
     return data;
 }
+
+export const router = express.Router();
+
+/**
+ * POST /api/image-metadata
+ * Get metadata for image(s) by path.
+ */
+router.post('/', async function (request, response) {
+    try {
+        const { path: singlePath, paths } = request.body;
+
+        if (!singlePath && !paths) {
+            return response.status(400).json({ error: 'Either "path" or "paths" is required.' });
+        }
+
+        const userDataRoot = request.user.directories.root;
+
+        // Helper to resolve and validate a path
+        const resolvePath = (relativePath) => {
+            // Normalize path separators
+            const normalizedPath = relativePath.replace(/\\/g, '/');
+
+            // Build full path
+            const fullPath = path.resolve(userDataRoot, normalizedPath);
+
+            // Security check: ensure path is under user data directory
+            if (!isPathUnderParent(userDataRoot, fullPath)) {
+                throw new Error(`Path "${relativePath}" is outside the user data directory.`);
+            }
+
+            return fullPath;
+        };
+
+        // Handle single path
+        if (singlePath && !paths) {
+            const fullPath = resolvePath(singlePath);
+
+            try {
+                await fs.access(fullPath);
+            } catch {
+                return response.status(404).json({ error: 'File not found.' });
+            }
+
+            const folderPath = path.dirname(fullPath);
+            const filename = path.basename(fullPath);
+            const metadata = await getOrGenerateMetadata(folderPath, filename);
+
+            if (!metadata) {
+                return response.status(404).json({ error: 'Could not generate metadata for file.' });
+            }
+
+            return response.json(metadata);
+        }
+
+        // Handle multiple paths
+        if (paths && Array.isArray(paths)) {
+            /** @type {Object.<string, ImageMetadata|{error: string}>} */
+            const results = {};
+
+            // Group paths by directory for efficient batch processing
+            /** @type {Map<string, {relativePath: string, filename: string}[]>} */
+            const pathsByFolder = new Map();
+
+            for (const relativePath of paths) {
+                try {
+                    const fullPath = resolvePath(relativePath);
+                    const folderPath = path.dirname(fullPath);
+                    const filename = path.basename(fullPath);
+
+                    if (!pathsByFolder.has(folderPath)) {
+                        pathsByFolder.set(folderPath, []);
+                    }
+                    pathsByFolder.get(folderPath).push({ relativePath, filename });
+                } catch (error) {
+                    results[relativePath] = { error: error.message };
+                }
+            }
+
+            // Process each folder batch
+            for (const [folderPath, files] of pathsByFolder) {
+                const filenames = files.map(f => f.filename);
+                const batchMetadata = await getOrGenerateMetadataBatch(folderPath, filenames);
+
+                for (const { relativePath, filename } of files) {
+                    if (batchMetadata[filename]) {
+                        results[relativePath] = batchMetadata[filename];
+                    } else {
+                        results[relativePath] = { error: 'File not found or could not process.' };
+                    }
+                }
+            }
+
+            return response.json(results);
+        }
+
+        return response.status(400).json({ error: 'Invalid request format.' });
+
+    } catch (error) {
+        console.error('[ImageMetadata] API error:', error);
+        return response.status(500).json({ error: 'Internal server error.' });
+    }
+});
