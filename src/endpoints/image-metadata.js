@@ -12,7 +12,7 @@ import writeFileAtomic from 'write-file-atomic';
 import { Jimp } from '../jimp.js';
 import { getConfigValue } from '../util.js';
 
-export const METADATA_FILE = 'image-metadata.json';
+export const METADATA_FILE = 'index.json';
 
 /**
  * @typedef {Object} ImageMetadata
@@ -188,6 +188,7 @@ export async function getOrGenerateMetadata(folderPath, filename) {
  * @returns {Promise<Object.<string, ImageMetadata>>} Map of filename to metadata
  */
 export async function getOrGenerateMetadataBatch(folderPath, filenames) {
+    /** @type {Object.<string, ImageMetadata>} */
     const results = {};
     const index = await readMetadataIndex(folderPath);
     let indexModified = false;
