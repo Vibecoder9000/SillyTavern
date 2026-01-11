@@ -1,6 +1,13 @@
 /* Native Tool Calling UI */
-.tool-call-message .mes_text,
-.tool-result-message .mes_text {
+
+/* The prefix text should render like normal message text, outside the box */
+.tool-prefix-text {
+    margin-bottom: 10px;
+}
+
+/* The tool call box contains only the tool call info, not the prefix text */
+.tool-call-box,
+.tool-result-box {
     background-color: rgba(0, 0, 0, 0.2);
     border: 1px solid #555;
     border-left: 3px solid #666;
@@ -12,8 +19,8 @@
     margin-top: 5px;
 }
 
-.tool-call-message h4,
-.tool-result-message h4 {
+.tool-call-box h4,
+.tool-result-box h4 {
     margin-top: 0;
     margin-bottom: 10px;
     font-size: 0.9em;
@@ -22,7 +29,7 @@
     letter-spacing: 1px;
 }
 
-.tool-call-message .tool-reasoning blockquote {
+.tool-call-box .tool-reasoning blockquote {
     margin: 0 0 10px 0;
     padding: 10px;
     background-color: rgba(0, 0, 0, 0.15);
@@ -32,13 +39,13 @@
     word-wrap: break-word;
 }
 
-.tool-call-message .tool-action p,
-.tool-call-message .tool-reasoning p {
+.tool-call-box .tool-action p,
+.tool-call-box .tool-reasoning p {
     margin: 0 0 5px 0;
 }
 
-.tool-call-message pre,
-.tool-result-message pre {
+.tool-call-box pre,
+.tool-result-box pre {
     white-space: pre-wrap;
     word-wrap: break-word;
     margin-top: 5px;
