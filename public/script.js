@@ -4401,7 +4401,7 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
         const agnosticToolPrompt = ToolManager.getNativeToolPrompt();
         if (agnosticToolPrompt) {
             // Prepend the tool instructions to the main system prompt.
-            system = `${agnosticToolPrompt}\n\n${system}`;
+            system = `${agnosticToolPrompt}\n\n{{original}}\n\n${system}`;
         }
     }
 
@@ -8519,6 +8519,11 @@ async function messageEditDone(div) {
     appendMediaToMessage(mes, newMessageElement, false);
     addCopyToCodeBlocks(newMessageElement);
 
+    // Preserve the last_mes class if it was on the old element
+    if (oldMessageElement.hasClass('last_mes')) {
+        newMessageElement.addClass('last_mes');
+    }
+
     // Replace the old DOM element with the new one.
     oldMessageElement.replaceWith(newMessageElement);
 
@@ -12028,6 +12033,9 @@ jQuery(async function () {
             // Set the global edit message ID
             this_edit_mes_id = edit_mes_id;
 
+            // Capture scroll position before modifying the DOM
+            const chatScrollPosition = chatElement.scrollTop();
+
             const messageBlock = $(this).closest('.mes_block');
             const messageText = messageBlock.find('.mes_text');
 
@@ -12215,11 +12223,17 @@ jQuery(async function () {
         appendMediaToMessage(mes, newMessageElement, false);
         addCopyToCodeBlocks(newMessageElement);
 
+        // Preserve the last_mes class if it was on the old element
+        if (oldMessageElement.hasClass('last_mes')) {
+            newMessageElement.addClass('last_mes');
+        }
+
         // Replace the old DOM element with the new one.
         oldMessageElement.replaceWith(newMessageElement);
 
         // Finalize.
         this_edit_mes_id = undefined;
+        showSwipeButtons();
         // No need to save chat on cancel.
     });
 
