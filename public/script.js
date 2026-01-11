@@ -1963,8 +1963,12 @@ export function updateMessageBlock(messageId, message, { rerenderMessage = true 
             const toolInfo = message.extra.tool_call_info;
             let html = '';
             if (message.extra.prefix_text) {
-                html += `<p>${DOMPurify.sanitize(message.extra.prefix_text)}</p>`;
+                // Apply markdown formatting to the prefix text
+                const formattedPrefix = messageFormatting(message.extra.prefix_text, message.name, message.is_system, message.is_user, messageId, {}, false);
+                html += `<div class="tool-prefix-text">${formattedPrefix}</div>`;
             }
+            // Wrap the tool call in a .tool-call-box container for proper styling
+            html += '<div class="tool-call-box">';
             html += '<h4><i class="fa-solid fa-cogs"></i> Tool Call</h4>';
             html += `<div class="tool-action"><p><b>Action:</b> <code>${DOMPurify.sanitize(toolInfo.tool)}</code></p>`;
             html += `<p><b>Arguments:</b></p><pre><code>${DOMPurify.sanitize(JSON.stringify(toolInfo.args, null, 2))}</code></pre></div>`;
@@ -1972,7 +1976,16 @@ export function updateMessageBlock(messageId, message, { rerenderMessage = true 
             if (power_user.tool_execution_mode === 'manual') {
                 html += `<button class="tool-execute-button" data-tool-name="${DOMPurify.sanitize(toolInfo.tool)}" data-message-id="${messageId}"><i class="fa-solid fa-play"></i> Execute Tool</button>`;
             }
+            html += '</div>'; // close .tool-call-box
 
+            messageElement.find('.mes_text').html(html);
+        } else if (message.extra?.is_tool_result) {
+            // Wrap the tool result in a .tool-result-box container for proper styling
+            const result = message.extra.tool_result_content;
+            let html = '<div class="tool-result-box">';
+            html += '<h4><i class="fa-solid fa-check-circle"></i> Tool Result</h4>';
+            html += `<pre><code>${DOMPurify.sanitize(result)}</code></pre>`;
+            html += '</div>'; // close .tool-result-box
             messageElement.find('.mes_text').html(html);
         } else {
             const text = message?.extra?.display_text ?? message.mes;
@@ -2568,8 +2581,12 @@ export function addOneMessage(mes, { type = 'normal', insertAfter = null, scroll
         newMessage.addClass('tool-call-message');
         let html = '';
         if (mes.extra.prefix_text) {
-            html += `<p>${DOMPurify.sanitize(mes.extra.prefix_text)}</p>`;
+            // Apply markdown formatting to the prefix text
+            const formattedPrefix = messageFormatting(mes.extra.prefix_text, mes.name, mes.is_system, mes.is_user, newMessageId, {}, false);
+            html += `<div class="tool-prefix-text">${formattedPrefix}</div>`;
         }
+        // Wrap the tool call in a .tool-call-box container for proper styling
+        html += '<div class="tool-call-box">';
         html += '<h4><i class="fa-solid fa-cogs"></i> Tool Call</h4>';
         html += `<div class="tool-action"><p><b>Action:</b> <code>${DOMPurify.sanitize(toolInfo.tool)}</code></p>`;
         html += `<p><b>Arguments:</b></p><pre><code>${DOMPurify.sanitize(JSON.stringify(toolInfo.args, null, 2))}</code></pre></div>`;
@@ -2577,21 +2594,22 @@ export function addOneMessage(mes, { type = 'normal', insertAfter = null, scroll
         if (power_user.tool_execution_mode === 'manual') {
             html += `<button class="tool-execute-button" data-tool-name="${DOMPurify.sanitize(toolInfo.tool)}" data-message-id="${newMessageId}"><i class="fa-solid fa-play"></i> Execute Tool</button>`;
         }
+        html += '</div>'; // close .tool-call-box
 
         newMessage.find('.mes_text').html(html);
     }
     else if (mes.extra?.is_tool_result) {
+        newMessage.addClass('tool-result-message');
+        const messageTextContainer = newMessage.find('.mes_text');
+        messageTextContainer.empty(); // Clear any default content first
+
         if (mes.extra.image || mes.extra.video) {
-            newMessage.addClass('tool-result-message');
             appendMediaToMessage(mes, newMessage);
         } else {
             const result = mes.extra.tool_result_content;
-            newMessage.addClass('tool-result-message');
 
-            // Build the elements programmatically to avoid markdown processing
-            const messageTextContainer = newMessage.find('.mes_text');
-            messageTextContainer.empty(); // Clear any default content first
-
+            // Wrap the tool result in a .tool-result-box container for proper styling
+            const box = $('<div class="tool-result-box"></div>');
             const header = $('<h4><i class="fa-solid fa-check-circle"></i> Tool Result</h4>');
             const pre = $('<pre></pre>');
             const code = $('<code></code>');
@@ -2599,7 +2617,8 @@ export function addOneMessage(mes, { type = 'normal', insertAfter = null, scroll
             code.text(result); // Use .text() to safely insert the content as plain text
 
             pre.append(code);
-            messageTextContainer.append(header, pre);
+            box.append(header, pre);
+            messageTextContainer.append(box);
         }
     }
     else {
@@ -3617,23 +3636,26 @@ class StreamingProcessor {
                     messageElement.addClass('tool-call-message');
                     let html = '';
                     if (parsedTool.prefix_text) {
-                        html += `<p>${DOMPurify.sanitize(parsedTool.prefix_text)}</p>`;
+                        // Apply markdown formatting to the prefix text
+                        const formattedPrefix = messageFormatting(parsedTool.prefix_text, chat[messageId].name, chat[messageId].is_system, chat[messageId].is_user, messageId, {}, false);
+                        html += `<div class="tool-prefix-text">${formattedPrefix}</div>`;
                     }
+                    // Wrap the tool call in a .tool-call-box container for proper styling
+                    html += '<div class="tool-call-box">';
                     html += '<h4><i class="fa-solid fa-cogs"></i> Tool Call</h4>';
                     html += `<div class="tool-action"><p><b>Action:</b> <code>${DOMPurify.sanitize(toolInfo.tool)}</code></p>`;
                     html += `<p><b>Arguments:</b></p><pre><code>${DOMPurify.sanitize(JSON.stringify(toolInfo.args, null, 2))}</code></pre></div>`;
+
+                    // Check for manual execution mode
+                    if (power_user.tool_execution_mode === 'manual') {
+                        html += `<button class="tool-execute-button" data-tool-name="${DOMPurify.sanitize(parsedTool.tool_call.tool)}" data-message-id="${messageId}"><i class="fa-solid fa-play"></i> Execute Tool</button>`;
+                    }
+                    html += '</div>'; // close .tool-call-box
                     messageElement.find('.mes_text').html(html);
                 }
 
-                // Check for manual execution mode
+                // If manual mode, save and return without executing
                 if (power_user.tool_execution_mode === 'manual') {
-                    // Add execute button for manual mode
-                    const messageElement = $(`#chat .mes[mesid="${messageId}"]`);
-                    if (messageElement.length) {
-                        const buttonHtml = `<button class="tool-execute-button" data-tool-name="${DOMPurify.sanitize(parsedTool.tool_call.tool)}" data-message-id="${messageId}"><i class="fa-solid fa-play"></i> Execute Tool</button>`;
-                        messageElement.find('.mes_text').append(buttonHtml);
-                    }
-
                     // Save tool call info for later execution and save chat
                     await saveChatConditional();
 
@@ -4400,9 +4422,18 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
     if (oai_settings.native_tool_calling) {
         const agnosticToolPrompt = ToolManager.getNativeToolPrompt();
         if (agnosticToolPrompt) {
-            // Prepend the tool instructions to the main system prompt.
-            system = `${agnosticToolPrompt}\n\n{{original}}\n\n${system}`;
+            if (main_api === 'openai') {
+                // For OpenAI, inject as an extension prompt to append to the main prompt instead of replacing it.
+                // Using BEFORE_PROMPT ensures it appears before other prompts but doesn't override the main system prompt.
+                setExtensionPrompt(inject_ids.TOOL_CALLING, agnosticToolPrompt, extension_prompt_types.BEFORE_PROMPT, 0, false, extension_prompt_roles.SYSTEM);
+            } else {
+                // For non-OpenAI APIs, prepend the tool instructions to the system prompt.
+                system = `${agnosticToolPrompt}\n\n{{original}}\n\n${system}`;
+            }
         }
+    } else {
+        // Clear the tool calling extension prompt if native tool calling is disabled.
+        setExtensionPrompt(inject_ids.TOOL_CALLING, '', extension_prompt_types.BEFORE_PROMPT, 0, false, extension_prompt_roles.SYSTEM);
     }
 
     if (main_api !== 'openai') {
@@ -5465,29 +5496,32 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
 
                 // Re-render the message element with the special tool call formatting.
                 const messageElement = $('#chat .mes').last();
+                const messageId = chat.length - 1;
                 if (messageElement.length) {
                     const toolInfo = parsedTool.tool_call;
                     messageElement.addClass('tool-call-message');
                     let html = '';
                     if (parsedTool.prefix_text) {
-                        html += `<p>${DOMPurify.sanitize(parsedTool.prefix_text)}</p>`;
+                        // Apply markdown formatting to the prefix text
+                        const formattedPrefix = messageFormatting(parsedTool.prefix_text, chat[messageId].name, chat[messageId].is_system, chat[messageId].is_user, messageId, {}, false);
+                        html += `<div class="tool-prefix-text">${formattedPrefix}</div>`;
                     }
+                    // Wrap the tool call in a .tool-call-box container for proper styling
+                    html += '<div class="tool-call-box">';
                     html += '<h4><i class="fa-solid fa-cogs"></i> Tool Call</h4>';
                     html += `<div class="tool-action"><p><b>Action:</b> <code>${DOMPurify.sanitize(toolInfo.tool)}</code></p>`;
                     html += `<p><b>Arguments:</b></p><pre><code>${DOMPurify.sanitize(JSON.stringify(toolInfo.args, null, 2))}</code></pre></div>`;
+
+                    // Check for manual execution mode
+                    if (power_user.tool_execution_mode === 'manual') {
+                        html += `<button class="tool-execute-button" data-tool-name="${DOMPurify.sanitize(parsedTool.tool_call.tool)}" data-message-id="${messageId}"><i class="fa-solid fa-play"></i> Execute Tool</button>`;
+                    }
+                    html += '</div>'; // close .tool-call-box
                     messageElement.find('.mes_text').html(html);
                 }
 
-                // Check for manual execution mode
-                const messageId = chat.length - 1;
+                // If manual mode, save and return without executing
                 if (power_user.tool_execution_mode === 'manual') {
-                    // Add execute button for manual mode
-                    const messageElement = $('#chat .mes').last();
-                    if (messageElement.length) {
-                        const buttonHtml = `<button class="tool-execute-button" data-tool-name="${DOMPurify.sanitize(parsedTool.tool_call.tool)}" data-message-id="${messageId}"><i class="fa-solid fa-play"></i> Execute Tool</button>`;
-                        messageElement.find('.mes_text').append(buttonHtml);
-                    }
-
                     // Save chat and stop here - user will click the button to continue
                     await saveChatConditional();
                     unblockGeneration(type);
@@ -8140,27 +8174,54 @@ function updateMessage(div) {
     const mes = chat[mesElement.attr('mesid')];
 
     if (mes.extra?.is_tool_call) {
-        // Attempt to parse the JSON to update the structured data for rendering.
-        const jsonMatch = text.match(/\{[\s\S]*\}/);
-        if (jsonMatch) {
-            try {
-                const parsedJson = JSON.parse(jsonMatch[0]);
-                mes.extra.tool_call_info = parsedJson;
-            } catch (error) {
-                console.warn('Failed to parse JSON from edited tool call. Raw text will be saved, but UI may not render correctly.', error);
+        // Re-parse the full edited text to extract prefix_text, reasoning, and tool_call
+        // Since the edit textarea now contains the full message, we need to parse it properly
+        const toolTagIndex = text.indexOf('<tool>');
+
+        if (toolTagIndex !== -1) {
+            // Extract prefix_text: everything before <tool> that isn't <think>
+            let textBeforeTool = text.substring(0, toolTagIndex);
+
+            // Extract reasoning from <think>...</think> if present
+            const thinkMatch = textBeforeTool.match(/<think>([\s\S]*?)<\/think>/);
+            let reasoning = '';
+            if (thinkMatch) {
+                reasoning = thinkMatch[1];
+                textBeforeTool = textBeforeTool.replace(/<think>[\s\S]*?<\/think>/, '');
+            }
+
+            // The remaining text before <tool> is the prefix_text
+            const prefixText = textBeforeTool.trim();
+
+            // Update the stored values
+            mes.extra.prefix_text = prefixText || undefined;
+            mes.extra.reasoning = reasoning || undefined;
+
+            // Try to parse the JSON tool call
+            const jsonMatch = text.match(/<tool>\s*(\{[\s\S]*?\})\s*<\/tool>/);
+            if (jsonMatch) {
+                try {
+                    const parsedJson = JSON.parse(jsonMatch[1]);
+                    mes.extra.tool_call_info = parsedJson;
+                } catch (error) {
+                    console.warn('Failed to parse JSON from edited tool call. Raw text will be saved, but UI may not render correctly.', error);
+                }
+            }
+        } else {
+            // Fallback: try to parse JSON directly (legacy behavior)
+            const jsonMatch = text.match(/\{[\s\S]*\}/);
+            if (jsonMatch) {
+                try {
+                    const parsedJson = JSON.parse(jsonMatch[0]);
+                    mes.extra.tool_call_info = parsedJson;
+                } catch (error) {
+                    console.warn('Failed to parse JSON from edited tool call. Raw text will be saved, but UI may not render correctly.', error);
+                }
             }
         }
 
-        // Reconstruct the full message with the stored prefix_text, reasoning, and new tool block.
-        let reconstructedMessage = '';
-        if (mes.extra.prefix_text) {
-            reconstructedMessage += `${mes.extra.prefix_text}\n\n`;
-        }
-        if (mes.extra.reasoning) {
-            reconstructedMessage += `<think>\n${mes.extra.reasoning}\n</think>\n`;
-        }
-        reconstructedMessage += text;
-        mes.mes = reconstructedMessage;
+        // Store the full edited text as-is
+        mes.mes = text;
     } else if (mes.extra?.is_tool_result) {
         mes.extra.tool_result_content = text;
         mes.mes = `<tool_result>\n${text}\n</tool_result>`;
@@ -8484,23 +8545,31 @@ async function messageEditDone(div) {
         newMessageElement.addClass('tool-call-message');
         let html = '';
         if (mes.extra.prefix_text) {
-            html += `<p>${DOMPurify.sanitize(mes.extra.prefix_text)}</p>`;
+            // Apply markdown formatting to the prefix text
+            const formattedPrefix = messageFormatting(mes.extra.prefix_text, mes.name, mes.is_system, mes.is_user, messageId, {}, false);
+            html += `<div class="tool-prefix-text">${formattedPrefix}</div>`;
         }
+        // Wrap the tool call in a .tool-call-box container for proper styling
+        html += '<div class="tool-call-box">';
         html += '<h4><i class="fa-solid fa-cogs"></i> Tool Call</h4>';
         html += `<div class="tool-action"><p><b>Action:</b> <code>${DOMPurify.sanitize(toolInfo.tool)}</code></p>`;
         html += `<p><b>Arguments:</b></p><pre><code>${DOMPurify.sanitize(JSON.stringify(toolInfo.args, null, 2))}</code></pre></div>`;
+        html += '</div>'; // close .tool-call-box
         newMessageElement.find('.mes_text').html(html);
     } else if (mes.extra?.is_tool_result) {
         const result = mes.extra.tool_result_content;
         newMessageElement.addClass('tool-result-message');
         const messageTextContainer = newMessageElement.find('.mes_text');
         messageTextContainer.empty();
+        // Wrap the tool result in a .tool-result-box container for proper styling
+        const box = $('<div class="tool-result-box"></div>');
         const header = $('<h4><i class="fa-solid fa-check-circle"></i> Tool Result</h4>');
         const pre = $('<pre></pre>');
         const code = $('<code></code>');
         code.text(result);
         pre.append(code);
-        messageTextContainer.append(header, pre);
+        box.append(header, pre);
+        messageTextContainer.append(box);
     } else {
         const sanitizerOverrides = mes.uses_system_ui ? { MESSAGE_ALLOW_SYSTEM_UI: true } : {};
         const formattedMessageText = messageFormatting(
@@ -12008,11 +12077,9 @@ jQuery(async function () {
             var text = mes.extra?.display_text ?? mes['mes'];
 
             if (mes.extra?.is_tool_call) {
-                const toolStartIndex = text.indexOf('<tool>');
-                if (toolStartIndex !== -1) {
-                    // Extract just the tool part for the main edit box.
-                    text = text.substring(toolStartIndex);
-                }
+                // Include prefix_text in the edit textarea so it can be edited
+                // The full message is: prefix_text + <think>reasoning</think> + <tool>...</tool>
+                // We keep the full text so users can edit the prefix if needed
             }
             else if (mes.extra?.is_tool_result) {
                 // For tool results, edit the raw content directly.
@@ -12190,21 +12257,33 @@ jQuery(async function () {
         if (mes.extra?.is_tool_call) {
             const toolInfo = mes.extra.tool_call_info;
             newMessageElement.addClass('tool-call-message');
-            let html = '<h4><i class="fa-solid fa-cogs"></i> Tool Call</h4>';
+            let html = '';
+            if (mes.extra.prefix_text) {
+                // Apply markdown formatting to the prefix text
+                const formattedPrefix = messageFormatting(mes.extra.prefix_text, mes.name, mes.is_system, mes.is_user, messageId, {}, false);
+                html += `<div class="tool-prefix-text">${formattedPrefix}</div>`;
+            }
+            // Wrap the tool call in a .tool-call-box container for proper styling
+            html += '<div class="tool-call-box">';
+            html += '<h4><i class="fa-solid fa-cogs"></i> Tool Call</h4>';
             html += `<div class="tool-action"><p><b>Action:</b> <code>${DOMPurify.sanitize(toolInfo.tool)}</code></p>`;
             html += `<p><b>Arguments:</b></p><pre><code>${DOMPurify.sanitize(JSON.stringify(toolInfo.args, null, 2))}</code></pre></div>`;
+            html += '</div>'; // close .tool-call-box
             newMessageElement.find('.mes_text').html(html);
         } else if (mes.extra?.is_tool_result) {
             const result = mes.extra.tool_result_content;
             newMessageElement.addClass('tool-result-message');
             const messageTextContainer = newMessageElement.find('.mes_text');
             messageTextContainer.empty();
+            // Wrap the tool result in a .tool-result-box container for proper styling
+            const box = $('<div class="tool-result-box"></div>');
             const header = $('<h4><i class="fa-solid fa-check-circle"></i> Tool Result</h4>');
             const pre = $('<pre></pre>');
             const code = $('<code></code>');
             code.text(result);
             pre.append(code);
-            messageTextContainer.append(header, pre);
+            box.append(header, pre);
+            messageTextContainer.append(box);
         } else {
             const sanitizerOverrides = mes.uses_system_ui ? { MESSAGE_ALLOW_SYSTEM_UI: true } : {};
             const formattedMessageText = messageFormatting(

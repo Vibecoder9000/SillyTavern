@@ -2160,6 +2160,34 @@ function openCustomFolderPopup(folderId) {
             return;
         }
 
+        if (jgButton && !isThumbnailSelectionMode) {
+            e.stopPropagation();
+            const action = jgButton.dataset.action;
+            const context = jgButton.closest('.thumbnail');
+            if (!context) return;
+            const filename = context.dataset.bgfile;
+            switch (action) {
+                case 'star':
+                    await toggleStarredBackground(filename);
+                    break;
+                case 'add-to-folder':
+                    openFolderChooserPopup(filename);
+                    break;
+                case 'remove-from-folder':
+                    await onRemoveFromFolderClick(filename, folderId, renderContent);
+                    break;
+                case 'delete':
+                    await onDeleteBackgroundClick.call(jgButton, e);
+                    renderContent();
+                    break;
+                case 'edit':
+                    await onRenameBackgroundClick.call(jgButton, e);
+                    renderContent();
+                    break;
+            }
+            return;
+        }
+
         if (thumbnail) {
             e.stopPropagation();
             if (isThumbnailSelectionMode) {
@@ -2196,34 +2224,6 @@ function openCustomFolderPopup(folderId) {
             } else {
                 onSelectBackgroundClick.call(thumbnail);
                 closePopup();
-            }
-            return;
-        }
-
-        if (jgButton && !isThumbnailSelectionMode) {
-            e.stopPropagation();
-            const action = jgButton.dataset.action;
-            const context = jgButton.closest('.thumbnail');
-            if (!context) return;
-            const filename = context.dataset.bgfile;
-            switch (action) {
-                case 'star':
-                    await toggleStarredBackground(filename);
-                    break;
-                case 'add-to-folder':
-                    openFolderChooserPopup(filename);
-                    break;
-                case 'remove-from-folder':
-                    await onRemoveFromFolderClick(filename, folderId, renderContent);
-                    break;
-                case 'delete':
-                    await onDeleteBackgroundClick.call(jgButton, e);
-                    renderContent();
-                    break;
-                case 'edit':
-                    await onRenameBackgroundClick.call(jgButton, e);
-                    renderContent();
-                    break;
             }
             return;
         }
