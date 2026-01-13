@@ -138,29 +138,9 @@ export async function generateThumbnail(directories, type, file, forceGenerate =
             return { path: null, aspectRatio: null, resolution: null };
         }
 
-        let pathToOriginalFile = path.join(originalFolder, file);
-        console.log(`[Thumbnails Debug] Checking primary: ${pathToOriginalFile}`);
+        const pathToOriginalFile = path.join(originalFolder, file);
         if (!fs.existsSync(pathToOriginalFile)) {
-            const charName = path.parse(file).name;
-            const userImagePath = path.join(directories.userImages, charName, file);
-            console.log(`[Thumbnails Debug] Not in characters. Checking user images: ${userImagePath}`);
-
-            if (fs.existsSync(userImagePath)) {
-                console.log(`[Thumbnails Debug] Found in user images: ${userImagePath}`);
-                pathToOriginalFile = userImagePath;
-            } else {
-                // If the exact filename isn't found, check if the directory exists and log contents
-                const userImageFolder = path.join(directories.userImages, charName);
-                if (fs.existsSync(userImageFolder)) {
-                    const contents = fs.readdirSync(userImageFolder);
-                    console.log(`[Thumbnails Debug] Folder exists: ${userImageFolder}. Contents: ${contents.join(', ')}`);
-                } else {
-                    console.log(`[Thumbnails Debug] Folder does not exist: ${userImageFolder}`);
-                }
-
-                console.warn(`[Thumbnails] Original file not found at ${pathToOriginalFile} or ${userImagePath}, skipping: ${file}`);
-                return { path: null, aspectRatio: null, resolution: null };
-            }
+            return { path: null, aspectRatio: null, resolution: null };
         }
 
         const fileExtension = path.extname(file).toLowerCase();
