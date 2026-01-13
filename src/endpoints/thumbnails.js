@@ -138,10 +138,17 @@ export async function generateThumbnail(directories, type, file, forceGenerate =
             return { path: null, aspectRatio: null, resolution: null };
         }
 
-        const pathToOriginalFile = path.join(originalFolder, file);
+        let pathToOriginalFile = path.join(originalFolder, file);
         if (!fs.existsSync(pathToOriginalFile)) {
-            console.error(`[generateThumbnail] Cannot generate thumbnail, original file not found: ${pathToOriginalFile}`);
-            return { path: null, aspectRatio: null, resolution: null };
+            const charName = path.parse(file).name;
+            const userImagePath = path.join(directories.userImages, charName, file);
+
+            if (fs.existsSync(userImagePath)) {
+                pathToOriginalFile = userImagePath;
+            } else {
+                console.warn(`[Thumbnails] Original file not found at ${pathToOriginalFile} or ${userImagePath}, skipping: ${file}`);
+                return { path: null, aspectRatio: null, resolution: null };
+            }
         }
 
         const fileExtension = path.extname(file).toLowerCase();
