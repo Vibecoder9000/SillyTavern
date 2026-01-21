@@ -596,40 +596,6 @@ export function getUniqueName(name, exists) {
 }
 
 /**
- * Checks if a file exists at the given path.
- * @param {string} filePath - The full path to the file.
- * @returns {Promise<boolean>} True if the file exists, false otherwise.
- */
-export async function fileExists(filePath) {
-    try {
-        await fsp.access(filePath);
-        return true;
-    } catch {
-        return false;
-    }
-}
-
-/**
- * Generates a unique filename by appending (1), (2), etc. if a conflict is found.
- * @param {string} directory - The directory where the file will be saved.
- * @param {string} originalFilename - The original desired filename.
- * @returns {Promise<string>} A unique filename.
- */
-export async function getUniqueFilename(directory, originalFilename) {
-    const fileExtension = path.extname(originalFilename);
-    const baseName = path.basename(originalFilename, fileExtension);
-
-    const dirContent = await fsp.readdir(directory);
-    const existingFiles = new Set(dirContent);
-
-    const uniqueBaseName = getUniqueName(baseName, (name) => {
-        return existingFiles.has(`${name}${fileExtension}`);
-    });
-
-    return `${uniqueBaseName}${fileExtension}`;
-}
-
-/**
  * Provides safe replacements for characters in filenames. Intended for use with sanitize() from the sanitize-filename package.
  * @param {string} char Character to sanitize
  * @returns {string} Safe replacement character
