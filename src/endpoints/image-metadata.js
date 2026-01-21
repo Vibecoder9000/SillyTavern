@@ -301,11 +301,8 @@ router.post('/', async function (request, response) {
 
         // Helper to resolve and validate a path
         const resolvePath = (relativePath) => {
-            // Normalize path separators
-            const normalizedPath = relativePath.replace(/\\/g, '/');
-
             // Build full path
-            const fullPath = path.resolve(userDataRoot, normalizedPath);
+            const fullPath = path.resolve(userDataRoot, relativePath);
 
             // Security check: ensure path is under user data directory
             if (!isPathUnderParent(userDataRoot, fullPath)) {
