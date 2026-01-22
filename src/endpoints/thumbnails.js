@@ -17,6 +17,7 @@ export const apiRouter = express.Router();
 export const SKIPPED_EXTENSIONS = new Set(['.apng', '.mp4', '.webm', '.avi', '.mkv', '.flv', '.gif']);
 export const ALLOWED_IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.tif', '.tiff', '.apng']);
 
+const thumbnailsEnabled = !!getConfigValue('thumbnails.enabled', true, 'boolean');
 const quality = Math.min(100, Math.max(1, parseInt(getConfigValue('thumbnails.quality', 95, 'number'))));
 const pngFormat = String(getConfigValue('thumbnails.format', 'jpg')).toLowerCase().trim() === 'png';
 
@@ -237,7 +238,6 @@ async function processSingleImage(file, originalFolder, thumbnailFolder, type) {
  */
 publicRouter.get('/', async function (request, response) {
     try {
-        const thumbnailsEnabled = !!getConfigValue('thumbnails.enabled', true, 'boolean');
         const { file: rawFile, type, animated } = request.query;
         if (typeof rawFile !== 'string' || typeof type !== 'string') return response.sendStatus(400);
         if (!(type === 'bg' || type === 'avatar' || type === 'persona')) {
