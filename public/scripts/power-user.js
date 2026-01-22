@@ -30,6 +30,7 @@ import {
     extension_prompt_types,
     extension_prompt_roles,
     deleteMessage,
+    settingsReady,
 } from '../script.js';
 import { isMobile, initMovingUI, favsToHotswap } from './RossAscends-mods.js';
 import {
@@ -4015,6 +4016,23 @@ jQuery(() => {
     $('#experimental_macro_engine').on('input', function () {
         power_user.experimental_macro_engine = !!$(this).prop('checked');
         saveSettingsDebounced();
+
+        // Check if the app is ready before showing the toast
+        if (!settingsReady) {
+            return;
+        }
+
+        eventSource.once(event_types.SETTINGS_UPDATED, function() {
+            toastr.warning(
+                t`Click here to reload.`,
+                t`Toggling the Experimental Macro Engine requires a reload.`,
+                {
+                    onclick: () => window.location.reload(),
+                    timeOut: 10000,
+                    preventDuplicates: true,
+                },
+            );
+        });
     });
 
     $('#disable_group_trimming').on('input', function () {
