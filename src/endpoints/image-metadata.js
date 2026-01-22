@@ -1,7 +1,6 @@
 /**
  * Generic image metadata service.
  * Provides on-demand metadata generation with file mtime-based caching.
- * Can be used for backgrounds, character images, gallery items, etc.
  */
 
 import * as fs from 'node:fs/promises';
@@ -13,7 +12,7 @@ import express from 'express';
 import { Jimp } from '../jimp.js';
 import { getConfigValue, isPathUnderParent } from '../util.js';
 
-export const METADATA_FILE = 'index.json';
+export const METADATA_FILE = 'image-metadata.json';
 
 /**
  * @typedef {Object} ImageMetadata
@@ -30,7 +29,7 @@ export const METADATA_FILE = 'index.json';
 /**
  * @typedef {Object} MetadataIndex
  * @property {number} version - Metadata version.
- * @property {Object.<string, ImageMetadata>} images - Mapping of filenames to their metadata.
+ * @property {Object.<string, ImageMetadata>} images - Mapping of relative paths to their metadata.
  * @property {Array<{id: string, name: string, thumbnailFile: string}>} folders - Virtual folders.
  */
 
@@ -157,12 +156,12 @@ export async function generateImageMetadata(filePath) {
 }
 
 /**
- * Reads the metadata index from a folder.
- * @param {string} folderPath - Path to the folder containing index.json
+ * Reads the centralized metadata index from the user data root.
+ * @param {string} userDataRoot - Path to the user data directory root
  * @returns {Promise<MetadataIndex>} The metadata index
  */
-export async function readMetadataIndex(folderPath) {
-    const indexPath = path.join(folderPath, METADATA_FILE);
+export async function readMetadataIndex(userDataRoot) {
+    const indexPath = path.join(userDataRoot, METADATA_FILE);
     try {
         const rawData = await fs.readFile(indexPath, 'utf8');
         return JSON.parse(rawData);
@@ -172,12 +171,12 @@ export async function readMetadataIndex(folderPath) {
 }
 
 /**
- * Writes the metadata index to a folder.
- * @param {string} folderPath - Path to the folder containing index.json
+ * Writes the centralized metadata index to the user data root.
+ * @param {string} userDataRoot - Path to the user data directory root
  * @param {MetadataIndex} metadata - The metadata to write
  */
-export async function writeMetadataIndex(folderPath, metadata) {
-    const indexPath = path.join(folderPath, METADATA_FILE);
+export async function writeMetadataIndex(userDataRoot, metadata) {
+    const indexPath = path.join(userDataRoot, METADATA_FILE);
     const jsonString = JSON.stringify(metadata, null, 4);
     await writeFileAtomic(indexPath, jsonString, 'utf8');
 }
@@ -185,49 +184,52 @@ export async function writeMetadataIndex(folderPath, metadata) {
 /**
  * Gets metadata for an image, generating it on-demand if needed.
  * Uses file mtime for cache invalidation.
- * @param {string} folderPath - Path to the folder containing the image and index.json
- * @param {string} filename - The image filename
+ * @param {string} userDataRoot - Path to the user data directory root
+ * @param {string} relativePath - The relative path to the image from userDataRoot
  * @returns {Promise<ImageMetadata|null>} The metadata, or null if file doesn't exist
  */
-export async function getOrGenerateMetadata(folderPath, filename) {
-    const results = await getOrGenerateMetadataBatch(folderPath, [filename]);
-    return results[filename] || null;
+export async function getOrGenerateMetadata(userDataRoot, relativePath) {
+    const results = await getOrGenerateMetadataBatch(userDataRoot, [relativePath]);
+    return results[relativePath] || null;
 }
 
 /**
  * Gets metadata for multiple images, generating on-demand as needed.
- * @param {string} folderPath - Path to the folder containing images and index.json
- * @param {string[]} filenames - Array of image filenames
- * @returns {Promise<Object.<string, ImageMetadata>>} Map of filename to metadata
+ * Uses relative paths from the user data root as keys in the centralized index.
+ * @param {string} userDataRoot - Path to the user data directory root
+ * @param {string[]} relativePaths - Array of relative paths from userDataRoot
+ * @returns {Promise<Object.<string, ImageMetadata>>} Map of relativePath to metadata
  */
-export async function getOrGenerateMetadataBatch(folderPath, filenames) {
+export async function getOrGenerateMetadataBatch(userDataRoot, relativePaths) {
     /** @type {Object.<string, ImageMetadata>} */
     const results = {};
-    const index = await readMetadataIndex(folderPath);
+    const index = await readMetadataIndex(userDataRoot);
     let indexModified = false;
 
-    for (const filename of filenames) {
-        const filePath = path.join(folderPath, filename);
+    for (const relativePath of relativePaths) {
+        // Normalize the path to use forward slashes for consistent keys
+        const normalizedPath = relativePath.split(path.sep).join('/');
+        const fullPath = path.join(userDataRoot, relativePath);
 
         let stats;
         try {
-            stats = await fs.stat(filePath);
+            stats = await fs.stat(fullPath);
         } catch {
             continue; // File doesn't exist, skip
         }
 
         const currentMtime = stats.mtimeMs;
-        const cached = index.images[filename];
+        const cached = index.images[normalizedPath];
 
         // If cached and not modified, use cached
         if (cached && cached.mtime === currentMtime) {
-            results[filename] = cached;
+            results[relativePath] = cached;
             continue;
         }
 
         // Generate new metadata
         try {
-            const metadata = await generateImageMetadata(filePath);
+            const metadata = await generateImageMetadata(fullPath);
             metadata.mtime = currentMtime;
 
             // Preserve folderIds if they existed
@@ -235,64 +237,87 @@ export async function getOrGenerateMetadataBatch(folderPath, filenames) {
                 metadata.folderIds = cached.folderIds;
             }
 
-            index.images[filename] = metadata;
-            results[filename] = metadata;
+            index.images[normalizedPath] = metadata;
+            results[relativePath] = metadata;
             indexModified = true;
         } catch (error) {
-            console.warn(`[ImageMetadata] Failed to generate metadata for ${filename}:`, error.message);
-        }
-    }
-
-    // Clean up orphaned metadata entries
-    const filesOnDisk = new Set(filenames);
-    for (const cachedFilename of Object.keys(index.images)) {
-        if (!filesOnDisk.has(cachedFilename)) {
-            delete index.images[cachedFilename];
-            indexModified = true;
+            console.warn(`[ImageMetadata] Failed to generate metadata for ${relativePath}:`, error.message);
         }
     }
 
     // Write index if modified
     if (indexModified) {
-        await writeMetadataIndex(folderPath, index);
+        await writeMetadataIndex(userDataRoot, index);
     }
 
     return results;
 }
 
 /**
- * Removes metadata for an image from the index.
- * @param {string} folderPath - Path to the folder containing index.json
- * @param {string} filename - The image filename to remove
+ * Removes metadata for an image from the centralized index.
+ * @param {string} userDataRoot - Path to the user data directory root
+ * @param {string} relativePath - The relative path to remove
  */
-export async function removeMetadata(folderPath, filename) {
-    const index = await readMetadataIndex(folderPath);
-    if (index.images[filename]) {
-        delete index.images[filename];
-        await writeMetadataIndex(folderPath, index);
+export async function removeMetadata(userDataRoot, relativePath) {
+    const normalizedPath = relativePath.split(path.sep).join('/');
+    const index = await readMetadataIndex(userDataRoot);
+    if (index.images[normalizedPath]) {
+        delete index.images[normalizedPath];
+        await writeMetadataIndex(userDataRoot, index);
     }
 }
 
 /**
  * Updates metadata for an image (e.g., after rename).
- * @param {string} folderPath - Path to the folder containing index.json
- * @param {string} oldFilename - The old filename
- * @param {string} newFilename - The new filename
+ * @param {string} userDataRoot - Path to the user data directory root
+ * @param {string} oldRelativePath - The old relative path
+ * @param {string} newRelativePath - The new relative path
  * @returns {Promise<ImageMetadata|null>} The updated metadata
  */
-export async function renameMetadata(folderPath, oldFilename, newFilename) {
-    const index = await readMetadataIndex(folderPath);
-    const data = index.images[oldFilename];
+export async function renameMetadata(userDataRoot, oldRelativePath, newRelativePath) {
+    const oldNormalized = oldRelativePath.split(path.sep).join('/');
+    const newNormalized = newRelativePath.split(path.sep).join('/');
+    const index = await readMetadataIndex(userDataRoot);
+    const data = index.images[oldNormalized];
 
     if (!data) {
-        throw new Error(`Image '${oldFilename}' not found in metadata.`);
+        throw new Error(`Image '${oldRelativePath}' not found in metadata.`);
     }
 
-    delete index.images[oldFilename];
-    index.images[newFilename] = data;
-    await writeMetadataIndex(folderPath, index);
+    delete index.images[oldNormalized];
+    index.images[newNormalized] = data;
+    await writeMetadataIndex(userDataRoot, index);
 
     return data;
+}
+
+/**
+ * Cleans up orphaned entries from the metadata index.
+ * Iterates over all entries and removes those whose files no longer exist.
+ * @param {string} userDataRoot - Path to the user data directory root
+ * @returns {Promise<string[]>} Array of removed paths
+ */
+export async function cleanupOrphanedMetadata(userDataRoot) {
+    const index = await readMetadataIndex(userDataRoot);
+    const orphanedPaths = [];
+
+    for (const relativePath of Object.keys(index.images)) {
+        const fullPath = path.join(userDataRoot, relativePath);
+        try {
+            await fs.access(fullPath);
+        } catch {
+            // File doesn't exist, mark for removal
+            orphanedPaths.push(relativePath);
+            delete index.images[relativePath];
+        }
+    }
+
+    if (orphanedPaths.length > 0) {
+        await writeMetadataIndex(userDataRoot, index);
+        console.log(`[ImageMetadata] Cleaned up ${orphanedPaths.length} orphaned metadata entries`);
+    }
+
+    return orphanedPaths;
 }
 
 export const router = express.Router();
@@ -311,22 +336,19 @@ router.post('/', async function (request, response) {
 
         const userDataRoot = request.user.directories.root;
 
-        // Helper to resolve and validate a path
-        const resolvePath = (relativePath) => {
-            // Build full path
+        // Helper to validate a path is under user data directory
+        const validatePath = (relativePath) => {
             const fullPath = path.resolve(userDataRoot, relativePath);
-
-            // Security check: ensure path is under user data directory
             if (!isPathUnderParent(userDataRoot, fullPath)) {
                 throw new Error(`Path "${relativePath}" is outside the user data directory.`);
             }
-
-            return fullPath;
+            return relativePath;
         };
 
         // Handle single path
         if (singlePath && !paths) {
-            const fullPath = resolvePath(singlePath);
+            const relativePath = validatePath(singlePath);
+            const fullPath = path.join(userDataRoot, relativePath);
 
             try {
                 await fs.access(fullPath);
@@ -334,9 +356,7 @@ router.post('/', async function (request, response) {
                 return response.status(404).json({ error: 'File not found.' });
             }
 
-            const folderPath = path.dirname(fullPath);
-            const filename = path.basename(fullPath);
-            const metadata = await getOrGenerateMetadata(folderPath, filename);
+            const metadata = await getOrGenerateMetadata(userDataRoot, relativePath);
 
             if (!metadata) {
                 return response.status(404).json({ error: 'Could not generate metadata for file.' });
@@ -349,37 +369,26 @@ router.post('/', async function (request, response) {
         if (paths && Array.isArray(paths)) {
             /** @type {Object.<string, ImageMetadata|{error: string}>} */
             const results = {};
+            const validPaths = [];
 
-            // Group paths by directory for efficient batch processing
-            /** @type {Map<string, {relativePath: string, filename: string}[]>} */
-            const pathsByFolder = new Map();
-
+            // Validate all paths first
             for (const relativePath of paths) {
                 try {
-                    const fullPath = resolvePath(relativePath);
-                    const folderPath = path.dirname(fullPath);
-                    const filename = path.basename(fullPath);
-
-                    if (!pathsByFolder.has(folderPath)) {
-                        pathsByFolder.set(folderPath, []);
-                    }
-                    pathsByFolder.get(folderPath).push({ relativePath, filename });
+                    validatePath(relativePath);
+                    validPaths.push(relativePath);
                 } catch (error) {
                     results[relativePath] = { error: error.message };
                 }
             }
 
-            // Process each folder batch
-            for (const [folderPath, files] of pathsByFolder) {
-                const filenames = files.map(f => f.filename);
-                const batchMetadata = await getOrGenerateMetadataBatch(folderPath, filenames);
+            // Process all valid paths in a single batch
+            const batchMetadata = await getOrGenerateMetadataBatch(userDataRoot, validPaths);
 
-                for (const { relativePath, filename } of files) {
-                    if (batchMetadata[filename]) {
-                        results[relativePath] = batchMetadata[filename];
-                    } else {
-                        results[relativePath] = { error: 'File not found or could not process.' };
-                    }
+            for (const relativePath of validPaths) {
+                if (batchMetadata[relativePath]) {
+                    results[relativePath] = batchMetadata[relativePath];
+                } else {
+                    results[relativePath] = { error: 'File not found or could not process.' };
                 }
             }
 
@@ -390,6 +399,21 @@ router.post('/', async function (request, response) {
 
     } catch (error) {
         console.error('[ImageMetadata] API error:', error);
+        return response.status(500).json({ error: 'Internal server error.' });
+    }
+});
+
+/**
+ * POST /api/image-metadata/cleanup
+ * Clean up orphaned metadata entries (files that no longer exist).
+ */
+router.post('/cleanup', async function (request, response) {
+    try {
+        const userDataRoot = request.user.directories.root;
+        const removed = await cleanupOrphanedMetadata(userDataRoot);
+        return response.json({ removed, count: removed.length });
+    } catch (error) {
+        console.error('[ImageMetadata] Cleanup error:', error);
         return response.status(500).json({ error: 'Internal server error.' });
     }
 });
