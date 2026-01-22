@@ -35,15 +35,27 @@ export const METADATA_FILE = 'index.json';
  */
 
 /**
- * Gets the configured background thumbnail resolution.
- * @returns {number} Thumbnail resolution (width * height)
+ * @typedef {'bg' | 'avatar' | 'persona'} ThumbnailType
  */
-export function getBackgroundThumbnailResolution() {
-    const dimensions = getConfigValue('thumbnails.dimensions.bg', [160, 90]);
-    if (Array.isArray(dimensions) && dimensions.length >= 2) {
-        return Number(dimensions[0]) * Number(dimensions[1]);
+
+/** @type {Record<string, number[]>} */
+export const thumbnailDimensions = {
+    'bg': getConfigValue('thumbnails.dimensions.bg', [160, 90]),
+    'avatar': getConfigValue('thumbnails.dimensions.avatar', [96, 144]),
+    'persona': getConfigValue('thumbnails.dimensions.persona', [96, 144]),
+};
+
+/**
+ * Gets the configured resolution for a given thumbnail type.
+ * @param {ThumbnailType} type Thumbnail type
+ * @returns {number} Resolution (width * height)
+ */
+export function getThumbnailResolution(type) {
+    const dims = thumbnailDimensions[type];
+    if (Array.isArray(dims) && dims.length >= 2) {
+        return Number(dims[0]) * Number(dims[1]);
     }
-    return 160 * 90;
+    return 0;
 }
 
 /**
@@ -140,7 +152,7 @@ export async function generateImageMetadata(filePath) {
         dominantColor,
         folderIds: [],
         addedTimestamp,
-        thumbnailResolution: getBackgroundThumbnailResolution(),
+        thumbnailResolution: getThumbnailResolution('bg'),
     };
 }
 

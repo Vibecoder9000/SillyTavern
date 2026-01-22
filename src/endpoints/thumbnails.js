@@ -8,7 +8,7 @@ import { sync as writeFileAtomicSync } from 'write-file-atomic';
 import { imageSize as sizeOf } from 'image-size';
 
 import { getConfigValue, invalidateFirefoxCache } from '../util.js';
-import { getBackgroundThumbnailResolution, isAnimatedWebP } from './image-metadata.js';
+import { getThumbnailResolution, isAnimatedWebP, thumbnailDimensions as dimensions } from './image-metadata.js';
 import { ResizeStrategy } from '@jimp/plugin-resize';
 
 export const publicRouter = express.Router();
@@ -24,12 +24,6 @@ const pngFormat = String(getConfigValue('thumbnails.format', 'jpg')).toLowerCase
  * @typedef {'bg' | 'avatar' | 'persona'} ThumbnailType
  */
 
-/** @type {Record<string, number[]>} */
-export const dimensions = {
-    'bg': getConfigValue('thumbnails.dimensions.bg', [160, 90]),
-    'avatar': getConfigValue('thumbnails.dimensions.avatar', [96, 144]),
-    'persona': getConfigValue('thumbnails.dimensions.persona', [96, 144]),
-};
 
 /**
  * Gets a path to thumbnail folder based on the type.
@@ -136,10 +130,10 @@ export async function generateThumbnail(directories, type, file, forceGenerate =
 
                 if (!forceGenerate) {
                     const buffer = fs.readFileSync(pathToCachedFile);
-                    const dimensions = sizeOf(buffer);
-                    const ratio = (dimensions.height > 0) ? (dimensions.width / dimensions.height) : 1.0;
+                    const fileDimensions = sizeOf(buffer);
+                    const ratio = (fileDimensions.height > 0) ? (fileDimensions.width / fileDimensions.height) : 1.0;
                     // When a thumbnail exists, return the current resolution from config so the JSON can be updated.
-                    const resolution = getBackgroundThumbnailResolution();
+                    const resolution = getThumbnailResolution(type);
                     return { path: pathToCachedFile, aspectRatio: ratio, resolution };
                 }
             } catch (e) {
@@ -204,7 +198,7 @@ async function processSingleImage(file, originalFolder, thumbnailFolder, type) {
         const aspectRatio = (originalHeight > 0) ? (originalWidth / originalHeight) : 1.0;
 
         const thumbImage = image.clone();
-        let thumbnailResolution;
+        const thumbnailResolution = getThumbnailResolution(type);
 
         if (type === 'bg') {
             const [configWidth, configHeight] = dimensions[type];
@@ -217,11 +211,10 @@ async function processSingleImage(file, originalFolder, thumbnailFolder, type) {
             const thumbHeight = Math.round(Math.sqrt(targetPixelArea / aspectRatio));
 
             thumbImage.resize({ w: thumbWidth, h: thumbHeight, mode: ResizeStrategy.BILINEAR });
-            thumbnailResolution = getBackgroundThumbnailResolution();
         } else if (type === 'avatar' || type === 'persona') {
             // Crop and resize to fixed dimensions
-            const [width, height] = dimensions[type];
-            thumbImage.cover({ w: width, h: height });
+            const [configWidth, configHeight] = dimensions[type];
+            thumbImage.cover({ w: configWidth, h: configHeight });
         }
 
         const buffer = pngFormat
