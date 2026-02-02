@@ -278,9 +278,9 @@ publicRouter.get('/', async function (request, response) {
         // Try to generate thumbnail if it doesn't exist
         if (!fs.existsSync(pathToCachedFile)) {
             const thumbResult = await generateThumbnail(request.user.directories, type, file, false);
-            // If generation failed (path is null), send 404 for frontend placeholder
+            // If generation failed (path is null), serve the original file
             if (!thumbResult.path) {
-                return response.sendStatus(404);
+                return serveOriginal();
             }
         }
 
