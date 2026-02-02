@@ -2097,6 +2097,11 @@ router.post('/generate', async function (request, response) {
                 };
             }
 
+            if (Array.isArray(request.body.quantizations) && request.body.quantizations.length > 0) {
+                bodyParams['provider'] ??= {};
+                bodyParams['provider']['quantizations'] = request.body.quantizations;
+            }
+
             if (request.body.use_fallback) {
                 bodyParams['route'] = 'fallback';
             }
@@ -2262,7 +2267,11 @@ router.post('/generate', async function (request, response) {
             apiUrl = new URL(request.body.reverse_proxy || API_MOONSHOT).toString();
             apiKey = request.body.reverse_proxy ? request.body.proxy_password : readSecret(request.user.directories, SECRET_KEYS.MOONSHOT);
             headers = {};
-            bodyParams = {};
+            bodyParams = {
+                thinking: {
+                    type: request.body.include_reasoning ? 'enabled' : 'disabled',
+                },
+            };
             request.body.json_schema
                 ? setJsonObjectFormat(bodyParams, request.body.messages, request.body.json_schema)
                 : addAssistantPrefix(request.body.messages, [], 'partial');
@@ -2608,6 +2617,35 @@ multimodalModels.post('/xai', async (req, res) => {
             // The endpoint says it doesn't support images, but it does
             multimodalModels.push('grok-4-0709');
         }
+        return res.json(multimodalModels);
+    } catch (error) {
+        console.error(error);
+        return res.sendStatus(500);
+    }
+});
+
+multimodalModels.post('/moonshot', async (req, res) => {
+    try {
+        const key = readSecret(req.user.directories, SECRET_KEYS.MOONSHOT);
+
+        if (!key) {
+            return res.json([]);
+        }
+
+        const response = await fetch('https://api.moonshot.ai/v1/models', {
+            headers: {
+                'Authorization': `Bearer ${key}`,
+            },
+        });
+
+        if (!response.ok) {
+            return res.json([]);
+        }
+
+        /** @type {any} */
+        const data = await response.json();
+
+        const multimodalModels = data.data.filter(m => m.supports_image_in).map(m => m.id);
         return res.json(multimodalModels);
     } catch (error) {
         console.error(error);

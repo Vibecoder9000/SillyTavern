@@ -380,12 +380,19 @@ const debug_functions = [];
 
 const setHotswapsDebounced = debounce(favsToHotswap);
 
-export function playMessageSound() {
-    if (!power_user.play_message_sound) {
+/**
+ * Plays the message sound if enabled in power user settings.
+ * Passes through the `force` parameter to override settings.
+ * @param {object} [param] Arguments object.
+ * @param {boolean} [param.force] Whether to force play the sound.
+ * @returns {void}
+ */
+export function playMessageSound({ force } = {}) {
+    if (!power_user.play_message_sound && !force) {
         return;
     }
 
-    if (power_user.play_sound_unfocused && browser_has_focus) {
+    if (power_user.play_sound_unfocused && browser_has_focus && !force) {
         return;
     }
 

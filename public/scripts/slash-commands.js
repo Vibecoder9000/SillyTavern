@@ -65,7 +65,7 @@ import { getRegexedString, regex_placement } from './extensions/regex/engine.js'
 import { findGroupMemberId, groups, is_group_generating, openGroupById, resetSelectedGroup, saveGroupChat, selected_group, getGroupMembers } from './group-chats.js';
 import { chat_completion_sources, oai_settings, promptManager, ZAI_ENDPOINT } from './openai.js';
 import { user_avatar } from './personas.js';
-import { addEphemeralStoppingString, chat_styles, context_presets, flushEphemeralStoppingStrings, power_user } from './power-user.js';
+import { addEphemeralStoppingString, chat_styles, context_presets, flushEphemeralStoppingStrings, playMessageSound, power_user } from './power-user.js';
 import { SERVER_INPUTS, textgen_types, textgenerationwebui_settings } from './textgen-settings.js';
 import { decodeTextTokens, getAvailableTokenizers, getFriendlyTokenizerName, getTextTokens, getTokenCountAsync, selectTokenizer } from './tokenizers.js';
 import { debounce, delay, equalsIgnoreCaseAndAccents, findChar, getCharIndex, isFalseBoolean, isTrueBoolean, onlyUnique, regexFromString, showFontAwesomePicker, stringToRange, trimToEndSentence, trimToStartSentence, waitUntilCondition } from './utils.js';
@@ -3143,6 +3143,17 @@ export function initDefaultSlashCommands() {
                 </ul>
             </div>
         `,
+    }));
+
+    SlashCommandParser.addCommandObject(SlashCommand.fromProps({
+        name: 'beep',
+        aliases: ['ding'],
+        returns: t`an empty string`,
+        callback: async () => {
+            playMessageSound({ force: true });
+            return '';
+        },
+        helpString: t`Plays the message received sound effect.`,
     }));
 
     registerVariableCommands();

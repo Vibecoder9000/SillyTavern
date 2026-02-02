@@ -623,6 +623,7 @@ jQuery(async function () {
         await processEndpoint('electronhub', '/api/backends/chat-completions/multimodal-models/electronhub');
         await processEndpoint('mistral', '/api/backends/chat-completions/multimodal-models/mistral');
         await processEndpoint('xai', '/api/backends/chat-completions/multimodal-models/xai');
+        await processEndpoint('moonshot', '/api/backends/chat-completions/multimodal-models/moonshot');
     }
 
     await addSettings();
