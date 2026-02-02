@@ -103,9 +103,10 @@ async function getAverageColorWithJimp(buffer) {
 /**
  * Generates metadata for a single image file.
  * @param {string} filePath - The full path to the image file.
+ * @param {ThumbnailType} type - The thumbnail type for resolution calculation.
  * @returns {Promise<ImageMetadata>} A metadata object. Throws an error if processing fails.
  */
-export async function generateImageMetadata(filePath) {
+export async function generateImageMetadata(filePath, type) {
     const buffer = await fs.readFile(filePath);
     const hash = crypto.createHash('sha256').update(buffer).digest('hex');
     const dimensions = imageSize(buffer);
@@ -151,7 +152,7 @@ export async function generateImageMetadata(filePath) {
         dominantColor,
         folderIds: [],
         addedTimestamp,
-        thumbnailResolution: getThumbnailResolution('bg'),
+        thumbnailResolution: getThumbnailResolution(type),
     };
 }
 
@@ -182,25 +183,14 @@ export async function writeMetadataIndex(userDataRoot, metadata) {
 }
 
 /**
- * Gets metadata for an image, generating it on-demand if needed.
- * Uses file mtime for cache invalidation.
- * @param {string} userDataRoot - Path to the user data directory root
- * @param {string} relativePath - The relative path to the image from userDataRoot
- * @returns {Promise<ImageMetadata|null>} The metadata, or null if file doesn't exist
- */
-export async function getOrGenerateMetadata(userDataRoot, relativePath) {
-    const results = await getOrGenerateMetadataBatch(userDataRoot, [relativePath]);
-    return results[relativePath] || null;
-}
-
-/**
  * Gets metadata for multiple images, generating on-demand as needed.
  * Uses relative paths from the user data root as keys in the centralized index.
  * @param {string} userDataRoot - Path to the user data directory root
  * @param {string[]} relativePaths - Array of relative paths from userDataRoot
+ * @param {ThumbnailType} type - The thumbnail type for resolution calculation.
  * @returns {Promise<Object.<string, ImageMetadata>>} Map of relativePath to metadata
  */
-export async function getOrGenerateMetadataBatch(userDataRoot, relativePaths) {
+export async function getOrGenerateMetadataBatch(userDataRoot, relativePaths, type) {
     /** @type {Object.<string, ImageMetadata>} */
     const results = {};
     const index = await readMetadataIndex(userDataRoot);
@@ -229,7 +219,7 @@ export async function getOrGenerateMetadataBatch(userDataRoot, relativePaths) {
 
         // Generate new metadata
         try {
-            const metadata = await generateImageMetadata(fullPath);
+            const metadata = await generateImageMetadata(fullPath, type);
             metadata.mtime = currentMtime;
 
             // Preserve folderIds if they existed
@@ -335,7 +325,7 @@ export const router = express.Router();
  */
 router.post('/', async function (request, response) {
     try {
-        const { path: singlePath, paths } = request.body;
+        const { path: singlePath, paths, type } = request.body;
 
         if (!singlePath && !paths) {
             return response.status(400).json({ error: 'Either "path" or "paths" is required.' });
@@ -363,7 +353,8 @@ router.post('/', async function (request, response) {
                 return response.status(404).json({ error: 'File not found.' });
             }
 
-            const metadata = await getOrGenerateMetadata(userDataRoot, relativePath);
+            const metadataResults = await getOrGenerateMetadataBatch(userDataRoot, [relativePath], type);
+            const metadata = metadataResults[relativePath];
 
             if (!metadata) {
                 return response.status(404).json({ error: 'Could not generate metadata for file.' });
@@ -389,7 +380,7 @@ router.post('/', async function (request, response) {
             }
 
             // Process all valid paths in a single batch
-            const batchMetadata = await getOrGenerateMetadataBatch(userDataRoot, validPaths);
+            const batchMetadata = await getOrGenerateMetadataBatch(userDataRoot, validPaths, type);
 
             for (const relativePath of validPaths) {
                 if (batchMetadata[relativePath]) {
