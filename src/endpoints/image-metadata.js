@@ -198,7 +198,7 @@ export async function getOrGenerateMetadataBatch(userDataRoot, relativePaths, ty
 
     for (const relativePath of relativePaths) {
         // Normalize the path to use forward slashes for consistent keys
-        const normalizedPath = relativePath.split(path.sep).join('/');
+        const posixPath = relativePath.replaceAll(path.sep, path.posix.sep);
         const fullPath = path.join(userDataRoot, relativePath);
 
         let stats;
@@ -209,7 +209,7 @@ export async function getOrGenerateMetadataBatch(userDataRoot, relativePaths, ty
         }
 
         const currentMtime = stats.mtimeMs;
-        const cached = index.images[normalizedPath];
+        const cached = index.images[posixPath];
 
         // If cached and not modified, use cached
         if (cached && cached.mtime === currentMtime) {
@@ -227,7 +227,7 @@ export async function getOrGenerateMetadataBatch(userDataRoot, relativePaths, ty
                 metadata.folderIds = cached.folderIds;
             }
 
-            index.images[normalizedPath] = metadata;
+            index.images[posixPath] = metadata;
             results[relativePath] = metadata;
             indexModified = true;
         } catch (error) {
@@ -265,17 +265,17 @@ export async function removeMetadata(userDataRoot, relativePath) {
  * @returns {Promise<ImageMetadata|null>} The updated metadata
  */
 export async function renameMetadata(userDataRoot, oldRelativePath, newRelativePath) {
-    const oldNormalized = oldRelativePath.split(path.sep).join('/');
-    const newNormalized = newRelativePath.split(path.sep).join('/');
+    const posixOldPath = oldRelativePath.replaceAll(path.sep, path.posix.sep);
+    const posixNewPath = newRelativePath.replaceAll(path.sep, path.posix.sep);
     const index = await readMetadataIndex(userDataRoot);
-    const data = index.images[oldNormalized];
+    const data = index.images[posixOldPath];
 
     if (!data) {
         throw new Error(`Image '${oldRelativePath}' not found in metadata.`);
     }
 
-    delete index.images[oldNormalized];
-    index.images[newNormalized] = data;
+    delete index.images[posixOldPath];
+    index.images[posixNewPath] = data;
     await writeMetadataIndex(userDataRoot, index);
 
     return data;
