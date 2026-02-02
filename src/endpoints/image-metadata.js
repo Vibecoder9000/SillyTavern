@@ -259,10 +259,10 @@ export async function getOrGenerateMetadataBatch(userDataRoot, relativePaths) {
  * @param {string} relativePath - The relative path to remove
  */
 export async function removeMetadata(userDataRoot, relativePath) {
-    const normalizedPath = relativePath.split(path.sep).join('/');
+    const posixPath = relativePath.replaceAll(path.sep, path.posix.sep);
     const index = await readMetadataIndex(userDataRoot);
-    if (index.images[normalizedPath]) {
-        delete index.images[normalizedPath];
+    if (index.images[posixPath]) {
+        delete index.images[posixPath];
         await writeMetadataIndex(userDataRoot, index);
     }
 }
@@ -302,7 +302,14 @@ export async function cleanupOrphanedMetadata(userDataRoot) {
     const orphanedPaths = [];
 
     for (const relativePath of Object.keys(index.images)) {
-        const fullPath = path.join(userDataRoot, relativePath);
+        const fullPath = path.resolve(userDataRoot, relativePath);
+
+        if (!isPathUnderParent(userDataRoot, fullPath)) {
+            orphanedPaths.push(relativePath);
+            delete index.images[relativePath];
+            continue;
+        }
+
         try {
             await fs.access(fullPath);
         } catch {
