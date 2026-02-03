@@ -188,13 +188,14 @@ export async function writeMetadataIndex(userDataRoot, metadata) {
  * @param {string} userDataRoot - Path to the user data directory root
  * @param {string[]} relativePaths - Array of relative paths from userDataRoot
  * @param {ThumbnailType} type - The thumbnail type for resolution calculation.
- * @returns {Promise<Object.<string, ImageMetadata>>} Map of relativePath to metadata
+ * @returns {Promise<{results: Object.<string, ImageMetadata>, generatedCount: number}>} Results map and count of newly generated
  */
 export async function getOrGenerateMetadataBatch(userDataRoot, relativePaths, type) {
     /** @type {Object.<string, ImageMetadata>} */
     const results = {};
     const index = await readMetadataIndex(userDataRoot);
     let indexModified = false;
+    let generatedCount = 0;
 
     for (const relativePath of relativePaths) {
         // Normalize the path to use forward slashes for consistent keys
@@ -230,6 +231,7 @@ export async function getOrGenerateMetadataBatch(userDataRoot, relativePaths, ty
             index.images[posixPath] = metadata;
             results[relativePath] = metadata;
             indexModified = true;
+            generatedCount++;
         } catch (error) {
             console.warn(`[ImageMetadata] Failed to generate metadata for ${relativePath}:`, error.message);
         }
@@ -240,7 +242,7 @@ export async function getOrGenerateMetadataBatch(userDataRoot, relativePaths, ty
         await writeMetadataIndex(userDataRoot, index);
     }
 
-    return results;
+    return { results, generatedCount };
 }
 
 /**
@@ -339,14 +341,13 @@ export async function initializeMetadataForDirectory(userDataRoot, subDirectory,
     const relativePaths = images.map(img => path.join(subDirectory, img));
 
     // Generate metadata for new images
-    const results = await getOrGenerateMetadataBatch(userDataRoot, relativePaths, type);
+    const { results, generatedCount } = await getOrGenerateMetadataBatch(userDataRoot, relativePaths, type);
 
-    const processedCount = Object.keys(results).length;
-    if (processedCount > 0) {
-        console.log(`[ImageMetadata] Initialized metadata for ${processedCount} images in ${subDirectory}`);
+    if (generatedCount > 0) {
+        console.log(`[ImageMetadata] Generated metadata for ${generatedCount} new images in ${subDirectory}`);
     }
 
-    return processedCount;
+    return Object.keys(results).length;
 }
 
 export const router = express.Router();
@@ -385,7 +386,7 @@ router.post('/', async function (request, response) {
                 return response.status(404).json({ error: 'File not found.' });
             }
 
-            const metadataResults = await getOrGenerateMetadataBatch(userDataRoot, [relativePath], type);
+            const { results: metadataResults } = await getOrGenerateMetadataBatch(userDataRoot, [relativePath], type);
             const metadata = metadataResults[relativePath];
 
             if (!metadata) {
@@ -412,7 +413,7 @@ router.post('/', async function (request, response) {
             }
 
             // Process all valid paths in a single batch
-            const batchMetadata = await getOrGenerateMetadataBatch(userDataRoot, validPaths, type);
+            const { results: batchMetadata } = await getOrGenerateMetadataBatch(userDataRoot, validPaths, type);
 
             for (const relativePath of validPaths) {
                 if (batchMetadata[relativePath]) {
@@ -429,6 +430,35 @@ router.post('/', async function (request, response) {
 
     } catch (error) {
         console.error('[ImageMetadata] API error:', error);
+        return response.status(500).json({ error: 'Internal server error.' });
+    }
+});
+
+/**
+ * GET /api/image-metadata/all
+ * Get all metadata from the index.
+ * @query {string} [prefix] - Optional path prefix to filter results
+ */
+router.get('/all', async function (request, response) {
+    try {
+        const userDataRoot = request.user.directories.root;
+        const prefix = String(request.query.prefix || '');
+        const index = await readMetadataIndex(userDataRoot);
+
+        // If prefix specified, filter to only matching paths
+        if (prefix) {
+            const filteredImages = {};
+            for (const [key, value] of Object.entries(index.images)) {
+                if (key.startsWith(prefix)) {
+                    filteredImages[key] = value;
+                }
+            }
+            return response.json({ version: index.version, images: filteredImages });
+        }
+
+        return response.json(index);
+    } catch (error) {
+        console.error('[ImageMetadata] Failed to read metadata index:', error);
         return response.status(500).json({ error: 'Internal server error.' });
     }
 });
