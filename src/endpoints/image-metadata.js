@@ -10,7 +10,7 @@ import { imageSize } from 'image-size';
 import writeFileAtomic from 'write-file-atomic';
 import express from 'express';
 import { Jimp } from '../jimp.js';
-import { getConfigValue, isPathUnderParent } from '../util.js';
+import { getConfigValue, getImages, isPathUnderParent } from '../util.js';
 
 export const METADATA_FILE = 'image-metadata.json';
 
@@ -315,6 +315,38 @@ export async function cleanupOrphanedMetadata(userDataRoot) {
     }
 
     return orphanedPaths;
+}
+
+/**
+ * Initializes metadata for all images in a directory.
+ * @param {string} userDataRoot - Path to the user data directory root
+ * @param {string} subDirectory - Subdirectory relative to userDataRoot
+ * @param {ThumbnailType} type - The thumbnail type for resolution calculation
+ * @returns {Promise<number>} Number of images processed
+ */
+export async function initializeMetadataForDirectory(userDataRoot, subDirectory, type) {
+    const fullDir = path.join(userDataRoot, subDirectory);
+
+    let images;
+    try {
+        images = getImages(fullDir);
+    } catch {
+        // Directory doesn't exist or can't be read
+        return 0;
+    }
+
+    // Convert to relative paths from userDataRoot
+    const relativePaths = images.map(img => path.join(subDirectory, img));
+
+    // Generate metadata for new images
+    const results = await getOrGenerateMetadataBatch(userDataRoot, relativePaths, type);
+
+    const processedCount = Object.keys(results).length;
+    if (processedCount > 0) {
+        console.log(`[ImageMetadata] Initialized metadata for ${processedCount} images in ${subDirectory}`);
+    }
+
+    return processedCount;
 }
 
 export const router = express.Router();
