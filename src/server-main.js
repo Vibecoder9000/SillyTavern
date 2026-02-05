@@ -69,7 +69,7 @@ import { redirectDeprecatedEndpoints, ServerStartup, setupPrivateEndpoints } fro
 import { diskCache } from './endpoints/characters.js';
 import { migrateFlatSecrets } from './endpoints/secrets.js';
 import { migrateGroupChatsMetadataFormat } from './endpoints/groups.js';
-import { initializeMetadataForDirectory } from './endpoints/image-metadata.js';
+import { initializeAllUserMetadata } from './endpoints/image-metadata.js';
 
 // Work around a node v20.0.0, v20.1.0, and v20.2.0 bug. The issue was fixed in v20.3.0.
 // https://github.com/nodejs/node/issues/47822#issuecomment-1564708870
@@ -277,6 +277,9 @@ async function preSetupTasks() {
     await settingsInit();
     await statsInit();
 
+    // Initialize image metadata
+    await initializeAllUserMetadata(directories);
+
     const pluginsDirectory = path.join(serverDirectory, 'plugins');
     const cleanupPlugins = await loadPlugins(app, pluginsDirectory);
     const consoleTitle = process.title;
@@ -402,18 +405,6 @@ async function postSetupTasks(result) {
 
     setupLogLevel();
     serverEvents.emit(EVENT_NAMES.SERVER_STARTED, { url: browserLaunchUrl });
-
-    // Initialize image metadata
-    (async () => {
-        try {
-            const directories = await getUserDirectoriesList();
-            for (const userDir of directories) {
-                await initializeMetadataForDirectory(userDir.root, 'backgrounds', 'bg');
-            }
-        } catch (error) {
-            console.error('[ImageMetadata] Failed to initialize background metadata:', error.message);
-        }
-    })();
 }
 
 /**

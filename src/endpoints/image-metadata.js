@@ -350,6 +350,21 @@ export async function initializeMetadataForDirectory(userDataRoot, subDirectory,
     return Object.keys(results).length;
 }
 
+/**
+ * Initializes image metadata for all users' background directories.
+ * @param {Array<{root: string}>} userDirectories - List of user directory objects
+ * @returns {Promise<void>}
+ */
+export async function initializeAllUserMetadata(userDirectories) {
+    try {
+        for (const userDir of userDirectories) {
+            await initializeMetadataForDirectory(userDir.root, 'backgrounds', 'bg');
+        }
+    } catch (error) {
+        console.error('[ImageMetadata] Failed to initialize background metadata:', error.message);
+    }
+}
+
 export const router = express.Router();
 
 /**
