@@ -43,7 +43,7 @@ const THUMBNAIL_CONFIG = {
 
 /**
  * Cache for image metadata.
- * @type {Map<string, object>}
+ * @type {Map<string, import('../../src/endpoints/image-metadata.js').ImageMetadata>}
  */
 const METADATA_CACHE = new Map();
 
@@ -586,6 +586,7 @@ export async function getBackgrounds() {
 
 /**
  * Preloads all image metadata to use dominant colors as placeholders.
+ * @return {Promise<void>}
  */
 async function preloadImageMetadata() {
     try {
