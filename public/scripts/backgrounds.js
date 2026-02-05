@@ -589,9 +589,10 @@ export async function getBackgrounds() {
  */
 async function preloadImageMetadata() {
     try {
-        const response = await fetch('/api/image-metadata/all?prefix=backgrounds/', {
-            method: 'GET',
+        const response = await fetch('/api/image-metadata/all', {
+            method: 'POST',
             headers: getRequestHeaders(),
+            body: JSON.stringify({ prefix: 'backgrounds/' }),
         });
         if (response.ok) {
             const data = await response.json();

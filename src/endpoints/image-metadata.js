@@ -435,14 +435,14 @@ router.post('/', async function (request, response) {
 });
 
 /**
- * GET /api/image-metadata/all
+ * POST /api/image-metadata/all
  * Get all metadata from the index.
- * @query {string} [prefix] - Optional path prefix to filter results
+ * @body {string} [prefix] - Optional path prefix to filter results
  */
-router.get('/all', async function (request, response) {
+router.post('/all', async function (request, response) {
     try {
         const userDataRoot = request.user.directories.root;
-        const prefix = String(request.query.prefix || '');
+        const prefix = String(request.body.prefix || '');
         const index = await readMetadataIndex(userDataRoot);
 
         // If prefix specified, filter to only matching paths
