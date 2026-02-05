@@ -14,13 +14,6 @@ export const router = express.Router();
 router.post('/all', async function (request, response) {
     const images = getImages(request.user.directories.backgrounds);
     const config = { width: thumbnailDimensions.bg[0], height: thumbnailDimensions.bg[1] };
-
-    // Generate metadata for images not from /upload
-    const relativePaths = images.map(img => path.join('backgrounds', img));
-    getOrGenerateMetadataBatch(request.user.directories.root, relativePaths, 'bg').catch(err => {
-        console.warn('[Backgrounds] Failed to generate metadata:', err.message);
-    });
-
     response.json({ images, config });
 });
 
