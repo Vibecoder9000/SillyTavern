@@ -73,12 +73,54 @@ const BG_TABS = Object.freeze({
  */
 let lazyLoadObserver = null;
 
+/**
+ * Cache for the current list of system background filenames.
+ * Used to re-sort backgrounds without refetching from the server.
+ * @type {string[]}
+ */
+let cachedSystemBackgrounds = [];
+
 export let background_settings = {
     name: '__transparent.png',
     url: generateUrlParameter('__transparent.png', false),
     fitting: 'classic',
     animation: false,
+    sortOrder: 'az',
 };
+
+/**
+ * Sorts an array of background filenames based on the current sort order.
+ * @param {string[]} backgrounds - Array of background filenames
+ * @param {boolean} isCustom - Whether these are custom (chat) backgrounds
+ * @returns {string[]} Sorted array of background filenames
+ */
+function sortBackgrounds(backgrounds, isCustom = false) {
+    const sortOrder = background_settings.sortOrder || 'az';
+
+    return [...backgrounds].sort((a, b) => {
+        switch (sortOrder) {
+            case 'az':
+                return a.localeCompare(b, undefined, { sensitivity: 'base' });
+            case 'za':
+                return b.localeCompare(a, undefined, { sensitivity: 'base' });
+            case 'newest':
+            case 'oldest': {
+                const keyA = isCustom ? a : `backgrounds/${a}`;
+                const keyB = isCustom ? b : `backgrounds/${b}`;
+                const metaA = METADATA_CACHE.get(keyA);
+                const metaB = METADATA_CACHE.get(keyB);
+                const timestampA = metaA?.addedTimestamp ?? 0;
+                const timestampB = metaB?.addedTimestamp ?? 0;
+                // Newest first (descending) or oldest first (ascending)
+                return sortOrder === 'newest'
+                    ? timestampB - timestampA
+                    : timestampA - timestampB;
+            }
+            default:
+                return 0;
+        }
+    });
+}
 
 /**
  * Creates a single thumbnail DOM element. The CSS now handles all sizing.
@@ -150,6 +192,9 @@ export function loadBackgroundSettings(settings) {
     if (!Object.hasOwn(backgroundSettings, 'animation')) {
         backgroundSettings.animation = false;
     }
+    if (!backgroundSettings.sortOrder) {
+        backgroundSettings.sortOrder = 'az';
+    }
 
     // If a value is already saved, use it. Otherwise, determine default based on screen size.
     let columns = backgroundSettings.thumbnailColumns;
@@ -158,12 +203,14 @@ export function loadBackgroundSettings(settings) {
         columns = isNarrowScreen ? THUMBNAIL_COLUMNS_DEFAULT_MOBILE : THUMBNAIL_COLUMNS_DEFAULT_DESKTOP;
     }
     background_settings.thumbnailColumns = columns;
+    background_settings.sortOrder = backgroundSettings.sortOrder;
     applyThumbnailColumns(background_settings.thumbnailColumns);
 
     setBackground(backgroundSettings.name, backgroundSettings.url);
     setFittingClass(backgroundSettings.fitting);
     $('#background_fitting').val(backgroundSettings.fitting);
     $('#background_thumbnails_animation').prop('checked', background_settings.animation);
+    $('#bg-sort').val(background_settings.sortOrder);
     highlightSelectedBackground();
 }
 
@@ -535,7 +582,8 @@ function renderSystemBackgrounds(backgrounds) {
 
     if (sourceList.length === 0) return;
 
-    sourceList.forEach(bg => {
+    const sortedList = sortBackgrounds(sourceList, false);
+    sortedList.forEach(bg => {
         const imageData = { filename: bg, isCustom: false };
         const thumbnail = createThumbnailElement(imageData);
         container.append(thumbnail);
@@ -556,7 +604,8 @@ function renderChatBackgrounds(backgrounds) {
 
     if (sourceList.length === 0) return;
 
-    sourceList.forEach(bg => {
+    const sortedList = sortBackgrounds(sourceList, true);
+    sortedList.forEach(bg => {
         const imageData = { filename: bg, isCustom: true };
         const thumbnail = createThumbnailElement(imageData);
         container.append(thumbnail);
@@ -579,6 +628,8 @@ export async function getBackgrounds() {
 
         await metadataPromise;
 
+        // Cache for re-sorting without refetch
+        cachedSystemBackgrounds = images;
         renderSystemBackgrounds(images);
         highlightSelectedBackground();
     }
@@ -968,6 +1019,15 @@ export function initBackgrounds() {
     $('#auto_background').on('click', autoBackgroundCommand);
     $('#add_bg_button').on('change', (e) => onBackgroundUploadSelected(e.originalEvent));
     $('#bg-filter').on('input', () => debouncedOnBackgroundFilterInput());
+    $('#bg-sort').on('change', function () {
+        background_settings.sortOrder = String($(this).val());
+        saveSettingsDebounced();
+        // Re-render both galleries with new sort order
+        renderSystemBackgrounds(cachedSystemBackgrounds);
+        renderChatBackgrounds();
+        highlightSelectedBackground();
+        highlightLockedBackground();
+    });
     SlashCommandParser.addCommandObject(SlashCommand.fromProps({
         name: 'lockbg',
         callback: () => {
