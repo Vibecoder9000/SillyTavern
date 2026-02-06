@@ -494,6 +494,11 @@ async function onDeleteBackgroundClick(e) {
         // If it's not custom, it's a built-in background. Delete it from the server
         if (!isCustom) {
             await delBackground(bg);
+            // Remove from cache to prevent reappearing on sort change
+            const cacheIndex = cachedSystemBackgrounds.indexOf(bg);
+            if (cacheIndex !== -1) {
+                cachedSystemBackgrounds.splice(cacheIndex, 1);
+            }
         } else {
             const list = chat_metadata[LIST_METADATA_KEY] || [];
             const index = list.indexOf(bg);
