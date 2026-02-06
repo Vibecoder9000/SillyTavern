@@ -57,6 +57,8 @@ import { extension_settings } from '../extensions.js';
  * @property {UnclosedScope[]|null} [unclosedScopes=null] - Pre-computed unclosed scopes
  */
 
+/** @typedef {(EnhancedMacroAutoCompleteOption|MacroFlagAutoCompleteOption|MacroClosingTagAutoCompleteOption|VariableShorthandAutoCompleteOption|VariableNameAutoCompleteOption|VariableOperatorAutoCompleteOption|VariableValueContextAutoCompleteOption|SimpleAutoCompleteOption)} AnyMacroAutoCompleteOption */
+
 /**
  * Finds unclosed scoped macros in the text up to cursor position.
  * Uses the MacroParser and MacroCstWalker for accurate analysis.
@@ -136,11 +138,11 @@ export function findUnclosedScopesRegex(text) {
  * @param {Object} [opts] - Optional configuration.
  * @param {boolean} [opts.forIfCondition=false] - If true, options are for {{if}} condition (closes with }}).
  * @param {string} [opts.paddingAfter=''] - Whitespace to add before closing }}.
- * @returns {(EnhancedMacroAutoCompleteOption|MacroFlagAutoCompleteOption|MacroClosingTagAutoCompleteOption|VariableShorthandAutoCompleteOption|VariableNameAutoCompleteOption|VariableOperatorAutoCompleteOption)[]}
+ * @returns {AnyMacroAutoCompleteOption[]}
  */
 export function buildVariableShorthandOptions(context, opts = {}) {
     const { forIfCondition = false, paddingAfter = '' } = opts;
-    /** @type {(VariableShorthandAutoCompleteOption|VariableNameAutoCompleteOption|VariableOperatorAutoCompleteOption|VariableValueContextAutoCompleteOption)[]} */
+    /** @type {AnyMacroAutoCompleteOption[]} */
     const options = [];
 
     const isLocal = context.variablePrefix === '.';
@@ -276,7 +278,7 @@ export function buildVariableShorthandOptions(context, opts = {}) {
 
     // If typing value (after = or +=), no autocomplete needed - freeform text
     // But we show the current context for reference (greyed out, non-selectable)
-    if (context.isTypingValue && !context.isTypingOperator) {
+    if (context.isTypingValue && !context.isTypingOperator && !context.isTypingClosingBrace) {
         // Show the current variable name as context (non-selectable)
         const varNameOption = new VariableNameAutoCompleteOption(context.variableName, scope, false);
         varNameOption.valueProvider = () => ''; // Context only
@@ -331,6 +333,49 @@ export function buildVariableShorthandOptions(context, opts = {}) {
         }
     }
 
+    // If typing closing brace on a variable shorthand (without operator), show the current state
+    // This handles cases like {{.Lila} or {{.Lila}}| where we want to show what was typed
+    if (context.isTypingClosingBrace && !context.isOperatorComplete && !context.isTypingOperator && !context.isTypingValue) {
+        // Show the current variable name as context (non-selectable)
+        const varNameOption = new VariableNameAutoCompleteOption(context.variableName, scope, false);
+        varNameOption.valueProvider = () => ''; // Context only
+        varNameOption.makeSelectable = false;
+        varNameOption.sortPriority = 2;
+        varNameOption.matchProvider = () => true; // Always show
+        options.push(varNameOption);
+    }
+
+    // If typing closing brace after a value operator (like {{.Lila+=4}} or {{.Lila+=4}),
+    // show the full context (variable + operator + value)
+    if (context.isTypingClosingBrace && context.variableOperator && context.isTypingValue) {
+        // Show the current variable name as context (non-selectable)
+        const varNameOption = new VariableNameAutoCompleteOption(context.variableName, scope, false);
+        varNameOption.valueProvider = () => ''; // Context only
+        varNameOption.makeSelectable = false;
+        varNameOption.sortPriority = 2;
+        varNameOption.matchProvider = () => true; // Always show
+        options.push(varNameOption);
+
+        // Show the operator that was used (non-selectable)
+        const opDef = VariableOperatorDefinitions.get(context.variableOperator);
+        if (opDef) {
+            const opOption = new VariableOperatorAutoCompleteOption(opDef);
+            opOption.valueProvider = () => ''; // Already typed
+            opOption.makeSelectable = false;
+            opOption.sortPriority = 3;
+            opOption.matchProvider = () => true; // Always show
+            options.push(opOption);
+
+            // Show value context info (non-selectable)
+            const valueOption = new VariableValueContextAutoCompleteOption(opDef, context.variableValue);
+            valueOption.valueProvider = () => ''; // Context only
+            valueOption.makeSelectable = false;
+            valueOption.sortPriority = 4;
+            valueOption.matchProvider = () => true; // Always show
+            options.push(valueOption);
+        }
+    }
+
     return options;
 }
 
@@ -340,10 +385,10 @@ export function buildVariableShorthandOptions(context, opts = {}) {
  * When typing arguments (after ::), prioritizes the exact macro match.
  * @param {MacroAutoCompleteContext} context
  * @param {string} [textUpToCursor] - Full document text up to cursor, for unclosed scope detection.
- * @returns {(EnhancedMacroAutoCompleteOption|MacroFlagAutoCompleteOption|MacroClosingTagAutoCompleteOption|VariableShorthandAutoCompleteOption|VariableNameAutoCompleteOption|VariableOperatorAutoCompleteOption)[]}
+ * @returns {AnyMacroAutoCompleteOption[]}
  */
 export function buildEnhancedMacroOptions(context, textUpToCursor) {
-    /** @type {(EnhancedMacroAutoCompleteOption|MacroFlagAutoCompleteOption|MacroClosingTagAutoCompleteOption|VariableShorthandAutoCompleteOption|VariableNameAutoCompleteOption|VariableOperatorAutoCompleteOption)[]} */
+    /** @type {AnyMacroAutoCompleteOption[]} */
     const options = [];
 
     if (context.isVariableShorthand) {
@@ -427,15 +472,25 @@ export function buildEnhancedMacroOptions(context, textUpToCursor) {
     const allMacros = macroSystem.registry.getAllMacros({ excludeHiddenAliases: true });
 
     // If we're typing arguments (after ::), only show the context to the matching macro
+    // Also treat typing closing brace the same way - show details for matching macro
     const isTypingArgs = context.currentArgIndex >= 0;
+    const isTypingClosingBrace = context.isTypingClosingBrace ?? false;
+    const shouldShowMatchingMacroDetails = isTypingArgs || isTypingClosingBrace;
 
     // Check if we're inside a scoped {{if}} for {{else}} selectability
     const isInsideScopedIf = unclosedScopes.some(scope => scope.name === 'if');
+
+    // Track if any macro matches the identifier (for "no match" message)
+    let hasMatchingMacro = false;
 
     for (const macro of allMacros) {
         // Check if this macro matches the typed identifier
         const isExactMatch = macro.name === context.identifier;
         const isAliasMatch = macro.aliasOf === context.identifier;
+
+        if (isExactMatch || isAliasMatch) {
+            hasMatchingMacro = true;
+        }
 
         // Only pass context to the macro that matches the identifier being typed
         // This ensures argument hints only show for the relevant macro
@@ -461,12 +516,28 @@ export function buildEnhancedMacroOptions(context, textUpToCursor) {
             option.makeSelectable = false;
         }
 
-        // When typing arguments, prioritize exact matches by putting them first
-        if (isTypingArgs && (isExactMatch || isAliasMatch)) {
+        // When typing arguments or closing brace, prioritize exact matches by putting them first
+        if (shouldShowMatchingMacroDetails && (isExactMatch || isAliasMatch)) {
             options.unshift(option);
         } else {
             options.push(option);
         }
+    }
+
+    // If typing args/closing brace but no macro matches, add a "no match" indicator
+    if (shouldShowMatchingMacroDetails && !hasMatchingMacro && context.identifier.length > 0) {
+        const noMatchOption = new SimpleAutoCompleteOption({
+            name: context.identifier,
+            symbol: '❌',
+            description: `No macro found: "${context.identifier}"`,
+            detailedDescription: `The macro name <code>${context.identifier}</code> does not exist.<br><br>Check spelling or use a different macro name.`,
+            type: 'error',
+        });
+        noMatchOption.valueProvider = () => '';
+        noMatchOption.makeSelectable = false;
+        noMatchOption.matchProvider = () => true; // Always show
+        noMatchOption.sortPriority = 0; // Top priority
+        options.unshift(noMatchOption);
     }
 
     return options;
@@ -600,7 +671,17 @@ export function findMacroAtCursor(text, cursorPos) {
     // Search backwards for opening {{ while tracking nesting depth for nested macros
     let openPos = -1;
     let depth = 0;
-    for (let i = cursorPos - 1; i >= 0; i--) {
+
+    // If cursor is right after }}, those are the closing braces of the macro we're looking for,
+    // not nested braces. Skip them by starting the search before them.
+    let searchStart = cursorPos - 1;
+    let cursorAfterClosingBraces = false;
+    if (cursorPos >= 2 && text[cursorPos - 1] === '}' && text[cursorPos - 2] === '}') {
+        searchStart = cursorPos - 3; // Start before the }}
+        cursorAfterClosingBraces = true;
+    }
+
+    for (let i = searchStart; i >= 0; i--) {
         if (text[i] === '}' && i > 0 && text[i - 1] === '}') {
             // Found }}, going backwards means we're entering a nested macro
             depth++;
@@ -624,29 +705,35 @@ export function findMacroAtCursor(text, cursorPos) {
 
     // Search forwards for closing }} while tracking nesting depth
     let closePos = -1;
-    depth = 0;
-    for (let i = cursorPos; i < text.length - 1; i++) {
-        if (text[i] === '{' && text[i + 1] === '{') {
-            // Found {{, entering a nested macro
-            depth++;
-            i++; // Skip the other brace
-            continue;
-        }
-        if (text[i] === '}' && text[i + 1] === '}') {
-            if (depth > 0) {
-                // This }} closes a nested macro
-                depth--;
+
+    // If cursor is right after }}, we already know where the closing braces are
+    if (cursorAfterClosingBraces) {
+        closePos = cursorPos;
+    } else {
+        depth = 0;
+        for (let i = cursorPos; i < text.length - 1; i++) {
+            if (text[i] === '{' && text[i + 1] === '{') {
+                // Found {{, entering a nested macro
+                depth++;
                 i++; // Skip the other brace
                 continue;
             }
-            // Found our closing }} at depth 0
-            closePos = i + 2;
-            break;
+            if (text[i] === '}' && text[i + 1] === '}') {
+                if (depth > 0) {
+                    // This }} closes a nested macro
+                    depth--;
+                    i++; // Skip the other brace
+                    continue;
+                }
+                // Found our closing }} at depth 0
+                closePos = i + 2;
+                break;
+            }
         }
-    }
 
-    if (closePos === -1) {
-        closePos = text.length;
+        if (closePos === -1) {
+            closePos = text.length;
+        }
     }
 
     const hasClosingBraces = closePos <= text.length && text.slice(closePos - 2, closePos) === '}}';
@@ -908,7 +995,7 @@ export async function buildMacroAutoCompleteResult(text, cursorPos, {
             resultIdentifier = context.invalidTrailingChars || '';
             // Use actual variableNameEnd position from parsing
             resultStart = macro.start + 2 + context.variableNameEnd;
-        } else if (context.isTypingValue) {
+        } else if (context.isTypingValue && !context.isTypingClosingBrace) {
             // Typing value: identifier = value being typed, start = after operator
             resultIdentifier = context.variableValue;
             // Use actual operatorEnd position from parsing (accounts for whitespace)
@@ -920,6 +1007,10 @@ export async function buildMacroAutoCompleteResult(text, cursorPos, {
 
             makeNoMatchText = () => `Type any value you want to ${context.variableOperator == '+=' ? `add to the variable '${context.variableName}'` : `set the variable '${context.variableName}' to`}.`;
             makeNoOptionsText = () => 'Enter a variable value';
+        } else if (context.isTypingClosingBrace) {
+            // Typing closing brace on variable shorthand - show context, no replacement needed
+            resultIdentifier = '';
+            resultStart = cursorPos;
         } else {
             // Fallback: use variable name
             resultIdentifier = context.variableName;

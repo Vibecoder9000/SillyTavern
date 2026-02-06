@@ -31,6 +31,7 @@ import { onboardingExperimentalMacroEngine } from '../macros/engine/MacroDiagnos
  * @property {string[]} args - Array of arguments typed so far.
  * @property {number} currentArgIndex - Index of the argument being typed (-1 if on identifier).
  * @property {boolean} isTypingSeparator - Whether cursor is on a partial separator (single ':').
+ * @property {boolean} isTypingClosingBrace - Whether cursor is typing the first closing brace on a standalone macro.
  * @property {boolean} hasSpaceAfterIdentifier - Whether there's a space after the identifier (for space-separated args).
  * @property {boolean} hasSpaceArgContent - Whether there's actual content after the space (not just whitespace).
  * @property {number} separatorCount - Number of '::' separators found.
@@ -1033,6 +1034,7 @@ export class VariableValueContextAutoCompleteOption extends AutoCompleteOption {
         super('value', '📝');
         this.#operatorDef = operatorDef;
         this.#currentValue = currentValue;
+        this.forceFullNameMatch = true;
     }
 
     /** @returns {{ symbol: string, name: string, description: string, needsValue: boolean }} */
@@ -1236,8 +1238,8 @@ export class MacroClosingTagAutoCompleteOption extends AutoCompleteOption {
 export function parseMacroContext(macroText, cursorOffset) {
     let i = 0;
 
-    // Skip leading whitespace
-    while (i < macroText.length && /\s/.test(macroText[i])) {
+    // Skip leading whitespace (but NOT newlines - those stop macro parsing for autocomplete)
+    while (i < macroText.length && /[ \t]/.test(macroText[i])) {
         i++;
     }
 
@@ -1257,8 +1259,8 @@ export function parseMacroContext(macroText, cursorOffset) {
             flags.push(char);
             i++;
             flagEndPositions.push(i); // Position right after this flag
-            // Skip whitespace between flags
-            while (i < macroText.length && /\s/.test(macroText[i])) {
+            // Skip whitespace between flags (but NOT newlines - those stop macro parsing for autocomplete)
+            while (i < macroText.length && /[ \t]/.test(macroText[i])) {
                 i++;
             }
         } else {
@@ -1387,15 +1389,49 @@ export function parseMacroContext(macroText, cursorOffset) {
         const operatorNeedsValue = operatorDef?.needsValue ?? false;
 
         // If operator requires a value, parse the value
+        // Do this BEFORE isTypingClosingBrace detection so we can check for } in value area
+        // let valueStartPos = i;
         if (operatorNeedsValue) {
             // Skip whitespace after operator
             while (i < macroText.length && /\s/.test(macroText[i])) {
                 i++;
             }
+            // valueStartPos = i;
             variableValue = macroText.slice(i).trimEnd();
         }
 
+        // Detect if typing first closing brace on a variable shorthand
+        // This happens when operatorText is just "}" or when cursor is beyond content (after }})
+        let isTypingClosingBrace = false;
+        if (operatorText.startsWith('}') && !variableOperator) {
+            // Typing first } on a standalone variable shorthand like {{.Lila}
+            isTypingClosingBrace = true;
+        } else if (cursorOffset > macroText.length && !variableOperator) {
+            // Cursor is after }} on a standalone variable shorthand like {{.Lila}}|
+            isTypingClosingBrace = true;
+        } else if (cursorOffset > macroText.length && variableOperator) {
+            // Cursor is after }} on any operator shorthand like {{.Lila++}}| or {{.Lila+=4}}|
+            isTypingClosingBrace = true;
+        } else if (cursorOffset >= macroText.length && variableOperator && !operatorNeedsValue) {
+            // Cursor at end of complete operator (++ or --) like {{.Lila++ or {{.Lila++  (with trailing space)
+            isTypingClosingBrace = true;
+        } else if (cursorOffset >= macroText.length && !variableOperator && variableName.length > 0) {
+            // Cursor at end of standalone variable (with or without trailing whitespace) like {{.Lila or {{ .Lila
+            isTypingClosingBrace = true;
+        } else if (operatorNeedsValue && variableValue.length > 0 && variableValue.endsWith('}')) {
+            // Typing first } after a value like {{.Lila+=4}
+            isTypingClosingBrace = true;
+            // Strip the } from the value
+            variableValue = variableValue.slice(0, -1);
+        } else if (operatorNeedsValue && cursorOffset >= macroText.length && variableValue.length > 0) {
+            // Cursor at end after typing a value (including trailing whitespace) like {{.Lila+=4
+            // This means the shorthand is "complete" and ready to close
+            isTypingClosingBrace = true;
+        }
+
         // Determine cursor position context for autocomplete
+        // Note: isTypingClosingBrace takes precedence - if we're typing a closing brace,
+        // we don't want to show operator suggestions, just the current state
         const prefixEnd = (macroText.indexOf(variablePrefix) ?? 0) + 1;
         if (cursorOffset < prefixEnd) {
             // Cursor is before the prefix - still in flags area conceptually
@@ -1403,9 +1439,10 @@ export function parseMacroContext(macroText, cursorOffset) {
         } else if (cursorOffset <= variableNameEnd) {
             // Cursor is in the variable name area (including at the end)
             isTypingVariableName = true;
-        } else if (variableName.length > 0 && !variableOperator && !hasInvalidTrailingChars) {
+        } else if (variableName.length > 0 && !variableOperator && !hasInvalidTrailingChars && !isTypingClosingBrace) {
             // Cursor is after variable name but no operator yet (and no invalid chars)
             // This includes partial operator prefixes like '+', '-', '|', '?', '>', '<'
+            // But NOT when typing a closing brace - that takes precedence
             isTypingOperator = true;
         } else if (variableName.length > 0 && variableOperator && isShortOperatorPrefix(variableOperator) && cursorOffset <= variableOperatorEnd) {
             // Short operator that could be prefix of longer one (e.g., > could become >=)
@@ -1434,6 +1471,7 @@ export function parseMacroContext(macroText, cursorOffset) {
             args: [],
             currentArgIndex: -1,
             isTypingSeparator: false,
+            isTypingClosingBrace,
             hasSpaceAfterIdentifier: false,
             hasSpaceArgContent: false,
             separatorCount: 0,
@@ -1465,20 +1503,55 @@ export function parseMacroContext(macroText, cursorOffset) {
     let partStart = i;
     let j = 0;
 
+    // Track nesting depth to skip :: inside nested macros
+    let nestedDepth = 0;
+    // Track if we've seen a :: separator - newlines before first :: should stop parsing
+    let hasSeenSeparator = false;
+    // Track if we broke early (e.g., at a newline)
+    let brokeEarly = false;
     while (j < remainingText.length) {
-        if (remainingText[j] === ':' && remainingText[j + 1] === ':') {
+        // Before the first :: separator, newlines should stop parsing
+        // This prevents text on the next line from being considered part of the identifier/space-arg
+        if (!hasSeenSeparator && nestedDepth === 0 && (remainingText[j] === '\n' || remainingText[j] === '\r')) {
+            // Stop parsing here - don't include the newline or anything after
+            brokeEarly = true;
+            break;
+        }
+        // Track nested macro braces
+        if (remainingText[j] === '{' && remainingText[j + 1] === '{') {
+            nestedDepth++;
+            currentPart += '{{';
+            j += 2;
+            continue;
+        }
+        if (remainingText[j] === '}' && remainingText[j + 1] === '}') {
+            nestedDepth = Math.max(0, nestedDepth - 1);
+            currentPart += '}}';
+            j += 2;
+            continue;
+        }
+        // Only count :: as separator when not inside nested macros
+        if (nestedDepth === 0 && remainingText[j] === ':' && remainingText[j + 1] === ':') {
             parts.push({ text: currentPart, start: partStart, end: i + j });
             separatorPositions.push({ start: i + j, end: i + j + 2 });
             currentPart = '';
             j += 2;
             partStart = i + j;
+            hasSeenSeparator = true;
         } else {
             currentPart += remainingText[j];
             j++;
         }
     }
-    // Push the last part
-    parts.push({ text: currentPart, start: partStart, end: macroText.length });
+    // Push the last part - use correct end position if we broke early.
+    // If we broke early (at a newline) AND cursor is past that point, don't push -
+    // this filters out text on the next line from being considered part of this macro.
+    // But if we didn't break early (cursor at end of closed macro), always push.
+    const lastPartEnd = brokeEarly ? i + j : macroText.length;
+    const shouldPushLastPart = !brokeEarly || cursorOffset <= lastPartEnd;
+    if (shouldPushLastPart) {
+        parts.push({ text: currentPart, start: partStart, end: lastPartEnd });
+    }
 
     // Determine if cursor is in the flags area (at or before identifier starts)
     const identifierStartPos = parts[0]?.start ?? i;
@@ -1553,7 +1626,14 @@ export function parseMacroContext(macroText, cursorOffset) {
     }
 
     // Clean identifier: strip trailing colons (for partial :: typing)
+    // Also strip trailing single } (for partial }} typing) - but only if no separators/args
     let cleanIdentifier = identifierOnly.replace(/:+$/, '');
+    let isTypingClosingBrace = false;
+    if (separatorPositions.length === 0 && !hasSpaceAfterIdentifier && cleanIdentifier.endsWith('}')) {
+        // Typing first closing brace on a standalone macro like {{char}
+        cleanIdentifier = cleanIdentifier.slice(0, -1);
+        isTypingClosingBrace = true;
+    }
 
     // Build args array - include space-separated arg if present
     // Trim args like the macro engine does
@@ -1574,6 +1654,7 @@ export function parseMacroContext(macroText, cursorOffset) {
         args,
         currentArgIndex,
         isTypingSeparator,
+        isTypingClosingBrace,
         hasSpaceAfterIdentifier,
         hasSpaceArgContent: spaceArgText.length > 0,
         separatorCount: separatorPositions.length,
@@ -1581,7 +1662,9 @@ export function parseMacroContext(macroText, cursorOffset) {
         isVariableShorthand: false,
         variablePrefix: null,
         variableName: '',
+        variableNameEnd: null,
         variableOperator: null,
+        variableOperatorEnd: null,
         variableValue: '',
         isTypingVariableName: false,
         isTypingOperator: false,
