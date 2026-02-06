@@ -1027,6 +1027,8 @@ export function initBackgrounds() {
         renderChatBackgrounds();
         highlightSelectedBackground();
         highlightLockedBackground();
+        // Re-apply any active search filter
+        onBackgroundFilterInput();
     });
     SlashCommandParser.addCommandObject(SlashCommand.fromProps({
         name: 'lockbg',
