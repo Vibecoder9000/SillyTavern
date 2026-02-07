@@ -58,6 +58,18 @@ const BG_SOURCES = {
 };
 
 /**
+ * Background sorting options.
+ * @readonly
+ * @enum {string}
+ */
+const BG_SORT_OPTIONS = {
+    AZ: 'az',
+    ZA: 'za',
+    NEWEST: 'newest',
+    OLDEST: 'oldest',
+};
+
+/**
  * Mapping of background sources to their corresponding tab IDs.
  * @readonly
  * @type {Record<string, string>}
@@ -85,7 +97,7 @@ export let background_settings = {
     url: generateUrlParameter('__transparent.png', false),
     fitting: 'classic',
     animation: false,
-    sortOrder: 'az',
+    sortOrder: BG_SORT_OPTIONS.AZ,
 };
 
 /**
@@ -95,16 +107,16 @@ export let background_settings = {
  * @returns {string[]} Sorted array of background filenames
  */
 function sortBackgrounds(backgrounds, isCustom = false) {
-    const sortOrder = background_settings.sortOrder || 'az';
+    const sortOrder = background_settings.sortOrder || BG_SORT_OPTIONS.AZ;
 
     return [...backgrounds].sort((a, b) => {
         switch (sortOrder) {
-            case 'az':
+            case BG_SORT_OPTIONS.AZ:
                 return sortIgnoreCaseAndAccents(a, b);
-            case 'za':
+            case BG_SORT_OPTIONS.ZA:
                 return sortIgnoreCaseAndAccents(b, a);
-            case 'newest':
-            case 'oldest': {
+            case BG_SORT_OPTIONS.NEWEST:
+            case BG_SORT_OPTIONS.OLDEST: {
                 const keyA = isCustom ? a : `backgrounds/${a}`;
                 const keyB = isCustom ? b : `backgrounds/${b}`;
                 const metaA = METADATA_CACHE.get(keyA);
@@ -112,7 +124,7 @@ function sortBackgrounds(backgrounds, isCustom = false) {
                 const timestampA = metaA?.addedTimestamp ?? 0;
                 const timestampB = metaB?.addedTimestamp ?? 0;
                 // Newest first (descending) or oldest first (ascending)
-                return sortOrder === 'newest'
+                return sortOrder === BG_SORT_OPTIONS.NEWEST
                     ? timestampB - timestampA
                     : timestampA - timestampB;
             }
@@ -193,7 +205,7 @@ export function loadBackgroundSettings(settings) {
         backgroundSettings.animation = false;
     }
     if (!backgroundSettings.sortOrder) {
-        backgroundSettings.sortOrder = 'az';
+        backgroundSettings.sortOrder = BG_SORT_OPTIONS.AZ;
     }
 
     // If a value is already saved, use it. Otherwise, determine default based on screen size.
