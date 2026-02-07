@@ -35,7 +35,7 @@
         "bowser": "^2.12.1",
         "bytes": "^3.1.2",
         "chalk": "^5.6.0",
-        "chevrotain": "^11.0.3",
+        "chevrotain": "^11.1.1",
         "command-exists": "^1.2.9",
         "compression": "^1.8.1",
         "cookie-parser": "^1.4.6",
@@ -105,9 +105,6 @@
         },
         "node-fetch": {
             "whatwg-url": "^14.0.0"
-        },
-        "chevrotain": {
-            "lodash-es": "^4.17.23"
         }
     },
     "name": "sillytavern",
