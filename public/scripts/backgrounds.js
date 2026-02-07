@@ -76,12 +76,13 @@ export let background_settings = {
 
 /**
  * Creates a single thumbnail DOM element. The CSS now handles all sizing.
- * @param {object} imageData - Data for the image (filename, isCustom).
+ * @param {object} imageData - Data for the image (filename, isCustom, isAnimated).
  * @returns {HTMLElement} The created thumbnail element.
  */
 function createThumbnailElement(imageData) {
     const bg = imageData.filename;
     const isCustom = imageData.isCustom;
+    const isAnimated = imageData.isAnimated ?? false;
 
     const thumbnail = $('#background_template .bg_example').clone();
 
@@ -100,6 +101,7 @@ function createThumbnailElement(imageData) {
     thumbnail.attr('title', title);
     thumbnail.attr('bgfile', bg);
     thumbnail.attr('custom', String(isCustom));
+    thumbnail.attr('animated', String(isAnimated));
     thumbnail.data('url', url);
     titleElement.text(friendlyTitle);
 
@@ -508,7 +510,7 @@ async function autoBackgroundCommand() {
 
 /**
  * Renders the system backgrounds gallery.
- * @param {string[]} [backgrounds] - Optional filtered list of backgrounds.
+ * @param {Array<{filename: string, isAnimated: boolean}>} [backgrounds] - Optional filtered list of backgrounds with metadata.
  */
 function renderSystemBackgrounds(backgrounds) {
     const sourceList = backgrounds || [];
@@ -518,7 +520,7 @@ function renderSystemBackgrounds(backgrounds) {
     if (sourceList.length === 0) return;
 
     sourceList.forEach(bg => {
-        const imageData = { filename: bg, isCustom: false };
+        const imageData = { filename: bg.filename, isCustom: false, isAnimated: bg.isAnimated };
         const thumbnail = createThumbnailElement(imageData);
         container.append(thumbnail);
     });
@@ -539,7 +541,10 @@ function renderChatBackgrounds(backgrounds) {
     if (sourceList.length === 0) return;
 
     sourceList.forEach(bg => {
-        const imageData = { filename: bg, isCustom: true };
+        // For custom backgrounds, infer isAnimated from extension since we don't have server metadata
+        const fileExtension = bg.split('.').pop().toLowerCase();
+        const isAnimated = ['mp4', 'webp', 'gif', 'apng'].includes(fileExtension);
+        const imageData = { filename: bg, isCustom: true, isAnimated };
         const thumbnail = createThumbnailElement(imageData);
         container.append(thumbnail);
     });
@@ -586,7 +591,8 @@ function activateLazyLoader() {
                 if (parentThumbnail) {
                     const bg = parentThumbnail.getAttribute('bgfile');
                     const isCustom = parentThumbnail.getAttribute('custom') === 'true';
-                    resolveImageUrl(bg, isCustom)
+                    const isAnimated = parentThumbnail.getAttribute('animated') === 'true';
+                    resolveImageUrl(bg, isCustom, isAnimated)
                         .then(url => { clipper.style.backgroundImage = url; })
                         .catch(() => { clipper.style.backgroundImage = PLACEHOLDER_IMAGE; });
                 }
@@ -619,12 +625,18 @@ function generateUrlParameter(bg, isCustom) {
  * Resolves the image URL for the background.
  * @param {string} bg Background file name
  * @param {boolean} isCustom Is a custom background
+ * @param {boolean|null} [isAnimated=null] Is the background animated (from metadata). If null, infers from extension.
  * @returns {Promise<string>} CSS URL of the background
  */
-async function resolveImageUrl(bg, isCustom) {
-    const fileExtension = bg.split('.').pop().toLowerCase();
-    const isAnimated = ['mp4', 'webp'].includes(fileExtension);
-    const thumbnailUrl = isAnimated && !background_settings.animation
+async function resolveImageUrl(bg, isCustom, isAnimated = null) {
+    // If isAnimated is not provided (null), fall back to extension-based heuristic
+    let animated = isAnimated;
+    if (animated === null) {
+        const fileExtension = bg.split('.').pop().toLowerCase();
+        animated = ['mp4', 'webp', 'gif', 'apng'].includes(fileExtension);
+    }
+
+    const thumbnailUrl = animated && !background_settings.animation
         ? await getThumbnailFromStorage(bg, isCustom)
         : isCustom
             ? bg

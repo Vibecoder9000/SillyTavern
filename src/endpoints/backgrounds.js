@@ -5,16 +5,36 @@ import express from 'express';
 import sanitize from 'sanitize-filename';
 
 import { invalidateThumbnail } from './thumbnails.js';
-import { thumbnailDimensions } from './image-metadata.js';
+import { thumbnailDimensions, getOrGenerateMetadataBatch } from './image-metadata.js';
 import { getImages } from '../util.js';
 import { getFileNameValidationFunction } from '../middleware/validateFileName.js';
 
 export const router = express.Router();
 
-router.post('/all', function (request, response) {
-    const images = getImages(request.user.directories.backgrounds);
-    const config = { width: thumbnailDimensions.bg[0], height: thumbnailDimensions.bg[1] };
-    response.json({ images, config });
+router.post('/all', async function (request, response) {
+    try {
+        const images = getImages(request.user.directories.backgrounds);
+        const config = { width: thumbnailDimensions.bg[0], height: thumbnailDimensions.bg[1] };
+
+        // Get metadata for all images to provide isAnimated flag to client
+        const relativePaths = images.map(img => path.join('backgrounds', img));
+        const metadataMap = await getOrGenerateMetadataBatch(request.user.directories.root, relativePaths, 'bg');
+
+        // Build response with metadata for each image
+        const imagesWithMetadata = images.map(img => {
+            const relativePath = path.join('backgrounds', img);
+            const metadata = metadataMap[relativePath];
+            return {
+                filename: img,
+                isAnimated: metadata?.isAnimated ?? false,
+            };
+        });
+
+        response.json({ images: imagesWithMetadata, config });
+    } catch (error) {
+        console.error('[Backgrounds] Error fetching backgrounds:', error);
+        response.status(500).json({ error: 'Failed to fetch backgrounds' });
+    }
 });
 
 router.post('/delete', getFileNameValidationFunction('bg'), function (request, response) {
