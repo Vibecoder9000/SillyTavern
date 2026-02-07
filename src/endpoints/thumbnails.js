@@ -8,7 +8,7 @@ import { sync as writeFileAtomicSync } from 'write-file-atomic';
 import { imageSize as sizeOf } from 'image-size';
 
 import { getConfigValue, invalidateFirefoxCache } from '../util.js';
-import { getThumbnailResolution, isAnimatedWebP, thumbnailDimensions as dimensions } from './image-metadata.js';
+import { getThumbnailResolution, isAnimatedWebP, isAnimatedApng, thumbnailDimensions as dimensions } from './image-metadata.js';
 import { ResizeStrategy } from '@jimp/plugin-resize';
 
 export const publicRouter = express.Router();
@@ -153,6 +153,16 @@ export async function generateThumbnail(directories, type, file, forceGenerate =
         if (fileExtension === '.webp' && isKnownAnimated !== false) {
             const buffer = fs.readFileSync(pathToOriginalFile);
             const isAnimated = isAnimatedWebP(buffer);
+            if (isAnimated) {
+                // The client is expected to handle it.
+                return { path: null, aspectRatio: null, resolution: null };
+            }
+        }
+
+        // For PNG files, check if they are actually APNGs.
+        if (fileExtension === '.png' && isKnownAnimated !== false) {
+            const buffer = fs.readFileSync(pathToOriginalFile);
+            const isAnimated = isAnimatedApng(buffer);
             if (isAnimated) {
                 // The client is expected to handle it.
                 return { path: null, aspectRatio: null, resolution: null };

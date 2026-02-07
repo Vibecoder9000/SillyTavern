@@ -62,7 +62,7 @@ export function getThumbnailResolution(type) {
  * @param {Buffer} buffer The file buffer.
  * @returns {boolean}
  */
-function isAnimatedApng(buffer) {
+export function isAnimatedApng(buffer) {
     return buffer.subarray(0, 200).includes('acTL');
 }
 
