@@ -290,7 +290,10 @@ publicRouter.get('/', async function (request, response) {
         }
 
         // Send a 404 so the frontend can display a placeholder
-        return response.sendStatus(404);
+        if (type === 'bg') {
+            return response.sendStatus(404);
+        }
+        return serveOriginal();
 
     } catch (error) {
         console.error('Failed getting thumbnail', error);

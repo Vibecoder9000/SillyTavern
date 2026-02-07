@@ -7314,6 +7314,9 @@ async function read_avatar_load(input) {
  * @returns {string} The URL for the thumbnail
  */
 export function getThumbnailUrl(type, file, t = false) {
+    if (!file || file === 'none') {
+        return default_avatar;
+    }
     return `/thumbnail?type=${type}&file=${encodeURIComponent(file)}${t ? `&t=${Date.now()}` : ''}`;
 }
 
