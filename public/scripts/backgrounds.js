@@ -3,7 +3,7 @@ import { characters, chat_metadata, eventSource, event_types, generateQuietPromp
 import { openThirdPartyExtensionMenu, saveMetadataDebounced } from './extensions.js';
 import { SlashCommand } from './slash-commands/SlashCommand.js';
 import { SlashCommandParser } from './slash-commands/SlashCommandParser.js';
-import { createThumbnail, flashHighlight, getBase64Async, stringFormat, debounce, setupScrollToTop, saveBase64AsFile, getFileExtension } from './utils.js';
+import { createThumbnail, flashHighlight, getBase64Async, stringFormat, debounce, setupScrollToTop, saveBase64AsFile, getFileExtension, sortIgnoreCaseAndAccents } from './utils.js';
 import { debounce_timeout } from './constants.js';
 import { t } from './i18n.js';
 import { Popup } from './popup.js';
@@ -100,9 +100,9 @@ function sortBackgrounds(backgrounds, isCustom = false) {
     return [...backgrounds].sort((a, b) => {
         switch (sortOrder) {
             case 'az':
-                return a.localeCompare(b, undefined, { sensitivity: 'base' });
+                return sortIgnoreCaseAndAccents(a, b);
             case 'za':
-                return b.localeCompare(a, undefined, { sensitivity: 'base' });
+                return sortIgnoreCaseAndAccents(b, a);
             case 'newest':
             case 'oldest': {
                 const keyA = isCustom ? a : `backgrounds/${a}`;
