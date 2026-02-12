@@ -413,10 +413,10 @@ function buildSpecialNativeToolResultMessage(toolResult) {
                 name: systemUserName,
                 is_user: false,
                 is_system: true,
-                mes: '<tool_result>\nImage displayed to user.\n</tool_result>',
+                mes: '<tool_result>\n</tool_result>',
                 extra: {
                     is_tool_result: true,
-                    tool_result_content: 'Image displayed to user.',
+                    tool_result_content: '',
                     media: [{ url: mediaUrl, type: MEDIA_TYPE.IMAGE, source: MEDIA_SOURCE.API, title: parsed.filepath }],
                     media_index: 0,
                     inline_image: true,
@@ -433,10 +433,10 @@ function buildSpecialNativeToolResultMessage(toolResult) {
                 name: systemUserName,
                 is_user: false,
                 is_system: true,
-                mes: '<tool_result>\nVideo displayed to user.\n</tool_result>',
+                mes: '<tool_result>\n</tool_result>',
                 extra: {
                     is_tool_result: true,
-                    tool_result_content: 'Video displayed to user.',
+                    tool_result_content: '',
                     media: [{ url: mediaUrl, type: MEDIA_TYPE.VIDEO, source: MEDIA_SOURCE.API, title: parsed.filepath }],
                     media_index: 0,
                     inline_image: true,
@@ -453,10 +453,10 @@ function buildSpecialNativeToolResultMessage(toolResult) {
                 name: systemUserName,
                 is_user: false,
                 is_system: true,
-                mes: '<tool_result>\nImage added to context for analysis.\n</tool_result>',
+                mes: '<tool_result>\n</tool_result>',
                 extra: {
                     is_tool_result: true,
-                    tool_result_content: 'Image added to context for analysis.',
+                    tool_result_content: '',
                     media: [{ url: mediaUrl, type: MEDIA_TYPE.IMAGE, source: MEDIA_SOURCE.API, title: parsed.filepath }],
                     media_index: 0,
                     inline_image: true,
@@ -2084,13 +2084,16 @@ export function updateMessageBlock(messageId, message, { rerenderMessage = true 
 
             messageElement.find('.mes_text').html(html);
         } else if (message.extra?.is_tool_result) {
-            // Wrap the tool result in a .tool-result-box container for proper styling
-            const result = message.extra.tool_result_content;
-            let html = '<div class="tool-result-box">';
-            html += '<h4><i class="fa-solid fa-check-circle"></i> Tool Result</h4>';
-            html += `<pre><code>${DOMPurify.sanitize(result)}</code></pre>`;
-            html += '</div>'; // close .tool-result-box
-            messageElement.find('.mes_text').html(html);
+            const result = String(message.extra.tool_result_content ?? '');
+            if (result.trim().length > 0) {
+                let html = '<div class="tool-result-box">';
+                html += '<h4><i class="fa-solid fa-check-circle"></i> Tool Result</h4>';
+                html += `<pre><code>${DOMPurify.sanitize(result)}</code></pre>`;
+                html += '</div>'; // close .tool-result-box
+                messageElement.find('.mes_text').html(html);
+            } else {
+                messageElement.find('.mes_text').empty();
+            }
         } else {
             const text = message?.extra?.display_text ?? message.mes;
             messageElement.find('.mes_text').html(messageFormatting(text, message.name, message.is_system, message.is_user, messageId, {}, false));
@@ -2707,22 +2710,23 @@ export function addOneMessage(mes, { type = 'normal', insertAfter = null, scroll
         const messageTextContainer = newMessage.find('.mes_text');
         messageTextContainer.empty(); // Clear any default content first
 
-        if (mes.extra.image || mes.extra.video) {
+        const hasMediaAttachments = Array.isArray(mes?.extra?.media) && mes.extra.media.length > 0;
+        if (mes.extra.image || mes.extra.video || hasMediaAttachments) {
             appendMediaToMessage(mes, newMessage);
         } else {
-            const result = mes.extra.tool_result_content;
+            const result = String(mes.extra.tool_result_content ?? '');
+            if (result.trim().length > 0) {
+                const box = $('<div class="tool-result-box"></div>');
+                const header = $('<h4><i class="fa-solid fa-check-circle"></i> Tool Result</h4>');
+                const pre = $('<pre></pre>');
+                const code = $('<code></code>');
 
-            // Wrap the tool result in a .tool-result-box container for proper styling
-            const box = $('<div class="tool-result-box"></div>');
-            const header = $('<h4><i class="fa-solid fa-check-circle"></i> Tool Result</h4>');
-            const pre = $('<pre></pre>');
-            const code = $('<code></code>');
+                code.text(result); // Use .text() to safely insert the content as plain text
 
-            code.text(result); // Use .text() to safely insert the content as plain text
-
-            pre.append(code);
-            box.append(header, pre);
-            messageTextContainer.append(box);
+                pre.append(code);
+                box.append(header, pre);
+                messageTextContainer.append(box);
+            }
         }
     }
     else {
@@ -8627,19 +8631,20 @@ async function messageEditDone(div) {
         html += '</div>'; // close .tool-call-box
         newMessageElement.find('.mes_text').html(html);
     } else if (mes.extra?.is_tool_result) {
-        const result = mes.extra.tool_result_content;
+        const result = String(mes.extra.tool_result_content ?? '');
         newMessageElement.addClass('tool-result-message');
         const messageTextContainer = newMessageElement.find('.mes_text');
         messageTextContainer.empty();
-        // Wrap the tool result in a .tool-result-box container for proper styling
-        const box = $('<div class="tool-result-box"></div>');
-        const header = $('<h4><i class="fa-solid fa-check-circle"></i> Tool Result</h4>');
-        const pre = $('<pre></pre>');
-        const code = $('<code></code>');
-        code.text(result);
-        pre.append(code);
-        box.append(header, pre);
-        messageTextContainer.append(box);
+        if (result.trim().length > 0) {
+            const box = $('<div class="tool-result-box"></div>');
+            const header = $('<h4><i class="fa-solid fa-check-circle"></i> Tool Result</h4>');
+            const pre = $('<pre></pre>');
+            const code = $('<code></code>');
+            code.text(result);
+            pre.append(code);
+            box.append(header, pre);
+            messageTextContainer.append(box);
+        }
     } else {
         const sanitizerOverrides = mes.uses_system_ui ? { MESSAGE_ALLOW_SYSTEM_UI: true } : {};
         const formattedMessageText = messageFormatting(
@@ -12341,19 +12346,20 @@ jQuery(async function () {
             html += '</div>'; // close .tool-call-box
             newMessageElement.find('.mes_text').html(html);
         } else if (mes.extra?.is_tool_result) {
-            const result = mes.extra.tool_result_content;
+            const result = String(mes.extra.tool_result_content ?? '');
             newMessageElement.addClass('tool-result-message');
             const messageTextContainer = newMessageElement.find('.mes_text');
             messageTextContainer.empty();
-            // Wrap the tool result in a .tool-result-box container for proper styling
-            const box = $('<div class="tool-result-box"></div>');
-            const header = $('<h4><i class="fa-solid fa-check-circle"></i> Tool Result</h4>');
-            const pre = $('<pre></pre>');
-            const code = $('<code></code>');
-            code.text(result);
-            pre.append(code);
-            box.append(header, pre);
-            messageTextContainer.append(box);
+            if (result.trim().length > 0) {
+                const box = $('<div class="tool-result-box"></div>');
+                const header = $('<h4><i class="fa-solid fa-check-circle"></i> Tool Result</h4>');
+                const pre = $('<pre></pre>');
+                const code = $('<code></code>');
+                code.text(result);
+                pre.append(code);
+                box.append(header, pre);
+                messageTextContainer.append(box);
+            }
         } else {
             const sanitizerOverrides = mes.uses_system_ui ? { MESSAGE_ALLOW_SYSTEM_UI: true } : {};
             const formattedMessageText = messageFormatting(
