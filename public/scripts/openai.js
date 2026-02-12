@@ -569,6 +569,13 @@ function setOpenAIMessages(chat) {
         const mediaDisplay = getMediaDisplay(chat[j]);
         const mediaIndex = getMediaIndex(chat[j]);
         const invocations = chat[j]?.extra?.tool_invocations;
+
+        // Some multimodal backends only accept image/video blocks in user messages.
+        // Keep tool-result UI/system semantics, but send media-bearing tool results as user role.
+        if (chat[j]?.extra?.is_tool_result && Array.isArray(media) && media.length > 0) {
+            role = 'user';
+        }
+
         messages[i] = { 'role': role, 'content': content, name: name, 'media': media, 'mediaDisplay': mediaDisplay, 'mediaIndex': mediaIndex, 'invocations': invocations };
         j++;
     }
@@ -5796,6 +5803,9 @@ export function isImageInliningSupported() {
         'claude-opus-4',
         'claude-sonnet-4',
         'claude-haiku-4',
+        'claude-opus-4-5',
+        'claude-sonnet-4-5',
+        'claude-haiku-4-5',
         // Cohere
         'c4ai-aya-vision',
         'command-a-vision',

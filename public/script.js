@@ -366,6 +366,110 @@ async function capToolOutput(output) {
 }
 
 /**
+ * Builds a special native tool result message for structured tool outputs.
+ * Supports both plain JSON and double-encoded JSON strings.
+ * @param {string|object} toolResult Raw tool result
+ * @returns {{ resultMessage: ChatMessage, stopGeneration: boolean }|null}
+ */
+function buildSpecialNativeToolResultMessage(toolResult) {
+    /**
+     * @param {string|object} value
+     * @returns {object|null}
+     */
+    function parseStructuredValue(value) {
+        if (value && typeof value === 'object') {
+            return value;
+        }
+
+        if (typeof value !== 'string') {
+            return null;
+        }
+
+        let text = value.trim();
+        if (text.startsWith('<tool_result>') && text.endsWith('</tool_result>')) {
+            text = text.replace(/^<tool_result>\s*/i, '').replace(/\s*<\/tool_result>$/i, '').trim();
+        }
+
+        try {
+            let parsed = JSON.parse(text);
+            if (typeof parsed === 'string') {
+                parsed = JSON.parse(parsed);
+            }
+            return parsed && typeof parsed === 'object' ? parsed : null;
+        } catch {
+            return null;
+        }
+    }
+
+    const parsed = parseStructuredValue(toolResult);
+    if (!parsed) {
+        return null;
+    }
+
+    if (parsed.type === 'image_display' && typeof parsed.filepath === 'string' && parsed.filepath.length > 0) {
+        const mediaUrl = `/api/files/download/${encodeURIComponent(parsed.filepath)}`;
+        return {
+            resultMessage: {
+                name: systemUserName,
+                is_user: false,
+                is_system: true,
+                mes: '<tool_result>\nImage displayed to user.\n</tool_result>',
+                extra: {
+                    is_tool_result: true,
+                    tool_result_content: 'Image displayed to user.',
+                    media: [{ url: mediaUrl, type: MEDIA_TYPE.IMAGE, source: MEDIA_SOURCE.API, title: parsed.filepath }],
+                    media_index: 0,
+                    inline_image: true,
+                },
+            },
+            stopGeneration: true,
+        };
+    }
+
+    if (parsed.type === 'video_display' && typeof parsed.filepath === 'string' && parsed.filepath.length > 0) {
+        const mediaUrl = `/api/files/download/${encodeURIComponent(parsed.filepath)}`;
+        return {
+            resultMessage: {
+                name: systemUserName,
+                is_user: false,
+                is_system: true,
+                mes: '<tool_result>\nVideo displayed to user.\n</tool_result>',
+                extra: {
+                    is_tool_result: true,
+                    tool_result_content: 'Video displayed to user.',
+                    media: [{ url: mediaUrl, type: MEDIA_TYPE.VIDEO, source: MEDIA_SOURCE.API, title: parsed.filepath }],
+                    media_index: 0,
+                    inline_image: true,
+                },
+            },
+            stopGeneration: true,
+        };
+    }
+
+    if (parsed.type === 'image_context' && typeof parsed.filepath === 'string' && parsed.filepath.length > 0) {
+        const mediaUrl = `/api/files/download/${encodeURIComponent(parsed.filepath)}`;
+        return {
+            resultMessage: {
+                name: systemUserName,
+                is_user: false,
+                is_system: true,
+                mes: '<tool_result>\nImage added to context for analysis.\n</tool_result>',
+                extra: {
+                    is_tool_result: true,
+                    tool_result_content: 'Image added to context for analysis.',
+                    media: [{ url: mediaUrl, type: MEDIA_TYPE.IMAGE, source: MEDIA_SOURCE.API, title: parsed.filepath }],
+                    media_index: 0,
+                    inline_image: true,
+                },
+            },
+            stopGeneration: false,
+        };
+    }
+
+    return null;
+}
+
+/**
  * Wait for page to load before continuing the app initialization.
  */
 await new Promise((resolve) => {
@@ -3671,27 +3775,10 @@ class StreamingProcessor {
                 let resultMessage;
                 let stopGeneration = false;
                 try {
-                    const parsed = typeof toolResult === 'string' ? JSON.parse(toolResult) : toolResult;
-
-                    if (parsed.type === 'image_display' && parsed.filepath) {
-                        resultMessage = {
-                            name: systemUserName,
-                            is_user: false,
-                            is_system: true,
-                            mes: '<tool_result>\nImage displayed to user.\n</tool_result>',
-                            extra: { is_tool_result: true, image: `/api/files/download/${parsed.filepath}` },
-                        };
-                        stopGeneration = true;
-                    }
-                    else if (parsed.type === 'video_display' && parsed.filepath) {
-                        resultMessage = {
-                            name: systemUserName,
-                            is_user: false,
-                            is_system: true,
-                            mes: '<tool_result>\nVideo displayed to user.\n</tool_result>',
-                            extra: { is_tool_result: true, video: `/api/files/download/${parsed.filepath}` },
-                        };
-                        stopGeneration = true;
+                    const specialResult = buildSpecialNativeToolResultMessage(toolResult);
+                    if (specialResult) {
+                        resultMessage = specialResult.resultMessage;
+                        stopGeneration = specialResult.stopGeneration;
                     }
                 } catch (e) {
                     console.error('[Streaming] Failed to parse special tool result:', e);
@@ -5535,27 +5622,10 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
                 let resultMessage;
                 let stopGeneration = false;
                 try {
-                    const parsed = typeof toolResult === 'string' ? JSON.parse(toolResult) : toolResult;
-
-                    if (parsed.type === 'image_display' && parsed.filepath) {
-                        resultMessage = {
-                            name: systemUserName,
-                            is_user: false,
-                            is_system: true,
-                            mes: '<tool_result>\nImage displayed to user.\n</tool_result>',
-                            extra: { is_tool_result: true, image: `/api/files/download/${parsed.filepath}` },
-                        };
-                        stopGeneration = true;
-                    }
-                    else if (parsed.type === 'video_display' && parsed.filepath) {
-                        resultMessage = {
-                            name: systemUserName,
-                            is_user: false,
-                            is_system: true,
-                            mes: '<tool_result>\nVideo displayed to user.\n</tool_result>',
-                            extra: { is_tool_result: true, video: `/api/files/download/${parsed.filepath}` },
-                        };
-                        stopGeneration = true;
+                    const specialResult = buildSpecialNativeToolResultMessage(toolResult);
+                    if (specialResult) {
+                        resultMessage = specialResult.resultMessage;
+                        stopGeneration = specialResult.stopGeneration;
                     }
                 } catch (e) {
                     console.error('[Non-Streaming] Failed to parse special tool result:', e);
@@ -13049,27 +13119,10 @@ jQuery(async function () {
             let resultMessage;
             let stopGeneration = false;
             try {
-                const parsed = typeof toolResult === 'string' ? JSON.parse(toolResult) : toolResult;
-
-                if (parsed.type === 'image_display' && parsed.filepath) {
-                    resultMessage = {
-                        name: systemUserName,
-                        is_user: false,
-                        is_system: true,
-                        mes: '<tool_result>\nImage displayed to user.\n</tool_result>',
-                        extra: { is_tool_result: true, image: `/api/files/download/${parsed.filepath}` },
-                    };
-                    stopGeneration = true;
-                }
-                else if (parsed.type === 'video_display' && parsed.filepath) {
-                    resultMessage = {
-                        name: systemUserName,
-                        is_user: false,
-                        is_system: true,
-                        mes: '<tool_result>\nVideo displayed to user.\n</tool_result>',
-                        extra: { is_tool_result: true, video: `/api/files/download/${parsed.filepath}` },
-                    };
-                    stopGeneration = true;
+                const specialResult = buildSpecialNativeToolResultMessage(toolResult);
+                if (specialResult) {
+                    resultMessage = specialResult.resultMessage;
+                    stopGeneration = specialResult.stopGeneration;
                 }
             } catch (e) {
                 console.error('[Manual Tool Execution] Failed to parse special tool result:', e);

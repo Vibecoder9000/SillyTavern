@@ -99,6 +99,25 @@ function tryParse(str) {
 }
 
 /**
+ * Wraps a promise with a timeout. If the promise doesn't resolve within the timeout,
+ * returns a timeout result instead of waiting forever.
+ * @param {Promise} promise The promise to wrap
+ * @param {number} timeoutMs The timeout in milliseconds
+ * @param {string} timeoutMessage The message to return on timeout
+ * @returns {Promise} The result of the promise or the timeout message
+ */
+function withTimeout(promise, timeoutMs, timeoutMessage) {
+    return Promise.race([
+        promise,
+        new Promise((resolve) => {
+            setTimeout(() => {
+                resolve(timeoutMessage);
+            }, timeoutMs);
+        }),
+    ]);
+}
+
+/**
  * Stringifies an object if it is not already a string.
  * @param {any} obj The object to stringify
  * @returns {string} A JSON string representation of the object.
@@ -391,6 +410,33 @@ function registerBuiltinTools() {
             },
         },
         {
+            name: 'view_image_file',
+            description: 'Provides an uploaded image to the model as multimodal context for further analysis. Use this when you need to inspect image contents before answering.',
+            parameters: {
+                'type': 'object',
+                'properties': {
+                    'filepath': {
+                        'type': 'string',
+                        'description': 'The path to the image file, relative to the uploads directory.',
+                    },
+                },
+                'required': ['filepath'],
+            },
+            action: async ({ filepath }) => {
+                const imageExtensions = ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.svg'];
+                const extension = filepath.slice(filepath.lastIndexOf('.')).toLowerCase();
+
+                if (!imageExtensions.includes(extension)) {
+                    return `Error: The file "${filepath}" is not a supported image type.`;
+                }
+
+                return {
+                    type: 'image_context',
+                    filepath: filepath,
+                };
+            },
+        },
+        {
             name: 'execute_shell',
             description: 'Executes a shell command in the sandbox environment. Useful for git, curl, or other command-line tools.',
             parameters: {
@@ -590,7 +636,17 @@ export class ToolManager {
 
             const invokeParameters = this.#parseParameters(parameters);
             const tool = this.#tools.get(name);
-            const result = await tool.invoke(invokeParameters, signal);
+            
+            // Apply 10-second timeout for long-running tools (execute_python and execute_shell)
+            const longRunningTools = ['execute_python', 'execute_shell'];
+            const isLongRunningTool = longRunningTools.includes(name);
+            const timeoutMs = isLongRunningTool ? 10000 : 60000; // 10 seconds for long-running, 60 for others
+            const timeoutMessage = 'Tool call run for max duration 10 seconds, ending logging here. Your command is running in the background. Make a new python or bash call to interrupt with the new tool call.';
+            
+            const result = isLongRunningTool
+                ? await withTimeout(tool.invoke(invokeParameters, signal), timeoutMs, timeoutMessage)
+                : await tool.invoke(invokeParameters, signal);
+            
             return typeof result === 'string' ? result : JSON.stringify(result);
         } catch (error) {
             console.error(`[ToolManager] An error occurred while invoking the tool "${name}":`, error);
