@@ -185,7 +185,7 @@ class GptSovitsV2Provider {
         const params = {
             text: inputText,
             prompt_text: prompt_text,
-            ref_audio_path: './参考音频/' + voiceId + '.wav',
+            ref_audio_path: './reference_audio/' + voiceId + '.wav',
             text_lang: this.settings.text_lang,
             prompt_lang: this.settings.prompt_lang,
             text_split_method: 'cut5',

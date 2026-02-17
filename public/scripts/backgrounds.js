@@ -1581,50 +1581,25 @@ async function setBackground(bg, url) {
  */
 async function onBackgroundUploadSelected() {
     const form = document.getElementById('form_bg_upload');
-    if (!(form instanceof HTMLFormElement)) return;
-    const formData = new FormData(form);
+    const input = document.getElementById('add_bg_button');
+    if (!(form instanceof HTMLFormElement) || !(input instanceof HTMLInputElement)) return;
+    const files = Array.from(input.files ?? []).filter(file => file.type.startsWith('image/') || file.type.startsWith('video/'));
 
     // Check if a file was actually selected
-    if (!formData.get('avatar') || formData.get('avatar').size === 0) {
+    if (files.length === 0) {
         form.reset();
         return;
     }
 
     try {
-        // This will convert video to webp and upload the static thumb
-        await convertFileIfVideo(formData);
-
-        const response = await fetch('/api/backgrounds/upload', {
-            method: 'POST',
-            headers: getRequestHeaders({ omitContentType: true }), // Important for FormData
-            body: formData,
-        });
-
-        if (!response.ok) {
-            const errorText = await response.text();
-            toastr.error(`Upload failed: ${errorText}`);
-            throw new Error(`Upload failed: ${errorText}`);
+        for (const file of files) {
+            const formData = new FormData();
+            formData.append('avatar', file);
+            // This will convert video to webp and upload the static thumb
+            await convertFileIfVideo(formData);
+            await uploadBackground(formData);
         }
-
-        const newImageData = await response.json();
-
-        // Create the client-side representation of the new image
-        const newImageClientData = {
-            ...newImageData,
-            id: newImageData.filename,
-            thumbnailUrl: getThumbnailUrl(newImageData.filename),
-            fullResUrl: getBackgroundPath(newImageData.filename),
-            isCustom: false,
-        };
-
-        // Add the new image to the master data list and re-render
-        backgroundSelector.images.push(newImageClientData);
-        // Keep the master list sorted
-        backgroundSelector.images.sort((a,b) => a.filename.localeCompare(b.filename, undefined, { numeric: true }));
-
-        // Pass the new filename directly
-        backgroundSelector.search($('#bg-filter').val() || '', newImageData.filename);
-
+        await getBackgrounds(true);
     } catch (error) {
         console.error('Error uploading background:', error);
         // If an error toast wasn't already shown, show a generic one.

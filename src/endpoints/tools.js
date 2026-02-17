@@ -2,12 +2,18 @@ import express from 'express';
 import path from 'node:path';
 import fs from 'node:fs/promises';
 import { serverDirectory } from '../server-directory.js';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import crypto from 'node:crypto';
 
 export const router = express.Router();
 
 const SANDBOX_DIR = path.resolve(path.join(serverDirectory, 'uploads'));
+
+// Track active processes to kill previous ones when new ones start
+const activeProcesses = {
+    python: null,
+    shell: null,
+};
 
 const COMMAND_DENYLIST = new Set([
     'rm',
@@ -24,6 +30,47 @@ const COMMAND_DENYLIST = new Set([
     'ren',
     'icacls',
 ]);
+
+let cachedPythonLauncher = null;
+
+/**
+ * Resolves an available Python launcher command for the current platform.
+ * @returns {{command: string, args: string[]}|null}
+ */
+function resolvePythonLauncher() {
+    if (cachedPythonLauncher) {
+        return cachedPythonLauncher;
+    }
+
+    const candidates = process.platform === 'win32'
+        ? [
+            { command: 'python', args: [] },
+            { command: 'py', args: ['-3'] },
+            { command: 'python3', args: [] },
+        ]
+        : [
+            { command: 'python3', args: [] },
+            { command: 'python', args: [] },
+        ];
+
+    for (const candidate of candidates) {
+        try {
+            const probe = spawnSync(candidate.command, [...candidate.args, '--version'], {
+                shell: false,
+                stdio: 'ignore',
+            });
+
+            if (!probe.error && probe.status === 0) {
+                cachedPythonLauncher = candidate;
+                return candidate;
+            }
+        } catch {
+            // Try the next launcher candidate.
+        }
+    }
+
+    return null;
+}
 
 /**
  * Safely checks if a given path is within the designated sandbox directory.
@@ -242,6 +289,12 @@ router.post('/executeshell', async (req, res) => {
         return res.status(400).json({ error: 'command is required.' });
     }
 
+    // Kill any previous shell process
+    if (activeProcesses.shell && !activeProcesses.shell.killed) {
+        console.log('Killing previous shell process.');
+        activeProcesses.shell.kill();
+    }
+
     try {
         const { stdout, stderr } = await spawnPromise(command, {
             cwd: SANDBOX_DIR,
@@ -270,20 +323,34 @@ router.post('/executepython', async (req, res) => {
         return res.status(400).json({ error: 'code is required.' });
     }
 
+    // Kill any previous Python process
+    if (activeProcesses.python && !activeProcesses.python.killed) {
+        console.log('Killing previous Python process.');
+        activeProcesses.python.kill();
+    }
+
     const tempFilename = `exec_${crypto.randomBytes(16).toString('hex')}.py`;
     const scriptPath = path.join(SANDBOX_DIR, tempFilename);
     await fs.mkdir(SANDBOX_DIR, { recursive: true });
+    const launcher = resolvePythonLauncher();
 
     try {
+        if (!launcher) {
+            return res.status(500).send('Python runtime not found. Install Python and ensure `python`, `python3`, or `py` is available on PATH.');
+        }
+
         await fs.writeFile(scriptPath, code, 'utf-8');
 
         res.setHeader('Content-Type', 'text/plain; charset=utf-8');
         res.setHeader('Transfer-Encoding', 'chunked');
 
-        const childProcess = spawn('python', ['-u', scriptPath], {
+        const childProcess = spawn(launcher.command, [...launcher.args, '-u', scriptPath], {
             cwd: SANDBOX_DIR,
-            shell: process.platform === 'win32',
+            shell: false,
         });
+
+        // Track this process so we can kill it when a new one starts
+        activeProcesses.python = childProcess;
 
         childProcess.stdout.on('data', (data) => {
             res.write(data);

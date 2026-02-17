@@ -121,8 +121,8 @@ class MiniMaxTtsProvider {
                 <div class="tts_block wide100p">
                     <select id="minimax_custom_voice_lang" class="text_pole">
                         <option value="auto">Auto Detect</option>
-                        <option value="Chinese">Chinese (中文)</option>
-                        <option value="Chinese,Yue">Chinese, Yue (粤语)</option>
+                        <option value="Chinese">Chinese</option>
+                        <option value="Chinese,Yue">Chinese, Yue</option>
                         <option value="English">English</option>
                         <option value="Arabic">Arabic (العربية)</option>
                         <option value="Russian">Russian (Русский)</option>
@@ -135,7 +135,7 @@ class MiniMaxTtsProvider {
                         <option value="Ukrainian">Ukrainian (Українська)</option>
                         <option value="Vietnamese">Vietnamese (Tiếng Việt)</option>
                         <option value="Indonesian">Indonesian (Bahasa Indonesia)</option>
-                        <option value="Japanese">Japanese (日本語)</option>
+                        <option value="Japanese">Japanese</option>
                         <option value="Italian">Italian (Italiano)</option>
                         <option value="Korean">Korean (한국어)</option>
                         <option value="Thai">Thai (ไทย)</option>
