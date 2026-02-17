@@ -12,6 +12,7 @@ import mime from 'mime-types';
 
 import { delay, getBasicAuthHeader, isValidUrl, tryParse } from '../util.js';
 import { readSecret, SECRET_KEYS } from './secrets.js';
+import { getFileNameValidationFunction } from '../middleware/validateFileName.js';
 import { AIMLAPI_HEADERS } from '../constants.js';
 
 /**
@@ -157,7 +158,6 @@ router.post('/samplers', async (request, response) => {
         const data = await result.json();
         const names = data.map(x => x.name);
         return response.send(names);
-
     } catch (error) {
         console.error(error);
         return response.sendStatus(500);
@@ -528,6 +528,34 @@ comfy.post('/delete-workflow', async (request, response) => {
         return response.sendStatus(200);
     } catch (error) {
         console.error(error);
+        return response.sendStatus(500);
+    }
+});
+
+comfy.post('/rename-workflow', getFileNameValidationFunction('old_name'), getFileNameValidationFunction('new_name'), async (request, response) => {
+    try {
+        const oldName = sanitize(String(request.body.old_name));
+        const newName = sanitize(String(request.body.new_name));
+
+        if (path.extname(oldName).toLowerCase() !== '.json' || path.extname(newName).toLowerCase() !== '.json') {
+            return response.status(400).send('Only JSON workflow files are allowed');
+        }
+
+        const oldPath = path.join(request.user.directories.comfyWorkflows, oldName);
+        const newPath = path.join(request.user.directories.comfyWorkflows, newName);
+
+        if (!fs.existsSync(oldPath)) {
+            return response.status(404).send('Workflow not found');
+        }
+
+        if (fs.existsSync(newPath)) {
+            return response.status(409).send('A workflow with that name already exists');
+        }
+
+        fs.renameSync(oldPath, newPath);
+        return response.sendStatus(204);
+    } catch (error) {
+        console.error('ComfyUI workflow rename failed', error);
         return response.sendStatus(500);
     }
 });
@@ -1288,8 +1316,7 @@ chutes.post('/models', async (request, response) => {
         const chutesData = /** @type {{items: Array<{name: string}>}} */ (data);
         const models = chutesData.items.map(x => ({ value: x.name, text: x.name })).sort((a, b) => a?.text?.localeCompare(b?.text));
         return response.send(models);
-    }
-    catch (error) {
+    } catch (error) {
         console.error(error);
         return response.sendStatus(500);
     }
@@ -1335,8 +1362,7 @@ chutes.post('/generate', async (request, response) => {
         const base64 = Buffer.from(buffer).toString('base64');
 
         return response.send({ image: base64 });
-    }
-    catch (error) {
+    } catch (error) {
         console.error(error);
         return response.sendStatus(500);
     }
@@ -1377,8 +1403,7 @@ nanogpt.post('/models', async (request, response) => {
 
         const models = Object.values(imageModels).map(x => ({ value: x.model, text: x.name }));
         return response.send(models);
-    }
-    catch (error) {
+    } catch (error) {
         console.error(error);
         return response.sendStatus(500);
     }
@@ -1419,8 +1444,7 @@ nanogpt.post('/generate', async (request, response) => {
         }
 
         return response.send({ image });
-    }
-    catch (error) {
+    } catch (error) {
         console.error(error);
         return response.sendStatus(500);
     }

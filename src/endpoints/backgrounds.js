@@ -18,7 +18,7 @@ router.post('/all', async function (request, response) {
 
         // Get metadata for all images to provide isAnimated flag to client
         const relativePaths = images.map(img => path.join('backgrounds', img));
-        const metadataMap = await getOrGenerateMetadataBatch(request.user.directories.root, relativePaths, 'bg');
+        const { results: metadataMap } = await getOrGenerateMetadataBatch(request.user.directories.root, relativePaths, 'bg');
 
         // Build response with metadata for each image
         const imagesWithMetadata = images.map(img => {
@@ -98,7 +98,7 @@ router.post('/upload', function (request, response) {
     if (!request.body || !request.file) return response.sendStatus(400);
 
     const img_path = path.join(request.file.destination, request.file.filename);
-    const filename = request.file.originalname;
+    const filename = sanitize(request.file.originalname);
 
     try {
         fs.copyFileSync(img_path, path.join(request.user.directories.backgrounds, filename));

@@ -296,12 +296,11 @@ publicRouter.get('/', async function (request, response) {
 
         if (fs.existsSync(pathToCachedFile)) {
             invalidateFirefoxCache(pathToCachedFile, request, response);
-            return response.sendFile(path.resolve(pathToCachedFile));
+            return response.sendFile(file, { root: thumbnailFolder, dotfiles: 'allow' });
         }
 
         // Send a 404 so the frontend can display a placeholder
         return response.sendStatus(404);
-
     } catch (error) {
         console.error('Failed getting thumbnail', error);
         return response.sendStatus(500);
