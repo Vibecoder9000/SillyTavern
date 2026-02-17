@@ -3,7 +3,7 @@ import { characters, chat_metadata, eventSource, event_types, generateQuietPromp
 import { openThirdPartyExtensionMenu, saveMetadataDebounced } from './extensions.js';
 import { SlashCommand } from './slash-commands/SlashCommand.js';
 import { SlashCommandParser } from './slash-commands/SlashCommandParser.js';
-import { createThumbnail, flashHighlight, getBase64Async, stringFormat, debounce, setupScrollToTop, saveBase64AsFile, getFileExtension, isAnimatedBackgroundExtension, sortIgnoreCaseAndAccents } from './utils.js';
+import { createThumbnail, flashHighlight, getBase64Async, stringFormat, debounce, setupScrollToTop, saveBase64AsFile, getFileExtension, sortIgnoreCaseAndAccents } from './utils.js';
 import { debounce_timeout } from './constants.js';
 import { t } from './i18n.js';
 import { Popup } from './popup.js';
@@ -40,6 +40,8 @@ const THUMBNAIL_CONFIG = {
     width: 160,
     height: 90,
 };
+
+const ANIMATED_BACKGROUND_EXTENSIONS = ['mp4', 'webp', 'gif', 'apng'];
 
 /**
  * Cache for image metadata.
@@ -750,6 +752,11 @@ function getUrlParameter(block) {
 
 function generateUrlParameter(bg, isCustom) {
     return isCustom ? `url("${encodeURI(bg)}")` : `url("${getBackgroundPath(bg)}")`;
+}
+
+function isAnimatedBackgroundExtension(fileName) {
+    const fileExtension = fileName.split('.').pop().toLowerCase();
+    return ANIMATED_BACKGROUND_EXTENSIONS.includes(fileExtension);
 }
 
 /**

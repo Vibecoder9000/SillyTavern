@@ -621,37 +621,6 @@ export function removeFileExtension(filename) {
     return filename.replace(/\.[^.]+$/, '');
 }
 
-/**
- * File extensions that should skip thumbnail generation and use the original file.
- * @type {Set<string>}
- */
-export const SKIPPED_THUMBNAIL_EXTENSIONS = new Set(['.apng', '.mp4', '.webm', '.avi', '.mkv', '.flv', '.gif']);
-
-/**
- * Checks whether a file extension should bypass thumbnail generation.
- * @param {string} fileNameOrExtension File name/path or extension (with or without dot)
- * @returns {boolean}
- */
-export function isSkippedThumbnailExtension(fileNameOrExtension) {
-    const value = String(fileNameOrExtension ?? '').trim().toLowerCase();
-    if (!value) {
-        return false;
-    }
-
-    let extension = '';
-    if (value.startsWith('.')) {
-        extension = value;
-    } else {
-        const cleanValue = value.split(/[?#]/)[0];
-        extension = path.extname(cleanValue).toLowerCase();
-        if (!extension && /^[a-z0-9]+$/.test(cleanValue)) {
-            extension = `.${cleanValue}`;
-        }
-    }
-
-    return SKIPPED_THUMBNAIL_EXTENSIONS.has(extension);
-}
-
 export function generateTimestamp() {
     const now = new Date();
     const year = now.getFullYear();

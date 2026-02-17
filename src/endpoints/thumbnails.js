@@ -7,14 +7,14 @@ import { Jimp, JimpMime } from '../jimp.js';
 import { sync as writeFileAtomicSync } from 'write-file-atomic';
 import { imageSize as sizeOf } from 'image-size';
 
-import { getConfigValue, invalidateFirefoxCache, isSkippedThumbnailExtension, SKIPPED_THUMBNAIL_EXTENSIONS } from '../util.js';
+import { getConfigValue, invalidateFirefoxCache } from '../util.js';
 import { getThumbnailResolution, isAnimatedWebP, isAnimatedApng, thumbnailDimensions as dimensions } from './image-metadata.js';
 import { ResizeStrategy } from '@jimp/plugin-resize';
 
 export const publicRouter = express.Router();
 export const apiRouter = express.Router();
 
-export const SKIPPED_EXTENSIONS = SKIPPED_THUMBNAIL_EXTENSIONS;
+export const SKIPPED_EXTENSIONS = new Set(['.apng', '.mp4', '.webm', '.avi', '.mkv', '.flv', '.gif']);
 export const ALLOWED_IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.tif', '.tiff', '.apng']);
 
 const thumbnailsEnabled = !!getConfigValue('thumbnails.enabled', true, 'boolean');
@@ -169,7 +169,7 @@ export async function generateThumbnail(directories, type, file, forceGenerate =
             }
         }
 
-        if (isSkippedThumbnailExtension(fileExtension)) {
+        if (SKIPPED_EXTENSIONS.has(fileExtension)) {
             return { path: null, aspectRatio: null, resolution: null };
         }
 
@@ -271,7 +271,7 @@ publicRouter.get('/', async function (request, response) {
 
         const animatedEnabled = animated === 'true';
         const fileExtension = path.extname(file).toLowerCase();
-        const isAnimatedFormat = isSkippedThumbnailExtension(fileExtension);
+        const isAnimatedFormat = SKIPPED_EXTENSIONS.has(fileExtension);
 
         // Serve original for animated formats or GIFs
         if (animatedEnabled && isAnimatedFormat) {

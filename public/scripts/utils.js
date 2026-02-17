@@ -1667,32 +1667,6 @@ export async function saveBase64AsFile(base64Data, subFolder, fileName, extensio
 }
 
 /**
- * Extensions treated as animated background formats.
- * @type {Set<string>}
- */
-export const ANIMATED_BACKGROUND_EXTENSIONS = new Set(['mp4', 'webp', 'gif', 'apng']);
-
-/**
- * Checks if a filename or extension should be treated as animated for background previews.
- * @param {string} fileNameOrExtension File path/name or extension (with or without dot)
- * @returns {boolean}
- */
-export function isAnimatedBackgroundExtension(fileNameOrExtension) {
-    const value = String(fileNameOrExtension ?? '').trim().toLowerCase();
-    if (!value) {
-        return false;
-    }
-
-    const queryIndex = value.search(/[?#]/);
-    const cleanValue = queryIndex === -1 ? value : value.slice(0, queryIndex);
-    const extension = cleanValue.startsWith('.')
-        ? cleanValue.slice(1)
-        : cleanValue.slice(cleanValue.lastIndexOf('.') + 1);
-
-    return ANIMATED_BACKGROUND_EXTENSIONS.has(extension);
-}
-
-/**
  * Gets the file extension from a File object.
  * @param {File} file The file to get the extension from
  * @returns {string} The file extension of the given file
