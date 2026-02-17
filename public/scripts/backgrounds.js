@@ -3,7 +3,7 @@ import { characters, chat_metadata, eventSource, event_types, generateQuietPromp
 import { openThirdPartyExtensionMenu, saveMetadataDebounced } from './extensions.js';
 import { SlashCommand } from './slash-commands/SlashCommand.js';
 import { SlashCommandParser } from './slash-commands/SlashCommandParser.js';
-import { createThumbnail, flashHighlight, getBase64Async, stringFormat, debounce, setupScrollToTop, saveBase64AsFile, getFileExtension, sortIgnoreCaseAndAccents } from './utils.js';
+import { createThumbnail, flashHighlight, getBase64Async, stringFormat, debounce, setupScrollToTop, saveBase64AsFile, getFileExtension, isAnimatedBackgroundExtension, sortIgnoreCaseAndAccents } from './utils.js';
 import { debounce_timeout } from './constants.js';
 import { t } from './i18n.js';
 import { Popup } from './popup.js';
@@ -643,8 +643,7 @@ function renderChatBackgrounds(backgrounds) {
     const sortedList = sortBackgrounds(sourceList, true);
     sortedList.forEach(bg => {
         // For custom backgrounds, infer isAnimated from extension since we don't have server metadata
-        const fileExtension = bg.split('.').pop().toLowerCase();
-        const isAnimated = ['mp4', 'webp', 'gif', 'apng'].includes(fileExtension);
+        const isAnimated = isAnimatedBackgroundExtension(bg);
         const imageData = { filename: bg, isCustom: true, isAnimated };
         const thumbnail = createThumbnailElement(imageData);
         container.append(thumbnail);
@@ -764,8 +763,7 @@ async function resolveImageUrl(bg, isCustom, isAnimated = null) {
     // If isAnimated is not provided (null), fall back to extension-based heuristic
     let animated = isAnimated;
     if (animated === null) {
-        const fileExtension = bg.split('.').pop().toLowerCase();
-        animated = ['mp4', 'webp', 'gif', 'apng'].includes(fileExtension);
+        animated = isAnimatedBackgroundExtension(bg);
     }
 
     const thumbnailUrl = animated && !background_settings.animation
