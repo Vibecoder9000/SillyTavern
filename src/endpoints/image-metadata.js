@@ -10,7 +10,7 @@ import { imageSize } from 'image-size';
 import writeFileAtomic from 'write-file-atomic';
 import express from 'express';
 import { Jimp } from '../jimp.js';
-import { getConfigValue, isPathUnderParent } from '../util.js';
+import { getConfigValue, getImages, isPathUnderParent } from '../util.js';
 
 export const METADATA_FILE = 'image-metadata.json';
 
@@ -62,7 +62,7 @@ export function getThumbnailResolution(type) {
  * @param {Buffer} buffer The file buffer.
  * @returns {boolean}
  */
-function isAnimatedApng(buffer) {
+export function isAnimatedApng(buffer) {
     return buffer.subarray(0, 200).includes('acTL');
 }
 
@@ -188,13 +188,14 @@ export async function writeMetadataIndex(userDataRoot, metadata) {
  * @param {string} userDataRoot - Path to the user data directory root
  * @param {string[]} relativePaths - Array of relative paths from userDataRoot
  * @param {ThumbnailType} type - The thumbnail type for resolution calculation.
- * @returns {Promise<Object.<string, ImageMetadata>>} Map of relativePath to metadata
+ * @returns {Promise<{results: Object.<string, ImageMetadata>, generatedCount: number}>} Results map and count of newly generated
  */
 export async function getOrGenerateMetadataBatch(userDataRoot, relativePaths, type) {
     /** @type {Object.<string, ImageMetadata>} */
     const results = {};
     const index = await readMetadataIndex(userDataRoot);
     let indexModified = false;
+    let generatedCount = 0;
 
     for (const relativePath of relativePaths) {
         // Normalize the path to use forward slashes for consistent keys
@@ -230,6 +231,7 @@ export async function getOrGenerateMetadataBatch(userDataRoot, relativePaths, ty
             index.images[posixPath] = metadata;
             results[relativePath] = metadata;
             indexModified = true;
+            generatedCount++;
         } catch (error) {
             console.warn(`[ImageMetadata] Failed to generate metadata for ${relativePath}:`, error.message);
         }
@@ -240,7 +242,7 @@ export async function getOrGenerateMetadataBatch(userDataRoot, relativePaths, ty
         await writeMetadataIndex(userDataRoot, index);
     }
 
-    return results;
+    return { results, generatedCount };
 }
 
 /**
@@ -572,7 +574,7 @@ router.post('/', async function (request, response) {
                 return response.status(404).json({ error: 'File not found.' });
             }
 
-            const metadataResults = await getOrGenerateMetadataBatch(userDataRoot, [relativePath], type);
+            const { results: metadataResults } = await getOrGenerateMetadataBatch(userDataRoot, [relativePath], type);
             const metadata = metadataResults[relativePath];
 
             if (!metadata) {
@@ -599,7 +601,7 @@ router.post('/', async function (request, response) {
             }
 
             // Process all valid paths in a single batch
-            const batchMetadata = await getOrGenerateMetadataBatch(userDataRoot, validPaths, type);
+            const { results: batchMetadata } = await getOrGenerateMetadataBatch(userDataRoot, validPaths, type);
 
             for (const relativePath of validPaths) {
                 if (batchMetadata[relativePath]) {
@@ -613,9 +615,37 @@ router.post('/', async function (request, response) {
         }
 
         return response.status(400).json({ error: 'Invalid request format.' });
-
     } catch (error) {
         console.error('[ImageMetadata] API error:', error);
+        return response.status(500).json({ error: 'Internal server error.' });
+    }
+});
+
+/**
+ * POST /api/image-metadata/all
+ * Get all metadata from the index.
+ * @body {string} [prefix] - Optional path prefix to filter results
+ */
+router.post('/all', async function (request, response) {
+    try {
+        const userDataRoot = request.user.directories.root;
+        const prefix = String(request.body.prefix || '');
+        const index = await readMetadataIndex(userDataRoot);
+
+        // If prefix specified, filter to only matching paths
+        if (prefix) {
+            const filteredImages = {};
+            for (const [key, value] of Object.entries(index.images)) {
+                if (key.startsWith(prefix)) {
+                    filteredImages[key] = value;
+                }
+            }
+            return response.json({ version: index.version, images: filteredImages });
+        }
+
+        return response.json(index);
+    } catch (error) {
+        console.error('[ImageMetadata] Failed to read metadata index:', error);
         return response.status(500).json({ error: 'Internal server error.' });
     }
 });

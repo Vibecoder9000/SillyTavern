@@ -284,6 +284,7 @@ const defaultSettings = {
     snap: false,
     free_extend: false,
     function_tool: false,
+    minimal_prompt_processing: false,
 
     prompts: promptTemplates,
 
@@ -547,6 +548,7 @@ async function loadSettings() {
     $('#sd_comfy_prompt').val(extension_settings.sd.comfy_prompt);
     $('#sd_comfy_runpod_url').val(extension_settings.sd.comfy_runpod_url);
     $('#sd_snap').prop('checked', extension_settings.sd.snap);
+    $('#sd_minimal_prompt_processing').prop('checked', extension_settings.sd.minimal_prompt_processing);
     $('#sd_clip_skip').val(extension_settings.sd.clip_skip);
     $('#sd_clip_skip_value').val(extension_settings.sd.clip_skip);
     $('#sd_seed').val(extension_settings.sd.seed);
@@ -669,6 +671,11 @@ function onSnapInput() {
     saveSettingsDebounced();
 }
 
+function onMinimalPromptProcessing() {
+    extension_settings.sd.minimal_prompt_processing = !!$(this).prop('checked');
+    saveSettingsDebounced();
+}
+
 function onStyleSelect() {
     const selectedStyle = String($('#sd_style').find(':selected').val());
     const styleObject = extension_settings.sd.styles.find(x => x.name === selectedStyle);
@@ -721,7 +728,8 @@ async function onDeleteStyleClick() {
 }
 
 async function onSaveStyleClick() {
-    const userInput = await callGenericPopup('Enter style name:', POPUP_TYPE.INPUT);
+    const selectedStyle = extension_settings.sd.style || '';
+    const userInput = await callGenericPopup(t`Enter style name:`, POPUP_TYPE.INPUT, selectedStyle);
 
     if (!userInput) {
         return;
@@ -754,6 +762,48 @@ async function onSaveStyleClick() {
     option.selected = true;
     $('#sd_style').append(option);
     $('#sd_style').val(styleObject.name);
+    saveSettingsDebounced();
+}
+
+async function onRenameStyleClick() {
+    const selectedStyle = extension_settings.sd.style;
+    const styleObject = extension_settings.sd.styles.find(x => x.name === selectedStyle);
+
+    if (!styleObject) {
+        return;
+    }
+
+    const newName = await callGenericPopup(t`Enter new style name:`, POPUP_TYPE.INPUT, selectedStyle);
+
+    if (!newName) {
+        return;
+    }
+
+    const name = String(newName).trim();
+
+    if (name === selectedStyle) {
+        return;
+    }
+
+    const existingStyle = extension_settings.sd.styles.find(x => x.name === name);
+
+    if (existingStyle) {
+        toastr.error(t`A style with that name already exists`);
+        return;
+    }
+
+    styleObject.name = name;
+    extension_settings.sd.style = name;
+
+    $('#sd_style').empty();
+    for (const style of extension_settings.sd.styles) {
+        const option = document.createElement('option');
+        option.value = style.name;
+        option.text = style.name;
+        option.selected = style.name === extension_settings.sd.style;
+        $('#sd_style').append(option);
+    }
+
     saveSettingsDebounced();
 }
 
@@ -2735,6 +2785,15 @@ function processReply(str) {
         return '';
     }
 
+    if (extension_settings.sd.minimal_prompt_processing) {
+        // Minimal prompt processing
+        // JSON and similar should be preserved
+        str = str.normalize('NFD');
+        str = str.replace(/\s+/g, ' '); // Collapse multiple whitespaces into one
+        str = str.trim();
+        return str;
+    }
+
     str = str.replaceAll('"', '');
     str = str.replaceAll('“', '');
     str = str.replaceAll('\n', ', ');
@@ -2893,7 +2952,7 @@ async function generatePicture(initiator, args, trigger, message, callback) {
     const quietPrompt = getQuietPrompt(generationType, trigger);
     const context = getContext();
 
-    const characterName = context.groupId
+    let characterName = context.groupId
         ? context.groups[Object.keys(context.groups).filter(x => context.groups[x].id === context.groupId)[0]]?.id?.toString()
         : context.characters[context.characterId]?.name;
 
@@ -2913,6 +2972,10 @@ async function generatePicture(initiator, args, trigger, message, callback) {
 
     if (isTrueBoolean(args?.quiet)) {
         callback = () => { };
+    }
+
+    if (isFalseBoolean(args?.gallery)) {
+        characterName = '';
     }
 
     const dimensions = setTypeSpecificDimensions(generationType);
@@ -2962,8 +3025,7 @@ async function generatePicture(initiator, args, trigger, message, callback) {
         const errorText = 'SD prompt text generation failed. ' + reason;
         toastr.error(errorText, 'Image Generation');
         throw new Error(errorText);
-    }
-    finally {
+    } finally {
         $(stopButton).hide();
         restoreOriginalDimensions(dimensions);
         eventSource.removeListener(CUSTOM_STOP_EVENT, stopListener);
@@ -3308,7 +3370,7 @@ async function sendGenerationRequest(generationType, prompt, additionalNegativeP
         return;
     }
 
-    const filename = `${characterName}_${humanizedDateTime()}`;
+    const filename = characterName ? `${characterName}_${humanizedDateTime()}` : humanizedDateTime();
     const base64Image = await saveBase64AsFile(result.data, characterName, filename, result.format);
     callback
         ? await callback(prompt, base64Image, generationType, additionalNegativePrefix, initiator, prefixedPrompt, result.format)
@@ -4711,6 +4773,58 @@ async function onComfyDeleteWorkflowClick() {
     onComfyWorkflowChange();
 }
 
+async function onComfyRenameWorkflowClick() {
+    const oldName = extension_settings.sd.comfy_workflow;
+
+    if (!oldName) {
+        return;
+    }
+
+    let newName = await callGenericPopup(t`Enter new workflow name:`, POPUP_TYPE.INPUT, oldName);
+
+    if (!newName) {
+        return;
+    }
+
+    newName = String(newName).trim();
+
+    if (!newName.toLowerCase().endsWith('.json')) {
+        newName += '.json';
+    }
+
+    if (newName === oldName) {
+        return;
+    }
+
+    const existingWorkflow = Array
+        .from(document.querySelectorAll('#sd_comfy_workflow option'))
+        .find(opt => opt instanceof HTMLOptionElement && opt.value === newName);
+
+    if (existingWorkflow) {
+        toastr.warning(t`A workflow with that name already exists`);
+        return;
+    }
+
+    const response = await fetch('/api/sd/comfy/rename-workflow', {
+        method: 'POST',
+        headers: getRequestHeaders(),
+        body: JSON.stringify({
+            old_name: oldName,
+            new_name: newName,
+        }),
+    });
+
+    if (!response.ok) {
+        const text = await response.text();
+        toastr.error(t`Failed to rename workflow.\n\n${text}`);
+        return;
+    }
+
+    extension_settings.sd.comfy_workflow = newName;
+    saveSettingsDebounced();
+    await loadComfyWorkflows();
+}
+
 /**
  * Sends a chat message with the generated image.
  * @param {string} prompt Prompt used for the image generation
@@ -5153,6 +5267,17 @@ function applyCommandArguments(args) {
         'denoise': 'denoising_strength',
         '2ndpass': 'hr_second_pass_steps',
         'faces': 'restore_faces',
+        'processing': 'minimal_prompt_processing',
+    };
+    const enumHandlers = {
+        'processing': (value) => {
+            if (/standard/gi.test(String(value))) {
+                return false;
+            }
+            if (/minimal/gi.test(String(value))) {
+                return true;
+            }
+        },
     };
 
     for (const [param, setting] of Object.entries(settingMap)) {
@@ -5161,6 +5286,14 @@ function applyCommandArguments(args) {
         }
         currentSettings[setting] = extension_settings.sd[setting];
         const value = String(args[param]);
+        const enumHandler = enumHandlers[param];
+        if (typeof enumHandler === 'function') {
+            const enumValue = enumHandler(value);
+            if (enumValue !== undefined) {
+                overrideSettings[setting] = enumValue;
+            }
+            continue;
+        }
         const type = typeof defaultSettings[setting];
         switch (type) {
             case 'boolean':
@@ -5243,6 +5376,9 @@ jQuery(async () => {
             new SlashCommandNamedArgument(
                 'quiet', 'whether to post the generated image to chat', [ARGUMENT_TYPE.BOOLEAN], false, false, 'false',
             ),
+            new SlashCommandNamedArgument(
+                'gallery', 'whether to save the generated image to the character gallery', [ARGUMENT_TYPE.BOOLEAN], false, false, 'true',
+            ),
             SlashCommandNamedArgument.fromProps({
                 name: 'negative',
                 description: 'negative prompt prefix',
@@ -5279,6 +5415,17 @@ jQuery(async () => {
                 description: 'snap auto-adjusted dimensions to the nearest known resolution (portraits and backgrounds only)',
                 typeList: [ARGUMENT_TYPE.BOOLEAN],
                 enumProvider: commonEnumProviders.boolean('trueFalse'),
+                isRequired: false,
+                acceptsMultiple: false,
+            }),
+            SlashCommandNamedArgument.fromProps({
+                name: 'processing',
+                description: 'level of response prompt processing returned by the LLM',
+                typeList: [ARGUMENT_TYPE.STRING],
+                enumList: [
+                    new SlashCommandEnumValue('standard', 'Standard prompt processing'),
+                    new SlashCommandEnumValue('minimal', 'Minimal prompt processing'),
+                ],
                 isRequired: false,
                 acceptsMultiple: false,
             }),
@@ -5414,7 +5561,7 @@ jQuery(async () => {
         ],
         helpString: `
             <div>
-                Requests to generate an image and posts it to chat (unless <code>quiet=true</code> argument is specified).
+                Requests to generate an image and posts it to chat (unless <code>quiet=true</code> argument is specified). The image is saved to the character gallery by default; use <code>gallery=false</code> to save to the root of the user images directory.
             </div>
             <div>
                 Supported arguments: <code>${Object.values(triggerWords).flat().join(', ')}</code>.
@@ -5554,9 +5701,11 @@ jQuery(async () => {
     $('#sd_comfy_workflow').on('change', onComfyWorkflowChange);
     $('#sd_comfy_open_workflow_editor').on('click', onComfyOpenWorkflowEditorClick);
     $('#sd_comfy_new_workflow').on('click', onComfyNewWorkflowClick);
+    $('#sd_comfy_rename_workflow').on('click', onComfyRenameWorkflowClick);
     $('#sd_comfy_delete_workflow').on('click', onComfyDeleteWorkflowClick);
     $('#sd_style').on('change', onStyleSelect);
     $('#sd_save_style').on('click', onSaveStyleClick);
+    $('#sd_rename_style').on('click', onRenameStyleClick);
     $('#sd_delete_style').on('click', onDeleteStyleClick);
     $('#sd_character_prompt_block').hide();
     $('#sd_interactive_mode').on('input', onInteractiveModeInput);
@@ -5565,6 +5714,7 @@ jQuery(async () => {
     $('#sd_openai_duration').on('input', onOpenAiDurationSelect);
     $('#sd_multimodal_captioning').on('input', onMultimodalCaptioningInput);
     $('#sd_snap').on('input', onSnapInput);
+    $('#sd_minimal_prompt_processing').on('input', onMinimalPromptProcessing);
     $('#sd_clip_skip').on('input', onClipSkipInput);
     $('#sd_seed').on('input', onSeedInput);
     $('#sd_character_prompt_share').on('input', onCharacterPromptShareInput);

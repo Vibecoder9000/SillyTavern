@@ -55,7 +55,10 @@ import { extension_settings } from '../extensions.js';
  * @property {MacroInfo|null} [macro=null] - Macro info if cursor is inside a macro
  * @property {string|null} [textUpToCursor=null] - Pre-computed text up to cursor
  * @property {UnclosedScope[]|null} [unclosedScopes=null] - Pre-computed unclosed scopes
+ * @property {boolean} [isForced=false] - Whether autocomplete was force-triggered (Ctrl+Space)
  */
+
+/** @typedef {(EnhancedMacroAutoCompleteOption|MacroFlagAutoCompleteOption|MacroClosingTagAutoCompleteOption|VariableShorthandAutoCompleteOption|VariableNameAutoCompleteOption|VariableOperatorAutoCompleteOption|VariableValueContextAutoCompleteOption|SimpleAutoCompleteOption)} AnyMacroAutoCompleteOption */
 
 /**
  * Finds unclosed scoped macros in the text up to cursor position.
@@ -100,14 +103,18 @@ export function findUnclosedScopesRegex(text) {
         const name = match[3];
 
         if (isClosing) {
-            // Pop matching opener (case-insensitive)
-            if (stack.length > 0 && stack[stack.length - 1].name.toLowerCase() === name.toLowerCase()) {
-                stack.pop();
+            // Find matching opener in stack (case-insensitive)
+            // When closing an outer scope, all inner unclosed scopes are implicitly closed
+            const matchIndex = stack.findLastIndex(s => s.name.toLowerCase() === name.toLowerCase());
+            if (matchIndex !== -1) {
+                // Pop everything from matchIndex to end (inclusive) - closes the matched scope and all nested ones
+                stack.splice(matchIndex);
             }
         } else {
             // Check if macro can accept scoped content
+            // List-arg macros don't support scopes - they accept arbitrary inline args instead
             const macroDef = macroSystem.registry.getPrimaryMacro(name);
-            if (macroDef && macroDef.maxArgs > 0) {
+            if (macroDef && macroDef.maxArgs > 0 && macroDef.list === null) {
                 // Try to find closing }} to extract trailing whitespace
                 let paddingAfter = '';
                 const afterMatch = text.slice(match.index + match[0].length);
@@ -131,16 +138,80 @@ export function findUnclosedScopesRegex(text) {
 }
 
 /**
+ * Checks if a scoped macro's scope content is optional (i.e., all required args are already filled).
+ * Used to determine whether to show the scope hint by default or only when forced.
+ *
+ * @param {UnclosedScope} scope - The unclosed scope info.
+ * @param {string} textUpToCursor - The text up to cursor to parse the macro content.
+ * @returns {boolean} - True if the scope content is optional.
+ */
+function isScopeOptional(scope, textUpToCursor) {
+    const def = macroSystem.registry.getPrimaryMacro(scope.name);
+    if (!def) {
+        // Unknown macro - treat scope as required (show hint)
+        return false;
+    }
+
+    // Find the macro's closing }} to extract its content
+    const openingEnd = textUpToCursor.indexOf('}}', scope.startOffset);
+    if (openingEnd === -1) {
+        // Macro not closed yet - can't determine
+        return false;
+    }
+
+    // Extract content between {{ and }} to count arguments
+    const macroContent = textUpToCursor.slice(scope.startOffset + 2, openingEnd);
+    const context = parseMacroContext(macroContent, macroContent.length);
+
+    // Count current arguments (including space-separated arg if present)
+    const currentArgCount = context.args.length;
+
+    // The scoped content would be the next argument (currentArgCount + 1)
+    // Scope is optional if:
+    // 1. Current args already meet minArgs requirement, AND
+    // 2. Adding one more (scope) would still be <= maxArgs
+    const wouldBeArgIndex = currentArgCount; // 0-indexed
+    const scopeIsOptional = currentArgCount >= def.minArgs && wouldBeArgIndex < def.maxArgs;
+
+    // Check if the argument at wouldBeArgIndex is marked as optional in the definition
+    if (def.unnamedArgDefs && def.unnamedArgDefs[wouldBeArgIndex]) {
+        return def.unnamedArgDefs[wouldBeArgIndex].optional === true;
+    }
+
+    // If no explicit arg definition, use the min/max args logic
+    return scopeIsOptional;
+}
+
+/**
+ * Filters unclosed scopes to exclude those with optional scope content.
+ * Used when autocomplete is not force-triggered (Ctrl+Space).
+ *
+ * @param {UnclosedScope[]} unclosedScopes - The unclosed scopes to filter.
+ * @param {string} textUpToCursor - The text up to cursor.
+ * @param {boolean} isForced - Whether autocomplete was force-triggered.
+ * @returns {UnclosedScope[]} - Filtered scopes (excludes optional scopes unless forced).
+ */
+function filterOptionalScopes(unclosedScopes, textUpToCursor, isForced) {
+    if (isForced) {
+        // When forced, show all scopes including optional ones
+        return unclosedScopes;
+    }
+
+    // Filter out scopes where the scope content is optional
+    return unclosedScopes.filter(scope => !isScopeOptional(scope, textUpToCursor));
+}
+
+/**
  * Builds autocomplete options for variable shorthand syntax (.varName or $varName).
  * @param {MacroAutoCompleteContext} context
  * @param {Object} [opts] - Optional configuration.
  * @param {boolean} [opts.forIfCondition=false] - If true, options are for {{if}} condition (closes with }}).
  * @param {string} [opts.paddingAfter=''] - Whitespace to add before closing }}.
- * @returns {(EnhancedMacroAutoCompleteOption|MacroFlagAutoCompleteOption|MacroClosingTagAutoCompleteOption|VariableShorthandAutoCompleteOption|VariableNameAutoCompleteOption|VariableOperatorAutoCompleteOption)[]}
+ * @returns {AnyMacroAutoCompleteOption[]}
  */
 export function buildVariableShorthandOptions(context, opts = {}) {
     const { forIfCondition = false, paddingAfter = '' } = opts;
-    /** @type {(VariableShorthandAutoCompleteOption|VariableNameAutoCompleteOption|VariableOperatorAutoCompleteOption|VariableValueContextAutoCompleteOption)[]} */
+    /** @type {AnyMacroAutoCompleteOption[]} */
     const options = [];
 
     const isLocal = context.variablePrefix === '.';
@@ -276,7 +347,7 @@ export function buildVariableShorthandOptions(context, opts = {}) {
 
     // If typing value (after = or +=), no autocomplete needed - freeform text
     // But we show the current context for reference (greyed out, non-selectable)
-    if (context.isTypingValue && !context.isTypingOperator) {
+    if (context.isTypingValue && !context.isTypingOperator && !context.isTypingClosingBrace) {
         // Show the current variable name as context (non-selectable)
         const varNameOption = new VariableNameAutoCompleteOption(context.variableName, scope, false);
         varNameOption.valueProvider = () => ''; // Context only
@@ -331,6 +402,49 @@ export function buildVariableShorthandOptions(context, opts = {}) {
         }
     }
 
+    // If typing closing brace on a variable shorthand (without operator), show the current state
+    // This handles cases like {{.Lila} or {{.Lila}}| where we want to show what was typed
+    if (context.isTypingClosingBrace && !context.isOperatorComplete && !context.isTypingOperator && !context.isTypingValue) {
+        // Show the current variable name as context (non-selectable)
+        const varNameOption = new VariableNameAutoCompleteOption(context.variableName, scope, false);
+        varNameOption.valueProvider = () => ''; // Context only
+        varNameOption.makeSelectable = false;
+        varNameOption.sortPriority = 2;
+        varNameOption.matchProvider = () => true; // Always show
+        options.push(varNameOption);
+    }
+
+    // If typing closing brace after a value operator (like {{.Lila+=4}} or {{.Lila+=4}),
+    // show the full context (variable + operator + value)
+    if (context.isTypingClosingBrace && context.variableOperator && context.isTypingValue) {
+        // Show the current variable name as context (non-selectable)
+        const varNameOption = new VariableNameAutoCompleteOption(context.variableName, scope, false);
+        varNameOption.valueProvider = () => ''; // Context only
+        varNameOption.makeSelectable = false;
+        varNameOption.sortPriority = 2;
+        varNameOption.matchProvider = () => true; // Always show
+        options.push(varNameOption);
+
+        // Show the operator that was used (non-selectable)
+        const opDef = VariableOperatorDefinitions.get(context.variableOperator);
+        if (opDef) {
+            const opOption = new VariableOperatorAutoCompleteOption(opDef);
+            opOption.valueProvider = () => ''; // Already typed
+            opOption.makeSelectable = false;
+            opOption.sortPriority = 3;
+            opOption.matchProvider = () => true; // Always show
+            options.push(opOption);
+
+            // Show value context info (non-selectable)
+            const valueOption = new VariableValueContextAutoCompleteOption(opDef, context.variableValue);
+            valueOption.valueProvider = () => ''; // Context only
+            valueOption.makeSelectable = false;
+            valueOption.sortPriority = 4;
+            valueOption.matchProvider = () => true; // Always show
+            options.push(valueOption);
+        }
+    }
+
     return options;
 }
 
@@ -340,36 +454,65 @@ export function buildVariableShorthandOptions(context, opts = {}) {
  * When typing arguments (after ::), prioritizes the exact macro match.
  * @param {MacroAutoCompleteContext} context
  * @param {string} [textUpToCursor] - Full document text up to cursor, for unclosed scope detection.
- * @returns {(EnhancedMacroAutoCompleteOption|MacroFlagAutoCompleteOption|MacroClosingTagAutoCompleteOption|VariableShorthandAutoCompleteOption|VariableNameAutoCompleteOption|VariableOperatorAutoCompleteOption)[]}
+ * @param {Object} [opts] - Additional options.
+ * @param {boolean} [opts.isForced=false] - Whether autocomplete was force-triggered (Ctrl+Space).
+ * @returns {AnyMacroAutoCompleteOption[]}
  */
-export function buildEnhancedMacroOptions(context, textUpToCursor) {
-    /** @type {(EnhancedMacroAutoCompleteOption|MacroFlagAutoCompleteOption|MacroClosingTagAutoCompleteOption|VariableShorthandAutoCompleteOption|VariableNameAutoCompleteOption|VariableOperatorAutoCompleteOption)[]} */
+export function buildEnhancedMacroOptions(context, textUpToCursor, { isForced = false } = {}) {
+    /** @type {AnyMacroAutoCompleteOption[]} */
     const options = [];
 
     if (context.isVariableShorthand) {
         return buildVariableShorthandOptions(context);
     }
 
-    // Check for unclosed scoped macros and suggest closing tags first
+    // Check for unclosed scoped macros and suggest closing tags
+    // Iterate from innermost to outermost, adding optional scopes and stopping at first required scope
     const unclosedScopes = findUnclosedScopes(textUpToCursor);
     if (unclosedScopes.length > 0) {
-        // Suggest closing the innermost (last) unclosed scope first
-        const innermostScope = unclosedScopes[unclosedScopes.length - 1];
-        // Preserve whitespace padding from the opening tag
-        // Pass currentPadding so the closing tag can replace user-typed whitespace with the target padding
-        const closingOption = new MacroClosingTagAutoCompleteOption(innermostScope.name, {
-            paddingBefore: innermostScope.paddingBefore,
-            paddingAfter: innermostScope.paddingAfter,
-            currentPadding: context.paddingBefore,
-        });
-        options.push(closingOption);
+        let firstRequiredPriority = 1; // Priority for the first required (non-optional) scope
+        let optionalPriority = 3; // Lower priority for optional scopes
+        let foundRequired = false;
+        let elseOptionAdded = false;
 
-        // If inside a scoped {{if}}, also suggest {{else}}
-        if (innermostScope.name === 'if') {
-            const macroDef = macroSystem.registry.getPrimaryMacro('else');
-            const elseOption = new EnhancedMacroAutoCompleteOption(macroDef);
-            elseOption.sortPriority = 2;
-            options.push(elseOption);
+        // Iterate from innermost (last) to outermost (first)
+        for (let i = unclosedScopes.length - 1; i >= 0; i--) {
+            const scope = unclosedScopes[i];
+            const isOptional = isScopeOptional(scope, textUpToCursor);
+            const nestingLevel = unclosedScopes.length - 1 - i; // 0 = innermost
+
+            // If we've already found a required scope, stop adding more
+            if (foundRequired && !isOptional) break;
+
+            const closingOption = new MacroClosingTagAutoCompleteOption(scope.name, {
+                paddingBefore: scope.paddingBefore,
+                paddingAfter: scope.paddingAfter,
+                currentPadding: context.paddingBefore,
+                isOptional: isOptional,
+                nestingLevel: nestingLevel,
+            });
+
+            if (isOptional) {
+                closingOption.sortPriority = optionalPriority++;
+            } else {
+                // First required scope gets top priority
+                closingOption.sortPriority = firstRequiredPriority;
+                foundRequired = true;
+            }
+
+            options.push(closingOption);
+
+            // If inside a scoped {{if}}, also suggest {{else}} (only once, for innermost if)
+            if (!elseOptionAdded && scope.name === 'if') {
+                const macroDef = macroSystem.registry.getPrimaryMacro('else');
+                const elseOption = new EnhancedMacroAutoCompleteOption(macroDef);
+                elseOption.sortPriority = 2;
+                options.push(elseOption);
+                elseOptionAdded = true;
+            }
+
+            // Stop once we've added a required scope
+            if (foundRequired) break;
         }
     }
 
@@ -427,15 +570,25 @@ export function buildEnhancedMacroOptions(context, textUpToCursor) {
     const allMacros = macroSystem.registry.getAllMacros({ excludeHiddenAliases: true });
 
     // If we're typing arguments (after ::), only show the context to the matching macro
+    // Also treat typing closing brace the same way - show details for matching macro
     const isTypingArgs = context.currentArgIndex >= 0;
+    const isTypingClosingBrace = context.isTypingClosingBrace ?? false;
+    const shouldShowMatchingMacroDetails = isTypingArgs || isTypingClosingBrace;
 
     // Check if we're inside a scoped {{if}} for {{else}} selectability
     const isInsideScopedIf = unclosedScopes.some(scope => scope.name === 'if');
+
+    // Track if any macro matches the identifier (for "no match" message)
+    let hasMatchingMacro = false;
 
     for (const macro of allMacros) {
         // Check if this macro matches the typed identifier
         const isExactMatch = macro.name === context.identifier;
         const isAliasMatch = macro.aliasOf === context.identifier;
+
+        if (isExactMatch || isAliasMatch) {
+            hasMatchingMacro = true;
+        }
 
         // Only pass context to the macro that matches the identifier being typed
         // This ensures argument hints only show for the relevant macro
@@ -461,11 +614,55 @@ export function buildEnhancedMacroOptions(context, textUpToCursor) {
             option.makeSelectable = false;
         }
 
-        // When typing arguments, prioritize exact matches by putting them first
-        if (isTypingArgs && (isExactMatch || isAliasMatch)) {
+        // When typing arguments or closing brace, prioritize exact matches by putting them first
+        if (shouldShowMatchingMacroDetails && (isExactMatch || isAliasMatch)) {
             options.unshift(option);
         } else {
             options.push(option);
+        }
+    }
+
+    // If typing args/closing brace but no macro matches, check for closing macro context
+    if (shouldShowMatchingMacroDetails && !hasMatchingMacro && context.identifier.length > 0) {
+        // Check if this is a closing macro (starts with /) - show original macro's details
+        // Note: We look up the macro directly, not from unclosedScopes, because the closing tag
+        // itself may have already closed the scope by this point in the text
+        const isClosingMacro = context.identifier.startsWith('/');
+        const closingMacroName = isClosingMacro ? context.identifier.slice(1) : null;
+        const macroDef = closingMacroName ? macroSystem.registry.getPrimaryMacro(closingMacroName) : null;
+
+        if (macroDef) {
+            // Show the original macro's details for the closing tag
+            // Create a context that shows we're closing the scope (no argument highlight)
+            const closingContext = /** @type {MacroAutoCompleteContext} */ ({
+                ...context,
+                identifier: macroDef.name,
+                currentArgIndex: -1, // No argument highlight
+                isClosingTag: true,
+            });
+            const closingOption = new EnhancedMacroAutoCompleteOption(macroDef, closingContext);
+            closingOption.valueProvider = () => '';
+            closingOption.makeSelectable = false;
+            closingOption.matchProvider = () => true;
+            closingOption.sortPriority = 0;
+            options.unshift(closingOption);
+            hasMatchingMacro = true; // Prevent "no match" message
+        }
+
+        // Only show "no match" if we didn't find a matching closing scope
+        if (!hasMatchingMacro) {
+            const noMatchOption = new SimpleAutoCompleteOption({
+                name: context.identifier,
+                symbol: '❌',
+                description: `No macro found: "${context.identifier}"`,
+                detailedDescription: `The macro name <code>${context.identifier}</code> does not exist.<br><br>Check spelling or use a different macro name.`,
+                type: 'error',
+            });
+            noMatchOption.valueProvider = () => '';
+            noMatchOption.makeSelectable = false;
+            noMatchOption.matchProvider = () => true; // Always show
+            noMatchOption.sortPriority = 0; // Top priority
+            options.unshift(noMatchOption);
         }
     }
 
@@ -600,7 +797,17 @@ export function findMacroAtCursor(text, cursorPos) {
     // Search backwards for opening {{ while tracking nesting depth for nested macros
     let openPos = -1;
     let depth = 0;
-    for (let i = cursorPos - 1; i >= 0; i--) {
+
+    // If cursor is right after }}, those are the closing braces of the macro we're looking for,
+    // not nested braces. Skip them by starting the search before them.
+    let searchStart = cursorPos - 1;
+    let cursorAfterClosingBraces = false;
+    if (cursorPos >= 2 && text[cursorPos - 1] === '}' && text[cursorPos - 2] === '}') {
+        searchStart = cursorPos - 3; // Start before the }}
+        cursorAfterClosingBraces = true;
+    }
+
+    for (let i = searchStart; i >= 0; i--) {
         if (text[i] === '}' && i > 0 && text[i - 1] === '}') {
             // Found }}, going backwards means we're entering a nested macro
             depth++;
@@ -624,29 +831,35 @@ export function findMacroAtCursor(text, cursorPos) {
 
     // Search forwards for closing }} while tracking nesting depth
     let closePos = -1;
-    depth = 0;
-    for (let i = cursorPos; i < text.length - 1; i++) {
-        if (text[i] === '{' && text[i + 1] === '{') {
-            // Found {{, entering a nested macro
-            depth++;
-            i++; // Skip the other brace
-            continue;
-        }
-        if (text[i] === '}' && text[i + 1] === '}') {
-            if (depth > 0) {
-                // This }} closes a nested macro
-                depth--;
+
+    // If cursor is right after }}, we already know where the closing braces are
+    if (cursorAfterClosingBraces) {
+        closePos = cursorPos;
+    } else {
+        depth = 0;
+        for (let i = cursorPos; i < text.length - 1; i++) {
+            if (text[i] === '{' && text[i + 1] === '{') {
+                // Found {{, entering a nested macro
+                depth++;
                 i++; // Skip the other brace
                 continue;
             }
-            // Found our closing }} at depth 0
-            closePos = i + 2;
-            break;
+            if (text[i] === '}' && text[i + 1] === '}') {
+                if (depth > 0) {
+                    // This }} closes a nested macro
+                    depth--;
+                    i++; // Skip the other brace
+                    continue;
+                }
+                // Found our closing }} at depth 0
+                closePos = i + 2;
+                break;
+            }
         }
-    }
 
-    if (closePos === -1) {
-        closePos = text.length;
+        if (closePos === -1) {
+            closePos = text.length;
+        }
     }
 
     const hasClosingBraces = closePos <= text.length && text.slice(closePos - 2, closePos) === '}}';
@@ -701,6 +914,7 @@ export async function buildMacroAutoCompleteResult(text, cursorPos, {
     macro = null,
     textUpToCursor = null,
     unclosedScopes = null,
+    isForced = false,
 } = {}) {
     // Compute textUpToCursor if not provided
     if (textUpToCursor === null) {
@@ -712,10 +926,14 @@ export async function buildMacroAutoCompleteResult(text, cursorPos, {
         unclosedScopes = findUnclosedScopes(textUpToCursor);
     }
 
+    // Filter out optional scopes unless forced (Ctrl+Space)
+    // This prevents intrusive hints for macros like {{trim}} where scope is optional
+    const filteredScopes = filterOptionalScopes(unclosedScopes, textUpToCursor, isForced);
+
     // If cursor is NOT inside a macro, check if we're in scoped content
     if (!macro) {
-        if (unclosedScopes.length > 0) {
-            const scopedMacro = unclosedScopes[unclosedScopes.length - 1];
+        if (filteredScopes.length > 0) {
+            const scopedMacro = filteredScopes[filteredScopes.length - 1];
 
             // Find where the opening macro ends
             const openingEnd = text.indexOf('}}', scopedMacro.startOffset);
@@ -724,10 +942,14 @@ export async function buildMacroAutoCompleteResult(text, cursorPos, {
                 const macroContent = text.slice(scopedMacro.startOffset + 2, openingEnd);
                 const baseContext = parseMacroContext(macroContent, macroContent.length);
 
+                // Check if this scope is optional (for display purposes)
+                const scopeIsOptional = isScopeOptional(scopedMacro, textUpToCursor);
+
                 const scopedContext = {
                     ...baseContext,
                     currentArgIndex: baseContext.args.length,
                     isInScopedContent: true,
+                    isScopedContentOptional: scopeIsOptional,
                     scopedMacroName: scopedMacro.name,
                 };
 
@@ -761,15 +983,19 @@ export async function buildMacroAutoCompleteResult(text, cursorPos, {
 
     if (isCursorAtClosing) {
         // Cursor is at the closing }} - check if this is an unclosed scoped macro
-        if (unclosedScopes.length > 0) {
-            const scopedMacro = unclosedScopes[unclosedScopes.length - 1];
+        if (filteredScopes.length > 0) {
+            const scopedMacro = filteredScopes[filteredScopes.length - 1];
             // Check if the current macro IS the unclosed scoped macro
             if (scopedMacro.startOffset === macro.start) {
                 // Show scoped context - cursor is right at the end of the opening tag
+                // Check if this scope is optional (for display purposes)
+                const scopeIsOptional = isScopeOptional(scopedMacro, textUpToCursor);
+
                 const scopedContext = {
                     ...context,
                     currentArgIndex: context.args.length,
                     isInScopedContent: true,
+                    isScopedContentOptional: scopeIsOptional,
                     scopedMacroName: scopedMacro.name,
                 };
 
@@ -788,6 +1014,33 @@ export async function buildMacroAutoCompleteResult(text, cursorPos, {
                 }
             }
         }
+
+        // Check if this is a closing tag ({{/macroName}}) - show original macro's details
+        // Note: We look up the macro directly, not from unclosedScopes, because the closing tag
+        // itself has already closed the scope by this point in the text
+        if (context.identifier.startsWith('/')) {
+            const closingMacroName = context.identifier.slice(1);
+            const macroDef = macroSystem.registry.getPrimaryMacro(closingMacroName);
+            if (macroDef) {
+                const closingContext = /** @type {MacroAutoCompleteContext} */ ({
+                    ...context,
+                    identifier: macroDef.name,
+                    currentArgIndex: -1, // No argument highlight
+                    isClosingTag: true,
+                });
+                const closingOption = new EnhancedMacroAutoCompleteOption(macroDef, closingContext);
+                closingOption.valueProvider = () => '';
+                closingOption.makeSelectable = false;
+
+                return new AutoCompleteNameResult(
+                    macroDef.name,
+                    macro.start + 2,
+                    [closingOption],
+                    false,
+                );
+            }
+        }
+
         // Not a scoped macro, just clear arg highlighting
         context.currentArgIndex = -1;
     }
@@ -908,7 +1161,7 @@ export async function buildMacroAutoCompleteResult(text, cursorPos, {
             resultIdentifier = context.invalidTrailingChars || '';
             // Use actual variableNameEnd position from parsing
             resultStart = macro.start + 2 + context.variableNameEnd;
-        } else if (context.isTypingValue) {
+        } else if (context.isTypingValue && !context.isTypingClosingBrace) {
             // Typing value: identifier = value being typed, start = after operator
             resultIdentifier = context.variableValue;
             // Use actual operatorEnd position from parsing (accounts for whitespace)
@@ -920,6 +1173,10 @@ export async function buildMacroAutoCompleteResult(text, cursorPos, {
 
             makeNoMatchText = () => `Type any value you want to ${context.variableOperator == '+=' ? `add to the variable '${context.variableName}'` : `set the variable '${context.variableName}' to`}.`;
             makeNoOptionsText = () => 'Enter a variable value';
+        } else if (context.isTypingClosingBrace) {
+            // Typing closing brace on variable shorthand - show context, no replacement needed
+            resultIdentifier = '';
+            resultStart = cursorPos;
         } else {
             // Fallback: use variable name
             resultIdentifier = context.variableName;
@@ -950,9 +1207,11 @@ export async function buildMacroAutoCompleteResult(text, cursorPos, {
  *
  * @param {string} text - The full text content.
  * @param {number} cursorPos - The cursor position.
+ * @param {Object} [options={}] - Additional options.
+ * @param {boolean} [options.isForced=false] - Whether autocomplete was force-triggered (Ctrl+Space).
  * @returns {Promise<AutoCompleteNameResult|null>}
  */
-export async function getMacroAutoCompleteAt(text, cursorPos) {
+export async function getMacroAutoCompleteAt(text, cursorPos, { isForced = false } = {}) {
     const macro = findMacroAtCursor(text, cursorPos);
-    return buildMacroAutoCompleteResult(text, cursorPos, { macro });
+    return buildMacroAutoCompleteResult(text, cursorPos, { macro, isForced });
 }

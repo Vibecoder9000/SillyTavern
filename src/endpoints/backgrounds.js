@@ -5,13 +5,13 @@ import express from 'express';
 import sanitize from 'sanitize-filename';
 
 import { invalidateThumbnail } from './thumbnails.js';
-import { thumbnailDimensions, readMetadataIndex, renameMetadata, removeMetadata } from './image-metadata.js';
+import { thumbnailDimensions, readMetadataIndex, renameMetadata, removeMetadata, getOrGenerateMetadataBatch } from './image-metadata.js';
 import { getImages } from '../util.js';
 import { getFileNameValidationFunction } from '../middleware/validateFileName.js';
 
 export const router = express.Router();
 
-router.post('/all', function (request, response) {
+router.post('/all', async function (request, response) {
     const images = getImages(request.user.directories.backgrounds);
     const config = { width: thumbnailDimensions.bg[0], height: thumbnailDimensions.bg[1] };
     response.json({ images, config });
@@ -111,12 +111,19 @@ router.post('/upload', function (request, response) {
     if (!request.body || !request.file) return response.sendStatus(400);
 
     const img_path = path.join(request.file.destination, request.file.filename);
-    const filename = request.file.originalname;
+    const filename = sanitize(request.file.originalname);
 
     try {
         fs.copyFileSync(img_path, path.join(request.user.directories.backgrounds, filename));
         fs.unlinkSync(img_path);
         invalidateThumbnail(request.user.directories, 'bg', filename);
+
+        // Generate metadata for the new image
+        const relativePath = path.join('backgrounds', filename);
+        getOrGenerateMetadataBatch(request.user.directories.root, [relativePath], 'bg').catch(err => {
+            console.warn('[Backgrounds] Failed to generate metadata for upload:', err.message);
+        });
+
         response.send(filename);
     } catch (err) {
         console.error(err);

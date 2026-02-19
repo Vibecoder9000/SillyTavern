@@ -102,12 +102,32 @@ app.use(bodyParser.json({ limit: '500mb' }));
 app.use(bodyParser.urlencoded({ extended: true, limit: '500mb' }));
 
 // CORS Settings //
-const CORS = cors({
-    origin: 'null',
-    methods: ['OPTIONS'],
-});
+const corsEnabled = getConfigValue('cors.enabled', true, 'boolean');
+if (corsEnabled) {
+    const corsOrigin = getConfigValue('cors.origin', 'null');
+    const corsMethods = getConfigValue('cors.methods', ['OPTIONS']);
+    const corsAllowedHeaders = getConfigValue('cors.allowedHeaders', []);
+    const corsExposedHeaders = getConfigValue('cors.exposedHeaders', []);
+    const corsCredentials = getConfigValue('cors.credentials', false, 'boolean');
+    const corsMaxAge = getConfigValue('cors.maxAge', null, 'number');
 
-app.use(CORS);
+    /** @type {cors.CorsOptions} */
+    const corsOptions = {
+        origin: corsOrigin,
+        methods: corsMethods,
+        credentials: corsCredentials,
+    };
+    if (Array.isArray(corsAllowedHeaders) && corsAllowedHeaders.length > 0) {
+        corsOptions.allowedHeaders = corsAllowedHeaders;
+    }
+    if (Array.isArray(corsExposedHeaders) && corsExposedHeaders.length > 0) {
+        corsOptions.exposedHeaders = corsExposedHeaders;
+    }
+    if (corsMaxAge !== null && Number.isInteger(corsMaxAge)) {
+        corsOptions.maxAge = corsMaxAge;
+    }
+    app.use(cors(corsOptions));
+}
 
 if (cliArgs.listen && cliArgs.basicAuthMode) {
     app.use(basicAuthMiddleware);
@@ -122,16 +142,6 @@ app.use(hostWhitelistMiddleware);
 
 if (cliArgs.listen) {
     app.use(accessLoggerMiddleware());
-}
-
-if (cliArgs.enableCorsProxy) {
-    app.use('/proxy/:url(*)', corsProxyMiddleware);
-} else {
-    app.use('/proxy/:url(*)', async (_, res) => {
-        const message = 'CORS proxy is disabled. Enable it in config.yaml or use the --corsProxy flag.';
-        console.log(message);
-        res.status(404).send(message);
-    });
 }
 
 app.use(cookieSession({
@@ -163,6 +173,9 @@ if (!cliArgs.disableCsrf) {
                 return;
             }
             req.session.csrfToken = token;
+        },
+        skipCsrfProtection: (req) => {
+            return cliArgs.enableCorsProxy ? /^\/proxy\//.test(req.path) : false;
         },
         size: 32,
     });
@@ -230,6 +243,16 @@ app.post('/api/ping', (request, response) => {
 
     response.sendStatus(204);
 });
+
+if (cliArgs.enableCorsProxy) {
+    app.use('/proxy/:url(*)', corsProxyMiddleware);
+} else {
+    app.use('/proxy/:url(*)', async (_, res) => {
+        const message = 'CORS proxy is disabled. Enable it in config.yaml or use the --corsProxy flag.';
+        console.log(message);
+        res.status(404).send(message);
+    });
+}
 
 // File uploads
 const uploadsPath = path.join(cliArgs.dataRoot, UPLOADS_DIRECTORY);
