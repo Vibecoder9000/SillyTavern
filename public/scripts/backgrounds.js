@@ -220,6 +220,7 @@ export function loadBackgroundSettings(settings) {
     }
     background_settings.thumbnailColumns = columns;
     background_settings.sortOrder = backgroundSettings.sortOrder;
+    background_settings.animation = backgroundSettings.animation;
     applyThumbnailColumns(background_settings.thumbnailColumns);
 
     setBackground(backgroundSettings.name, backgroundSettings.url);
@@ -502,14 +503,13 @@ async function onDeleteBackgroundClick(e) {
     const url = bgToDelete.data('url');
     const isCustom = bgToDelete.attr('custom') === 'true';
     const deleteFromServerId = 'delete_bg_from_server';
-    const customInputs = [
-        {
-            type: 'checkbox',
-            label: t`Also delete file from server`,
-            id: deleteFromServerId,
-            defaultState: true,
-        },
-    ];
+    /** @type {import('./popup.js').CustomPopupInput[]} */
+    const customInputs = [{
+        type: 'checkbox',
+        label: t`Also delete file from server`,
+        id: deleteFromServerId,
+        defaultState: true,
+    }];
     let deleteFromServer = false;
     const confirm = await Popup.show.confirm(t`Delete the background?`, null, {
         customInputs: isCustom ? customInputs : [],
