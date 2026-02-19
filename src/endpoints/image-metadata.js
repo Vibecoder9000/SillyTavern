@@ -255,6 +255,17 @@ export async function removeMetadata(userDataRoot, relativePath) {
     const index = await readMetadataIndex(userDataRoot);
     if (index.images[posixPath]) {
         delete index.images[posixPath];
+
+        // Clear any folder thumbnailFile references that point to the deleted file
+        const deletedFileName = path.posix.basename(posixPath);
+        if (Array.isArray(index.folders)) {
+            for (const folder of index.folders) {
+                if (folder.thumbnailFile === deletedFileName) {
+                    folder.thumbnailFile = '';
+                }
+            }
+        }
+
         await writeMetadataIndex(userDataRoot, index);
     }
 }
@@ -278,6 +289,18 @@ export async function renameMetadata(userDataRoot, oldRelativePath, newRelativeP
 
     delete index.images[posixOldPath];
     index.images[posixNewPath] = data;
+
+    // Update any folder thumbnailFile references that point to the old filename
+    const oldFileName = path.posix.basename(posixOldPath);
+    const newFileName = path.posix.basename(posixNewPath);
+    if (oldFileName !== newFileName && Array.isArray(index.folders)) {
+        for (const folder of index.folders) {
+            if (folder.thumbnailFile === oldFileName) {
+                folder.thumbnailFile = newFileName;
+            }
+        }
+    }
+
     await writeMetadataIndex(userDataRoot, index);
 
     return data;
