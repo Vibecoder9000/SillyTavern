@@ -101,7 +101,8 @@
     opacity: 1;
 }
 
-.bg_example .mobile-only-menu-toggle {
+.bg_example .mobile-only-menu-toggle,
+.bg_folder_tile .mobile-only-menu-toggle {
     display: none;
 }
 

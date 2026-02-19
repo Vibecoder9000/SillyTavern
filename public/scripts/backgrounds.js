@@ -1315,6 +1315,17 @@ export function initBackgrounds() {
             e.stopPropagation();
             const folderId = $(this).closest('.bg_folder_tile').attr('data-folder-id');
             if (folderId) onDeleteFolder(folderId);
+        })
+        .on('click', '.bg_folder_tile .mobile-only-menu-toggle', function (e) {
+            e.stopPropagation();
+            const $context = $(this).closest('.bg_folder_tile');
+            const wasOpen = $context.hasClass('mobile-menu-open');
+            // Close all other open menus before opening a new one.
+            $('.bg_folder_tile.mobile-menu-open').removeClass('mobile-menu-open');
+            $('.bg_example.mobile-menu-open').removeClass('mobile-menu-open');
+            if (!wasOpen) {
+                $context.addClass('mobile-menu-open');
+            }
         });
 
     $(document)
@@ -1325,6 +1336,7 @@ export function initBackgrounds() {
             const wasOpen = $context.hasClass('mobile-menu-open');
             // Close all other open menus before opening a new one.
             $('.bg_example.mobile-menu-open').removeClass('mobile-menu-open');
+            $('.bg_folder_tile.mobile-menu-open').removeClass('mobile-menu-open');
             if (!wasOpen) {
                 $context.addClass('mobile-menu-open');
             }
