@@ -655,8 +655,6 @@ function renderChatBackgrounds(backgrounds) {
 }
 
 export async function getBackgrounds() {
-    await preloadImageMetadata();
-
     const response = await fetch('/api/backgrounds/all', {
         method: 'POST',
         headers: getRequestHeaders(),
@@ -666,6 +664,7 @@ export async function getBackgrounds() {
         const { images, config } = await response.json();
         Object.assign(THUMBNAIL_CONFIG, config);
         cachedSystemBackgrounds = images;
+        await preloadImageMetadata();
 
         renderSystemBackgrounds(images);
         highlightSelectedBackground();
