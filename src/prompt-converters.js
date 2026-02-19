@@ -25,6 +25,14 @@ export const PROMPT_PROCESSING_TYPE = {
     SINGLE: 'single',
 };
 
+// 'auto' is intentionally unmapped
+const GEMINI_MEDIA_RESOLUTION = {
+    low: 'media_resolution_low',
+    high: 'media_resolution_high',
+};
+
+const enableThoughtSignatures = !!getConfigValue('gemini.thoughtSignatures', true, 'boolean');
+
 /**
  * @typedef {object} PromptNames
  * @property {string} charName Character name
@@ -110,7 +118,6 @@ export function postProcessPrompt(messages, type, names) {
  * @copyright Prompt Conversion script taken from RisuAI by kwaroran (GPLv3).
  */
 export function convertClaudePrompt(messages, addAssistantPostfix, addAssistantPrefill, withSysPromptSupport, useSystemPrompt, addSysHumanMsg, excludePrefixes) {
-
     //Prepare messages for claude.
     //When 'Exclude Human/Assistant prefixes' checked, setting messages role to the 'system'(last message is exception).
     if (messages.length > 0) {
@@ -501,17 +508,27 @@ export function convertGooglePrompt(messages, model, useSysPrompt, names) {
         //create the prompt parts
         const parts = [];
         message.content.forEach((part) => {
-            const addDataUrlPart = (/** @type {string} */ url, /** @type {string} */ defaultMimeType) => {
+            const addDataUrlPart = (/** @type {string} */ url, /** @type {string} */ defaultMimeType, /** @type {string?} */ detail = null) => {
                 if (url && url.startsWith('data:')) {
                     const [header, base64Data] = url.split(',');
                     const mimeType = header.match(/data:([^;]+)/)?.[1] || defaultMimeType;
+                    const mediaResolution = GEMINI_MEDIA_RESOLUTION[detail] || null;
 
-                    parts.push({
+                    const part = {
                         inlineData: {
                             mimeType: mimeType,
                             data: base64Data,
                         },
-                    });
+                    };
+
+                    // https://ai.google.dev/gemini-api/docs/gemini-3#media_resolution
+                    if (/gemini-3/.test(model) && mediaResolution) {
+                        part.mediaResolution = {
+                            level: mediaResolution,
+                        };
+                    }
+
+                    parts.push(part);
                 }
             };
 
@@ -532,16 +549,19 @@ export function convertGooglePrompt(messages, model, useSysPrompt, names) {
                             name: toolCall.function.name,
                             args: tryParse(toolCall.function.arguments) ?? toolCall.function.arguments,
                         },
+                        ...(toolCall.signature ? { thoughtSignature: toolCall.signature } : {}),
                     });
 
                     toolNameMap[toolCall.id] = toolCall.function.name;
                 });
             } else if (part.type === 'image_url') {
                 const imageUrl = part.image_url?.url;
-                addDataUrlPart(imageUrl, 'image/png');
+                const detail = part.image_url?.detail;
+                addDataUrlPart(imageUrl, 'image/png', detail);
             } else if (part.type === 'video_url') {
                 const videoUrl = part.video_url?.url;
-                addDataUrlPart(videoUrl, 'video/mp4');
+                const detail = part.video_url?.detail;
+                addDataUrlPart(videoUrl, 'video/mp4', detail);
             } else if (part.type === 'audio_url') {
                 const audioUrl = part.audio_url?.url;
                 addDataUrlPart(audioUrl, 'audio/mpeg');
@@ -549,16 +569,27 @@ export function convertGooglePrompt(messages, model, useSysPrompt, names) {
         });
 
         // https://ai.google.dev/gemini-api/docs/gemini-3#migrating_from_other_models
-        if (/gemini-3/.test(model)) {
+        // Inject stored thought signatures, or fall back to bypass magic for Gemini 3
+        if (/gemini-3/.test(model) || /gemini-2\.5/.test(model)) {
             const skipSignatureMagic = 'skip_thought_signature_validator';
-            parts.filter(p => p.functionCall).forEach(p => {
-                p.thoughtSignature = skipSignatureMagic;
+            const textSignature = message.signature;
+
+            parts.forEach((part) => {
+                if (enableThoughtSignatures && textSignature && typeof part.text === 'string') {
+                    part.thoughtSignature = textSignature;
+                } else if (/gemini-3/.test(model)) {
+                    // Gemini 3: Fall back to bypass magic for function calls (mandatory) and images
+                    if (part.functionCall && !part.thoughtSignature) {
+                        part.thoughtSignature = skipSignatureMagic;
+                    }
+                    if (/-image/.test(model) && message.role === 'model') {
+                        if (typeof part.text === 'string' || part.inlineData) {
+                            part.thoughtSignature = skipSignatureMagic;
+                        }
+                    }
+                }
+                // Gemini 2.5 without stored signatures: signatures are optional, no bypass needed
             });
-            if (/-image/.test(model) && message.role === 'model') {
-                parts.filter(p => typeof p.text === 'string' || p.inlineData).forEach(p => {
-                    p.thoughtSignature = skipSignatureMagic;
-                });
-            }
         }
 
         // merge consecutive messages with the same role
@@ -572,7 +603,7 @@ export function convertGooglePrompt(messages, model, useSysPrompt, names) {
                         contents[contents.length - 1].parts.push(part);
                     }
                 }
-                if (part.inlineData || part.functionCall || part.functionResponse || part.thoughtSignature) {
+                if (part.inlineData || part.functionCall || part.functionResponse || part.thoughtSignature || part.mediaResolution) {
                     contents[contents.length - 1].parts.push(part);
                 }
             });
@@ -908,8 +939,7 @@ export function mergeMessages(messages, names, { strict = false, placeholders = 
         if (mergedMessages.length && placeholders) {
             if (mergedMessages[0].role === 'system' && (mergedMessages.length === 1 || mergedMessages[1].role !== 'user')) {
                 mergedMessages.splice(1, 0, { role: 'user', content: PROMPT_PLACEHOLDER });
-            }
-            else if (mergedMessages[0].role !== 'system' && mergedMessages[0].role !== 'user') {
+            } else if (mergedMessages[0].role !== 'system' && mergedMessages[0].role !== 'user') {
                 mergedMessages.unshift({ role: 'user', content: PROMPT_PLACEHOLDER });
             }
         }
@@ -936,11 +966,9 @@ export function convertTextCompletionPrompt(messages) {
         }
         else if (m.role === 'system' && m.name === undefined) {
             messageStrings.push('System: ' + m.content);
-        }
-        else if (m.role === 'system' && m.name !== undefined) {
+        } else if (m.role === 'system' && m.name !== undefined) {
             messageStrings.push(m.name + ': ' + m.content);
-        }
-        else {
+        } else {
             messageStrings.push(m.role + ': ' + m.content);
         }
     });
@@ -1030,12 +1058,12 @@ export function cachingAtDepthForOpenRouterClaude(messages, cachingAtDepth, ttl)
 }
 
 /**
- * Adds cache_control to the system prompt for OpenRouter Claude requests.
+ * Adds cache_control to the system prompt for OpenRouter requests.
  *
  * @param {object[]} messages Array of messages
- * @param {string} ttl TTL value
+ * @param {string} [ttl] TTL value (optional)
  */
-export function cachingSystemPromptForOpenRouterClaude(messages, ttl) {
+export function cachingSystemPromptForOpenRouter(messages, ttl = undefined) {
     if (!Array.isArray(messages) || messages.length === 0) {
         return;
     }
@@ -1051,6 +1079,10 @@ export function cachingSystemPromptForOpenRouterClaude(messages, ttl) {
         return;
     }
 
+    const cacheControl = ttl
+        ? { type: 'ephemeral', ttl }
+        : { type: 'ephemeral' };
+
     if (Array.isArray(systemMessage.content)) {
         const hasExistingCacheControl = systemMessage.content.some(part => part?.cache_control);
         if (hasExistingCacheControl) {
@@ -1059,7 +1091,7 @@ export function cachingSystemPromptForOpenRouterClaude(messages, ttl) {
 
         for (let i = systemMessage.content.length - 1; i >= 0; i--) {
             if (systemMessage.content[i]?.type === 'text') {
-                systemMessage.content[i].cache_control = { type: 'ephemeral', ttl };
+                systemMessage.content[i].cache_control = cacheControl;
                 return;
             }
         }
@@ -1068,7 +1100,7 @@ export function cachingSystemPromptForOpenRouterClaude(messages, ttl) {
             {
                 type: 'text',
                 text: systemMessage.content,
-                cache_control: { type: 'ephemeral', ttl },
+                cache_control: cacheControl,
             },
         ];
     }
@@ -1118,7 +1150,7 @@ export function calculateClaudeBudgetTokens(maxTokens, reasoningEffort, stream) 
  * @param {number} maxTokens Maximum tokens
  * @param {string} reasoningEffort Reasoning effort
  * @param {string} model Model name
- * @returns {number?} Budget tokens
+ * @returns {number|string|null} Budget tokens
  */
 export function calculateGoogleBudgetTokens(maxTokens, reasoningEffort, model) {
     function getFlashBudget() {
@@ -1203,15 +1235,61 @@ export function calculateGoogleBudgetTokens(maxTokens, reasoningEffort, model) {
         return budgetTokens;
     }
 
-    if (model.includes('flash-lite')) {
+    function getGemini3FlashBudget() {
+        switch (reasoningEffort) {
+            case REASONING_EFFORT.auto:
+                return null;
+            case REASONING_EFFORT.min:
+                return 'minimal';
+            case REASONING_EFFORT.low:
+                return 'low';
+            case REASONING_EFFORT.medium:
+                return 'medium';
+            case REASONING_EFFORT.high:
+                return 'high';
+            case REASONING_EFFORT.max:
+                return 'high';
+        }
+
+        return null;
+    }
+
+    function getGemini3ProBudget() {
+        switch (reasoningEffort) {
+            case REASONING_EFFORT.auto:
+                return null;
+            case REASONING_EFFORT.min:
+                return 'low';
+            case REASONING_EFFORT.low:
+                return 'low';
+            case REASONING_EFFORT.medium:
+                return 'low';
+            case REASONING_EFFORT.high:
+                return 'high';
+            case REASONING_EFFORT.max:
+                return 'high';
+        }
+
+        return null;
+    }
+
+    if (/gemini-3-pro/.test(model)) {
+        return getGemini3ProBudget();
+    }
+
+    if (/gemini-3-flash/.test(model)) {
+        return getGemini3FlashBudget();
+    }
+
+    if (/flash-lite/.test(model)) {
         return getFlashLiteBudget();
     }
 
-    if (model.includes('flash')) {
+    if (/flash/.test(model)) {
         return getFlashBudget();
     }
 
-    if (model.includes('pro')) {
+    if (/pro/.test(model)) {
         return getProBudget();
     }
 
@@ -1219,10 +1297,14 @@ export function calculateGoogleBudgetTokens(maxTokens, reasoningEffort, model) {
 }
 
 /**
- * Embed media content in OpenRouter messages.
+ * Embed media content in OpenRouter messages (OpenAI-compatible).
  * @param {object[]} messages Array of messages
+ * @param {object} options Options for embedding
+ * @param {boolean} [options.audio] Enable audio embedding (default: true)
+ * @param {boolean} [options.video] Enable video embedding (default: true)
+ * @returns {void}
  */
-export function embedOpenRouterMedia(messages) {
+export function embedOpenRouterMedia(messages, { audio = true, video = true } = { audio: true, video: true }) {
     if (!Array.isArray(messages)) {
         return;
     }
@@ -1233,11 +1315,11 @@ export function embedOpenRouterMedia(messages) {
         }
 
         for (const contentPart of message.content) {
-            if (contentPart?.type === 'video_url' && contentPart.video_url?.url?.startsWith('data:')) {
+            if (video && contentPart?.type === 'video_url' && contentPart.video_url?.url?.startsWith('data:')) {
                 contentPart.type = 'input_video';
             }
 
-            if (contentPart?.type === 'audio_url' && contentPart.audio_url?.url?.startsWith('data:')) {
+            if (audio && contentPart?.type === 'audio_url' && contentPart.audio_url?.url?.startsWith('data:')) {
                 const formatMap = {
                     'audio/mpeg': 'mp3',
                     'audio/wav': 'wav',
@@ -1274,5 +1356,65 @@ export function addReasoningContentToToolCalls(messages) {
         }
 
         message.reasoning_content = '';
+    }
+}
+
+/**
+ * Converts reasoning signatures to OpenRouter format.
+ * @param {object[]} messages Array of messages
+ * @param {string} model Model name
+ * @return {void}
+ */
+export function addOpenRouterSignatures(messages, model) {
+    const getFormatForModel = () => {
+        if (/google\/gemini/.test(model)) {
+            return 'google-gemini-v1';
+        }
+        if (/anthropic\/claude/.test(model)) {
+            return 'anthropic-claude-v1';
+        }
+        if (/openai\/gpt/.test(model)) {
+            return 'openai-responses-v1';
+        }
+        if (/x-ai\/grok/.test(model)) {
+            return 'xai-responses-v1';
+        }
+        return 'unknown';
+    };
+
+    if (!Array.isArray(messages)) {
+        return;
+    }
+
+    for (const message of messages) {
+        const details = [];
+        const addDetail = (data, id) => {
+            if (typeof data !== 'string' || data.length === 0) {
+                return;
+            }
+            const detail = {
+                index: details.length,
+                id: id || `signature-${details.length}`,
+                type: 'reasoning.encrypted',
+                data: data,
+                format: getFormatForModel(),
+            };
+            details.push(detail);
+        };
+        if (typeof message.signature === 'string') {
+            addDetail(message.signature);
+            delete message.signature;
+        }
+        if (Array.isArray(message.tool_calls)) {
+            message.tool_calls.forEach((toolCall) => {
+                if (typeof toolCall.signature === 'string') {
+                    addDetail(toolCall.signature, toolCall.id);
+                    delete toolCall.signature;
+                }
+            });
+        }
+        if (details.length > 0) {
+            message.reasoning_details = details;
+        }
     }
 }

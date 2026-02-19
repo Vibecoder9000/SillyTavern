@@ -1,5 +1,5 @@
 import { localforage } from '../lib.js';
-import { characters, main_api, nai_settings, online_status, this_chid } from '../script.js';
+import { characters, event_types, eventSource, main_api, nai_settings, online_status, this_chid } from '../script.js';
 import { power_user, registerDebugFunction } from './power-user.js';
 import { chat_completion_sources, model_list, oai_settings } from './openai.js';
 import { groups, selected_group } from './group-chats.js';
@@ -603,47 +603,34 @@ export function getTokenizerModel() {
 
         if (model?.architecture?.tokenizer === 'Llama2') {
             return llamaTokenizer;
-        }
-        else if (model?.architecture?.tokenizer === 'Llama3') {
+        } else if (model?.architecture?.tokenizer === 'Llama3') {
             return llama3Tokenizer;
-        }
-        else if (model?.architecture?.tokenizer === 'Mistral') {
+        } else if (model?.architecture?.tokenizer === 'Mistral') {
             return mistralTokenizer;
-        }
-        else if (model?.architecture?.tokenizer === 'Yi') {
+        } else if (model?.architecture?.tokenizer === 'Yi') {
             return yiTokenizer;
-        }
-        else if (model?.architecture?.tokenizer === 'Gemini') {
+        } else if (model?.architecture?.tokenizer === 'Gemini') {
             return gemmaTokenizer;
-        }
-        else if (model?.architecture?.tokenizer === 'Qwen') {
+        } else if (model?.architecture?.tokenizer === 'Qwen') {
             return qwen2Tokenizer;
-        }
-        else if (model?.architecture?.tokenizer === 'Cohere') {
+        } else if (model?.architecture?.tokenizer === 'Cohere') {
             if (model?.id && model?.id.includes('command-a')) {
                 return commandATokenizer;
             }
             return commandRTokenizer;
-        }
-        else if (oai_settings.openrouter_model.includes('gpt-4o')) {
+        } else if (oai_settings.openrouter_model.includes('gpt-4o')) {
             return gpt4oTokenizer;
-        }
-        else if (oai_settings.openrouter_model.includes('gpt-4')) {
+        } else if (oai_settings.openrouter_model.includes('gpt-4')) {
             return gpt4Tokenizer;
-        }
-        else if (oai_settings.openrouter_model.includes('gpt-3.5-turbo')) {
+        } else if (oai_settings.openrouter_model.includes('gpt-3.5-turbo')) {
             return turboTokenizer;
-        }
-        else if (oai_settings.openrouter_model.includes('claude')) {
+        } else if (oai_settings.openrouter_model.includes('claude')) {
             return claudeTokenizer;
-        }
-        else if (oai_settings.openrouter_model.includes('GPT-NeoXT')) {
+        } else if (oai_settings.openrouter_model.includes('GPT-NeoXT')) {
             return gpt2Tokenizer;
-        }
-        else if (oai_settings.openrouter_model.includes('jamba')) {
+        } else if (oai_settings.openrouter_model.includes('jamba')) {
             return jambaTokenizer;
-        }
-        else if (oai_settings.openrouter_model.includes('deepseek')) {
+        } else if (oai_settings.openrouter_model.includes('deepseek')) {
             return deepseekTokenizer;
         }
     }
@@ -651,50 +638,35 @@ export function getTokenizerModel() {
     if (oai_settings.chat_completion_source == chat_completion_sources.ELECTRONHUB && oai_settings.electronhub_model) {
         if (oai_settings.electronhub_model.includes('gpt-4o') || oai_settings.electronhub_model.includes('gpt-5')) {
             return gpt4oTokenizer;
-        }
-        else if (oai_settings.electronhub_model.includes('gpt-4.1') || oai_settings.electronhub_model.includes('gpt-4.5')) {
+        } else if (oai_settings.electronhub_model.includes('gpt-4.1') || oai_settings.electronhub_model.includes('gpt-4.5')) {
             return gpt4oTokenizer;
-        }
-        else if (oai_settings.electronhub_model.includes('gpt-4')) {
+        } else if (oai_settings.electronhub_model.includes('gpt-4')) {
             return gpt4Tokenizer;
-        }
-        else if (oai_settings.electronhub_model.includes('gpt-3.5-turbo')) {
+        } else if (oai_settings.electronhub_model.includes('gpt-3.5-turbo')) {
             return turboTokenizer;
-        }
-        else if (oai_settings.electronhub_model.includes('claude')) {
+        } else if (oai_settings.electronhub_model.includes('claude')) {
             return claudeTokenizer;
-        }
-        else if (oai_settings.electronhub_model.includes('jamba')) {
+        } else if (oai_settings.electronhub_model.includes('jamba')) {
             return jambaTokenizer;
-        }
-        else if (oai_settings.electronhub_model.includes('deepseek') || oai_settings.electronhub_model.includes('sonar-reasoning') || oai_settings.electronhub_model.includes('r1')) {
+        } else if (oai_settings.electronhub_model.includes('deepseek') || oai_settings.electronhub_model.includes('sonar-reasoning') || oai_settings.electronhub_model.includes('r1')) {
             return deepseekTokenizer;
-        }
-        else if (oai_settings.electronhub_model.includes('qwen')) {
+        } else if (oai_settings.electronhub_model.includes('qwen')) {
             return qwen2Tokenizer;
-        }
-        else if (oai_settings.electronhub_model.includes('gemma')) {
+        } else if (oai_settings.electronhub_model.includes('gemma')) {
             return gemmaTokenizer;
-        }
-        else if (oai_settings.electronhub_model.includes('mistral')) {
+        } else if (oai_settings.electronhub_model.includes('mistral')) {
             return mistralTokenizer;
-        }
-        else if (oai_settings.electronhub_model.includes('yi')) {
+        } else if (oai_settings.electronhub_model.includes('yi')) {
             return yiTokenizer;
-        }
-        else if (oai_settings.electronhub_model.includes('llama3') || oai_settings.electronhub_model.includes('llama-3') || oai_settings.electronhub_model.startsWith('l3')) {
+        } else if (oai_settings.electronhub_model.includes('llama3') || oai_settings.electronhub_model.includes('llama-3') || oai_settings.electronhub_model.startsWith('l3')) {
             return llama3Tokenizer;
-        }
-        else if (oai_settings.electronhub_model.includes('llama')) {
+        } else if (oai_settings.electronhub_model.includes('llama')) {
             return llamaTokenizer;
-        }
-        else if (oai_settings.electronhub_model.includes('command-a')) {
+        } else if (oai_settings.electronhub_model.includes('command-a')) {
             return commandATokenizer;
-        }
-        else if (oai_settings.electronhub_model.includes('command-r')) {
+        } else if (oai_settings.electronhub_model.includes('command-r')) {
             return commandRTokenizer;
-        }
-        else if (oai_settings.electronhub_model.includes('nemo')) {
+        } else if (oai_settings.electronhub_model.includes('nemo')) {
             return nemoTokenizer;
         }
     }
@@ -814,9 +786,7 @@ export function countTokensOpenAI(messages, full = false) {
 
         if (typeof cachedCount === 'number') {
             token_count += cachedCount;
-        }
-
-        else {
+        } else {
             jQuery.ajax({
                 async: false,
                 type: 'POST', //
@@ -866,9 +836,7 @@ export async function countTokensOpenAIAsync(messages, full = false) {
 
         if (typeof cachedCount === 'number') {
             token_count += cachedCount;
-        }
-
-        else {
+        } else {
             const data = await jQuery.ajax({
                 async: true,
                 type: 'POST', //
@@ -898,8 +866,7 @@ function getTokenCacheObject() {
     try {
         if (selected_group) {
             chatId = groups.find(x => x.id == selected_group)?.chat_id;
-        }
-        else if (this_chid !== undefined) {
+        } else if (this_chid !== undefined) {
             chatId = characters[this_chid].chat;
         }
     } catch {
@@ -1223,6 +1190,12 @@ export async function initTokenizers() {
         textgen_types.VLLM,
         textgen_types.APHRODITE,
     );
+    eventSource.on(event_types.ONLINE_STATUS_CHANGED, async () => {
+        // Clear tokenizer warning when (re)connecting to an LLM backend that supports tokenization
+        if (main_api === 'textgenerationwebui' && TEXTGEN_TOKENIZERS.includes(textgen_settings.type)) {
+            sessionStorage.removeItem(TOKENIZER_WARNING_KEY);
+        }
+    });
     await loadTokenCache();
     registerDebugFunction('resetTokenCache', 'Reset token cache', 'Purges the calculated token counts. Use this if you want to force a full re-tokenization of all chats or suspect the token counts are wrong.', resetTokenCache);
 }

@@ -327,9 +327,8 @@ async function tryReadImage(imgPath, crop) {
     try {
         const rawImg = await Jimp.read(imgPath);
         return await applyAvatarCropResize(rawImg, crop);
-    }
-    // If it's an unsupported type of image (APNG) - just read the file as buffer
-    catch (error) {
+    } catch (error) {
+        // If it's an unsupported type of image (APNG) - just read the file as buffer
         console.error(`Failed to read image: ${imgPath}`, error);
         return fs.readFileSync(imgPath);
     }
@@ -413,19 +412,18 @@ const processCharacter = async (item, directories, { shallow }) => {
         let jsonObject = getCharaCardV2(JSON.parse(imgData), directories, false);
         jsonObject.avatar = item;
         const character = jsonObject;
-        character['json_data'] = imgData;
+        character.json_data = imgData;
         const charStat = fs.statSync(path.join(directories.characters, item));
-        character['date_added'] = charStat.ctimeMs;
-        character['create_date'] = jsonObject['create_date'] || new Date(Math.round(charStat.ctimeMs)).toISOString();
+        character.date_added = charStat.ctimeMs;
+        character.create_date = jsonObject.create_date || new Date(Math.round(charStat.ctimeMs)).toISOString();
         const chatsDirectory = path.join(directories.chats, item.replace('.png', ''));
 
         const { chatSize, dateLastChat } = calculateChatSize(chatsDirectory);
-        character['chat_size'] = chatSize;
-        character['date_last_chat'] = dateLastChat;
-        character['data_size'] = calculateDataSize(jsonObject?.data);
+        character.chat_size = chatSize;
+        character.date_last_chat = dateLastChat;
+        character.data_size = calculateDataSize(jsonObject?.data);
         return shallow ? toShallow(character) : character;
-    }
-    catch (err) {
+    } catch (err) {
         console.error(`Could not process character: ${item}`);
 
         if (err instanceof SyntaxError) {
@@ -505,7 +503,7 @@ function unsetPrivateFields(char) {
 
 function readFromV2(char) {
     if (_.isUndefined(char.data)) {
-        console.warn(`Char ${char['name']} has Spec v2 data missing`);
+        console.warn(`Char ${char.name} has Spec v2 data missing`);
         return char;
     }
 
@@ -543,17 +541,17 @@ function readFromV2(char) {
                 //console.warn(`Spec v2 extension data missing for field: ${charField}, using default value: ${defaultValue}`);
                 char[charField] = defaultValue;
             } else {
-                console.warn(`Char ${char['name']} has Spec v2 data missing for unknown field: ${charField}`);
+                console.warn(`Char ${char.name} has Spec v2 data missing for unknown field: ${charField}`);
                 return;
             }
         }
         if (!_.isUndefined(char[charField]) && !_.isUndefined(v2Value) && String(char[charField]) !== String(v2Value)) {
-            console.warn(`Char ${char['name']} has Spec v2 data mismatch with Spec v1 for field: ${charField}`, char[charField], v2Value);
+            console.warn(`Char ${char.name} has Spec v2 data mismatch with Spec v1 for field: ${charField}`, char[charField], v2Value);
         }
         char[charField] = v2Value;
     });
 
-    char['chat'] = char['chat'] ?? `${char.name} - ${humanizedDateTime()}`;
+    char.chat = char.chat ?? `${char.name} - ${humanizedDateTime()}`;
 
     return char;
 }
@@ -627,9 +625,6 @@ function charaFormatData(data, directories) {
     _.set(char, 'data.extensions.depth_prompt.depth', depth_value);
     _.set(char, 'data.extensions.depth_prompt.role', role_value);
 
-    // V3 fields
-    _.set(char, 'data.group_only_greetings', data.group_only_greetings ?? []);
-
     if (data.world) {
         try {
             const file = readWorldInfoFile(directories, data.world, false);
@@ -643,7 +638,6 @@ function charaFormatData(data, directories) {
             if (file && file.entries) {
                 _.set(char, 'data.character_book', convertWorldInfoToCharacterBook(data.world, file.entries));
             }
-
         } catch {
             console.warn(`Failed to read world info file: ${data.world}. Character book will not be available.`);
         }
@@ -785,7 +779,7 @@ async function importFromCharX(uploadPath, { request }, preservedFileName) {
     // Apply standard character transformations
     let processedCard = readFromV2(card);
     unsetPrivateFields(processedCard);
-    processedCard['create_date'] = new Date().toISOString();
+    processedCard.create_date = new Date().toISOString();
     processedCard.name = sanitize(processedCard.name);
 
     const fileName = preservedFileName || getPngName(processedCard.name, request.user.directories);
@@ -903,7 +897,7 @@ async function importFromJson(uploadPath, { request }, preservedFileName) {
         importRisuSprites(request.user.directories, jsonData);
         unsetPrivateFields(jsonData);
         jsonData = readFromV2(jsonData);
-        jsonData['create_date'] = new Date().toISOString();
+        jsonData.create_date = new Date().toISOString();
         const pngName = preservedFileName || getPngName(jsonData.data?.name || jsonData.name, request.user.directories);
         const char = JSON.stringify(jsonData);
         const result = await writeCharacterData(DEFAULT_AVATAR_PATH, char, pngName, request);
@@ -940,7 +934,8 @@ async function importFromJson(uploadPath, { request }, preservedFileName) {
             await generateThumbnail(request.user.directories, 'avatar', `${pngName}.png`, true, false);
         }
         return result ? pngName : '';
-    } else if (jsonData.char_name !== undefined) {//json Pygmalion notepad
+    } else if (jsonData.char_name !== undefined) {
+        //json Pygmalion notepad
         console.info('Importing from gradio json');
         jsonData.char_name = sanitize(jsonData.char_name);
         if (jsonData.creator_notes) {
@@ -995,7 +990,7 @@ async function importFromPng(uploadPath, { request }, preservedFileName) {
         importRisuSprites(request.user.directories, jsonData);
         unsetPrivateFields(jsonData);
         jsonData = readFromV2(jsonData);
-        jsonData['create_date'] = new Date().toISOString();
+        jsonData.create_date = new Date().toISOString();
         const char = JSON.stringify(jsonData);
         const result = await writeCharacterData(uploadPath, char, pngName, request);
         fs.unlinkSync(uploadPath);
@@ -1115,8 +1110,7 @@ router.post('/rename', validateAvatarUrlMiddleware, async function (request, res
 
         // Return new avatar name to ST
         return response.send({ avatar: newAvatarName });
-    }
-    catch (err) {
+    } catch (err) {
         console.error(err);
         return response.sendStatus(500);
     }
@@ -1564,8 +1558,7 @@ router.post('/duplicate', validateAvatarUrlMiddleware, async function (request, 
         fs.copyFileSync(filename, newFilename);
         console.info(`${filename} was copied to ${newFilename}`);
         response.send({ path: path.parse(newFilename).base });
-    }
-    catch (error) {
+    } catch (error) {
         console.error(error);
         return response.send({ error: true });
     }
@@ -1601,8 +1594,7 @@ router.post('/export', validateAvatarUrlMiddleware, async function (request, res
                     const jsonObject = getCharaCardV2(JSON.parse(json), request.user.directories);
                     unsetPrivateFields(jsonObject);
                     return response.type('json').send(JSON.stringify(jsonObject, null, 4));
-                }
-                catch {
+                } catch {
                     return response.sendStatus(400);
                 }
             }

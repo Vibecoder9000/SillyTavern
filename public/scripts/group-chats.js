@@ -18,7 +18,6 @@ import {
     paginationDropdownChangeHandler,
     waitUntilCondition,
     uuidv4,
-    humanFileSize,
 } from './utils.js';
 import { RA_CountCharTokens, humanizedDateTime, dragElement, favsToHotswap, getMessageTimeStamp } from './RossAscends-mods.js';
 import { power_user, loadMovingUIState, sortEntitiesList } from './power-user.js';
@@ -39,8 +38,6 @@ import {
     setCharacterName,
     setEditedMessageId,
     is_send_press,
-    name1,
-    name2,
     resetChatState,
     setSendButtonState,
     getCharacters,
@@ -73,6 +70,7 @@ import {
     isChatSaving,
     setExternalAbortController,
     baseChatReplace,
+    createLazyFields,
     depth_prompt_depth_default,
     loadItemizedPrompts,
     animation_duration,
@@ -82,7 +80,7 @@ import {
     chatElement,
     ensureMessageMediaIsArray,
 } from '../script.js';
-import { printTagList, createTagMapFromList, applyTagsOnCharacterSelect, tag_map, applyTagsOnGroupSelect } from './tags.js';
+import { printTagList, createTagMapFromList, applyTagsOnCharacterSelect, tag_map, applyTagsOnGroupSelect, printTagFilters, tag_filter_type } from './tags.js';
 import { FILTER_TYPES, FilterHelper } from './filters.js';
 import { isExternalMediaAllowed } from './chats.js';
 import { POPUP_TYPE, Popup, callGenericPopup } from './popup.js';
@@ -136,6 +134,7 @@ export const group_generation_mode = {
 export const DEFAULT_AUTO_MODE_DELAY = 5;
 
 export const groupCandidatesFilter = new FilterHelper(debounce(printGroupCandidates, debounce_timeout.quick));
+export const groupMembersFilter = new FilterHelper(debounce(printGroupMembers, debounce_timeout.quick));
 let autoModeWorker = null;
 const saveGroupDebounced = debounce(async (group, reload) => await _save(group, reload), debounce_timeout.relaxed);
 /** @type {Map<string, number>} */
@@ -174,9 +173,8 @@ async function regenerateGroup() {
         // for new generations after the update
         if ((generationId && this_generationId) && generationId !== this_generationId) {
             break;
-        }
-        // legacy for generations before the update
-        else if (lastMes.is_user || lastMes.is_system) {
+        } else if (lastMes.is_user || lastMes.is_system) {
+            // legacy for generations before the update
             break;
         }
 
@@ -275,8 +273,8 @@ export async function getGroupChat(groupId, reload = false) {
     }
 
     // Add integrity slug if missing
-    if (!metadata['integrity']) {
-        metadata['integrity'] = uuidv4();
+    if (!metadata.integrity) {
+        metadata.integrity = uuidv4();
     }
 
     await loadItemizedPrompts(getCurrentChatId());
@@ -393,8 +391,7 @@ export function findGroupMemberId(arg, full = false) {
         console.log(`Targeting group member ${chid} (${arg}) from search result`, result[0]);
 
         return !full ? chid : { ...{ id: chid }, ...result[0].item };
-    }
-    else {
+    } else {
         const memberAvatar = group.members[index];
 
         if (memberAvatar === undefined) {
@@ -458,7 +455,7 @@ export function getGroupDepthPrompts(groupId, characterId) {
             continue;
         }
 
-        const depthPromptText = baseChatReplace(character.data?.extensions?.depth_prompt?.prompt?.trim(), name1, character.name) || '';
+        const depthPromptText = baseChatReplace(character.data?.extensions?.depth_prompt?.prompt?.trim(), null, character.name) || '';
         const depthPromptDepth = character.data?.extensions?.depth_prompt?.depth ?? depth_prompt_depth_default;
         const depthPromptRole = character.data?.extensions?.depth_prompt?.role ?? depth_prompt_role_default;
 
@@ -477,29 +474,46 @@ export function getGroupDepthPrompts(groupId, characterId) {
  * @returns {{description: string, personality: string, scenario: string, mesExamples: string}} Group character cards combined
  */
 export function getGroupCharacterCards(groupId, characterId) {
+    const lazy = getGroupCharacterCardsLazy(groupId, characterId);
+    if (!lazy) return null;
+
+    // Resolve all lazy fields into a plain object
+    return {
+        description: lazy.description,
+        personality: lazy.personality,
+        scenario: lazy.scenario,
+        mesExamples: lazy.mesExamples,
+    };
+}
+
+/**
+ * Returns group character cards with lazy evaluation.
+ * Each field is only processed when first accessed.
+ * @param {string} groupId Group ID
+ * @param {number} characterId Current Character ID
+ * @returns {{description: string, personality: string, scenario: string, mesExamples: string}} Group character cards with lazy getters
+ */
+export function getGroupCharacterCardsLazy(groupId, characterId) {
     const group = groups.find(x => x.id === groupId);
 
+    // If no group cards should be generated, return null so caller knows to fall back
     if (!group || !group?.generation_mode || !Array.isArray(group.members) || !group.members.length) {
         return null;
     }
 
     /**
-     * Runs the macro engine on a text, with custom <FIELDNAME> replace
+     * Runs baseChatReplace on a text, with custom <FIELDNAME> replace
      * @param {string} value Value to replace
      * @param {string} fieldName Name of the field
      * @param {string} characterName Name of the character
      * @param {boolean} trim Whether to trim the value
      * @returns {string} Replaced text
-     * */
-    function customBaseChatReplace(value, fieldName, characterName, trim) {
-        if (!value) {
-            return '';
-        }
-
-        // We should do the custom field name replacement first, and then run it through the normal macro engine with provided names
+     */
+    function customTransform(value, fieldName, characterName, trim) {
+        if (!value) return '';
         value = value.replace(/<FIELDNAME>/gi, fieldName);
         value = trim ? value.trim() : value;
-        return baseChatReplace(value, name1, characterName);
+        return baseChatReplace(value, null, characterName);
     }
 
     /**
@@ -509,60 +523,50 @@ export function getGroupCharacterCards(groupId, characterId) {
      * @param {string} fieldName Name of the field
      * @param {function(string): string} [preprocess] Preprocess function
      * @returns {string} Prepared text
-     * */
+     */
     function replaceAndPrepareForJoin(value, characterName, fieldName, preprocess = null) {
-        value = value.trim();
-        if (!value) {
-            return '';
-        }
-
-        // Run preprocess function
+        value = value?.trim() ?? '';
+        if (!value) return '';
         if (typeof preprocess === 'function') {
             value = preprocess(value);
         }
-
-        // Prepare and replace prefixes
-        const prefix = customBaseChatReplace(group.generation_mode_join_prefix, fieldName, characterName, false);
-        const suffix = customBaseChatReplace(group.generation_mode_join_suffix, fieldName, characterName, false);
-        // Also run the macro replacement on the actual content
-        value = customBaseChatReplace(value, fieldName, characterName, true);
-
+        const prefix = customTransform(group.generation_mode_join_prefix, fieldName, characterName, false);
+        const suffix = customTransform(group.generation_mode_join_suffix, fieldName, characterName, false);
+        value = customTransform(value, fieldName, characterName, true);
         return `${prefix}${value}${suffix}`;
     }
 
-    const scenarioOverride = String(chat_metadata['scenario'] || '');
-    const mesExamplesOverride = String(chat_metadata['mes_example'] || '');
-
-    let descriptions = [];
-    let personalities = [];
-    let scenarios = [];
-    let mesExamplesArray = [];
-
-    for (const member of group.members) {
-        const index = characters.findIndex(x => x.avatar === member);
-        const character = characters[index];
-
-        if (index === -1 || !character) {
-            console.debug(`Skipping missing member: ${member}`);
-            continue;
+    /**
+     * Collects and joins field values from all group members
+     * @param {string} fieldName Display name of the field
+     * @param {function(Character): string} getter Function to get field value from character
+     * @param {function(string): string} [preprocess] Optional preprocess function
+     * @returns {string} Combined field values
+     */
+    function collectField(fieldName, getter, preprocess = null) {
+        const values = [];
+        for (const member of group.members) {
+            const index = characters.findIndex(x => x.avatar === member);
+            const character = characters[index];
+            if (index === -1 || !character) continue;
+            if (group.disabled_members.includes(member) && characterId !== index && group.generation_mode !== group_generation_mode.APPEND_DISABLED) {
+                continue;
+            }
+            values.push(replaceAndPrepareForJoin(getter(character), character.name, fieldName, preprocess));
         }
-
-        if (group.disabled_members.includes(member) && characterId !== index && group.generation_mode !== group_generation_mode.APPEND_DISABLED) {
-            continue;
-        }
-
-        descriptions.push(replaceAndPrepareForJoin(character.description, character.name, 'Description'));
-        personalities.push(replaceAndPrepareForJoin(character.personality, character.name, 'Personality'));
-        scenarios.push(replaceAndPrepareForJoin(character.scenario, character.name, 'Scenario'));
-        mesExamplesArray.push(replaceAndPrepareForJoin(character.mes_example, character.name, 'Example Messages', (x) => !x.startsWith('<START>') ? `<START>\n${x}` : x));
+        return values.filter(x => x.length).join('\n');
     }
 
-    const description = descriptions.filter(x => x.length).join('\n');
-    const personality = personalities.filter(x => x.length).join('\n');
-    const scenario = baseChatReplace(scenarioOverride?.trim(), name1, name2) || scenarios.filter(x => x.length).join('\n');
-    const mesExamples = baseChatReplace(mesExamplesOverride?.trim(), name1, name2) || mesExamplesArray.filter(x => x.length).join('\n');
+    const scenarioOverride = String(chat_metadata.scenario || '');
+    const mesExamplesOverride = String(chat_metadata.mes_example || '');
 
-    return { description, personality, scenario, mesExamples };
+    return createLazyFields({
+        description: () => collectField('Description', c => c.description),
+        personality: () => collectField('Personality', c => c.personality),
+        scenario: () => baseChatReplace(scenarioOverride?.trim()) || collectField('Scenario', c => c.scenario),
+        mesExamples: () => baseChatReplace(mesExamplesOverride?.trim()) ||
+            collectField('Example Messages', c => c.mes_example, x => !x.startsWith('<START>') ? `<START>\n${x}` : x),
+    });
 }
 
 /**
@@ -587,16 +591,16 @@ async function getFirstCharacterMessage(character) {
     }
 
     const mes = {};
-    mes['is_user'] = false;
-    mes['is_system'] = false;
-    mes['name'] = character.name;
-    mes['send_date'] = getMessageTimeStamp();
-    mes['original_avatar'] = character.avatar;
-    mes['extra'] = { 'gen_id': Date.now() * Math.random() * 1000000 };
-    mes['mes'] = messageText
-        ? substituteParams(messageText.trim(), name1, character.name)
+    mes.is_user = false;
+    mes.is_system = false;
+    mes.name = character.name;
+    mes.send_date = getMessageTimeStamp();
+    mes.original_avatar = character.avatar;
+    mes.extra = { 'gen_id': Date.now() * Math.random() * 1000000 };
+    mes.mes = messageText
+        ? substituteParams(messageText.trim(), { name2Override: character.name })
         : '';
-    mes['force_avatar'] =
+    mes.force_avatar =
         character.avatar != 'none'
             ? getThumbnailUrl('avatar', character.avatar)
             : default_avatar;
@@ -622,7 +626,7 @@ async function saveGroupChat(groupId, shouldSaveGroup, force = false) {
         return;
     }
     const chatId = group.chat_id;
-    group['date_last_chat'] = Date.now();
+    group.date_last_chat = Date.now();
     /** @type {ChatHeader} */
     const chatHeader = {
         chat_metadata: { ...chat_metadata },
@@ -738,8 +742,7 @@ export async function renameGroupMember(oldAvatar, newAvatar, newName) {
                     }
                 }
             }
-        }
-        catch (error) {
+        } catch (error) {
             console.log(`An error during renaming the character ${newName} in group: ${group.name}`);
             console.error(error);
         }
@@ -851,7 +854,7 @@ function updateGroupAvatar(group) {
  */
 function isValidImageUrl(url) {
     // check if empty dict
-    if (Object.keys(url).length === 0) {
+    if (!url || Object.keys(url).length === 0) {
         return false;
     }
     return isDataURL(url) || (url && (url.startsWith('user') || url.startsWith('/user')));
@@ -1005,28 +1008,22 @@ async function generateGroupWrapper(byAutoMode, type = null, params = {}) {
             if (activatedMembers.length === 0) {
                 activatedMembers = activateListOrder(group.members.slice(0, 1));
             }
-        }
-        else if (type === 'swipe' || type === 'continue') {
+        } else if (type === 'swipe' || type === 'continue') {
             activatedMembers = activateSwipe(group.members, { allowSystem: false });
 
             if (activatedMembers.length === 0) {
                 toastr.warning(t`Deleted group member swiped. To get a reply, add them back to the group.`);
                 throw new Error('Deleted group member swiped');
             }
-        }
-        else if (type === 'impersonate') {
+        } else if (type === 'impersonate') {
             activatedMembers = activateImpersonate(group.members);
-        }
-        else if (activationStrategy === group_activation_strategy.NATURAL) {
+        } else if (activationStrategy === group_activation_strategy.NATURAL) {
             activatedMembers = activateNaturalOrder(enabledMembers, activationText, lastMessage, group.allow_self_responses, isUserInput);
-        }
-        else if (activationStrategy === group_activation_strategy.LIST) {
+        } else if (activationStrategy === group_activation_strategy.LIST) {
             activatedMembers = activateListOrder(enabledMembers);
-        }
-        else if (activationStrategy === group_activation_strategy.POOLED) {
+        } else if (activationStrategy === group_activation_strategy.POOLED) {
             activatedMembers = activatePooledOrder(enabledMembers, lastMessage, isUserInput);
-        }
-        else if (activationStrategy === group_activation_strategy.MANUAL && !isUserInput) {
+        } else if (activationStrategy === group_activation_strategy.MANUAL && !isUserInput) {
             activatedMembers = shuffle(enabledMembers).slice(0, 1).map(x => characters.findIndex(y => y.avatar === x)).filter(x => x !== -1);
         }
 
@@ -1162,8 +1159,7 @@ function activateSwipe(members, { allowSystem = false } = {}) {
                 break;
             }
         }
-    }
-    else {
+    } else {
         activatedNames.push(lastMessage.original_avatar);
     }
 
@@ -1444,6 +1440,10 @@ async function modifyGroupMember(groupId, groupMember, isDelete) {
     printGroupCandidates();
     printGroupMembers();
 
+    // Refresh the tag filters for both lists to reflect any new tags
+    printTagFilters(tag_filter_type.group_candidates_list);
+    printTagFilters(tag_filter_type.group_members_list);
+
     const groupHasMembers = getGroupCharacters({ doFilter: false, onlyMembers: true }).length > 0;
     $('#rm_group_submit').prop('disabled', !groupHasMembers);
 }
@@ -1552,31 +1552,63 @@ function isGroupMember(group, avatarId) {
  * @returns {Array<{item: Character, id: number, type: string}>} Array of group character objects
  */
 function getGroupCharacters({ doFilter = false, onlyMembers = false } = {}) {
-    function sortMembersFn(a, b) {
+    function applyFilterAndSort(results, filter, filterSelector) {
+        let filtered = results;
+        if (doFilter) {
+            filtered = filter.applyFilters(filtered);
+        }
+        const useFilterOrder = doFilter && !!$(filterSelector).val();
+        sortEntitiesList(filtered, useFilterOrder, filter);
+        filter.clearFuzzySearchCaches();
+        return filtered;
+    }
+
+    function handleMembers(results, thisGroup) {
         const membersArray = thisGroup?.members ?? newGroupMembers;
-        const aIndex = membersArray.indexOf(a.item.avatar);
-        const bIndex = membersArray.indexOf(b.item.avatar);
-        return aIndex - bIndex;
+
+        // Create index map for O(1) lookups in member sort function
+        // (separate from characterIndexMap which maps character objects to their array indices)
+        const memberIndexMap = new Map(membersArray.map((avatar, index) => [avatar, index]));
+
+        function sortMembersFn(a, b) {
+            const aIndex = memberIndexMap.get(a.item.avatar) ?? -1;
+            const bIndex = memberIndexMap.get(b.item.avatar) ?? -1;
+            return aIndex - bIndex;
+        }
+
+        // Apply manual member sort before filter and sort
+        let filtered = results;
+        if (doFilter) {
+            filtered = groupMembersFilter.applyFilters(filtered);
+        }
+        filtered.sort(sortMembersFn);
+
+        // Apply conditional filter-based sort and cleanup
+        const useFilterOrder = doFilter && !!$('#rm_group_members_filter').val();
+        if (useFilterOrder) {
+            sortEntitiesList(filtered, useFilterOrder, groupMembersFilter);
+        }
+        groupMembersFilter.clearFuzzySearchCaches();
+        return filtered;
     }
 
     const thisGroup = openGroupId && groups.find((x) => x.id == openGroupId);
-    let candidates = characters
+
+    // Create index map for O(1) lookups when mapping characters to their array indices
+    // (separate from memberIndexMap used later for sorting members by their group order)
+    const characterIndexMap = new Map(characters.map((char, index) => [char, index]));
+
+    const results = characters
         .filter((x) => isGroupMember(thisGroup, x.avatar) == onlyMembers)
-        .map((x) => ({ item: x, id: characters.indexOf(x), type: 'character' }));
+        .map((x) => ({ item: x, id: characterIndexMap.get(x), type: 'character' }));
 
-    if (doFilter) {
-        candidates = groupCandidatesFilter.applyFilters(candidates);
+    // Early return for candidates (non-members)
+    if (!onlyMembers) {
+        return applyFilterAndSort(results, groupCandidatesFilter, '#rm_group_filter');
     }
 
-    if (onlyMembers) {
-        candidates.sort(sortMembersFn);
-    } else {
-        const useFilterOrder = doFilter && !!$('#rm_group_filter').val();
-        sortEntitiesList(candidates, useFilterOrder, groupCandidatesFilter);
-    }
-
-    groupCandidatesFilter.clearFuzzySearchCaches();
-    return candidates;
+    // Handle members with manual sort capability
+    return handleMembers(results, thisGroup);
 }
 
 function printGroupCandidates() {
@@ -1616,7 +1648,7 @@ function printGroupMembers() {
         const pageSize = Number(accountStorage.getItem(storageKey)) || 5;
         const sizeChangerOptions = [5, 10, 25, 50, 100, 200, 500, 1000];
         $(this).pagination({
-            dataSource: getGroupCharacters({ doFilter: false, onlyMembers: true }),
+            dataSource: getGroupCharacters({ doFilter: true, onlyMembers: true }),
             pageRange: 1,
             position: 'top',
             showPageNumbers: false,
@@ -1662,8 +1694,7 @@ function getGroupCharacterBlock(character) {
     const auxFieldValue = (character.data && character.data[auxFieldName]) || '';
     if (auxFieldValue) {
         template.find('.character_version').text(auxFieldValue);
-    }
-    else {
+    } else {
         template.find('.character_version').hide();
     }
 
@@ -1777,6 +1808,7 @@ function select_group_chats(groupId, skipAnimation) {
     $('#group_avatar_preview').empty().append(getGroupAvatar(group));
     $('#rm_group_restore_avatar').toggle(!!group && isValidImageUrl(group.avatar_url));
     $('#rm_group_filter').val('').trigger('input');
+    $('#rm_group_members_filter').val('').trigger('input');
     $('#rm_group_activation_strategy').val(replyStrategy);
     $(`#rm_group_activation_strategy option[value="${replyStrategy}"]`).prop('selected', true);
     $('#rm_group_generation_mode').val(generationMode);
@@ -1832,8 +1864,7 @@ function select_group_chats(groupId, skipAnimation) {
     if (group) {
         $('#rm_group_automode_label').show();
         $('#rm_button_selected_ch').children('h2').text(groupName);
-    }
-    else {
+    } else {
         $('#rm_group_automode_label').hide();
     }
 
@@ -1996,14 +2027,14 @@ export async function openGroupById(groupId) {
 
         if (selected_group !== groupId) {
             groupChatQueueOrder = new Map();
-            await clearChat();
-            cancelTtsPlay();
-            selected_group = groupId;
             setCharacterId(undefined);
             setCharacterName('');
+            resetSelectedGroup();
+            await clearChat({ clearData: true });
+            cancelTtsPlay();
+            selected_group = groupId;
             setEditedMessageId(undefined);
             updateChatMetadata({}, true);
-            chat.length = 0;
             await getGroupChat(groupId);
             return true;
         }
@@ -2042,6 +2073,11 @@ async function openCharacterDefinition(characterSelect) {
 function filterGroupMembers() {
     const searchValue = String($(this).val()).toLowerCase();
     groupCandidatesFilter.setFilterData(FILTER_TYPES.SEARCH, searchValue);
+}
+
+function filterGroupMemberList() {
+    const searchValue = String($(this).val()).toLowerCase();
+    groupMembersFilter.setFilterData(FILTER_TYPES.SEARCH, searchValue);
 }
 
 async function createGroup() {
@@ -2104,8 +2140,7 @@ export async function createNewGroupChat(groupId) {
         return;
     }
 
-    await clearChat();
-    chat.length = 0;
+    await clearChat({ clearData: true });
     const newChatName = humanizedDateTime();
     group.chats.push(newChatName);
     group.chat_id = newChatName;
@@ -2118,7 +2153,7 @@ export async function createNewGroupChat(groupId) {
 /**
  * Retrieves past chats for a specified group.
  * @param {string} groupId Group ID
- * @returns {Promise<Array>} Array of past chats
+ * @returns {Promise<Array<import('../../src/endpoints/chats.js').ChatInfo>>} Array of past chats
  */
 export async function getGroupPastChats(groupId) {
     const group = groups.find(x => x.id === groupId);
@@ -2131,24 +2166,15 @@ export async function getGroupPastChats(groupId) {
 
     try {
         for (const chatId of group.chats) {
-            const messages = await loadGroupChat(chatId);
-            if (!Array.isArray(messages)) {
-                continue;
-            }
-            const fileSize = humanFileSize(JSON.stringify(messages).length);
-            if (messages.length > 0 && Object.hasOwn(messages[0], 'chat_metadata')) {
-                messages.shift();
-            }
-            const chatItems = messages.length;
-            const lastMessage = messages.length ? messages[messages.length - 1].mes : '[The chat is empty]';
-            const lastMessageDate = messages.length ? (messages[messages.length - 1].send_date || Date.now()) : Date.now();
-            chats.push({
-                'file_name': chatId,
-                'mes': lastMessage,
-                'last_mes': lastMessageDate,
-                'file_size': fileSize,
-                'chat_items': chatItems,
+            const response = await fetch('/api/chats/group/info', {
+                method: 'POST',
+                headers: getRequestHeaders(),
+                body: JSON.stringify({ id: chatId }),
             });
+            if (response.ok) {
+                const data = await response.json();
+                chats.push(data);
+            }
         }
     } catch (err) {
         console.error(err);
@@ -2170,10 +2196,9 @@ export async function openGroupChat(groupId, chatId) {
         return;
     }
 
-    await clearChat();
-    chat.length = 0;
+    await clearChat({ clearData: true });
     group.chat_id = chatId;
-    group['date_last_chat'] = Date.now();
+    group.date_last_chat = Date.now();
     updateChatMetadata({}, true);
 
     await editGroup(groupId, true, false);
@@ -2428,6 +2453,7 @@ jQuery(() => {
         openGroupById(groupId);
     });
     $('#rm_group_filter').on('input', filterGroupMembers);
+    $('#rm_group_members_filter').on('input', filterGroupMemberList);
     $('#rm_group_submit').on('click', createGroup);
     $('#rm_group_scenario').on('click', setCharacterSettingsOverrides);
     $('#rm_group_automode').on('input', function () {
@@ -2439,7 +2465,6 @@ jQuery(() => {
         const value = $(this).prop('checked');
         hideMutedSprites = value;
         onHideMutedSpritesClick(value);
-
     });
     $('#send_textarea').on('keyup', onSendTextareaInput);
     $('#groupCurrentMemberPopoutButton').on('click', doCurMemberListPopout);

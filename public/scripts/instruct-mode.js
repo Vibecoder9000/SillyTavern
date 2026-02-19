@@ -10,7 +10,7 @@ import {
 import { onlyUnique, regexFromString, resetScrollHeight } from './utils.js';
 
 /**
- * @type {any[]} Instruct mode presets.
+ * @type {InstructSettings[]} Instruct mode presets.
  */
 export let instruct_presets = [];
 
@@ -161,7 +161,7 @@ export async function loadInstructMode(data) {
  */
 export function updateBindModelTemplatesState() {
     const bindModelTemplates = power_user.model_templates_mappings[online_status] ?? power_user.model_templates_mappings[power_user.chat_template_hash];
-    const bindingsMatch = (bindModelTemplates && power_user.context.preset === bindModelTemplates['context'] && (!power_user.instruct.enabled || power_user.instruct.preset === bindModelTemplates['instruct'])) ?? false;
+    const bindingsMatch = (bindModelTemplates && power_user.context.preset === bindModelTemplates.context && (!power_user.instruct.enabled || power_user.instruct.preset === bindModelTemplates.instruct)) ?? false;
     const currentState = $('#bind_model_templates').prop('checked');
     if (bindingsMatch === currentState) {
         // No change needed
@@ -436,10 +436,10 @@ export function formatInstructModeChat(name, mes, isUser, isNarrator, forceAvata
     let suffix = getSuffix() || '';
 
     if (instruct.macro) {
-        prefix = substituteParams(prefix, name1, name2);
+        prefix = substituteParams(prefix, { name1Override: name1, name2Override: name2 });
         prefix = prefix.replace(/{{name}}/gi, name || 'System');
 
-        suffix = substituteParams(suffix, name1, name2);
+        suffix = substituteParams(suffix, { name1Override: name1, name2Override: name2 });
         suffix = suffix.replace(/{{name}}/gi, name || 'System');
     }
 
@@ -524,10 +524,10 @@ export function formatInstructModeExamples(mesExamplesArray, name1, name2) {
     let outputSuffix = power_user.instruct.output_suffix || '';
 
     if (power_user.instruct.macro) {
-        inputPrefix = substituteParams(inputPrefix, name1, name2);
-        outputPrefix = substituteParams(outputPrefix, name1, name2);
-        inputSuffix = substituteParams(inputSuffix, name1, name2);
-        outputSuffix = substituteParams(outputSuffix, name1, name2);
+        inputPrefix = substituteParams(inputPrefix, { name1Override: name1, name2Override: name2 });
+        outputPrefix = substituteParams(outputPrefix, { name1Override: name1, name2Override: name2 });
+        inputSuffix = substituteParams(inputSuffix, { name1Override: name1, name2Override: name2 });
+        outputSuffix = substituteParams(outputSuffix, { name1Override: name1, name2Override: name2 });
 
         inputPrefix = inputPrefix.replace(/{{name}}/gi, name1);
         outputPrefix = outputPrefix.replace(/{{name}}/gi, name2);
@@ -631,7 +631,7 @@ export function formatInstructModePrompt(name, isImpersonate, promptBias, name1,
     }
 
     if (instruct.macro) {
-        sequence = substituteParams(sequence, name1, name2);
+        sequence = substituteParams(sequence, { name1Override: name1, name2Override: name2 });
         sequence = sequence.replace(/{{name}}/gi, name || 'System');
     }
 
@@ -798,7 +798,6 @@ jQuery(() => {
             $('#instruct_system_sequence').prop('readOnly', false);
             $('#instruct_system_suffix').prop('readOnly', false);
         }
-
     });
 
     $('#instruct_enabled').on('change', function () {

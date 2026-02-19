@@ -500,10 +500,21 @@ export const OPENAI_REASONING_EFFORT_MODELS = [
     'gpt-5.1',
     'gpt-5.1-2025-11-13',
     'gpt-5.1-chat-latest',
+    'gpt-5.2',
+    'gpt-5.2-2025-12-11',
+    'gpt-5.2-chat-latest',
 ];
 
 export const OPENAI_REASONING_EFFORT_MAP = {
     min: 'minimal',
+};
+
+export const NANOGPT_REASONING_EFFORT_MAP = {
+    min: 'none',
+    low: 'minimal',
+    medium: 'low',
+    high: 'medium',
+    max: 'high',
 };
 
 export const LOG_LEVELS = {

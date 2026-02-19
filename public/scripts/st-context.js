@@ -65,6 +65,8 @@ import {
     getMediaIndex,
     scrollChatToBottom,
     scrollOnMediaLoad,
+    getOneCharacter,
+    getCharacterSource,
 } from '../script.js';
 import {
     extension_settings,
@@ -89,18 +91,19 @@ import { executeSlashCommands, executeSlashCommandsWithOptions, registerSlashCom
 import { SlashCommand } from './slash-commands/SlashCommand.js';
 import { ARGUMENT_TYPE, SlashCommandArgument, SlashCommandNamedArgument } from './slash-commands/SlashCommandArgument.js';
 import { SlashCommandParser } from './slash-commands/SlashCommandParser.js';
-import { tag_map, tags } from './tags.js';
+import { tag_map, tags, importTags } from './tags.js';
 import { getTextGenServer, textgenerationwebui_settings } from './textgen-settings.js';
 import { tokenizers, getTextTokens, getTokenCount, getTokenCountAsync, getTokenizerModel } from './tokenizers.js';
 import { ToolManager } from './tool-calling.js';
 import { accountStorage } from './util/AccountStorage.js';
-import { timestampToMoment, uuidv4 } from './utils.js';
-import { getGlobalVariable, getLocalVariable, setGlobalVariable, setLocalVariable } from './variables.js';
+import { timestampToMoment, uuidv4, importFromExternalUrl } from './utils.js';
+import { addGlobalVariable, addLocalVariable, decrementGlobalVariable, decrementLocalVariable, deleteGlobalVariable, deleteLocalVariable, existsGlobalVariable, existsLocalVariable, getGlobalVariable, getLocalVariable, incrementGlobalVariable, incrementLocalVariable, setGlobalVariable, setLocalVariable } from './variables.js';
 import { convertCharacterBook, getWorldInfoPrompt, loadWorldInfo, reloadEditor, saveWorldInfo, updateWorldInfoList } from './world-info.js';
 import { ChatCompletionService, TextCompletionService } from './custom-request.js';
 import { ConnectionManagerRequestService } from './extensions/shared.js';
 import { updateReasoningUI, parseReasoningFromString, getReasoningTemplateByName } from './reasoning.js';
 import { IGNORE_SYMBOL } from './constants.js';
+import { macros } from './macros/macro-system.js';
 
 export function getContext() {
     return {
@@ -165,7 +168,9 @@ export function getContext() {
         timestampToMoment,
         /** @deprecated Handlebars for extensions are no longer supported. */
         registerHelper: () => { },
+        /** @deprecated Use `macros.register(name, { handler, description })` from scripts/macros/macro-system.js instead. */
         registerMacro: MacrosParser.registerMacro.bind(MacrosParser),
+        /** @deprecated Use `macros.registry.unregisterMacro(name)` from scripts/macros/macro-system.js instead. */
         unregisterMacro: MacrosParser.unregisterMacro.bind(MacrosParser),
         registerFunctionTool: ToolManager.registerFunctionTool.bind(ToolManager),
         unregisterFunctionTool: ToolManager.unregisterFunctionTool.bind(ToolManager),
@@ -211,7 +216,11 @@ export function getContext() {
         textCompletionSettings: textgenerationwebui_settings,
         powerUserSettings: power_user,
         getCharacters,
+        getOneCharacter,
         getCharacterCardFields,
+        getCharacterSource,
+        importFromExternalUrl,
+        importTags,
         uuidv4,
         humanizedDateTime,
         updateMessageBlock,
@@ -221,6 +230,7 @@ export function getContext() {
         getMediaIndex,
         scrollChatToBottom,
         scrollOnMediaLoad,
+        macros,
         swipe: {
             left: swipe_left,
             right: swipe_right,
@@ -235,10 +245,20 @@ export function getContext() {
             local: {
                 get: getLocalVariable,
                 set: setLocalVariable,
+                del: deleteLocalVariable,
+                add: addLocalVariable,
+                inc: incrementLocalVariable,
+                dec: decrementLocalVariable,
+                has: existsLocalVariable,
             },
             global: {
                 get: getGlobalVariable,
                 set: setGlobalVariable,
+                del: deleteGlobalVariable,
+                add: addGlobalVariable,
+                inc: incrementGlobalVariable,
+                dec: decrementGlobalVariable,
+                has: existsGlobalVariable,
             },
         },
         loadWorldInfo,

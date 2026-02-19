@@ -51,7 +51,7 @@ export async function migrateGroupChatsMetadataFormat(userDirectories) {
                     if (!needsMigration) {
                         continue;
                     }
-                    if (!fs.existsSync(backupPath)){
+                    if (!fs.existsSync(backupPath)) {
                         await fsPromises.mkdir(backupPath, { recursive: true });
                     }
                     await fsPromises.copyFile(groupFilePath, path.join(backupPath, groupFile.name));
@@ -126,8 +126,8 @@ router.post('/all', (request, response) => {
             const fileContents = fs.readFileSync(filePath, 'utf8');
             const group = JSON.parse(fileContents);
             const groupStat = fs.statSync(filePath);
-            group['date_added'] = groupStat.birthtimeMs;
-            group['create_date'] = new Date(groupStat.birthtimeMs).toISOString();
+            group.date_added = groupStat.birthtimeMs;
+            group.create_date = new Date(groupStat.birthtimeMs).toISOString();
 
             let chat_size = 0;
             let date_last_chat = 0;
@@ -142,11 +142,10 @@ router.post('/all', (request, response) => {
                 }
             }
 
-            group['date_last_chat'] = date_last_chat;
-            group['chat_size'] = chat_size;
+            group.date_last_chat = date_last_chat;
+            group.chat_size = chat_size;
             groups.push(group);
-        }
-        catch (error) {
+        } catch (error) {
             console.error(error);
         }
     });

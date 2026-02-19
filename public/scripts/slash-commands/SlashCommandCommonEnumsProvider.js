@@ -155,7 +155,7 @@ export const commonEnumProviders = {
             ...isAll || types.includes('scope') ? scope.allVariableNames.map(name => new SlashCommandEnumValue(name, null, enumTypes.variable, enumIcons.scopeVariable)) : [],
             ...isAll || types.includes('local') ? Object.keys(chat_metadata.variables ?? []).map(name => new SlashCommandEnumValue(name, null, enumTypes.name, enumIcons.localVariable)) : [],
             ...isAll || types.includes('global') ? Object.keys(extension_settings.variables.global ?? []).map(name => new SlashCommandEnumValue(name, null, enumTypes.macro, enumIcons.globalVariable)) : [],
-        ].filter((item, idx, list)=>idx == list.findIndex(it=>it.value == item.value));
+        ].filter((item, idx, list) => idx == list.findIndex(it => it.value == item.value));
     },
 
     /**
@@ -329,4 +329,14 @@ export const commonEnumProviders = {
         new SlashCommandEnumValue('null', null, enumTypes.type, enumIcons.null),
         new SlashCommandEnumValue('undefined', null, enumTypes.type, enumIcons.undefined),
     ],
+
+    messageRoles: () => [
+        new SlashCommandEnumValue('user', null, enumTypes.enum, enumIcons.user),
+        new SlashCommandEnumValue('assistant', null, enumTypes.enum, enumIcons.assistant),
+        new SlashCommandEnumValue('system', null, enumTypes.enum, enumIcons.system),
+    ],
+
+    backgrounds: () => Array.from(document.querySelectorAll('.bg_example'))
+        .map(it => new SlashCommandEnumValue(it.getAttribute('bgfile')))
+        .filter(it => it.value?.length),
 };

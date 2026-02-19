@@ -1328,6 +1328,10 @@ Here are the available tools:`);
         });
     }
 
+    static initToolSlashCommands() {
+        return this.registerNativeToolCommand();
+    }
+
     static unregisterNativeToolCommand() {
         this.#tools.clear();
         SlashCommandParser.removeCommand('tools-list');

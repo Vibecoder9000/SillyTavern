@@ -126,8 +126,7 @@ export async function getStatusHorde() {
     try {
         const hordeStatus = await checkHordeStatus();
         setOnlineStatus(hordeStatus ? t`Connected` : 'no_connection');
-    }
-    catch {
+    } catch {
         setOnlineStatus('no_connection');
     }
 
@@ -205,11 +204,11 @@ export async function generateHorde(prompt, params, signal, reportProgress) {
     delete params.prompt;
 
     // No idea what these do
-    params['n'] = 1;
-    params['frmtadsnsp'] = false;
-    params['frmtrmblln'] = false;
-    params['frmtrmspch'] = false;
-    params['frmttriminc'] = false;
+    params.n = 1;
+    params.frmtadsnsp = false;
+    params.frmtrmblln = false;
+    params.frmtrmspch = false;
+    params.frmttriminc = false;
 
     const payload = {
         'prompt': prompt,

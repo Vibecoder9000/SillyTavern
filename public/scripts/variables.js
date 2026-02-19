@@ -133,7 +133,7 @@ export function setGlobalVariable(name, value, args = {}) {
     return value;
 }
 
-function addLocalVariable(name, value) {
+export function addLocalVariable(name, value) {
     const currentValue = getLocalVariable(name) || 0;
     try {
         const parsedValue = JSON.parse(currentValue);
@@ -163,7 +163,7 @@ function addLocalVariable(name, value) {
     return newValue;
 }
 
-function addGlobalVariable(name, value) {
+export function addGlobalVariable(name, value) {
     const currentValue = getGlobalVariable(name) || 0;
     try {
         const parsedValue = JSON.parse(currentValue);
@@ -193,19 +193,19 @@ function addGlobalVariable(name, value) {
     return newValue;
 }
 
-function incrementLocalVariable(name) {
+export function incrementLocalVariable(name) {
     return addLocalVariable(name, 1);
 }
 
-function incrementGlobalVariable(name) {
+export function incrementGlobalVariable(name) {
     return addGlobalVariable(name, 1);
 }
 
-function decrementLocalVariable(name) {
+export function decrementLocalVariable(name) {
     return addLocalVariable(name, -1);
 }
 
-function decrementGlobalVariable(name) {
+export function decrementGlobalVariable(name) {
     return addGlobalVariable(name, -1);
 }
 
@@ -388,8 +388,7 @@ async function timesCallback(args, value) {
             command.breakController = new SlashCommandBreakController();
             command.scope.setMacro('timesIndex', i);
             result = await command.execute();
-        }
-        else {
+        } else {
             result = await executeSubCommands(command.replace(/\{\{timesIndex\}\}/g, i.toString()), args._scope, args._parserFlags, args._abortController);
         }
         if (result.isAborted) break;
@@ -408,7 +407,7 @@ async function ifCallback(args, value) {
     const { a, b, rule } = parseBooleanOperands(args);
     const result = evalBoolean(rule, a, b);
 
-    /**@type {string|SlashCommandClosure} */
+    /** @type {string|SlashCommandClosure} */
     let command;
     if (value) {
         if (value[0] instanceof SlashCommandClosure) {
@@ -438,7 +437,7 @@ async function ifCallback(args, value) {
  * @param {string} name Local variable name
  * @returns {boolean} True if the local variable exists, false otherwise
  */
-function existsLocalVariable(name) {
+export function existsLocalVariable(name) {
     return chat_metadata.variables && chat_metadata.variables[name] !== undefined;
 }
 
@@ -447,7 +446,7 @@ function existsLocalVariable(name) {
  * @param {string} name Global variable name
  * @returns {boolean} True if the global variable exists, false otherwise
  */
-function existsGlobalVariable(name) {
+export function existsGlobalVariable(name) {
     return extension_settings.variables.global && extension_settings.variables.global[name] !== undefined;
 }
 
@@ -575,7 +574,7 @@ export function evalBoolean(rule, a, b) {
         case 'neq':
             return aString !== bString;
         default:
-            throw new Error(`Unknown boolean comparison rule for type number. Accepted: in, nin, eq, neq. Provided: ${rule}`);
+            throw new Error(`Unknown boolean comparison rule for type string. Accepted: in, nin, eq, neq. Provided: ${rule}`);
     }
 }
 
@@ -608,7 +607,7 @@ async function executeSubCommands(command, scope = null, parserFlags = null, abo
  * @param {string} name Variable name to delete
  * @returns {string} Empty string
  */
-function deleteLocalVariable(name) {
+export function deleteLocalVariable(name) {
     if (!existsLocalVariable(name)) {
         console.warn(`The local variable "${name}" does not exist.`);
         return '';
@@ -624,7 +623,7 @@ function deleteLocalVariable(name) {
  * @param {string} name Variable name to delete
  * @returns {string} Empty string
  */
-function deleteGlobalVariable(name) {
+export function deleteGlobalVariable(name) {
     if (!existsGlobalVariable(name)) {
         console.warn(`The global variable "${name}" does not exist.`);
         return '';

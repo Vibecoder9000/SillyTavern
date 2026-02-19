@@ -765,7 +765,7 @@ class PromptManager {
         eventSource.on(event_types.CHATCOMPLETION_MODEL_CHANGED, () => this.renderDebounced());
 
         // Re-render when the character changes.
-        eventSource.on('chatLoaded', (event) => {
+        eventSource.on(event_types.CHAT_LOADED, (event) => {
             this.handleCharacterSelected(event);
             this.saveServiceSettings().then(() => this.renderDebounced());
         });
@@ -986,7 +986,6 @@ class PromptManager {
      * @returns {void}
      */
     addPrompt(prompt, identifier) {
-
         if (typeof prompt !== 'object' || prompt === null) throw new Error('Object is not a prompt');
 
         const newPrompt = {
@@ -1280,10 +1279,10 @@ class PromptManager {
         const preparedPrompt = new Prompt(prompt);
 
         if (typeof original === 'string') {
-            if (0 < groupMembers.length) preparedPrompt.content = substituteParams(prompt.content ?? '', null, null, original, groupMembers.join(', '));
-            else preparedPrompt.content = substituteParams(prompt.content, null, null, original);
+            if (0 < groupMembers.length) preparedPrompt.content = substituteParams(prompt.content ?? '', { original, groupOverride: groupMembers.join(', ') });
+            else preparedPrompt.content = substituteParams(prompt.content, { original });
         } else {
-            if (0 < groupMembers.length) preparedPrompt.content = substituteParams(prompt.content ?? '', null, null, null, groupMembers.join(', '));
+            if (0 < groupMembers.length) preparedPrompt.content = substituteParams(prompt.content ?? '', { groupOverride: groupMembers.join(', ') });
             else preparedPrompt.content = substituteParams(prompt.content);
         }
 
@@ -1318,7 +1317,6 @@ class PromptManager {
             this.updatePromptByIdentifier(identifier, prompt);
             debouncedSaveServiceSettings().then(() => this.render());
         });
-
     }
 
     /**
