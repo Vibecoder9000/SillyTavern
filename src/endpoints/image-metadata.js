@@ -10,7 +10,7 @@ import { imageSize } from 'image-size';
 import writeFileAtomic from 'write-file-atomic';
 import express from 'express';
 import { Jimp } from '../jimp.js';
-import { getConfigValue, getImages, isPathUnderParent } from '../util.js';
+import { getConfigValue, isPathUnderParent } from '../util.js';
 
 export const METADATA_FILE = 'image-metadata.json';
 
