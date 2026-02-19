@@ -6,13 +6,22 @@ import { SlashCommandParser } from './slash-commands/SlashCommandParser.js';
 import { createThumbnail, flashHighlight, getBase64Async, stringFormat, debounce, setupScrollToTop, saveBase64AsFile, getFileExtension } from './utils.js';
 import { debounce_timeout } from './constants.js';
 import { t } from './i18n.js';
-import { Popup } from './popup.js';
+import { callGenericPopup, Popup, POPUP_TYPE } from './popup.js';
 import { groups, selected_group } from './group-chats.js';
 import { humanizedDateTime } from './RossAscends-mods.js';
 import { deleteMediaFromServer } from './chats.js';
 
 const BG_METADATA_KEY = 'custom_background';
 const LIST_METADATA_KEY = 'chat_backgrounds';
+
+/** @type {Array<{id: string, name: string, thumbnailFile: string}>} */
+let folderList = [];
+/** @type {Object.<string, string[]>} filename → folderIds */
+let imageFolderMap = {};
+/** @type {string|null} Currently active folder drill-in, or null for root */
+let activeFolderId = null;
+/** @type {string[]} Full unfiltered image list for folder filtering */
+let allSystemImages = [];
 
 // A single transparent PNG pixel used as a placeholder for errored backgrounds
 const PNG_PIXEL = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=';
@@ -452,6 +461,24 @@ async function onDeleteBackgroundClick(e) {
             }
         }
 
+        // Remove from local image list so it doesn't reappear on re-render
+        const deletedBg = bgToDelete.attr('bgfile');
+        if (deletedBg) {
+            const imgIdx = allSystemImages.indexOf(deletedBg);
+            if (imgIdx !== -1) allSystemImages.splice(imgIdx, 1);
+
+            // Update folder map and clear folder thumbnail if it referenced this image
+            if (imageFolderMap[deletedBg]) {
+                delete imageFolderMap[deletedBg];
+            }
+            for (const folder of folderList) {
+                if (folder.thumbnailFile === deletedBg) {
+                    folder.thumbnailFile = '';
+                }
+            }
+            renderFolderGrid();
+        }
+
         bgToDelete.remove();
 
         if (url === chat_metadata[BG_METADATA_KEY]) {
@@ -556,9 +583,380 @@ export async function getBackgrounds() {
     if (response.ok) {
         const { images, config } = await response.json();
         Object.assign(THUMBNAIL_CONFIG, config);
+        allSystemImages = images;
 
-        renderSystemBackgrounds(images);
+        // Load folders first so getFilteredImages() works correctly in folder view
+        await loadFolders();
+
+        // Render only filtered images if inside a folder, otherwise all
+        renderSystemBackgrounds(getFilteredImages());
         highlightSelectedBackground();
+    }
+}
+
+/**
+ * Loads folder data from the server (separate from image loading).
+ */
+async function loadFolders() {
+    try {
+        const response = await fetch('/api/backgrounds/folders', {
+            method: 'POST',
+            headers: getRequestHeaders(),
+            body: JSON.stringify({}),
+        });
+        if (response.ok) {
+            const data = await response.json();
+            folderList = data.folders || [];
+            imageFolderMap = data.imageFolderMap || {};
+
+            // Auto-assign thumbnail for folders that don't have one
+            for (const folder of folderList) {
+                if (!folder.thumbnailFile) {
+                    const firstImage = allSystemImages.find(img => {
+                        const fids = imageFolderMap[img];
+                        return fids && fids.includes(folder.id);
+                    });
+                    if (firstImage) {
+                        folder.thumbnailFile = firstImage;
+                        // Persist to server (fire-and-forget)
+                        fetch(`/api/image-metadata/folders/${folder.id}`, {
+                            method: 'PUT',
+                            headers: getRequestHeaders(),
+                            body: JSON.stringify({ thumbnailFile: firstImage }),
+                        }).catch(err => console.debug('Auto-thumbnail save failed:', err));
+                    }
+                }
+            }
+
+            renderFolderGrid();
+        }
+    } catch (error) {
+        console.error('Error loading folders:', error);
+    }
+}
+
+/**
+ * Renders the folder grid inside #bg_folder_grid.
+ */
+function renderFolderGrid() {
+    const container = $('#bg_folder_grid');
+    container.empty();
+
+    if (folderList.length === 0 && !activeFolderId) {
+        // Still show the "+ New Folder" tile even if no folders exist
+        const newFolderTile = $('#bg_new_folder_template .bg_new_folder_tile').clone();
+        container.append(newFolderTile);
+        return;
+    }
+
+    for (const folder of folderList) {
+        const tile = createFolderTileElement(folder);
+        container.append(tile);
+    }
+
+    // Add the "+ New Folder" placeholder tile
+    const newFolderTile = $('#bg_new_folder_template .bg_new_folder_tile').clone();
+    container.append(newFolderTile);
+}
+
+/**
+ * Creates a single folder tile DOM element.
+ * @param {{id: string, name: string, thumbnailFile: string}} folder
+ * @returns {HTMLElement}
+ */
+function createFolderTileElement(folder) {
+    const tile = $('#bg_folder_tile_template .bg_folder_tile').clone();
+    tile.attr('data-folder-id', folder.id);
+    tile.find('.bg_folder_tile_name').text(folder.name);
+
+    // Set cover image (async, update when resolved)
+    getFolderCoverUrl(folder).then(coverUrl => {
+        if (coverUrl) {
+            tile.find('.bg_folder_tile_cover').css('background-image', `url("${coverUrl}")`);
+        }
+    });
+
+    return tile.get(0);
+}
+
+/**
+ * Gets the cover image URL for a folder.
+ * Uses thumbnailFile if set, otherwise falls back to the first image in the folder.
+ * @param {{id: string, name: string, thumbnailFile: string}} folder
+ * @returns {Promise<string|null>}
+ */
+async function getFolderCoverUrl(folder) {
+    const file = folder.thumbnailFile || allSystemImages.find(img => {
+        const fids = imageFolderMap[img];
+        return fids && fids.includes(folder.id);
+    });
+    if (!file) return null;
+
+    const fileExtension = file.split('.').pop().toLowerCase();
+    const isAnimated = ['mp4', 'webp'].includes(fileExtension);
+    if (isAnimated && !background_settings.animation) {
+        return getThumbnailFromStorage(file, false);
+    }
+    return getThumbnailUrl('bg', file);
+}
+
+/**
+ * Gets images filtered by the active folder.
+ * @returns {string[]}
+ */
+function getFilteredImages() {
+    if (!activeFolderId) return allSystemImages;
+    return allSystemImages.filter(img => {
+        const fids = imageFolderMap[img];
+        return fids && fids.includes(activeFolderId);
+    });
+}
+
+/**
+ * Drills into a folder — hides folder grid, shows breadcrumb, filters images.
+ * @param {string} folderId
+ */
+function onFolderDrillIn(folderId) {
+    const folder = folderList.find(f => f.id === folderId);
+    if (!folder) return;
+
+    activeFolderId = folderId;
+    $('body').addClass('in-folder-view');
+
+    // Hide folder grid, show breadcrumb
+    $('#bg_folder_grid').hide();
+    $('#bg_folder_breadcrumb').show();
+    $('#bg_current_folder_name').text(folder.name);
+
+    // Render only this folder's images
+    renderSystemBackgrounds(getFilteredImages());
+    highlightSelectedBackground();
+}
+
+/**
+ * Returns to the root folder overview.
+ */
+function onBackToFolders() {
+    activeFolderId = null;
+    $('body').removeClass('in-folder-view');
+
+    // Show folder grid, hide breadcrumb
+    $('#bg_folder_grid').show();
+    $('#bg_folder_breadcrumb').hide();
+    $('#bg_current_folder_name').text('');
+
+    // Show all images
+    renderSystemBackgrounds(allSystemImages);
+    highlightSelectedBackground();
+}
+
+/**
+ * Creates a new folder via API.
+ */
+async function onCreateFolder() {
+    const name = await Popup.show.input(t`Enter folder name:`);
+    if (!name || !name.trim()) return;
+
+    try {
+        const response = await fetch('/api/image-metadata/folders', {
+            method: 'POST',
+            headers: getRequestHeaders(),
+            body: JSON.stringify({ name: name.trim() }),
+        });
+        if (response.ok) {
+            const folder = await response.json();
+            folderList.push(folder);
+            renderFolderGrid();
+            toastr.success(t`Folder created: ${folder.name}`);
+        }
+    } catch (error) {
+        console.error('Error creating folder:', error);
+        toastr.error(t`Failed to create folder`);
+    }
+}
+
+/**
+ * Renames a folder via API.
+ * @param {string} folderId
+ */
+async function onRenameFolder(folderId) {
+    const folder = folderList.find(f => f.id === folderId);
+    if (!folder) return;
+
+    const newName = await Popup.show.input(t`Enter new folder name:`, null, folder.name);
+    if (!newName || !newName.trim() || newName.trim() === folder.name) return;
+
+    try {
+        const response = await fetch(`/api/image-metadata/folders/${folderId}`, {
+            method: 'PUT',
+            headers: getRequestHeaders(),
+            body: JSON.stringify({ name: newName.trim() }),
+        });
+        if (response.ok) {
+            folder.name = newName.trim();
+            renderFolderGrid();
+            toastr.success(t`Folder renamed`);
+        }
+    } catch (error) {
+        console.error('Error renaming folder:', error);
+        toastr.error(t`Failed to rename folder`);
+    }
+}
+
+/**
+ * Deletes a folder via API.
+ * @param {string} folderId
+ */
+async function onDeleteFolder(folderId) {
+    const folder = folderList.find(f => f.id === folderId);
+    if (!folder) return;
+
+    const confirm = await Popup.show.confirm(t`Delete folder "${folder.name}"?`, t`Images will not be deleted, only the folder grouping.`);
+    if (!confirm) return;
+
+    try {
+        const response = await fetch(`/api/image-metadata/folders/${folderId}`, {
+            method: 'DELETE',
+            headers: getRequestHeaders(),
+        });
+        if (response.ok) {
+            folderList = folderList.filter(f => f.id !== folderId);
+            // Clean imageFolderMap
+            for (const fids of Object.values(imageFolderMap)) {
+                const idx = fids.indexOf(folderId);
+                if (idx !== -1) fids.splice(idx, 1);
+            }
+            // If we were inside this folder, go back
+            if (activeFolderId === folderId) {
+                onBackToFolders();
+            }
+            renderFolderGrid();
+            toastr.success(t`Folder deleted`);
+        }
+    } catch (error) {
+        console.error('Error deleting folder:', error);
+        toastr.error(t`Failed to delete folder`);
+    }
+}
+
+/**
+ * Shows a folder assignment popup for an image.
+ * @param {string} bgFile - The background filename
+ */
+async function onAssignToFolder(bgFile) {
+    if (folderList.length === 0) {
+        toastr.info(t`Create a folder first`);
+        return;
+    }
+
+    const currentFolderIds = imageFolderMap[bgFile] || [];
+
+    // Build checkbox inputs for Popup
+    const checkboxHtml = folderList.map(f => {
+        const checked = currentFolderIds.includes(f.id) ? 'checked' : '';
+        return `<label class="checkbox_label flexGap5" style="margin:4px 0;">
+            <input type="checkbox" data-folder-id="${f.id}" ${checked}>
+            <span>${f.name}</span>
+        </label>`;
+    }).join('');
+
+    const content = $(`<div><h3>${t`Assign to folders`}</h3>${checkboxHtml}</div>`);
+
+    const result = await callGenericPopup(content, POPUP_TYPE.CONFIRM, '', { okButton: t`Save` });
+    if (!result) return;
+
+    // Determine which folders were toggled on/off
+    const toAssign = [];
+    const toUnassign = [];
+    content.find('input[type="checkbox"]').each(function () {
+        const fid = $(this).data('folder-id');
+        const isChecked = $(this).prop('checked');
+        const wasChecked = currentFolderIds.includes(fid);
+        if (isChecked && !wasChecked) toAssign.push(fid);
+        if (!isChecked && wasChecked) toUnassign.push(fid);
+    });
+
+    // Construct the relative path the server expects (backgrounds/filename)
+    const relativePath = `backgrounds/${bgFile}`;
+
+    try {
+        for (const fid of toAssign) {
+            const resp = await fetch(`/api/image-metadata/folders/${fid}/images`, {
+                method: 'POST',
+                headers: getRequestHeaders(),
+                body: JSON.stringify({ paths: [relativePath] }),
+            });
+            if (!resp.ok) throw new Error(`Assign to folder ${fid} failed: ${resp.status}`);
+        }
+        for (const fid of toUnassign) {
+            const resp = await fetch(`/api/image-metadata/folders/${fid}/images`, {
+                method: 'DELETE',
+                headers: getRequestHeaders(),
+                body: JSON.stringify({ paths: [relativePath] }),
+            });
+            if (!resp.ok) throw new Error(`Unassign from folder ${fid} failed: ${resp.status}`);
+        }
+
+        // Update local state
+        const newFolderIds = folderList
+            .filter(f => {
+                const wasIn = currentFolderIds.includes(f.id);
+                if (toAssign.includes(f.id)) return true;
+                if (toUnassign.includes(f.id)) return false;
+                return wasIn;
+            })
+            .map(f => f.id);
+
+        if (newFolderIds.length > 0) {
+            imageFolderMap[bgFile] = newFolderIds;
+        } else {
+            delete imageFolderMap[bgFile];
+        }
+
+        renderFolderGrid();
+
+        // Re-render filtered image list if currently inside a folder view
+        if (activeFolderId) {
+            renderSystemBackgrounds(getFilteredImages());
+            highlightSelectedBackground();
+        }
+
+        toastr.success(t`Folder assignment updated`);
+    } catch (error) {
+        console.error('Error assigning to folder:', error);
+        toastr.error(t`Failed to update folder assignment`);
+    }
+}
+
+/**
+ * Sets an image as the folder cover.
+ * @param {string} bgFile - The background filename
+ */
+async function onSetFolderCover(bgFile) {
+    if (!activeFolderId) return;
+
+    try {
+        const response = await fetch(`/api/image-metadata/folders/${activeFolderId}`, {
+            method: 'PUT',
+            headers: getRequestHeaders(),
+            body: JSON.stringify({ thumbnailFile: bgFile }),
+        });
+        if (response.ok) {
+            const folder = folderList.find(f => f.id === activeFolderId);
+            if (folder) {
+                folder.thumbnailFile = bgFile;
+                // Update the DOM tile cover image
+                const coverUrl = await getFolderCoverUrl(folder);
+                if (coverUrl) {
+                    $(`.bg_folder_tile[data-folder-id="${folder.id}"] .bg_folder_tile_cover`)
+                        .css('background-image', `url('${coverUrl}')`);
+                }
+            }
+            toastr.success(t`Folder cover updated`);
+        }
+    } catch (error) {
+        console.error('Error setting folder cover:', error);
+        toastr.error(t`Failed to set folder cover`);
     }
 }
 
@@ -856,6 +1254,29 @@ function onBackgroundFilterInput() {
         const hasMatch = title.toLowerCase().includes(filterValue);
         $bg.toggle(hasMatch);
     });
+
+    // Show/hide folder tiles based on whether they contain any matching images
+    if (!activeFolderId) {
+        $('#bg_folder_grid .bg_folder_tile').each(function () {
+            const $tile = $(this);
+            if ($tile.hasClass('bg_new_folder_tile')) {
+                $tile.toggle(!filterValue); // hide placeholder when searching
+                return;
+            }
+            const folderId = $tile.attr('data-folder-id');
+            if (!folderId || !filterValue) {
+                $tile.show();
+                return;
+            }
+            // Check if any image in this folder matches the filter
+            const hasMatchingImage = allSystemImages.some(img => {
+                const fids = imageFolderMap[img];
+                if (!fids || !fids.includes(folderId)) return false;
+                return img.toLowerCase().includes(filterValue);
+            });
+            $tile.toggle(hasMatchingImage);
+        });
+    }
 }
 
 const debouncedOnBackgroundFilterInput = debounce(onBackgroundFilterInput, debounce_timeout.standard);
@@ -871,6 +1292,30 @@ export function getActiveBackgroundTab() {
 export function initBackgrounds() {
     eventSource.on(event_types.CHAT_CHANGED, onChatChanged);
     eventSource.on(event_types.FORCE_SET_BACKGROUND, forceSetBackground);
+
+    // Folder event handlers
+    $(document)
+        .on('click', '.bg_folder_tile:not(.bg_new_folder_tile)', function (e) {
+            if ($(e.target).closest('.jg-button').length) return; // let button handler run
+            const folderId = $(this).attr('data-folder-id');
+            if (folderId) onFolderDrillIn(folderId);
+        })
+        .on('click', '.bg_new_folder_tile', function () {
+            onCreateFolder();
+        })
+        .on('click', '#bg_back_to_folders', function () {
+            onBackToFolders();
+        })
+        .on('click', '.bg_folder_tile [data-action="rename-folder"]', function (e) {
+            e.stopPropagation();
+            const folderId = $(this).closest('.bg_folder_tile').attr('data-folder-id');
+            if (folderId) onRenameFolder(folderId);
+        })
+        .on('click', '.bg_folder_tile [data-action="delete-folder"]', function (e) {
+            e.stopPropagation();
+            const folderId = $(this).closest('.bg_folder_tile').attr('data-folder-id');
+            if (folderId) onDeleteFolder(folderId);
+        });
 
     $(document)
         .off('click', '.bg_example').on('click', '.bg_example', onSelectBackgroundClick)
@@ -909,6 +1354,20 @@ export function initBackgrounds() {
                 case 'copy':
                     onCopyToSystemBackgroundClick.call(this, e.originalEvent);
                     break;
+                case 'folder': {
+                    const bgEl = $(this).closest('.bg_example');
+                    if (bgEl.attr('custom') === 'true') break; // Only system backgrounds
+                    const bgFile = bgEl.attr('bgfile');
+                    if (bgFile) onAssignToFolder(bgFile);
+                    break;
+                }
+                case 'set-cover': {
+                    const bgEl = $(this).closest('.bg_example');
+                    if (bgEl.attr('custom') === 'true') break; // Only system backgrounds
+                    const bgFile = bgEl.attr('bgfile');
+                    if (bgFile) onSetFolderCover(bgFile);
+                    break;
+                }
             }
         });
 

@@ -16,13 +16,13 @@ export const METADATA_FILE = 'image-metadata.json';
 
 /**
  * @typedef {Object} ImageMetadata
- * @property {string} hash - SHA-256 hash of the image file.
- * @property {number} aspectRatio - Aspect ratio (width / height) of the image.
- * @property {boolean} isAnimated - Whether the image is animated.
- * @property {string} dominantColor - Dominant color in hex format (e.g., '#RRGGBB').
+ * @property {string} [hash] - SHA-256 hash of the image file.
+ * @property {number} [aspectRatio] - Aspect ratio (width / height) of the image.
+ * @property {boolean} [isAnimated] - Whether the image is animated.
+ * @property {string} [dominantColor] - Dominant color in hex format (e.g., '#RRGGBB').
  * @property {string[]} folderIds - Array of virtual folder IDs the image belongs to.
- * @property {number} addedTimestamp - Timestamp when the image was added.
- * @property {number} thumbnailResolution - Thumbnail resolution (width * height) for cache invalidation.
+ * @property {number} [addedTimestamp] - Timestamp when the image was added.
+ * @property {number} [thumbnailResolution] - Thumbnail resolution (width * height) for cache invalidation.
  * @property {number} [mtime] - File modification time for cache invalidation (internal use).
  */
 
@@ -317,7 +317,226 @@ export async function cleanupOrphanedMetadata(userDataRoot) {
     return orphanedPaths;
 }
 
+/**
+ * Creates a new virtual folder.
+ * @param {string} userDataRoot
+ * @param {string} name
+ * @returns {Promise<{id: string, name: string, thumbnailFile: string}>}
+ */
+export async function createFolder(userDataRoot, name) {
+    const index = await readMetadataIndex(userDataRoot);
+    const id = crypto.randomUUID();
+    const folder = { id, name, thumbnailFile: '' };
+    index.folders.push(folder);
+    await writeMetadataIndex(userDataRoot, index);
+    return folder;
+}
+
+/**
+ * Renames or updates a virtual folder.
+ * @param {string} userDataRoot
+ * @param {string} folderId
+ * @param {{name?: string, thumbnailFile?: string}} updates
+ * @returns {Promise<{id: string, name: string, thumbnailFile: string}>}
+ */
+export async function updateFolder(userDataRoot, folderId, updates) {
+    const index = await readMetadataIndex(userDataRoot);
+    const folder = index.folders.find(f => f.id === folderId);
+    if (!folder) throw new Error(`Folder '${folderId}' not found.`);
+    if (updates.name !== undefined) folder.name = updates.name;
+    if (updates.thumbnailFile !== undefined) folder.thumbnailFile = updates.thumbnailFile;
+    await writeMetadataIndex(userDataRoot, index);
+    return folder;
+}
+
+/**
+ * Deletes a virtual folder and removes its ID from all images.
+ * @param {string} userDataRoot
+ * @param {string} folderId
+ * @returns {Promise<void>}
+ */
+export async function deleteFolder(userDataRoot, folderId) {
+    const index = await readMetadataIndex(userDataRoot);
+    const idx = index.folders.findIndex(f => f.id === folderId);
+    if (idx === -1) throw new Error(`Folder '${folderId}' not found.`);
+    index.folders.splice(idx, 1);
+    // Remove folderId from all images
+    for (const meta of Object.values(index.images)) {
+        if (Array.isArray(meta.folderIds)) {
+            const fi = meta.folderIds.indexOf(folderId);
+            if (fi !== -1) meta.folderIds.splice(fi, 1);
+        }
+    }
+    await writeMetadataIndex(userDataRoot, index);
+}
+
+/**
+ * Assigns images to a folder.
+ * @param {string} userDataRoot
+ * @param {string} folderId
+ * @param {string[]} relativePaths
+ * @returns {Promise<void>}
+ */
+export async function assignImagesToFolder(userDataRoot, folderId, relativePaths) {
+    const index = await readMetadataIndex(userDataRoot);
+    if (!index.folders.some(f => f.id === folderId)) {
+        throw new Error(`Folder '${folderId}' not found.`);
+    }
+    for (const rp of relativePaths) {
+        const posixPath = rp.replaceAll(path.sep, path.posix.sep);
+
+        // Validate: must be a backgrounds/ path
+        if (!posixPath.startsWith('backgrounds/') || posixPath.includes('..')) {
+            throw new Error(`Invalid background path: '${posixPath}'`);
+        }
+
+        // Validate: file must exist on disk
+        const absPath = path.join(userDataRoot, posixPath);
+        try {
+            await fs.access(absPath);
+        } catch {
+            throw new Error(`Background file not found: '${posixPath}'`);
+        }
+
+        let meta = index.images[posixPath];
+        if (!meta) {
+            // Create a stub entry so folderIds can be stored even before full metadata generation
+            meta = { folderIds: [] };
+            index.images[posixPath] = meta;
+        }
+        if (!Array.isArray(meta.folderIds)) meta.folderIds = [];
+        if (!meta.folderIds.includes(folderId)) {
+            meta.folderIds.push(folderId);
+        }
+    }
+    await writeMetadataIndex(userDataRoot, index);
+}
+
+/**
+ * Unassigns images from a folder.
+ * @param {string} userDataRoot
+ * @param {string} folderId
+ * @param {string[]} relativePaths
+ * @returns {Promise<void>}
+ */
+export async function unassignImagesFromFolder(userDataRoot, folderId, relativePaths) {
+    const index = await readMetadataIndex(userDataRoot);
+    for (const rp of relativePaths) {
+        const posixPath = rp.replaceAll(path.sep, path.posix.sep);
+        const meta = index.images[posixPath];
+        if (!meta || !Array.isArray(meta.folderIds)) continue;
+        const fi = meta.folderIds.indexOf(folderId);
+        if (fi !== -1) meta.folderIds.splice(fi, 1);
+    }
+    await writeMetadataIndex(userDataRoot, index);
+}
+
 export const router = express.Router();
+
+/**
+ * GET /api/image-metadata/folders
+ * List all virtual folders.
+ */
+router.get('/folders', async function (request, response) {
+    try {
+        const index = await readMetadataIndex(request.user.directories.root);
+        return response.json(index.folders || []);
+    } catch (error) {
+        console.error('[ImageMetadata] Folders list error:', error);
+        return response.status(500).json({ error: 'Internal server error.' });
+    }
+});
+
+/**
+ * POST /api/image-metadata/folders
+ * Create a new folder. Body: { name: string }
+ */
+router.post('/folders', async function (request, response) {
+    try {
+        const { name } = request.body;
+        if (!name || typeof name !== 'string') {
+            return response.status(400).json({ error: '"name" is required.' });
+        }
+        const folder = await createFolder(request.user.directories.root, name.trim());
+        return response.json(folder);
+    } catch (error) {
+        console.error('[ImageMetadata] Folder create error:', error);
+        return response.status(500).json({ error: 'Internal server error.' });
+    }
+});
+
+/**
+ * PUT /api/image-metadata/folders/:id
+ * Update a folder. Body: { name?, thumbnailFile? }
+ */
+router.put('/folders/:id', async function (request, response) {
+    try {
+        const folder = await updateFolder(request.user.directories.root, request.params.id, request.body);
+        return response.json(folder);
+    } catch (error) {
+        if (error.message.includes('not found')) {
+            return response.status(404).json({ error: error.message });
+        }
+        console.error('[ImageMetadata] Folder update error:', error);
+        return response.status(500).json({ error: 'Internal server error.' });
+    }
+});
+
+/**
+ * DELETE /api/image-metadata/folders/:id
+ * Delete a folder and unassign all images.
+ */
+router.delete('/folders/:id', async function (request, response) {
+    try {
+        await deleteFolder(request.user.directories.root, request.params.id);
+        return response.json({ ok: true });
+    } catch (error) {
+        if (error.message.includes('not found')) {
+            return response.status(404).json({ error: error.message });
+        }
+        console.error('[ImageMetadata] Folder delete error:', error);
+        return response.status(500).json({ error: 'Internal server error.' });
+    }
+});
+
+/**
+ * POST /api/image-metadata/folders/:id/images
+ * Assign images to a folder. Body: { paths: string[] }
+ */
+router.post('/folders/:id/images', async function (request, response) {
+    try {
+        const { paths } = request.body;
+        if (!Array.isArray(paths)) {
+            return response.status(400).json({ error: '"paths" array is required.' });
+        }
+        await assignImagesToFolder(request.user.directories.root, request.params.id, paths);
+        return response.json({ ok: true });
+    } catch (error) {
+        if (error.message.includes('not found')) {
+            return response.status(404).json({ error: error.message });
+        }
+        console.error('[ImageMetadata] Folder assign error:', error);
+        return response.status(500).json({ error: 'Internal server error.' });
+    }
+});
+
+/**
+ * DELETE /api/image-metadata/folders/:id/images
+ * Unassign images from a folder. Body: { paths: string[] }
+ */
+router.delete('/folders/:id/images', async function (request, response) {
+    try {
+        const { paths } = request.body;
+        if (!Array.isArray(paths)) {
+            return response.status(400).json({ error: '"paths" array is required.' });
+        }
+        await unassignImagesFromFolder(request.user.directories.root, request.params.id, paths);
+        return response.json({ ok: true });
+    } catch (error) {
+        console.error('[ImageMetadata] Folder unassign error:', error);
+        return response.status(500).json({ error: 'Internal server error.' });
+    }
+});
 
 /**
  * POST /api/image-metadata

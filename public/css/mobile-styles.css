@@ -38,6 +38,21 @@
         grid-template-columns: repeat(var(--bg-thumb-columns, 3), 1fr);
     }
 
+    .bg_folder_grid {
+        grid-template-columns: repeat(calc(var(--bg-thumb-columns, 3) + 2), 1fr);
+    }
+
+    .bg_folder_tile .bg_folder_tile_menu {
+        opacity: 1;
+        visibility: visible;
+        transform: scale(1);
+    }
+
+    .bg_folder_tile .jg-button {
+        width: 30px;
+        height: 30px;
+    }
+
     .bg_list {
         width: unset;
     }

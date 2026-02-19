@@ -5582,6 +5582,14 @@
                         </div>
                     </ul>
                     <div id="bg_global_tab" class="bg_tab_panel">
+                        <div id="bg_folder_breadcrumb" class="bg_folder_breadcrumb" style="display:none;">
+                            <button id="bg_back_to_folders" class="menu_button menu_button_icon">
+                                <i class="fa-solid fa-arrow-left"></i>
+                                <span data-i18n="Back">Back</span>
+                            </button>
+                            <span id="bg_current_folder_name" class="bg_current_folder_name"></span>
+                        </div>
+                        <div id="bg_folder_grid" class="bg_list bg_folder_grid"></div>
                         <div id="bg_menu_content" class="bg_list"></div>
                     </div>
                     <div id="bg_chat_tab" class="bg_tab_panel">
@@ -6550,8 +6558,29 @@
                     <div data-action="copy" class="jg-button jg-copy fa-solid fa-file-arrow-up" data-i18n="[title]Copy to global backgrounds" title="Copy to global backgrounds"></div>
                     <div data-action="edit" class="jg-button jg-edit fa-solid fa-pen-to-square fa-fw pointer" data-i18n="[title]Rename Background" title="Rename Background"></div>
                     <div data-action="delete" class="jg-button jg-delete fa-solid fa-trash-can fa-fw pointer" data-i18n="[title]Delete Background" title="Delete Background"></div>
+                    <div data-action="folder" class="jg-button jg-folder fa-solid fa-folder fa-fw pointer" data-i18n="[title]Add to folder" title="Add to folder"></div>
+                    <div data-action="set-cover" class="jg-button jg-set-cover fa-solid fa-image fa-fw pointer" data-i18n="[title]Set as folder cover" title="Set as folder cover"></div>
                 </div>
                 <div class="BGSampleTitle"></div>
+            </div>
+        </div>
+        <div id="bg_folder_tile_template" class="template_element">
+            <div class="bg_folder_tile" data-folder-id="">
+                <div class="bg_folder_tile_cover"></div>
+                <div class="bg_folder_tile_overlay">
+                    <i class="fa-solid fa-folder"></i>
+                    <span class="bg_folder_tile_name"></span>
+                </div>
+                <div class="bg_folder_tile_menu jg-menu">
+                    <div data-action="rename-folder" class="jg-button fa-solid fa-pen-to-square fa-fw pointer" data-i18n="[title]Rename folder" title="Rename folder"></div>
+                    <div data-action="delete-folder" class="jg-button fa-solid fa-trash-can fa-fw pointer" data-i18n="[title]Delete folder" title="Delete folder"></div>
+                </div>
+            </div>
+        </div>
+        <div id="bg_new_folder_template" class="template_element">
+            <div class="bg_folder_tile bg_new_folder_tile">
+                <i class="fa-solid fa-folder-plus fa-2x"></i>
+                <span data-i18n="New Folder">New Folder</span>
             </div>
         </div>
         <!-- templates for JS to reuse when needed -->
