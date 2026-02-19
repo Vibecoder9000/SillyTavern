@@ -90,7 +90,7 @@ let lazyLoadObserver = null;
 /**
  * Cache for the current list of system background filenames.
  * Used to re-sort backgrounds without refetching from the server.
- * @type {string[]}
+ * @type {Array<{filename: string, isAnimated: boolean}>}
  */
 let cachedSystemBackgrounds = [];
 
@@ -526,7 +526,7 @@ async function onDeleteBackgroundClick(e) {
         if (!isCustom) {
             await delBackground(bg);
             // Remove from cache to prevent reappearing on sort change
-            const cacheIndex = cachedSystemBackgrounds.indexOf(bg);
+            const cacheIndex = cachedSystemBackgrounds.findIndex(s => s.filename === bg);
             if (cacheIndex !== -1) {
                 cachedSystemBackgrounds.splice(cacheIndex, 1);
             }
