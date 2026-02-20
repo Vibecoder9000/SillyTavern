@@ -262,7 +262,7 @@ import { initInputMarkdown } from './scripts/input-md-formatting.js';
 import { AbortReason } from './scripts/util/AbortReason.js';
 import { initSystemPrompts } from './scripts/sysprompt.js';
 import { registerExtensionSlashCommands as initExtensionSlashCommands } from './scripts/extensions-slashcommands.js';
-import { ToolManager } from './scripts/tool-calling.js';
+import { ToolManager, initToolCalling } from './scripts/tool-calling.js';
 import { addShowdownPatch } from './scripts/util/showdown-patch.js';
 import { applyBrowserFixes } from './scripts/browser-fixes.js';
 import { initServerHistory } from './scripts/server-history.js';
@@ -327,6 +327,49 @@ export {
     /** @deprecated Use appendMediaToMessage instead. */
     appendMediaToMessage as appendImageToMessage,
 };
+
+const TRUNCATION_NOTE = '\n[truncated- tool per-output length limit reached]\n';
+
+/**
+ * Truncates a string if its token count is estimated to exceed a specified limit.
+ * Uses an asynchronous token counter to check the total size, and then a character-based
+ * approximation for the truncation itself to ensure client-side performance.
+ * @param {string|Error} output The string to cap.
+ * @returns {Promise<string>} A promise that resolves to the original or truncated string.
+ */
+async function capToolOutput(output) {
+    if (output instanceof Error) {
+        output = output.message || String(output);
+    }
+    const truncationLimit = power_user.tool_output_truncation_limit ?? 4092;
+
+    // A limit of 0 disables truncation
+    if (truncationLimit <= 0) {
+        return output;
+    }
+
+    const contentTokenLimit = truncationLimit - 25;
+
+    // Use the async tokenizer to get an accurate count of the full output
+    const tokenCount = await getTokenCountAsync(output);
+
+    if (tokenCount <= contentTokenLimit) {
+        return output;
+    }
+
+    // Use a character-based approximation to perform the split.
+    const approximateCharLimit = contentTokenLimit * 4;
+    const halfCharLimit = Math.floor(approximateCharLimit / 2);
+
+    if (output.length <= approximateCharLimit) {
+        return output;
+    }
+
+    const start = output.substring(0, halfCharLimit);
+    const end = output.substring(output.length - halfCharLimit);
+
+    return `${start}${TRUNCATION_NOTE}${end}`;
+}
 
 /**
  * Wait for page to load before continuing the app initialization.
@@ -696,6 +739,7 @@ async function firstLoadInit() {
     initExtensions();
     initExtensionSlashCommands();
     ToolManager.initToolSlashCommands();
+    initToolCalling();
     await initPresetManager();
     await initSystemMessages();
     await getSettings();
@@ -1910,8 +1954,37 @@ function insertSVGIcon(mes, extra) {
 export function updateMessageBlock(messageId, message, { rerenderMessage = true } = {}) {
     const messageElement = chatElement.find(`[mesid="${messageId}"]`);
     if (rerenderMessage) {
-        const text = message?.extra?.display_text ?? message.mes;
-        messageElement.find('.mes_text').html(messageFormatting(text, message.name, message.is_system, message.is_user, messageId, {}, false));
+        if (message.extra?.is_tool_call && message.extra?.tool_call_info) {
+            const toolInfo = message.extra.tool_call_info;
+            let html = '';
+            if (message.extra.prefix_text) {
+                html += `<p>${DOMPurify.sanitize(message.extra.prefix_text)}</p>`;
+            }
+            html += '<h4><i class="fa-solid fa-cogs"></i> Tool Call</h4>';
+            html += `<div class="tool-action"><p><b>Action:</b> <code>${DOMPurify.sanitize(toolInfo.tool)}</code></p>`;
+            html += `<p><b>Arguments:</b></p><pre><code>${DOMPurify.sanitize(JSON.stringify(toolInfo.args, null, 2))}</code></pre></div>`;
+
+            if (power_user.tool_execution_mode === 'manual') {
+                html += `<button class="tool-execute-button" data-tool-name="${DOMPurify.sanitize(toolInfo.tool)}" data-message-id="${messageId}"><i class="fa-solid fa-play"></i> Execute Tool</button>`;
+            }
+
+            messageElement.find('.mes_text').html(html);
+        } else {
+            const text = message?.extra?.display_text ?? message.mes;
+            messageElement.find('.mes_text').html(messageFormatting(text, message.name, message.is_system, message.is_user, messageId, {}, false));
+        }
+    }
+
+    if (message.extra?.is_tool_call) {
+        messageElement.addClass('tool-call-message');
+    } else {
+        messageElement.removeClass('tool-call-message');
+    }
+
+    if (message.extra?.is_tool_result) {
+        messageElement.addClass('tool-result-message');
+    } else {
+        messageElement.removeClass('tool-result-message');
     }
 
     updateReasoningUI(messageElement);
@@ -2554,8 +2627,55 @@ export function updateMessageElement(mes, { messageId = chat.length - 1, message
         insertSVGIcon(messageElement, mes.extra);
     }
 
-    if (mes?.extra?.isSmallSys === true) {
-        messageElement.addClass('smallSysMes');
+    if (mes.extra?.is_tool_call) {
+        const toolInfo = mes.extra.tool_call_info;
+        messageElement.addClass('tool-call-message');
+        let html = '';
+        if (mes.extra.prefix_text) {
+            html += `<div class="tool-prefix-text"><p>${DOMPurify.sanitize(mes.extra.prefix_text)}</p></div>`;
+        }
+        html += '<div class="tool-call-box">';
+        html += '<h4><i class="fa-solid fa-cogs"></i> Tool Call</h4>';
+        html += `<div class="tool-action"><p><b>Action:</b> <code>${DOMPurify.sanitize(toolInfo.tool)}</code></p>`;
+        html += `<p><b>Arguments:</b></p><pre><code>${DOMPurify.sanitize(JSON.stringify(toolInfo.args, null, 2))}</code></pre></div>`;
+        html += '</div>';
+
+        if (power_user.tool_execution_mode === 'manual') {
+            html += `<button class="tool-execute-button" data-tool-name="${DOMPurify.sanitize(toolInfo.tool)}" data-message-id="${messageId}"><i class="fa-solid fa-play"></i> Execute Tool</button>`;
+        }
+
+        messageElement.find('.mes_text').html(html);
+    }
+    else if (mes.extra?.is_tool_result) {
+        if (mes.extra.image || mes.extra.video) {
+            messageElement.addClass('tool-result-message');
+            appendMediaToMessage(mes, messageElement);
+        } else {
+            const result = mes.extra.tool_result_content;
+            messageElement.addClass('tool-result-message');
+
+            const messageTextContainer = messageElement.find('.mes_text');
+            messageTextContainer.empty();
+
+            const toolResultBox = $('<div class="tool-result-box"></div>');
+            const header = $('<h4><i class="fa-solid fa-check-circle"></i> Tool Result</h4>');
+            const pre = $('<pre></pre>');
+            const code = $('<code></code>');
+
+            code.text(result);
+
+            pre.append(code);
+            toolResultBox.append(header, pre);
+            messageTextContainer.append(toolResultBox);
+        }
+    }
+    else {
+        if (mes?.extra?.isSmallSys === true) {
+            messageElement.addClass('smallSysMes');
+        }
+
+        appendMediaToMessage(mes, messageElement, adjustMediaScroll);
+        messageElement.find('.mes_text').html(messageHTML);
     }
 
     if (Array.isArray(mes?.extra?.tool_invocations)) {
@@ -2569,8 +2689,6 @@ export function updateMessageElement(mes, { messageId = chat.length - 1, message
         $(this).parent().html('<div class="missing-avatar fa-solid fa-user-slash"></div>');
     });
 
-    appendMediaToMessage(mes, messageElement, adjustMediaScroll);
-    messageElement.find('.mes_text').html(messageHTML);
     addCopyToCodeBlocks(messageElement);
 
     // Set the swipes counter for all non-user messages.
@@ -3391,12 +3509,14 @@ class StreamingProcessor {
     /**
      * Creates a new streaming processor.
      * @param {string} type Generation type
-     * @param {boolean} forceName2 If true, force the use of name2
+     * @param {string} type Generation type
+     * @param {object} generateOptions The options object from the Generate function call.
+     * @param {boolean} dryRun Whether this is a dry run.
      * @param {Date} timeStarted Date when generation was started
      * @param {string} continueMessage Previous message if the type is 'continue'
      * @param {PromptReasoning} promptReasoning Prompt reasoning instance
      */
-    constructor(type, forceName2, timeStarted, continueMessage, promptReasoning) {
+    constructor(type, generateOptions, dryRun, timeStarted, continueMessage, promptReasoning) {
         this.result = '';
         this.messageId = -1;
         /** @type {HTMLElement} */
@@ -3410,7 +3530,9 @@ class StreamingProcessor {
         /** @type {HTMLTextAreaElement} */
         this.sendTextarea = document.querySelector('#send_textarea');
         this.type = type;
-        this.force_name2 = forceName2;
+        this.generateOptions = generateOptions;
+        this.dryRun = dryRun;
+        this.force_name2 = generateOptions.force_name2;
         this.isStopped = false;
         this.isFinished = false;
         this.generator = this.nullStreamingGeneration;
@@ -3594,6 +3716,122 @@ class StreamingProcessor {
     }
 
     async onFinishStreaming(messageId, text) {
+        if (oai_settings.native_tool_calling && this.type !== 'impersonate' && this.type !== 'regenerate') {
+            const parsedTool = ToolManager.findAndParseNativeToolCall(text);
+            if (parsedTool) {
+                // Reconstruct the message to ensure it's well-formed and doesn't contain partial tags.
+                const formattedToolCall = ToolManager.formatNativeToolCallForDisplay(parsedTool);
+                chat[messageId].mes = formattedToolCall;
+                chat[messageId].extra = { is_tool_call: true, tool_call_info: parsedTool.tool_call, reasoning: parsedTool.reasoning, prefix_text: parsedTool.prefix_text };
+
+                // Re-render the message element with the special tool call formatting.
+                const toolMessageElement = $(`#chat .mes[mesid="${messageId}"]`);
+                if (toolMessageElement.length) {
+                    const toolInfo = parsedTool.tool_call;
+                    toolMessageElement.addClass('tool-call-message');
+                    let html = '';
+                    if (parsedTool.prefix_text) {
+                        html += `<div class="tool-prefix-text"><p>${DOMPurify.sanitize(parsedTool.prefix_text)}</p></div>`;
+                    }
+                    html += '<div class="tool-call-box">';
+                    html += '<h4><i class="fa-solid fa-cogs"></i> Tool Call</h4>';
+                    html += `<div class="tool-action"><p><b>Action:</b> <code>${DOMPurify.sanitize(toolInfo.tool)}</code></p>`;
+                    html += `<p><b>Arguments:</b></p><pre><code>${DOMPurify.sanitize(JSON.stringify(toolInfo.args, null, 2))}</code></pre></div>`;
+                    html += '</div>';
+                    toolMessageElement.find('.mes_text').html(html);
+                }
+
+                // Check for manual execution mode
+                if (power_user.tool_execution_mode === 'manual') {
+                    const manualMessageElement = $(`#chat .mes[mesid="${messageId}"]`);
+                    if (manualMessageElement.length) {
+                        const buttonHtml = `<button class="tool-execute-button" data-tool-name="${DOMPurify.sanitize(parsedTool.tool_call.tool)}" data-message-id="${messageId}"><i class="fa-solid fa-play"></i> Execute Tool</button>`;
+                        manualMessageElement.find('.mes_text').append(buttonHtml);
+                    }
+
+                    await saveChatConditional();
+                    this.markUIGenStopped();
+                    unblockGeneration();
+                    return;
+                }
+
+                // Auto mode: execute tool immediately
+                const toolResult = await ToolManager.invokeFunctionTool(parsedTool.tool_call.tool, parsedTool.tool_call.args, this.abortController.signal);
+
+                let resultMessage;
+                let stopGeneration = false;
+                try {
+                    const parsed = typeof toolResult === 'string' ? JSON.parse(toolResult) : toolResult;
+
+                    if (parsed.type === 'image_display' && parsed.filepath) {
+                        resultMessage = {
+                            name: systemUserName,
+                            is_user: false,
+                            is_system: true,
+                            mes: '<tool_result>\nImage displayed to user.\n</tool_result>',
+                            extra: { is_tool_result: true, image: `/api/files/download/${parsed.filepath}` },
+                        };
+                        stopGeneration = true;
+                    }
+                    else if (parsed.type === 'image_context' && parsed.filepath) {
+                        resultMessage = {
+                            name: systemUserName,
+                            is_user: false,
+                            is_system: true,
+                            mes: '<tool_result>\nImage provided as context for analysis.\n</tool_result>',
+                            extra: { is_tool_result: true, image: `/api/files/download/${parsed.filepath}` },
+                        };
+                        stopGeneration = false;
+                    }
+                    else if (parsed.type === 'video_display' && parsed.filepath) {
+                        resultMessage = {
+                            name: systemUserName,
+                            is_user: false,
+                            is_system: true,
+                            mes: '<tool_result>\nVideo displayed to user.\n</tool_result>',
+                            extra: { is_tool_result: true, video: `/api/files/download/${parsed.filepath}` },
+                        };
+                        stopGeneration = true;
+                    }
+                } catch (e) {
+                    console.error('[Streaming] Failed to parse special tool result:', e);
+                }
+
+                if (!resultMessage) {
+                    const cappedToolResult = await capToolOutput(toolResult);
+                    resultMessage = {
+                        name: systemUserName,
+                        is_user: false,
+                        is_system: true,
+                        mes: `<tool_result>\n${cappedToolResult}\n</tool_result>`,
+                        extra: { is_tool_result: true, tool_result_content: cappedToolResult },
+                    };
+                }
+
+                chat.push(resultMessage);
+                addOneMessage(resultMessage);
+
+                if (!stopGeneration) {
+                    const newOptions = { ...this.generateOptions, depth: this.generateOptions.depth + 1 };
+                    Generate('normal', newOptions, this.dryRun);
+                }
+
+                this.markUIGenStopped();
+                unblockGeneration();
+                return;
+            } else {
+                if (chat[messageId].extra?.is_tool_call) {
+                    delete chat[messageId].extra.is_tool_call;
+                    delete chat[messageId].extra.tool_call_info;
+                    delete chat[messageId].extra.reasoning;
+                    delete chat[messageId].extra.prefix_text;
+                    const toolMsgEl = chatElement.find(`.mes[mesid="${messageId}"]`);
+                    toolMsgEl.removeClass('tool-call-message');
+                }
+            }
+        }
+
+        this.markUIGenStopped();
         await this.onProgressStreaming(messageId, text, true);
         const messageElement = chatElement.find(`.mes[mesid="${messageId}"]`);
         const message = chat[messageId];
@@ -4301,7 +4539,9 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
     // Collect messages with usable content
     const canUseTools = ToolManager.isToolCallingSupported();
     const canPerformToolCalls = !dryRun && ToolManager.canPerformToolCalls(type) && depth < ToolManager.RECURSE_LIMIT;
-    let coreChat = chat.filter(x => !x.is_system || (canUseTools && Array.isArray(x.extra?.tool_invocations)));
+    const noNativeToolCallTypes = ['impersonate', 'quiet', 'continue'];
+    const canPerformNativeToolCalls = !dryRun && oai_settings.native_tool_calling && !noNativeToolCallTypes.includes(type) && depth < ToolManager.RECURSE_LIMIT;
+    let coreChat = chat.filter(x => !x.is_system || (canUseTools && Array.isArray(x.extra?.tool_invocations)) || x.extra?.is_tool_result);
     if (type === 'swipe') {
         coreChat.pop();
     }
@@ -5186,7 +5426,8 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
 
         if (isStreamingEnabled() && type !== 'quiet') {
             continue_mag = promptReasoning.removePrefix(continue_mag);
-            streamingProcessor = new StreamingProcessor(type, force_name2, generation_started, continue_mag, promptReasoning);
+            const generateOptions = { automatic_trigger, force_name2, quiet_prompt, quietToLoud, skipWIAN, force_chid, signal, quietImage, quietName, jsonSchema, depth };
+            streamingProcessor = new StreamingProcessor(type, generateOptions, dryRun, generation_started, continue_mag, promptReasoning);
             if (isContinue) {
                 // Save reply does add cycle text to the prompt, so it's not needed here
                 streamingProcessor.firstMessageText = '';
@@ -5353,6 +5594,125 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
                 depth = depth + 1;
                 await ToolManager.saveFunctionToolInvocations(invocationResult.invocations);
                 return Generate('normal', { automatic_trigger, force_name2, quiet_prompt, quietToLoud, skipWIAN, force_chid, signal, quietImage, quietName, depth }, dryRun);
+            }
+        }
+
+        // Native tool calling: detect <tool> blocks in the non-streamed response text
+        if (oai_settings.native_tool_calling && depth < ToolManager.RECURSE_LIMIT) {
+            const parsedTool = ToolManager.findAndParseNativeToolCall(getMessage);
+            if (parsedTool) {
+                // Reconstruct the message to ensure it's well-formed and doesn't contain partial tags.
+                const formattedToolCall = ToolManager.formatNativeToolCallForDisplay(parsedTool);
+                chat[chat.length - 1].mes = formattedToolCall;
+                chat[chat.length - 1].extra = { is_tool_call: true, tool_call_info: parsedTool.tool_call, reasoning: parsedTool.reasoning, prefix_text: parsedTool.prefix_text };
+
+                // Re-render the message element with the special tool call formatting.
+                const messageElement = $('#chat .mes').last();
+                if (messageElement.length) {
+                    const toolInfo = parsedTool.tool_call;
+                    messageElement.addClass('tool-call-message');
+                    let html = '';
+                    if (parsedTool.prefix_text) {
+                        html += `<div class="tool-prefix-text"><p>${DOMPurify.sanitize(parsedTool.prefix_text)}</p></div>`;
+                    }
+                    html += '<div class="tool-call-box">';
+                    html += '<h4><i class="fa-solid fa-cogs"></i> Tool Call</h4>';
+                    html += `<div class="tool-action"><p><b>Action:</b> <code>${DOMPurify.sanitize(toolInfo.tool)}</code></p>`;
+                    html += `<p><b>Arguments:</b></p><pre><code>${DOMPurify.sanitize(JSON.stringify(toolInfo.args, null, 2))}</code></pre></div>`;
+                    html += '</div>';
+                    messageElement.find('.mes_text').html(html);
+                }
+
+                // Check for manual execution mode
+                const messageId = chat.length - 1;
+                if (power_user.tool_execution_mode === 'manual') {
+                    // Add execute button for manual mode
+                    const manualMsgEl = $('#chat .mes').last();
+                    if (manualMsgEl.length) {
+                        const buttonHtml = `<button class="tool-execute-button" data-tool-name="${DOMPurify.sanitize(parsedTool.tool_call.tool)}" data-message-id="${messageId}"><i class="fa-solid fa-play"></i> Execute Tool</button>`;
+                        manualMsgEl.find('.mes_text').append(buttonHtml);
+                    }
+
+                    // Save chat and stop here - user will click the button to continue
+                    await saveChatConditional();
+                    unblockGeneration(type);
+                    generatedPromptCache = '';
+                    return;
+                }
+
+                // Auto mode: execute tool immediately
+                const toolResult = await ToolManager.invokeFunctionTool(parsedTool.tool_call.tool, parsedTool.tool_call.args, signal);
+
+                let resultMessage;
+                let stopGeneration = false;
+                try {
+                    const parsed = typeof toolResult === 'string' ? JSON.parse(toolResult) : toolResult;
+
+                    if (parsed.type === 'image_display' && parsed.filepath) {
+                        resultMessage = {
+                            name: systemUserName,
+                            is_user: false,
+                            is_system: true,
+                            mes: '<tool_result>\nImage displayed to user.\n</tool_result>',
+                            extra: { is_tool_result: true, image: `/api/files/download/${parsed.filepath}` },
+                        };
+                        stopGeneration = true;
+                    }
+                    else if (parsed.type === 'image_context' && parsed.filepath) {
+                        resultMessage = {
+                            name: systemUserName,
+                            is_user: false,
+                            is_system: true,
+                            mes: '<tool_result>\nImage provided as context for analysis.\n</tool_result>',
+                            extra: { is_tool_result: true, image: `/api/files/download/${parsed.filepath}` },
+                        };
+                        stopGeneration = false;
+                    }
+                    else if (parsed.type === 'video_display' && parsed.filepath) {
+                        resultMessage = {
+                            name: systemUserName,
+                            is_user: false,
+                            is_system: true,
+                            mes: '<tool_result>\nVideo displayed to user.\n</tool_result>',
+                            extra: { is_tool_result: true, video: `/api/files/download/${parsed.filepath}` },
+                        };
+                        stopGeneration = true;
+                    }
+                } catch (e) {
+                    console.error('[Non-Streaming] Failed to parse special tool result:', e);
+                }
+
+                if (!resultMessage) {
+                    const cappedToolResult = await capToolOutput(toolResult);
+                    resultMessage = {
+                        name: systemUserName,
+                        is_user: false,
+                        is_system: true,
+                        mes: `<tool_result>\n${cappedToolResult}\n</tool_result>`,
+                        extra: { is_tool_result: true, tool_result_content: cappedToolResult },
+                    };
+                }
+
+                chat.push(resultMessage);
+                addOneMessage(resultMessage);
+
+                if (stopGeneration) {
+                    unblockGeneration(type);
+                    return;
+                }
+
+                const newOptions = { automatic_trigger, force_name2, quiet_prompt, quietToLoud, skipWIAN, force_chid, signal, quietImage, quietName, jsonSchema, depth: depth + 1 };
+                return Generate('normal', newOptions, dryRun);
+            } else {
+                const lastMsg = chat[chat.length - 1];
+                if (lastMsg?.extra?.is_tool_call) {
+                    delete lastMsg.extra.is_tool_call;
+                    delete lastMsg.extra.tool_call_info;
+                    delete lastMsg.extra.reasoning;
+                    delete lastMsg.extra.prefix_text;
+                    const msgEl = $('#chat .mes').last();
+                    msgEl.removeClass('tool-call-message');
+                }
             }
         }
 
@@ -7900,6 +8260,10 @@ function updateMessage(div) {
         text = removeMacros(text);
     }
     mes.mes = text;
+    // Keep tool_result_content in sync with mes text for tool result messages
+    if (mes.extra?.is_tool_result && mes.extra.tool_result_content !== undefined) {
+        mes.extra.tool_result_content = text;
+    }
     if (mes.swipe_id !== undefined) {
         ensureSwipes(mes);
         mes.swipes[mes.swipe_id] = text;
@@ -8130,17 +8494,44 @@ async function messageEditDone(div) {
     mesBlock.find('.mes_text').empty();
     mesBlock.find('.mes_edit_buttons').css('display', 'none');
     mesBlock.find('.mes_buttons').css('display', '');
-    mesBlock.find('.mes_text').append(
-        messageFormatting(
-            text,
-            this_edit_mes_chname,
-            mes.is_system,
-            mes.is_user,
-            this_edit_mes_id,
-            {},
-            false,
-        ),
-    );
+
+    // Re-render tool call/result messages with their special formatting
+    if (mes.extra?.is_tool_result) {
+        const messageTextContainer = mesBlock.find('.mes_text');
+        const toolResultBox = $('<div class="tool-result-box"></div>');
+        const header = $('<h4><i class="fa-solid fa-check-circle"></i> Tool Result</h4>');
+        const pre = $('<pre></pre>');
+        const code = $('<code></code>');
+        code.text(text);
+        pre.append(code);
+        toolResultBox.append(header, pre);
+        messageTextContainer.append(toolResultBox);
+    } else if (mes.extra?.is_tool_call) {
+        const toolInfo = mes.extra.tool_call_info;
+        let html = '';
+        if (mes.extra.prefix_text) {
+            html += `<div class="tool-prefix-text"><p>${DOMPurify.sanitize(mes.extra.prefix_text)}</p></div>`;
+        }
+        html += '<div class="tool-call-box">';
+        html += '<h4><i class="fa-solid fa-cogs"></i> Tool Call</h4>';
+        html += `<div class="tool-action"><p><b>Action:</b> <code>${DOMPurify.sanitize(toolInfo.tool)}</code></p>`;
+        html += `<p><b>Arguments:</b></p><pre><code>${DOMPurify.sanitize(JSON.stringify(toolInfo.args, null, 2))}</code></pre></div>`;
+        html += '</div>';
+        mesBlock.find('.mes_text').html(html);
+    } else {
+        mesBlock.find('.mes_text').append(
+            messageFormatting(
+                text,
+                this_edit_mes_chname,
+                mes.is_system,
+                mes.is_user,
+                this_edit_mes_id,
+                {},
+                false,
+            ),
+        );
+    }
+
     mesBlock.find('.mes_bias').empty();
     mesBlock.find('.mes_bias').append(messageFormatting(bias, '', false, false, -1, {}, false));
     appendMediaToMessage(mes, div.closest('.mes'));
@@ -12240,6 +12631,103 @@ jQuery(async function () {
     $(document).on('click', '.open_characters_library', async function () {
         await getCharacters();
         await eventSource.emit(event_types.OPEN_CHARACTER_LIBRARY);
+    });
+
+    // Manual tool execution button handler
+    $(document).on('click', '.tool-execute-button', async function (e) {
+        e.stopPropagation();
+        e.preventDefault();
+        const button = $(this);
+        const messageId = parseInt(button.data('message-id'));
+        const message = chat[messageId];
+
+        if (!message?.extra?.tool_call_info) {
+            toastr.error('Tool call information not found');
+            return;
+        }
+
+        // Prevent double-clicking
+        if (button.hasClass('executing')) {
+            return;
+        }
+
+        button.addClass('executing');
+        button.html('<i class="fa-solid fa-spinner fa-spin"></i> Executing...');
+
+        try {
+            const toolInfo = message.extra.tool_call_info;
+            const toolResult = await ToolManager.invokeFunctionTool(toolInfo.tool, toolInfo.args, undefined);
+
+            let resultMessage;
+            let stopGeneration = false;
+            try {
+                const parsed = typeof toolResult === 'string' ? JSON.parse(toolResult) : toolResult;
+
+                if (parsed.type === 'image_display' && parsed.filepath) {
+                    resultMessage = {
+                        name: systemUserName,
+                        is_user: false,
+                        is_system: true,
+                        mes: '<tool_result>\nImage displayed to user.\n</tool_result>',
+                        extra: { is_tool_result: true, image: `/api/files/download/${parsed.filepath}` },
+                    };
+                    stopGeneration = true;
+                }
+                else if (parsed.type === 'image_context' && parsed.filepath) {
+                    resultMessage = {
+                        name: systemUserName,
+                        is_user: false,
+                        is_system: true,
+                        mes: '<tool_result>\nImage provided as context for analysis.\n</tool_result>',
+                        extra: { is_tool_result: true, image: `/api/files/download/${parsed.filepath}` },
+                    };
+                    stopGeneration = false;
+                }
+                else if (parsed.type === 'video_display' && parsed.filepath) {
+                    resultMessage = {
+                        name: systemUserName,
+                        is_user: false,
+                        is_system: true,
+                        mes: '<tool_result>\nVideo displayed to user.\n</tool_result>',
+                        extra: { is_tool_result: true, video: `/api/files/download/${parsed.filepath}` },
+                    };
+                    stopGeneration = true;
+                }
+            } catch (e) {
+                console.error('[Manual Tool Execution] Failed to parse special tool result:', e);
+            }
+
+            if (!resultMessage) {
+                const cappedToolResult = await capToolOutput(String(toolResult));
+                resultMessage = {
+                    name: systemUserName,
+                    is_user: false,
+                    is_system: true,
+                    mes: `<tool_result>\n${cappedToolResult}\n</tool_result>`,
+                    extra: { is_tool_result: true, tool_result_content: cappedToolResult },
+                };
+            }
+
+            // Remove the execute button from the UI
+            button.remove();
+
+            // Add the result message to chat
+            chat.push(resultMessage);
+            addOneMessage(resultMessage);
+            await saveChatConditional();
+
+            // Continue generation unless it's a stop-generating tool
+            if (!stopGeneration) {
+                // Get the current depth from the message or default to 0
+                const currentDepth = message.extra?.depth || 0;
+                Generate('normal', { depth: currentDepth + 1 });
+            }
+        } catch (error) {
+            console.error('[Manual Tool Execution] Error:', error);
+            toastr.error('Failed to execute tool: ' + String(error));
+            button.removeClass('executing');
+            button.html('<i class="fa-solid fa-play"></i> Execute Tool');
+        }
     });
 
     // Added here to prevent execution before script.js is loaded and get rid of quirky timeouts

@@ -1083,6 +1083,16 @@ async function populateChatCompletion(prompts, chatCompletion, { bias, quietProm
     // Character and world information
     await addToChatCompletion('worldInfoBefore');
     await addToChatCompletion('main');
+
+    // Add native tool calling prompt with tool details right after the main system prompt
+    if (oai_settings.native_tool_calling) {
+        const nativeToolPrompt = ToolManager.getNativeToolPrompt();
+        if (nativeToolPrompt) {
+            const nativeToolMessage = await Message.createAsync('system', nativeToolPrompt, 'nativeToolPrompt');
+            chatCompletion.insert(nativeToolMessage, 'main', 'end');
+        }
+    }
+
     await addToChatCompletion('worldInfoAfter');
     await addToChatCompletion('charDescription');
     await addToChatCompletion('charPersonality');
