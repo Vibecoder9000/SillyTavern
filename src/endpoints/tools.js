@@ -109,6 +109,39 @@ async function isPathInSandbox(userPath, { checkExists = true } = {}) {
     }
 }
 
+router.get('/download', async (req, res) => {
+    let filepath = req.query.file;
+
+    if (!filepath || typeof filepath !== 'string') {
+        return res.status(400).json({ error: 'file query parameter is required.' });
+    }
+
+    if (filepath.startsWith('/')) {
+        filepath = filepath.substring(1);
+    }
+
+    if (!(await isPathInSandbox(filepath, { checkExists: true }))) {
+        return res.status(403).json({ error: 'Access denied: Path is outside the sandbox.' });
+    }
+
+    try {
+        const fullPath = path.join(SANDBOX_DIR, filepath);
+        const fileName = path.basename(fullPath);
+        const stat = await fs.stat(fullPath);
+        res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
+        res.setHeader('Content-Length', stat.size);
+        const content = await fs.readFile(fullPath);
+        res.send(content);
+    } catch (error) {
+        if (error.code === 'ENOENT') {
+            res.status(404).json({ error: `File not found: ${filepath}` });
+        } else {
+            console.error(`Error downloading file "${filepath}":`, error);
+            res.status(500).json({ error: 'An error occurred while downloading the file.' });
+        }
+    }
+});
+
 router.post('/readfile', async (req, res) => {
     let { filepath } = req.body;
 

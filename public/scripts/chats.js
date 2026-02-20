@@ -2107,6 +2107,39 @@ async function onImageSwiped(messageId, element, direction) {
 }
 
 export function initChatUtilities() {
+    // Handle sandbox file download links rendered by the sandboxDownloadExt Showdown extension
+    // DOMPurify prefixes classes with "custom-", so .sandbox-download becomes .custom-sandbox-download
+    $(document).on('click', '.custom-sandbox-download', async function (e) {
+        e.preventDefault();
+        e.stopPropagation();
+        const filepath = $(this).attr('data-file');
+        if (!filepath) return;
+        try {
+            const url = `/api/extensions/tools/download?file=${encodeURIComponent(filepath)}`;
+            const response = await fetch(url, {
+                method: 'GET',
+                headers: getRequestHeaders(),
+            });
+            if (!response.ok) {
+                const errorData = await response.json().catch(() => ({ error: 'Download failed' }));
+                toastr.error(errorData.error || 'Download failed');
+                return;
+            }
+            const blob = await response.blob();
+            const blobUrl = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = blobUrl;
+            a.download = filepath.split('/').pop() || 'download';
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(blobUrl);
+        } catch (error) {
+            console.error('Error downloading sandbox file:', error);
+            toastr.error('Could not download the file.');
+        }
+    });
+
     $(document).on('click', '.mes_hide', async function () {
         const messageBlock = $(this).closest('.mes');
         const messageId = Number(messageBlock.attr('mesid'));

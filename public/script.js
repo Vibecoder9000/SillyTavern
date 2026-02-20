@@ -532,6 +532,23 @@ async function getClientVersion() {
     }
 }
 
+/**
+ * Showdown extension that converts ![](filename) references to sandbox files
+ * into clickable download links instead of broken images.
+ * @returns {object[]} Showdown extension array
+ */
+function sandboxDownloadExt() {
+    return [{
+        type: 'lang',
+        regex: /!\[\]\((?!https?:\/\/)([^)]+)\)/g,
+        replace: function (match, filepath) {
+            const sanitizedPath = filepath.replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+            const fileName = sanitizedPath.split('/').pop();
+            return `<a class="sandbox-download interactable" data-file="${sanitizedPath}" title="Download ${sanitizedPath}" style="color:blue;cursor:pointer;text-decoration:underline;">${fileName}</a>`;
+        },
+    }];
+}
+
 export function reloadMarkdownProcessor() {
     converter = new showdown.Converter({
         emoji: true,
@@ -542,7 +559,7 @@ export function reloadMarkdownProcessor() {
         simpleLineBreaks: true,
         strikethrough: true,
         disableForced4SpacesIndentedSublists: true,
-        extensions: [markdownUnderscoreExt()],
+        extensions: [markdownUnderscoreExt(), sandboxDownloadExt()],
     });
 
     // Inject the dinkus extension after creating the converter

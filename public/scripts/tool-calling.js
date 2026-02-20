@@ -1011,9 +1011,10 @@ export class ToolManager {
         }
 
         const finalPromptParts = [];
-        finalPromptParts.push(`Always put your tool call in your main response. Go one step at a time.
+        finalPromptParts.push(`Always put your tool call in your main response. Only one tool call, at the end of your message, is supported.
 
-Call the tool with the required arguments inside a <tool> block. When calling a tool, you MUST follow the format and nothing else.
+Call the tool with the required arguments inside a <tool> block. 
+To provide a file for the user to download from the uploads directory, use the syntax \`![](filename.ext)\`
 
 Format example:
 
@@ -1026,7 +1027,8 @@ Format example:
 }
 </tool>
 
-Here are the available tools:`);
+Here are the available tools:
+`);
 
         const toolsString = this.tools.map(tool => {
             const openAITool = tool.toFunctionOpenAI();
