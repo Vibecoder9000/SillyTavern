@@ -2211,6 +2211,47 @@ export function initChatUtilities() {
         openAttachmentManager();
     });
 
+    // Upload file(s) to the uploads sandbox directory
+    $('#sandbox_upload_input').on('change', async function () {
+        const fileInput = this;
+        if (!(fileInput instanceof HTMLInputElement) || !fileInput.files?.length) return;
+
+        const files = Array.from(fileInput.files);
+        let successCount = 0;
+
+        for (const file of files) {
+            try {
+                const formData = new FormData();
+                formData.append('file', file);
+
+                const headers = getRequestHeaders({ omitContentType: true });
+                const response = await fetch('/api/files/upload-multipart?destination=sandbox', {
+                    method: 'POST',
+                    headers: headers,
+                    body: formData,
+                });
+
+                if (!response.ok) {
+                    const errorText = await response.text();
+                    toastr.error(`Failed to upload ${file.name}: ${errorText}`);
+                    continue;
+                }
+
+                successCount++;
+            } catch (error) {
+                console.error('Error uploading file:', error);
+                toastr.error(`Error uploading ${file.name}`);
+            }
+        }
+
+        if (successCount > 0) {
+            toastr.success(`${successCount} file(s) uploaded to uploads folder.`);
+        }
+
+        // Reset the file input
+        $('#file_form').trigger('reset');
+    });
+
     $(document).on('click', '.mes_embed', function () {
         const messageBlock = $(this).closest('.mes');
         const messageId = Number(messageBlock.attr('mesid'));

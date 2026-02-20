@@ -11711,6 +11711,8 @@ jQuery(async function () {
             setTimeout(() => openMessageDelete(fromSlashCommand), animation_duration);
         } else if (id == 'option_close_chat') {
             await closeCurrentChat();
+        } else if (id == 'option_upload') {
+            $('#sandbox_upload_input').trigger('click');
         } else if (id === 'option_settings') {
             //var checkBox = document.getElementById("waifuMode");
             var topBar = document.getElementById('top-bar');

@@ -246,6 +246,12 @@ function spawnPromise(command, options) {
         const childProcess = spawn(cmd, args, {
             ...options,
             shell: false,
+            env: {
+                ...process.env,
+                ...(options.env || {}),
+                PYTHONIOENCODING: 'utf-8',
+                PYTHONUTF8: '1',
+            },
         });
 
         let stdout = '';
@@ -347,6 +353,11 @@ router.post('/executepython', async (req, res) => {
         const childProcess = spawn(launcher.command, [...launcher.args, '-u', scriptPath], {
             cwd: SANDBOX_DIR,
             shell: false,
+            env: {
+                ...process.env,
+                PYTHONIOENCODING: 'utf-8',
+                PYTHONUTF8: '1',
+            },
         });
 
         // Track this process so we can kill it when a new one starts
