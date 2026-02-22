@@ -262,7 +262,7 @@ import { initInputMarkdown } from './scripts/input-md-formatting.js';
 import { AbortReason } from './scripts/util/AbortReason.js';
 import { initSystemPrompts } from './scripts/sysprompt.js';
 import { registerExtensionSlashCommands as initExtensionSlashCommands } from './scripts/extensions-slashcommands.js';
-import { ToolManager, initToolCalling } from './scripts/tool-calling.js';
+import { ToolManager } from './scripts/tool-calling.js';
 import { addShowdownPatch } from './scripts/util/showdown-patch.js';
 import { applyBrowserFixes } from './scripts/browser-fixes.js';
 import { initServerHistory } from './scripts/server-history.js';
@@ -327,49 +327,6 @@ export {
     /** @deprecated Use appendMediaToMessage instead. */
     appendMediaToMessage as appendImageToMessage,
 };
-
-const TRUNCATION_NOTE = '\n[truncated- tool per-output length limit reached]\n';
-
-/**
- * Truncates a string if its token count is estimated to exceed a specified limit.
- * Uses an asynchronous token counter to check the total size, and then a character-based
- * approximation for the truncation itself to ensure client-side performance.
- * @param {string|Error} output The string to cap.
- * @returns {Promise<string>} A promise that resolves to the original or truncated string.
- */
-async function capToolOutput(output) {
-    if (output instanceof Error) {
-        output = output.message || String(output);
-    }
-    const truncationLimit = power_user.tool_output_truncation_limit ?? 4092;
-
-    // A limit of 0 disables truncation
-    if (truncationLimit <= 0) {
-        return output;
-    }
-
-    const contentTokenLimit = truncationLimit - 25;
-
-    // Use the async tokenizer to get an accurate count of the full output
-    const tokenCount = await getTokenCountAsync(output);
-
-    if (tokenCount <= contentTokenLimit) {
-        return output;
-    }
-
-    // Use a character-based approximation to perform the split.
-    const approximateCharLimit = contentTokenLimit * 4;
-    const halfCharLimit = Math.floor(approximateCharLimit / 2);
-
-    if (output.length <= approximateCharLimit) {
-        return output;
-    }
-
-    const start = output.substring(0, halfCharLimit);
-    const end = output.substring(output.length - halfCharLimit);
-
-    return `${start}${TRUNCATION_NOTE}${end}`;
-}
 
 /**
  * Wait for page to load before continuing the app initialization.
@@ -532,23 +489,6 @@ async function getClientVersion() {
     }
 }
 
-/**
- * Showdown extension that converts ![](filename) references to sandbox files
- * into clickable download links instead of broken images.
- * @returns {object[]} Showdown extension array
- */
-function sandboxDownloadExt() {
-    return [{
-        type: 'lang',
-        regex: /!\[\]\((?!https?:\/\/)([^)]+)\)/g,
-        replace: function (match, filepath) {
-            const sanitizedPath = filepath.replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-            const fileName = sanitizedPath.split('/').pop();
-            return `<a class="sandbox-download interactable" data-file="${sanitizedPath}" title="Download ${sanitizedPath}" style="color:blue;cursor:pointer;text-decoration:underline;">${fileName}</a>`;
-        },
-    }];
-}
-
 export function reloadMarkdownProcessor() {
     converter = new showdown.Converter({
         emoji: true,
@@ -559,7 +499,7 @@ export function reloadMarkdownProcessor() {
         simpleLineBreaks: true,
         strikethrough: true,
         disableForced4SpacesIndentedSublists: true,
-        extensions: [markdownUnderscoreExt(), sandboxDownloadExt()],
+        extensions: [markdownUnderscoreExt()],
     });
 
     // Inject the dinkus extension after creating the converter
@@ -572,7 +512,8 @@ export function reloadMarkdownProcessor() {
 export function getCurrentChatId() {
     if (selected_group) {
         return groups.find(x => x.id == selected_group)?.chat_id;
-    } else if (this_chid !== undefined) {
+    }
+    else if (this_chid !== undefined) {
         return characters[this_chid]?.chat;
     }
 }
@@ -756,7 +697,6 @@ async function firstLoadInit() {
     initExtensions();
     initExtensionSlashCommands();
     ToolManager.initToolSlashCommands();
-    initToolCalling();
     await initPresetManager();
     await initSystemMessages();
     await getSettings();
@@ -897,14 +837,13 @@ export async function selectCharacterById(id, { switchMenu = true } = {}) {
     if (selected_group || String(this_chid) !== String(id)) {
         //if clicked on a different character from what was currently selected
         if (!is_send_press) {
-            setCharacterId(undefined);
-            setCharacterName('');
-            resetSelectedGroup();
-            await clearChat({ clearData: true });
+            await clearChat();
             cancelTtsPlay();
+            resetSelectedGroup();
             this_edit_mes_id = undefined;
             selected_button = 'character_edit';
             setCharacterId(id);
+            chat.length = 0;
             chat_metadata = {};
             await getChat();
         }
@@ -970,7 +909,8 @@ function getCharacterBlock(item, id) {
     const description = item.data?.creator_notes || '';
     if (description) {
         template.find('.ch_description').text(description);
-    } else {
+    }
+    else {
         template.find('.ch_description').hide();
     }
 
@@ -978,7 +918,8 @@ function getCharacterBlock(item, id) {
     const auxFieldValue = (item.data && item.data[auxFieldName]) || '';
     if (auxFieldValue) {
         template.find('.character_version').text(auxFieldValue);
-    } else {
+    }
+    else {
         template.find('.character_version').hide();
     }
 
@@ -1410,7 +1351,8 @@ export async function deleteCharacterChatByName(characterId, fileName) {
 }
 
 export async function replaceCurrentChat() {
-    await clearChat({ clearData: true });
+    await clearChat();
+    chat.length = 0;
 
     const chatsResponse = await fetch('/api/characters/chats', {
         method: 'POST',
@@ -1422,14 +1364,16 @@ export async function replaceCurrentChat() {
         const chats = Object.values(await chatsResponse.json());
         chats.sort((a, b) => sortMoments(timestampToMoment(a.last_mes), timestampToMoment(b.last_mes)));
 
+        // pick existing chat
         if (chats.length && typeof chats[0] === 'object') {
-            // pick existing chat
             characters[this_chid].chat = chats[0].file_name.replace('.jsonl', '');
             $('#selected_chat_pole').val(characters[this_chid].chat);
             saveCharacterDebounced();
             await getChat();
-        } else {
-            // start new chat
+        }
+
+        // start new chat
+        else {
             characters[this_chid].chat = `${name2} - ${humanizedDateTime()}`;
             $('#selected_chat_pole').val(characters[this_chid].chat);
             saveCharacterDebounced();
@@ -1586,12 +1530,7 @@ export function cancelDebouncedChatSave() {
     }
 }
 
-/**
- * Visually removes all chat message elements.
- * @param {object} [options] Options
- * @param {boolean} [options.clearData=false] Optionally clear the chat array's contents.
- */
-export async function clearChat({ clearData = false } = {}) {
+export async function clearChat() {
     cancelDebouncedChatSave();
     cancelDebouncedMetadataSave();
     closeMessageEditor();
@@ -1608,8 +1547,6 @@ export async function clearChat({ clearData = false } = {}) {
 
     await saveItemizedPrompts(getCurrentChatId());
     itemizedPrompts.length = 0;
-
-    if (clearData) chat.length = 0;
 }
 
 export async function deleteLastMessage() {
@@ -1692,13 +1629,16 @@ export const reloadCurrentChat = reloadChatMutex.update.bind(reloadChatMutex);
  */
 export async function reloadCurrentChatUnsafe() {
     preserveNeutralChat();
-    await clearChat({ clearData: true });
+    await clearChat();
+    chat.length = 0;
 
     if (selected_group) {
         await getGroupChat(selected_group, true);
-    } else if (this_chid !== undefined) {
+    }
+    else if (this_chid !== undefined) {
         await getChat();
-    } else {
+    }
+    else {
         resetChatState();
         restoreNeutralChat();
         await getCharacters();
@@ -1924,16 +1864,32 @@ export function messageFormatting(mes, ch_name, isSystem, isUser, messageId, san
 /**
  * Inserts or replaces an SVG icon adjacent to the provided message's timestamp.
  *
+ * If the `extra.api` is "openai" and `extra.model` contains the substring "claude",
+ * the function fetches the "claude.svg". Otherwise, it fetches the SVG named after
+ * the value in `extra.api`.
+ *
  * @param {JQuery<HTMLElement>} mes - The message element containing the timestamp where the icon should be inserted or replaced.
  * @param {ChatMessageExtra} extra - Contains the API and model details.
  */
 function insertSVGIcon(mes, extra) {
     // Determine the SVG filename
-    let modelName = extra?.api || '';
+    let modelName;
 
-    // If there's no API information, we can't determine which SVG to use
-    if (!modelName) {
-        return;
+    // Claude on OpenRouter or Anthropic
+    if (extra.api === 'openai' && extra.model?.toLowerCase().includes('claude')) {
+        modelName = 'claude';
+    }
+    // OpenAI on OpenRouter
+    else if (extra.api === 'openai' && extra.model?.toLowerCase().includes('openai')) {
+        modelName = 'openai';
+    }
+    // OpenRouter website model or other models
+    else if (extra.api === 'openai' && (extra.model === null || extra.model?.toLowerCase().includes('/'))) {
+        modelName = 'openrouter';
+    }
+    // Everything else
+    else {
+        modelName = extra.api;
     }
 
     const insertOrReplaceSVG = (image, className, targetSelector, insertBefore) => {
@@ -1971,37 +1927,8 @@ function insertSVGIcon(mes, extra) {
 export function updateMessageBlock(messageId, message, { rerenderMessage = true } = {}) {
     const messageElement = chatElement.find(`[mesid="${messageId}"]`);
     if (rerenderMessage) {
-        if (message.extra?.is_tool_call && message.extra?.tool_call_info) {
-            const toolInfo = message.extra.tool_call_info;
-            let html = '';
-            if (message.extra.prefix_text) {
-                html += `<p>${DOMPurify.sanitize(message.extra.prefix_text)}</p>`;
-            }
-            html += '<h4><i class="fa-solid fa-cogs"></i> Tool Call</h4>';
-            html += `<div class="tool-action"><p><b>Action:</b> <code>${DOMPurify.sanitize(toolInfo.tool)}</code></p>`;
-            html += `<p><b>Arguments:</b></p><pre><code>${DOMPurify.sanitize(JSON.stringify(toolInfo.args, null, 2))}</code></pre></div>`;
-
-            if (power_user.tool_execution_mode === 'manual') {
-                html += `<button class="tool-execute-button" data-tool-name="${DOMPurify.sanitize(toolInfo.tool)}" data-message-id="${messageId}"><i class="fa-solid fa-play"></i> Execute Tool</button>`;
-            }
-
-            messageElement.find('.mes_text').html(html);
-        } else {
-            const text = message?.extra?.display_text ?? message.mes;
-            messageElement.find('.mes_text').html(messageFormatting(text, message.name, message.is_system, message.is_user, messageId, {}, false));
-        }
-    }
-
-    if (message.extra?.is_tool_call) {
-        messageElement.addClass('tool-call-message');
-    } else {
-        messageElement.removeClass('tool-call-message');
-    }
-
-    if (message.extra?.is_tool_result) {
-        messageElement.addClass('tool-result-message');
-    } else {
-        messageElement.removeClass('tool-result-message');
+        const text = message?.extra?.display_text ?? message.mes;
+        messageElement.find('.mes_text').html(messageFormatting(text, message.name, message.is_system, message.is_user, messageId, {}, false));
     }
 
     updateReasoningUI(messageElement);
@@ -2583,6 +2510,7 @@ export function addOneMessage(mes, { type = undefined, insertAfter = null, scrol
  * @returns {JQuery<HTMLElement>} Rendered HTMLElement.
  */
 export function updateMessageElement(mes, { messageId = chat.length - 1, messageElement = messageTemplate.clone(), adjustMediaScroll = SCROLL_BEHAVIOR.NONE } = {}) {
+
     let avatarImg = getThumbnailUrl('persona', user_avatar);
 
     //for non-user messages
@@ -2644,55 +2572,8 @@ export function updateMessageElement(mes, { messageId = chat.length - 1, message
         insertSVGIcon(messageElement, mes.extra);
     }
 
-    if (mes.extra?.is_tool_call) {
-        const toolInfo = mes.extra.tool_call_info;
-        messageElement.addClass('tool-call-message');
-        let html = '';
-        if (mes.extra.prefix_text) {
-            html += `<div class="tool-prefix-text"><p>${DOMPurify.sanitize(mes.extra.prefix_text)}</p></div>`;
-        }
-        html += '<div class="tool-call-box">';
-        html += '<h4><i class="fa-solid fa-cogs"></i> Tool Call</h4>';
-        html += `<div class="tool-action"><p><b>Action:</b> <code>${DOMPurify.sanitize(toolInfo.tool)}</code></p>`;
-        html += `<p><b>Arguments:</b></p><pre><code>${DOMPurify.sanitize(JSON.stringify(toolInfo.args, null, 2))}</code></pre></div>`;
-        html += '</div>';
-
-        if (power_user.tool_execution_mode === 'manual') {
-            html += `<button class="tool-execute-button" data-tool-name="${DOMPurify.sanitize(toolInfo.tool)}" data-message-id="${messageId}"><i class="fa-solid fa-play"></i> Execute Tool</button>`;
-        }
-
-        messageElement.find('.mes_text').html(html);
-    }
-    else if (mes.extra?.is_tool_result) {
-        if (mes.extra.image || mes.extra.video) {
-            messageElement.addClass('tool-result-message');
-            appendMediaToMessage(mes, messageElement);
-        } else {
-            const result = mes.extra.tool_result_content;
-            messageElement.addClass('tool-result-message');
-
-            const messageTextContainer = messageElement.find('.mes_text');
-            messageTextContainer.empty();
-
-            const toolResultBox = $('<div class="tool-result-box"></div>');
-            const header = $('<h4><i class="fa-solid fa-check-circle"></i> Tool Result</h4>');
-            const pre = $('<pre></pre>');
-            const code = $('<code></code>');
-
-            code.text(result);
-
-            pre.append(code);
-            toolResultBox.append(header, pre);
-            messageTextContainer.append(toolResultBox);
-        }
-    }
-    else {
-        if (mes?.extra?.isSmallSys === true) {
-            messageElement.addClass('smallSysMes');
-        }
-
-        appendMediaToMessage(mes, messageElement, adjustMediaScroll);
-        messageElement.find('.mes_text').html(messageHTML);
+    if (mes?.extra?.isSmallSys === true) {
+        messageElement.addClass('smallSysMes');
     }
 
     if (Array.isArray(mes?.extra?.tool_invocations)) {
@@ -2706,6 +2587,8 @@ export function updateMessageElement(mes, { messageId = chat.length - 1, message
         $(this).parent().html('<div class="missing-avatar fa-solid fa-user-slash"></div>');
     });
 
+    appendMediaToMessage(mes, messageElement, adjustMediaScroll);
+    messageElement.find('.mes_text').html(messageHTML);
     addCopyToCodeBlocks(messageElement);
 
     // Set the swipes counter for all non-user messages.
@@ -3526,14 +3409,12 @@ class StreamingProcessor {
     /**
      * Creates a new streaming processor.
      * @param {string} type Generation type
-     * @param {string} type Generation type
-     * @param {object} generateOptions The options object from the Generate function call.
-     * @param {boolean} dryRun Whether this is a dry run.
+     * @param {boolean} forceName2 If true, force the use of name2
      * @param {Date} timeStarted Date when generation was started
      * @param {string} continueMessage Previous message if the type is 'continue'
      * @param {PromptReasoning} promptReasoning Prompt reasoning instance
      */
-    constructor(type, generateOptions, dryRun, timeStarted, continueMessage, promptReasoning) {
+    constructor(type, forceName2, timeStarted, continueMessage, promptReasoning) {
         this.result = '';
         this.messageId = -1;
         /** @type {HTMLElement} */
@@ -3547,9 +3428,7 @@ class StreamingProcessor {
         /** @type {HTMLTextAreaElement} */
         this.sendTextarea = document.querySelector('#send_textarea');
         this.type = type;
-        this.generateOptions = generateOptions;
-        this.dryRun = dryRun;
-        this.force_name2 = generateOptions.force_name2;
+        this.force_name2 = forceName2;
         this.isStopped = false;
         this.isFinished = false;
         this.generator = this.nullStreamingGeneration;
@@ -3733,122 +3612,6 @@ class StreamingProcessor {
     }
 
     async onFinishStreaming(messageId, text) {
-        if (oai_settings.native_tool_calling && this.type !== 'impersonate' && this.type !== 'regenerate') {
-            const parsedTool = ToolManager.findAndParseNativeToolCall(text);
-            if (parsedTool) {
-                // Reconstruct the message to ensure it's well-formed and doesn't contain partial tags.
-                const formattedToolCall = ToolManager.formatNativeToolCallForDisplay(parsedTool);
-                chat[messageId].mes = formattedToolCall;
-                chat[messageId].extra = { is_tool_call: true, tool_call_info: parsedTool.tool_call, reasoning: parsedTool.reasoning, prefix_text: parsedTool.prefix_text };
-
-                // Re-render the message element with the special tool call formatting.
-                const toolMessageElement = $(`#chat .mes[mesid="${messageId}"]`);
-                if (toolMessageElement.length) {
-                    const toolInfo = parsedTool.tool_call;
-                    toolMessageElement.addClass('tool-call-message');
-                    let html = '';
-                    if (parsedTool.prefix_text) {
-                        html += `<div class="tool-prefix-text"><p>${DOMPurify.sanitize(parsedTool.prefix_text)}</p></div>`;
-                    }
-                    html += '<div class="tool-call-box">';
-                    html += '<h4><i class="fa-solid fa-cogs"></i> Tool Call</h4>';
-                    html += `<div class="tool-action"><p><b>Action:</b> <code>${DOMPurify.sanitize(toolInfo.tool)}</code></p>`;
-                    html += `<p><b>Arguments:</b></p><pre><code>${DOMPurify.sanitize(JSON.stringify(toolInfo.args, null, 2))}</code></pre></div>`;
-                    html += '</div>';
-                    toolMessageElement.find('.mes_text').html(html);
-                }
-
-                // Check for manual execution mode
-                if (power_user.tool_execution_mode === 'manual') {
-                    const manualMessageElement = $(`#chat .mes[mesid="${messageId}"]`);
-                    if (manualMessageElement.length) {
-                        const buttonHtml = `<button class="tool-execute-button" data-tool-name="${DOMPurify.sanitize(parsedTool.tool_call.tool)}" data-message-id="${messageId}"><i class="fa-solid fa-play"></i> Execute Tool</button>`;
-                        manualMessageElement.find('.mes_text').append(buttonHtml);
-                    }
-
-                    await saveChatConditional();
-                    this.markUIGenStopped();
-                    unblockGeneration();
-                    return;
-                }
-
-                // Auto mode: execute tool immediately
-                const toolResult = await ToolManager.invokeFunctionTool(parsedTool.tool_call.tool, parsedTool.tool_call.args, this.abortController.signal);
-
-                let resultMessage;
-                let stopGeneration = false;
-                try {
-                    const parsed = typeof toolResult === 'string' ? JSON.parse(toolResult) : toolResult;
-
-                    if (parsed.type === 'image_display' && parsed.filepath) {
-                        resultMessage = {
-                            name: systemUserName,
-                            is_user: false,
-                            is_system: true,
-                            mes: '<tool_result>\nImage displayed to user.\n</tool_result>',
-                            extra: { is_tool_result: true, image: `/api/files/download/${parsed.filepath}` },
-                        };
-                        stopGeneration = true;
-                    }
-                    else if (parsed.type === 'image_context' && parsed.filepath) {
-                        resultMessage = {
-                            name: systemUserName,
-                            is_user: false,
-                            is_system: true,
-                            mes: '<tool_result>\nImage provided as context for analysis.\n</tool_result>',
-                            extra: { is_tool_result: true, image: `/api/files/download/${parsed.filepath}` },
-                        };
-                        stopGeneration = false;
-                    }
-                    else if (parsed.type === 'video_display' && parsed.filepath) {
-                        resultMessage = {
-                            name: systemUserName,
-                            is_user: false,
-                            is_system: true,
-                            mes: '<tool_result>\nVideo displayed to user.\n</tool_result>',
-                            extra: { is_tool_result: true, video: `/api/files/download/${parsed.filepath}` },
-                        };
-                        stopGeneration = true;
-                    }
-                } catch (e) {
-                    console.error('[Streaming] Failed to parse special tool result:', e);
-                }
-
-                if (!resultMessage) {
-                    const cappedToolResult = await capToolOutput(toolResult);
-                    resultMessage = {
-                        name: systemUserName,
-                        is_user: false,
-                        is_system: true,
-                        mes: `<tool_result>\n${cappedToolResult}\n</tool_result>`,
-                        extra: { is_tool_result: true, tool_result_content: cappedToolResult },
-                    };
-                }
-
-                chat.push(resultMessage);
-                addOneMessage(resultMessage);
-
-                if (!stopGeneration) {
-                    const newOptions = { ...this.generateOptions, depth: this.generateOptions.depth + 1 };
-                    Generate('normal', newOptions, this.dryRun);
-                }
-
-                this.markUIGenStopped();
-                unblockGeneration();
-                return;
-            } else {
-                if (chat[messageId].extra?.is_tool_call) {
-                    delete chat[messageId].extra.is_tool_call;
-                    delete chat[messageId].extra.tool_call_info;
-                    delete chat[messageId].extra.reasoning;
-                    delete chat[messageId].extra.prefix_text;
-                    const toolMsgEl = chatElement.find(`.mes[mesid="${messageId}"]`);
-                    toolMsgEl.removeClass('tool-call-message');
-                }
-            }
-        }
-
-        this.markUIGenStopped();
         await this.onProgressStreaming(messageId, text, true);
         const messageElement = chatElement.find(`.mes[mesid="${messageId}"]`);
         const message = chat[messageId];
@@ -3940,9 +3703,9 @@ class StreamingProcessor {
     }
 
     /**
-     * @returns {AsyncGenerator<{ text: string, swipes: string[], logprobs: import('./scripts/logprobs.js').TokenLogprobs, toolCalls: any[], state: any }, void, void>}
+     * @returns {Generator<{ text: string, swipes: string[], logprobs: import('./scripts/logprobs.js').TokenLogprobs, toolCalls: any[], state: any }, void, void>}
      */
-    async* nullStreamingGeneration() {
+    *nullStreamingGeneration() {
         throw new Error('Generation function for streaming is not hooked up');
     }
 
@@ -3987,7 +3750,8 @@ class StreamingProcessor {
             }
             const seconds = (timestamps[timestamps.length - 1] - timestamps[0]) / 1000;
             console.warn(`Stream stats: ${timestamps.length} tokens, ${seconds.toFixed(2)} seconds, rate: ${Number(timestamps.length / seconds).toFixed(2)} TPS`);
-        } catch (err) {
+        }
+        catch (err) {
             // in the case of a self-inflicted abort, we have already cleaned up
             if (!this.isFinished) {
                 console.error(err);
@@ -4370,7 +4134,7 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
     const isInstruct = power_user.instruct.enabled && main_api !== 'openai';
     const isImpersonate = type == 'impersonate';
 
-    if (!(dryRun || depth || type == 'regenerate' || type == 'swipe' || type == 'quiet')) {
+    if (!(dryRun || type == 'regenerate' || type == 'swipe' || type == 'quiet')) {
         const interruptedByCommand = await processCommands(String($('#send_textarea').val()));
 
         if (interruptedByCommand) {
@@ -4459,7 +4223,7 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
     const lastMessage = chat[chat.length - 1];
 
     let textareaText;
-    if (type !== 'regenerate' && type !== 'swipe' && type !== 'quiet' && !isImpersonate && !dryRun && !depth) {
+    if (type !== 'regenerate' && type !== 'swipe' && type !== 'quiet' && !isImpersonate && !dryRun) {
         is_send_press = true;
         textareaText = String($('#send_textarea').val());
         $('#send_textarea').val('')[0].dispatchEvent(new Event('input', { bubbles: true }));
@@ -4467,7 +4231,8 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
         textareaText = '';
         if (chat.length && lastMessage.is_user) {
             //do nothing? why does this check exist?
-        } else if (type !== 'quiet' && type !== 'swipe' && !isImpersonate && !dryRun && !depth && chat.length) {
+        }
+        else if (type !== 'quiet' && type !== 'swipe' && !isImpersonate && !dryRun && chat.length) {
             deleteItemizedPromptForMessage(chat.length - 1);
             chat.length = chat.length - 1;
             await removeLastMessage();
@@ -4508,14 +4273,16 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
         'continue',
     ];
     //for normal messages sent from user..
-    if ((textareaText != '' || (hasPendingFileAttachment() && !noAttachTypes.includes(type))) && !automatic_trigger && type !== 'quiet' && !dryRun && !depth) {
+    if ((textareaText != '' || (hasPendingFileAttachment() && !noAttachTypes.includes(type))) && !automatic_trigger && type !== 'quiet' && !dryRun) {
         // If user message contains no text other than bias - send as a system message
         if (messageBias && !removeMacros(textareaText)) {
             sendSystemMessage(system_message_types.GENERIC, ' ', { bias: messageBias });
-        } else {
+        }
+        else {
             await sendMessageAsUser(textareaText, messageBias);
         }
-    } else if (textareaText == '' && !automatic_trigger && !dryRun && [undefined, 'normal'].includes(type) && main_api == 'openai' && oai_settings.send_if_empty.trim().length > 0 && !depth) {
+    }
+    else if (textareaText == '' && !automatic_trigger && !dryRun && [undefined, 'normal'].includes(type) && main_api == 'openai' && oai_settings.send_if_empty.trim().length > 0) {
         // Use send_if_empty if set and the user message is empty. Only when sending messages normally
         await sendMessageAsUser(oai_settings.send_if_empty.trim(), messageBias);
     }
@@ -4556,9 +4323,7 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
     // Collect messages with usable content
     const canUseTools = ToolManager.isToolCallingSupported();
     const canPerformToolCalls = !dryRun && ToolManager.canPerformToolCalls(type) && depth < ToolManager.RECURSE_LIMIT;
-    const noNativeToolCallTypes = ['impersonate', 'quiet', 'continue'];
-    const canPerformNativeToolCalls = !dryRun && oai_settings.native_tool_calling && !noNativeToolCallTypes.includes(type) && depth < ToolManager.RECURSE_LIMIT;
-    let coreChat = chat.filter(x => !x.is_system || (canUseTools && Array.isArray(x.extra?.tool_invocations)) || x.extra?.is_tool_result);
+    let coreChat = chat.filter(x => !x.is_system || (canUseTools && Array.isArray(x.extra?.tool_invocations)));
     if (type === 'swipe') {
         coreChat.pop();
     }
@@ -4636,7 +4401,8 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
     if (main_api == 'koboldhorde' && (horde_settings.auto_adjust_context_length || horde_settings.auto_adjust_response_length)) {
         try {
             adjustedParams = await adjustHordeGenerationParams(max_context, amount_gen);
-        } catch {
+        }
+        catch {
             unblockGeneration(type);
             return Promise.resolve();
         }
@@ -4814,7 +4580,8 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
             // When continuing generation of previous output, last user message precedes the message to continue
             if (isContinue) {
                 coreChat.splice(coreChat.length - 1, 0, { mes: jailbreak, is_user: true });
-            } else {
+            }
+            else {
                 // This operation will result in the injectedIndices indexes being off by one
                 coreChat.push({ mes: jailbreak, is_user: true });
                 // Add +1 to the elements to correct for the new PHI/Jailbreak message.
@@ -5089,6 +4856,7 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
 
         // Add quiet generation prompt at depth 0
         if (quiet_prompt && quiet_prompt.length) {
+
             // here name1 is forced for all quiet prompts..why?
             const name = name1;
             //checks if we are in instruct, if so, formats the chat as such, otherwise just adds the quiet prompt
@@ -5435,7 +5203,8 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
 
         if (itemizedIndex !== -1) {
             itemizedPrompts[itemizedIndex] = additionalPromptStuff;
-        } else {
+        }
+        else {
             itemizedPrompts.push(additionalPromptStuff);
         }
 
@@ -5443,8 +5212,7 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
 
         if (isStreamingEnabled() && type !== 'quiet') {
             continue_mag = promptReasoning.removePrefix(continue_mag);
-            const generateOptions = { automatic_trigger, force_name2, quiet_prompt, quietToLoud, skipWIAN, force_chid, signal, quietImage, quietName, jsonSchema, depth };
-            streamingProcessor = new StreamingProcessor(type, generateOptions, dryRun, generation_started, continue_mag, promptReasoning);
+            streamingProcessor = new StreamingProcessor(type, force_name2, generation_started, continue_mag, promptReasoning);
             if (isContinue) {
                 // Save reply does add cycle text to the prompt, so it's not needed here
                 streamingProcessor.firstMessageText = '';
@@ -5578,14 +5346,17 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
         if (isImpersonate) {
             $('#send_textarea').val(getMessage)[0].dispatchEvent(new Event('input', { bubbles: true }));
             await eventSource.emit(event_types.IMPERSONATE_READY, getMessage);
-        } else if (type == 'quiet') {
+        }
+        else if (type == 'quiet') {
             unblockGeneration(type);
             return getMessage;
-        } else {
+        }
+        else {
             // Without streaming we'll be having a full message on continuation. Treat it as a last chunk.
             if (originalType !== 'continue') {
                 ({ type, getMessage } = await saveReply({ type, getMessage, title, swipes, reasoning, imageUrls, reasoningSignature }));
-            } else {
+            }
+            else {
                 ({ type, getMessage } = await saveReply({ type: 'appendFinal', getMessage, title, swipes, reasoning, imageUrls, reasoningSignature }));
             }
 
@@ -5614,125 +5385,6 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
             }
         }
 
-        // Native tool calling: detect <tool> blocks in the non-streamed response text
-        if (oai_settings.native_tool_calling && depth < ToolManager.RECURSE_LIMIT) {
-            const parsedTool = ToolManager.findAndParseNativeToolCall(getMessage);
-            if (parsedTool) {
-                // Reconstruct the message to ensure it's well-formed and doesn't contain partial tags.
-                const formattedToolCall = ToolManager.formatNativeToolCallForDisplay(parsedTool);
-                chat[chat.length - 1].mes = formattedToolCall;
-                chat[chat.length - 1].extra = { is_tool_call: true, tool_call_info: parsedTool.tool_call, reasoning: parsedTool.reasoning, prefix_text: parsedTool.prefix_text };
-
-                // Re-render the message element with the special tool call formatting.
-                const messageElement = $('#chat .mes').last();
-                if (messageElement.length) {
-                    const toolInfo = parsedTool.tool_call;
-                    messageElement.addClass('tool-call-message');
-                    let html = '';
-                    if (parsedTool.prefix_text) {
-                        html += `<div class="tool-prefix-text"><p>${DOMPurify.sanitize(parsedTool.prefix_text)}</p></div>`;
-                    }
-                    html += '<div class="tool-call-box">';
-                    html += '<h4><i class="fa-solid fa-cogs"></i> Tool Call</h4>';
-                    html += `<div class="tool-action"><p><b>Action:</b> <code>${DOMPurify.sanitize(toolInfo.tool)}</code></p>`;
-                    html += `<p><b>Arguments:</b></p><pre><code>${DOMPurify.sanitize(JSON.stringify(toolInfo.args, null, 2))}</code></pre></div>`;
-                    html += '</div>';
-                    messageElement.find('.mes_text').html(html);
-                }
-
-                // Check for manual execution mode
-                const messageId = chat.length - 1;
-                if (power_user.tool_execution_mode === 'manual') {
-                    // Add execute button for manual mode
-                    const manualMsgEl = $('#chat .mes').last();
-                    if (manualMsgEl.length) {
-                        const buttonHtml = `<button class="tool-execute-button" data-tool-name="${DOMPurify.sanitize(parsedTool.tool_call.tool)}" data-message-id="${messageId}"><i class="fa-solid fa-play"></i> Execute Tool</button>`;
-                        manualMsgEl.find('.mes_text').append(buttonHtml);
-                    }
-
-                    // Save chat and stop here - user will click the button to continue
-                    await saveChatConditional();
-                    unblockGeneration(type);
-                    generatedPromptCache = '';
-                    return;
-                }
-
-                // Auto mode: execute tool immediately
-                const toolResult = await ToolManager.invokeFunctionTool(parsedTool.tool_call.tool, parsedTool.tool_call.args, signal);
-
-                let resultMessage;
-                let stopGeneration = false;
-                try {
-                    const parsed = typeof toolResult === 'string' ? JSON.parse(toolResult) : toolResult;
-
-                    if (parsed.type === 'image_display' && parsed.filepath) {
-                        resultMessage = {
-                            name: systemUserName,
-                            is_user: false,
-                            is_system: true,
-                            mes: '<tool_result>\nImage displayed to user.\n</tool_result>',
-                            extra: { is_tool_result: true, image: `/api/files/download/${parsed.filepath}` },
-                        };
-                        stopGeneration = true;
-                    }
-                    else if (parsed.type === 'image_context' && parsed.filepath) {
-                        resultMessage = {
-                            name: systemUserName,
-                            is_user: false,
-                            is_system: true,
-                            mes: '<tool_result>\nImage provided as context for analysis.\n</tool_result>',
-                            extra: { is_tool_result: true, image: `/api/files/download/${parsed.filepath}` },
-                        };
-                        stopGeneration = false;
-                    }
-                    else if (parsed.type === 'video_display' && parsed.filepath) {
-                        resultMessage = {
-                            name: systemUserName,
-                            is_user: false,
-                            is_system: true,
-                            mes: '<tool_result>\nVideo displayed to user.\n</tool_result>',
-                            extra: { is_tool_result: true, video: `/api/files/download/${parsed.filepath}` },
-                        };
-                        stopGeneration = true;
-                    }
-                } catch (e) {
-                    console.error('[Non-Streaming] Failed to parse special tool result:', e);
-                }
-
-                if (!resultMessage) {
-                    const cappedToolResult = await capToolOutput(toolResult);
-                    resultMessage = {
-                        name: systemUserName,
-                        is_user: false,
-                        is_system: true,
-                        mes: `<tool_result>\n${cappedToolResult}\n</tool_result>`,
-                        extra: { is_tool_result: true, tool_result_content: cappedToolResult },
-                    };
-                }
-
-                chat.push(resultMessage);
-                addOneMessage(resultMessage);
-
-                if (stopGeneration) {
-                    unblockGeneration(type);
-                    return;
-                }
-
-                const newOptions = { automatic_trigger, force_name2, quiet_prompt, quietToLoud, skipWIAN, force_chid, signal, quietImage, quietName, jsonSchema, depth: depth + 1 };
-                return Generate('normal', newOptions, dryRun);
-            } else {
-                const lastMsg = chat[chat.length - 1];
-                if (lastMsg?.extra?.is_tool_call) {
-                    delete lastMsg.extra.is_tool_call;
-                    delete lastMsg.extra.tool_call_info;
-                    delete lastMsg.extra.reasoning;
-                    delete lastMsg.extra.prefix_text;
-                    const msgEl = $('#chat .mes').last();
-                    msgEl.removeClass('tool-call-message');
-                }
-            }
-        }
-
         if (type !== 'quiet') {
             playMessageSound();
         }
@@ -5741,6 +5393,7 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
         if (!isAborted && power_user.auto_swipe && generatedTextFiltered(getMessage)) {
             is_send_press = false;
             return await swipe(null, SWIPE_DIRECTION.RIGHT, { source: SWIPE_SOURCE.AUTO_SWIPE, repeated: true, forceMesId: chat.length - 1 });
+
         }
 
         console.debug('/api/chats/save called by /Generate');
@@ -6173,7 +5826,9 @@ function addChatsPreamble(mesSendString) {
 function addChatsSeparator(mesSendString) {
     if (power_user.context.chat_start) {
         return substituteParams(power_user.context.chat_start + '\n') + mesSendString;
-    } else {
+    }
+
+    else {
         return mesSendString;
     }
 }
@@ -6856,6 +6511,7 @@ export async function saveReply({ type, getMessage, fromStreaming = false, title
         !fromStreaming && await eventSource.emit(event_types.MESSAGE_RECEIVED, chat_id, type);
         addOneMessage(chat[chat_id], { type: 'swipe' });
         !fromStreaming && await eventSource.emit(event_types.CHARACTER_MESSAGE_RENDERED, chat_id, type);
+
     } else {
         console.debug('entering chat update routine for non-swipe post');
         const newMessage = {};
@@ -7046,10 +6702,7 @@ export function syncMesToSwipe(messageId = null) {
         return false;
     }
 
-    // Only sync swipes if the chat is not pristine, so that macros in the greeting can resolve again on swipe
-    if (chat_metadata.tainted || chat.length > 1) {
-        targetMessage.swipes[targetMessage.swipe_id] = targetMessage.mes;
-    }
+    targetMessage.swipes[targetMessage.swipe_id] = targetMessage.mes;
 
     targetSwipeInfo.send_date = targetMessage.send_date;
     targetSwipeInfo.gen_started = targetMessage.gen_started;
@@ -7397,13 +7050,16 @@ export async function renameCharacter(name = null, { silent = false, renameChats
                 } else {
                     toastr.success(t`Character renamed!`, t`Rename Character`);
                 }
-            } else {
+            }
+            else {
                 throw new Error('Newly renamed character was lost?');
             }
-        } else {
+        }
+        else {
             throw new Error('Could not rename the character');
         }
-    } catch (error) {
+    }
+    catch (error) {
         // Reloading to prevent data corruption
         if (!silent) await Popup.show.text(t`Rename Character`, t`Something went wrong. The page will be reloaded.`);
         else toastr.error(t`Something went wrong. The page will be reloaded.`, t`Rename Character`);
@@ -7695,7 +7351,8 @@ export function buildAvatarList(block, entities, { templateId = 'inline_avatar_t
             avatarTemplate.append(grpTemplate.children());
             avatarTemplate.attr({ 'data-grid': id, 'data-chid': null });
             avatarTemplate.attr('title', `[Group] ${entity.item.name}`);
-        } else if (entity.type === 'persona') {
+        }
+        else if (entity.type === 'persona') {
             avatarTemplate.attr({ 'data-pid': id, 'data-chid': null });
             avatarTemplate.find('img').attr('src', getThumbnailUrl('persona', entity.item.avatar));
             avatarTemplate.attr('title', `[Persona] ${entity.item.name}\nFile: ${entity.item.avatar}`);
@@ -7855,8 +7512,9 @@ function getFirstMessage() {
 
 export async function openCharacterChat(file_name) {
     await waitUntilCondition(() => !isChatSaving, debounce_timeout.extended, 10);
-    await clearChat({ clearData: true });
+    await clearChat();
     characters[this_chid].chat = file_name;
+    chat.length = 0;
     chat_metadata = {};
     await getChat();
     $('#selected_chat_pole').val(file_name);
@@ -8277,10 +7935,6 @@ function updateMessage(div) {
         text = removeMacros(text);
     }
     mes.mes = text;
-    // Keep tool_result_content in sync with mes text for tool result messages
-    if (mes.extra?.is_tool_result && mes.extra.tool_result_content !== undefined) {
-        mes.extra.tool_result_content = text;
-    }
     if (mes.swipe_id !== undefined) {
         ensureSwipes(mes);
         mes.swipes[mes.swipe_id] = text;
@@ -8441,7 +8095,8 @@ async function messageEditCancel(messageId = this_edit_mes_id) {
     await eventSource.emit(event_types.MESSAGE_UPDATED, messageId);
     if (messageId == this_edit_mes_id) {
         this_edit_mes_id = undefined;
-    } else {
+    }
+    else {
         console.warn(`The message editor was closed on message #${messageId} while #${this_edit_mes_id} is being edited.`);
     }
 
@@ -8475,7 +8130,8 @@ async function messageEditMove(sourceId, targetId) {
 
     if (sourceId <= targetId) {
         sourceMessageDiv.insertAfter(targetMessageDiv);
-    } else {
+    }
+    else {
         sourceMessageDiv.insertBefore(targetMessageDiv);
     }
 
@@ -8511,44 +8167,17 @@ async function messageEditDone(div) {
     mesBlock.find('.mes_text').empty();
     mesBlock.find('.mes_edit_buttons').css('display', 'none');
     mesBlock.find('.mes_buttons').css('display', '');
-
-    // Re-render tool call/result messages with their special formatting
-    if (mes.extra?.is_tool_result) {
-        const messageTextContainer = mesBlock.find('.mes_text');
-        const toolResultBox = $('<div class="tool-result-box"></div>');
-        const header = $('<h4><i class="fa-solid fa-check-circle"></i> Tool Result</h4>');
-        const pre = $('<pre></pre>');
-        const code = $('<code></code>');
-        code.text(text);
-        pre.append(code);
-        toolResultBox.append(header, pre);
-        messageTextContainer.append(toolResultBox);
-    } else if (mes.extra?.is_tool_call) {
-        const toolInfo = mes.extra.tool_call_info;
-        let html = '';
-        if (mes.extra.prefix_text) {
-            html += `<div class="tool-prefix-text"><p>${DOMPurify.sanitize(mes.extra.prefix_text)}</p></div>`;
-        }
-        html += '<div class="tool-call-box">';
-        html += '<h4><i class="fa-solid fa-cogs"></i> Tool Call</h4>';
-        html += `<div class="tool-action"><p><b>Action:</b> <code>${DOMPurify.sanitize(toolInfo.tool)}</code></p>`;
-        html += `<p><b>Arguments:</b></p><pre><code>${DOMPurify.sanitize(JSON.stringify(toolInfo.args, null, 2))}</code></pre></div>`;
-        html += '</div>';
-        mesBlock.find('.mes_text').html(html);
-    } else {
-        mesBlock.find('.mes_text').append(
-            messageFormatting(
-                text,
-                this_edit_mes_chname,
-                mes.is_system,
-                mes.is_user,
-                this_edit_mes_id,
-                {},
-                false,
-            ),
-        );
-    }
-
+    mesBlock.find('.mes_text').append(
+        messageFormatting(
+            text,
+            this_edit_mes_chname,
+            mes.is_system,
+            mes.is_user,
+            this_edit_mes_id,
+            {},
+            false,
+        ),
+    );
     mesBlock.find('.mes_bias').empty();
     mesBlock.find('.mes_bias').append(messageFormatting(bias, '', false, false, -1, {}, false));
     appendMediaToMessage(mes, div.closest('.mes'));
@@ -8610,6 +8239,7 @@ export async function getChatsFromFiles(data, isGroupChat) {
                     currentChat.shift();
                 }
                 chat_dict[file_name] = currentChat;
+
             } catch (error) {
                 console.error(error);
             }
@@ -9318,13 +8948,11 @@ export function isMessageSwipeable(messageId, message = undefined) {
             //User messages are not swipeable.
             !message.is_user
         )
-    ) {
-        // The message is swipeable.
-        return true;
-    } else {
-        // The message is not swipeable.
-        return false;
-    }
+    )
+    //The message is swipeable.
+    { return true; }
+    //The message is not swipeable.
+    else { return false; }
 }
 
 /**
@@ -9514,7 +9142,8 @@ export async function saveChatConditional() {
 
         if (selected_group) {
             await saveGroupChat(selected_group, true);
-        } else {
+        }
+        else {
             await saveChat();
         }
 
@@ -9620,7 +9249,8 @@ export function closeMessageEditor(what = 'all') {
 export function setGenerationProgress(progress) {
     if (!progress) {
         $('#send_textarea').css({ 'background': '', 'transition': '' });
-    } else {
+    }
+    else {
         $('#send_textarea').css({
             'background': `linear-gradient(90deg, #008000d6 ${progress}%, transparent ${progress}%)`,
             'transition': '0.25s ease-in-out',
@@ -9950,6 +9580,7 @@ export async function createOrEditCharacter(e) {
             select_rm_info('char_create', avatarId, oldSelectedChar);
 
             crop_data = undefined;
+
         } catch (error) {
             console.error('Error creating character', error);
             toastr.error(t`Failed to create character`);
@@ -10134,7 +9765,8 @@ export async function swipe(event, direction, { source, repeated, message = chat
                 document.body.dataset.swiping = 'true';
                 await generation;
             }
-        } catch (error) {
+        }
+        catch (error) {
             console.warn(`Swipe failed, Swiping back. ${error}`);
         }
 
@@ -10170,7 +9802,8 @@ export async function swipe(event, direction, { source, repeated, message = chat
                 //Update the chat.
                 await loadFromSwipeId(mesId, chat[mesId].swipe_id);
                 await redisplayChat({ startIndex: mesId });
-            } else {
+            }
+            else {
                 await Popup.show.confirm(
                     t`ERROR: <code>syncSwipeToMes</code> has failed to revert the failed ${direction} swipe on message #${mesId}.`,
                     t`<p>After you click OK, the chat will be reloaded to prevent data corruption.</p>`,
@@ -10343,6 +9976,7 @@ export async function swipe(event, direction, { source, repeated, message = chat
             duration: 0, //used to be 100 //Disabled on Cohee's request. https://github.com/SillyTavern/SillyTavern/pull/4610/files#r2408731744
             queue: false,
             progress: function (animation, progress, remainingMs) {
+
                 if (is_animation_scroll) chatElement.scrollTop(getMessageBottomHeight(thisMesDiv));
             },
             complete: function () {
@@ -10359,6 +9993,7 @@ export async function swipe(event, direction, { source, repeated, message = chat
      * @param {boolean} [skipSwipeOut=false]
      */
     async function animateSwipe(run_generate = false, skipSwipeOut = false) {
+
         if (!skipSwipeOut) {
             //Swipe out.
             await animateSwipeTransition(mesId, { xEnd: `${swipeRange}px`, duration: swipeDuration });
@@ -10426,6 +10061,7 @@ export async function swipe(event, direction, { source, repeated, message = chat
 
     //If the swipe is not being deleted.
     if (source != SWIPE_SOURCE.DELETE && source != SWIPE_SOURCE.BACK) {
+
         // Make sure ad-hoc changes to extras are saved before swiping away
         syncMesToSwipe(mesId);
 
@@ -10469,8 +10105,9 @@ export async function swipe(event, direction, { source, repeated, message = chat
         }
         await standardSwipe(newSwipeId);
         return;
-    } else if (direction === SWIPE_DIRECTION.RIGHT) {
-        //If swiping right.
+    }
+    //If swiping right.
+    else if (direction === SWIPE_DIRECTION.RIGHT) {
         // make new slot in array
         if (forceSwipeId == null) newSwipeId++;
 
@@ -10497,16 +10134,18 @@ export async function swipe(event, direction, { source, repeated, message = chat
                 chat[mesId].swipe_id = originalSwipeId;
                 await endSwipe();
                 return;
-            } else if (overswipe == OVERSWIPE_BEHAVIOR.REGENERATE) {
-                //Regenerate the message
+            }
+            //Regenerate the message
+            else if (overswipe == OVERSWIPE_BEHAVIOR.REGENERATE) {
                 clearMessageData(chat[mesId]);
                 let run_generate = true;
                 //Generate.
                 await animateSwipe(run_generate);
                 await endSwipe();
                 return;
-            } else if (overswipe == OVERSWIPE_BEHAVIOR.LOOP || overswipe == OVERSWIPE_BEHAVIOR.PRISTINE_GREETING) {
-                // Loop to the first swipe.
+            }
+            // Loop to the first swipe.
+            else if (overswipe == OVERSWIPE_BEHAVIOR.LOOP || overswipe == OVERSWIPE_BEHAVIOR.PRISTINE_GREETING) {
                 newSwipeId = 0;
             }
         }
@@ -10713,7 +10352,8 @@ export async function doNewChat({ deleteCurrentChat = false } = {}) {
 
     //Fix it; New chat doesn't create while open create character menu
     await waitUntilCondition(() => !isChatSaving, debounce_timeout.extended, 10);
-    await clearChat({ clearData: true });
+    await clearChat();
+    chat.length = 0;
 
     chat_file_for_del = getCurrentChatDetails()?.sessionName;
 
@@ -10725,7 +10365,8 @@ export async function doNewChat({ deleteCurrentChat = false } = {}) {
     if (selected_group) {
         await createNewGroupChat(selected_group);
         if (deleteCurrentChat) await deleteGroupChat(selected_group, chat_file_for_del, { jumpToNewChat: false }); // don't jump, new chat was already created and jumped to above
-    } else {
+    }
+    else {
         //RossAscends: added character name to new chat filenames and replaced Date.now() with humanizedDateTime;
         chat_metadata = {};
         characters[this_chid].chat = `${name2} - ${humanizedDateTime()}`;
@@ -10734,6 +10375,7 @@ export async function doNewChat({ deleteCurrentChat = false } = {}) {
         await createOrEditCharacter(new CustomEvent('newChat'));
         if (deleteCurrentChat) await delChat(chat_file_for_del + '.jsonl');
     }
+
 }
 
 /**
@@ -10788,7 +10430,8 @@ export async function renameGroupOrCharacterChat({ characterId, groupId, oldFile
 
         if (groupId) {
             await renameGroupChat(groupId, oldFileName, newFileName);
-        } else if (characterId !== undefined && String(characterId) === String(this_chid) && characters[characterId]?.chat === oldFileName) {
+        }
+        else if (characterId !== undefined && String(characterId) === String(this_chid) && characters[characterId]?.chat === oldFileName) {
             characters[characterId].chat = newFileName;
             $('#selected_chat_pole').val(characters[characterId].chat);
             await createOrEditCharacter();
@@ -10829,7 +10472,8 @@ export async function renameChat(oldFileName, newName) {
 export async function closeCurrentChat() {
     if (is_send_press == false) {
         await waitUntilCondition(() => !isChatSaving, debounce_timeout.extended, 10);
-        await clearChat({ clearData: true });
+        await clearChat();
+        chat.length = 0;
         resetSelectedGroup();
         setCharacterId(undefined);
         setCharacterName('');
@@ -11440,7 +11084,8 @@ jQuery(async function () {
             if (popup_type == 'input') {
                 dialogueResolve($('#dialogue_popup_input').val());
                 $('#dialogue_popup_input').val('');
-            } else {
+            }
+            else {
                 dialogueResolve(true);
             }
 
@@ -11675,7 +11320,9 @@ jQuery(async function () {
                     });
                 }
             }
-        } else if (id == 'option_start_new_chat') {
+        }
+
+        else if (id == 'option_start_new_chat') {
             if ((selected_group || this_chid !== undefined) && !is_send_press) {
                 let deleteCurrentChat = false;
                 const result = await Popup.show.confirm(t`Start new chat?`, await renderTemplateAsync('newChatConfirm'), {
@@ -11691,7 +11338,9 @@ jQuery(async function () {
                 const alreadyInTempChat = this_chid === undefined && name2 === neutralCharacterName;
                 await newAssistantChat({ temporary: alreadyInTempChat });
             }
-        } else if (id == 'option_regenerate') {
+        }
+
+        else if (id == 'option_regenerate') {
             //Attempting to regenerate a user message will instead generate a new message.
             if (chat.length && chat.length - 1 === this_edit_mes_id && chat[this_edit_mes_id]?.is_user == false) {
                 toastr.warning(t`Finish the edit before starting a generation.`, t`You cannot regenerate the message you are editing.`);
@@ -11700,17 +11349,22 @@ jQuery(async function () {
             if (is_send_press == false) {
                 if (selected_group) {
                     regenerateGroup();
-                } else {
+                }
+                else {
                     is_send_press = true;
                     Generate('regenerate', buildOrFillAdditionalArgs());
                 }
             }
-        } else if (id == 'option_impersonate') {
+        }
+
+        else if (id == 'option_impersonate') {
             if (is_send_press == false || fromSlashCommand) {
                 is_send_press = true;
                 Generate('impersonate', buildOrFillAdditionalArgs());
             }
-        } else if (id == 'option_continue') {
+        }
+
+        else if (id == 'option_continue') {
             if (swipeState == SWIPE_STATE.EDITING) {
                 toastr.warning(t`Confirm the edit to start a generation.`, t`You cannot send a message during a swipe-edit.`);
                 return;
@@ -11724,13 +11378,17 @@ jQuery(async function () {
                 is_send_press = true;
                 Generate('continue', buildOrFillAdditionalArgs());
             }
-        } else if (id == 'option_delete_mes') {
+        }
+
+        else if (id == 'option_delete_mes') {
             setTimeout(() => openMessageDelete(fromSlashCommand), animation_duration);
-        } else if (id == 'option_close_chat') {
+        }
+
+        else if (id == 'option_close_chat') {
             await closeCurrentChat();
-        } else if (id == 'option_upload') {
-            $('#sandbox_upload_input').trigger('click');
-        } else if (id === 'option_settings') {
+        }
+
+        else if (id === 'option_settings') {
             //var checkBox = document.getElementById("waifuMode");
             var topBar = document.getElementById('top-bar');
             var topSettingsHolder = document.getElementById('top-settings-holder');
@@ -11743,7 +11401,9 @@ jQuery(async function () {
 
                 divchat.style.borderRadius = '';
                 divchat.style.backgroundColor = '';
+
             } else {
+
                 divchat.style.borderRadius = '10px'; // Adjust the value to control the roundness of the corners
                 divchat.style.backgroundColor = ''; // Set the background color to your preference
 
@@ -12650,103 +12310,6 @@ jQuery(async function () {
     $(document).on('click', '.open_characters_library', async function () {
         await getCharacters();
         await eventSource.emit(event_types.OPEN_CHARACTER_LIBRARY);
-    });
-
-    // Manual tool execution button handler
-    $(document).on('click', '.tool-execute-button', async function (e) {
-        e.stopPropagation();
-        e.preventDefault();
-        const button = $(this);
-        const messageId = parseInt(button.data('message-id'));
-        const message = chat[messageId];
-
-        if (!message?.extra?.tool_call_info) {
-            toastr.error('Tool call information not found');
-            return;
-        }
-
-        // Prevent double-clicking
-        if (button.hasClass('executing')) {
-            return;
-        }
-
-        button.addClass('executing');
-        button.html('<i class="fa-solid fa-spinner fa-spin"></i> Executing...');
-
-        try {
-            const toolInfo = message.extra.tool_call_info;
-            const toolResult = await ToolManager.invokeFunctionTool(toolInfo.tool, toolInfo.args, undefined);
-
-            let resultMessage;
-            let stopGeneration = false;
-            try {
-                const parsed = typeof toolResult === 'string' ? JSON.parse(toolResult) : toolResult;
-
-                if (parsed.type === 'image_display' && parsed.filepath) {
-                    resultMessage = {
-                        name: systemUserName,
-                        is_user: false,
-                        is_system: true,
-                        mes: '<tool_result>\nImage displayed to user.\n</tool_result>',
-                        extra: { is_tool_result: true, image: `/api/files/download/${parsed.filepath}` },
-                    };
-                    stopGeneration = true;
-                }
-                else if (parsed.type === 'image_context' && parsed.filepath) {
-                    resultMessage = {
-                        name: systemUserName,
-                        is_user: false,
-                        is_system: true,
-                        mes: '<tool_result>\nImage provided as context for analysis.\n</tool_result>',
-                        extra: { is_tool_result: true, image: `/api/files/download/${parsed.filepath}` },
-                    };
-                    stopGeneration = false;
-                }
-                else if (parsed.type === 'video_display' && parsed.filepath) {
-                    resultMessage = {
-                        name: systemUserName,
-                        is_user: false,
-                        is_system: true,
-                        mes: '<tool_result>\nVideo displayed to user.\n</tool_result>',
-                        extra: { is_tool_result: true, video: `/api/files/download/${parsed.filepath}` },
-                    };
-                    stopGeneration = true;
-                }
-            } catch (e) {
-                console.error('[Manual Tool Execution] Failed to parse special tool result:', e);
-            }
-
-            if (!resultMessage) {
-                const cappedToolResult = await capToolOutput(String(toolResult));
-                resultMessage = {
-                    name: systemUserName,
-                    is_user: false,
-                    is_system: true,
-                    mes: `<tool_result>\n${cappedToolResult}\n</tool_result>`,
-                    extra: { is_tool_result: true, tool_result_content: cappedToolResult },
-                };
-            }
-
-            // Remove the execute button from the UI
-            button.remove();
-
-            // Add the result message to chat
-            chat.push(resultMessage);
-            addOneMessage(resultMessage);
-            await saveChatConditional();
-
-            // Continue generation unless it's a stop-generating tool
-            if (!stopGeneration) {
-                // Get the current depth from the message or default to 0
-                const currentDepth = message.extra?.depth || 0;
-                Generate('normal', { depth: currentDepth + 1 });
-            }
-        } catch (error) {
-            console.error('[Manual Tool Execution] Error:', error);
-            toastr.error('Failed to execute tool: ' + String(error));
-            button.removeClass('executing');
-            button.html('<i class="fa-solid fa-play"></i> Execute Tool');
-        }
     });
 
     // Added here to prevent execution before script.js is loaded and get rid of quirky timeouts
