@@ -885,7 +885,7 @@ function onBackToFolders() {
     $('#bg_current_folder_name').text('');
 
     // Show all images
-    renderSystemBackgrounds(cachedSystemBackgrounds);
+    renderSystemBackgrounds(getFilteredImages());
     highlightSelectedBackground();
 }
 
@@ -1545,8 +1545,8 @@ export function initBackgrounds() {
     $('#bg-sort').on('change', function () {
         background_settings.sortOrder = String($(this).val());
         saveSettingsDebounced();
-        // Re-render both galleries with new sort order
-        renderSystemBackgrounds(cachedSystemBackgrounds);
+        // Re-render both galleries with new sort order (respecting active folder filter)
+        renderSystemBackgrounds(getFilteredImages());
         renderChatBackgrounds();
         highlightSelectedBackground();
         highlightLockedBackground();
