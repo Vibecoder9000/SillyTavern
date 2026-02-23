@@ -3786,7 +3786,7 @@ class StreamingProcessor {
                             is_user: false,
                             is_system: true,
                             mes: '<tool_result>\nImage displayed to user.\n</tool_result>',
-                            extra: { is_tool_result: true, image: `/api/files/download/${parsed.filepath}` },
+                            extra: { is_tool_result: true, image: `/api/extensions/tools/download?file=${encodeURIComponent(parsed.filepath)}` },
                         };
                         stopGeneration = true;
                     }
@@ -3796,7 +3796,7 @@ class StreamingProcessor {
                             is_user: false,
                             is_system: true,
                             mes: '<tool_result>\nImage provided as context for analysis.\n</tool_result>',
-                            extra: { is_tool_result: true, image: `/api/files/download/${parsed.filepath}` },
+                            extra: { is_tool_result: true, image: `/api/extensions/tools/download?file=${encodeURIComponent(parsed.filepath)}` },
                         };
                         stopGeneration = false;
                     }
@@ -3806,7 +3806,7 @@ class StreamingProcessor {
                             is_user: false,
                             is_system: true,
                             mes: '<tool_result>\nVideo displayed to user.\n</tool_result>',
-                            extra: { is_tool_result: true, video: `/api/files/download/${parsed.filepath}` },
+                            extra: { is_tool_result: true, video: `/api/extensions/tools/download?file=${encodeURIComponent(parsed.filepath)}` },
                         };
                         stopGeneration = true;
                     }
@@ -5671,7 +5671,7 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
                             is_user: false,
                             is_system: true,
                             mes: '<tool_result>\nImage displayed to user.\n</tool_result>',
-                            extra: { is_tool_result: true, image: `/api/files/download/${parsed.filepath}` },
+                            extra: { is_tool_result: true, image: `/api/extensions/tools/download?file=${encodeURIComponent(parsed.filepath)}` },
                         };
                         stopGeneration = true;
                     }
@@ -5681,7 +5681,7 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
                             is_user: false,
                             is_system: true,
                             mes: '<tool_result>\nImage provided as context for analysis.\n</tool_result>',
-                            extra: { is_tool_result: true, image: `/api/files/download/${parsed.filepath}` },
+                            extra: { is_tool_result: true, image: `/api/extensions/tools/download?file=${encodeURIComponent(parsed.filepath)}` },
                         };
                         stopGeneration = false;
                     }
@@ -5691,7 +5691,7 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
                             is_user: false,
                             is_system: true,
                             mes: '<tool_result>\nVideo displayed to user.\n</tool_result>',
-                            extra: { is_tool_result: true, video: `/api/files/download/${parsed.filepath}` },
+                            extra: { is_tool_result: true, video: `/api/extensions/tools/download?file=${encodeURIComponent(parsed.filepath)}` },
                         };
                         stopGeneration = true;
                     }
@@ -12688,7 +12688,7 @@ jQuery(async function () {
                         is_user: false,
                         is_system: true,
                         mes: '<tool_result>\nImage displayed to user.\n</tool_result>',
-                        extra: { is_tool_result: true, image: `/api/files/download/${parsed.filepath}` },
+                        extra: { is_tool_result: true, image: `/api/extensions/tools/download?file=${encodeURIComponent(parsed.filepath)}` },
                     };
                     stopGeneration = true;
                 }
@@ -12698,7 +12698,7 @@ jQuery(async function () {
                         is_user: false,
                         is_system: true,
                         mes: '<tool_result>\nImage provided as context for analysis.\n</tool_result>',
-                        extra: { is_tool_result: true, image: `/api/files/download/${parsed.filepath}` },
+                        extra: { is_tool_result: true, image: `/api/extensions/tools/download?file=${encodeURIComponent(parsed.filepath)}` },
                     };
                     stopGeneration = false;
                 }
@@ -12708,7 +12708,7 @@ jQuery(async function () {
                         is_user: false,
                         is_system: true,
                         mes: '<tool_result>\nVideo displayed to user.\n</tool_result>',
-                        extra: { is_tool_result: true, video: `/api/files/download/${parsed.filepath}` },
+                        extra: { is_tool_result: true, video: `/api/extensions/tools/download?file=${encodeURIComponent(parsed.filepath)}` },
                     };
                     stopGeneration = true;
                 }
