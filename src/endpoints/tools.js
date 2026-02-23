@@ -8,6 +8,7 @@ import crypto from 'node:crypto';
 export const router = express.Router();
 
 const SANDBOX_DIR = path.resolve(path.join(serverDirectory, 'uploads'));
+const SD_WEBUI_URL = 'http://localhost:7860';
 
 // Track active processes to kill previous ones when new ones start
 const activeProcesses = {
@@ -440,5 +441,88 @@ router.post('/executepython', async (req, res) => {
                 }
             }
         }, 1000);
+    }
+});
+
+// ========== Stable Diffusion Image Generation Endpoints ==========
+
+router.get('/sd_models', async (_req, res) => {
+    try {
+        const response = await fetch(`${SD_WEBUI_URL}/sdapi/v1/sd-models`);
+        if (!response.ok) {
+            const text = await response.text();
+            return res.status(response.status).json({ error: `SD WebUI error: ${text}` });
+        }
+        const models = await response.json();
+        return res.json(models);
+    } catch (error) {
+        console.error('Failed to fetch SD models:', error);
+        return res.status(502).json({ error: `Could not connect to Stable Diffusion WebUI at ${SD_WEBUI_URL}. Is it running with --api?` });
+    }
+});
+
+router.post('/sd_txt2img', async (req, res) => {
+    try {
+        const { prompt, negative_prompt, model, width, height, steps, cfg_scale, sampler_name, seed } = req.body;
+
+        if (!prompt) {
+            return res.status(400).json({ error: 'prompt is required' });
+        }
+
+        // If a model is specified, switch to it first
+        if (model) {
+            const optionsRes = await fetch(`${SD_WEBUI_URL}/sdapi/v1/options`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ sd_model_checkpoint: model }),
+            });
+            if (!optionsRes.ok) {
+                const text = await optionsRes.text();
+                return res.status(optionsRes.status).json({ error: `Failed to switch model: ${text}` });
+            }
+        }
+
+        // Generate the image
+        const genResponse = await fetch(`${SD_WEBUI_URL}/sdapi/v1/txt2img`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                prompt,
+                negative_prompt: negative_prompt || '',
+                width: width || 512,
+                height: height || 512,
+                steps: steps || 20,
+                cfg_scale: cfg_scale || 7,
+                sampler_name: sampler_name || 'Euler a',
+                seed: seed ?? -1,
+            }),
+        });
+
+        if (!genResponse.ok) {
+            const text = await genResponse.text();
+            return res.status(genResponse.status).json({ error: `Image generation failed: ${text}` });
+        }
+
+        const genResult = await genResponse.json();
+
+        if (!genResult.images || genResult.images.length === 0) {
+            return res.status(500).json({ error: 'No images returned from SD WebUI' });
+        }
+
+        // Save the first image to the uploads directory
+        const imageBuffer = Buffer.from(genResult.images[0], 'base64');
+        const filename = `sd_${Date.now()}_${crypto.randomBytes(4).toString('hex')}.png`;
+        const filepath = path.join(SANDBOX_DIR, filename);
+
+        await fs.mkdir(SANDBOX_DIR, { recursive: true });
+        await fs.writeFile(filepath, imageBuffer);
+
+        return res.json({
+            filepath: filename,
+            info: genResult.info || 'Image generated successfully.',
+        });
+    } catch (error) {
+        console.error('Failed to generate image via SD WebUI:', error);
+        return res.status(502).json({ error: `Could not connect to Stable Diffusion WebUI at ${SD_WEBUI_URL}. Is it running with --api?` });
     }
 });

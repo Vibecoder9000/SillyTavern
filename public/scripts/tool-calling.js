@@ -527,13 +527,120 @@ function registerBuiltinTools() {
                 }
             },
         },
+        {
+            name: 'sd_list_models',
+            description: 'Lists the available Stable Diffusion checkpoints (models) on the local SD WebUI instance. Use this to discover which models are available before generating images.',
+            parameters: {
+                'type': 'object',
+                'properties': {},
+            },
+            action: async () => {
+                try {
+                    const response = await fetch('/api/extensions/tools/sd_models', {
+                        method: 'GET',
+                        headers: getRequestHeaders(),
+                    });
+
+                    if (!response.ok) {
+                        const error = await response.json();
+                        return `Error fetching models: ${error.error || response.statusText}`;
+                    }
+
+                    const models = await response.json();
+                    const modelNames = models.map(m => m.title || m.model_name);
+                    return JSON.stringify({ available_models: modelNames });
+                } catch (error) {
+                    return `Error: Could not connect to Stable Diffusion WebUI. Make sure it is running at localhost:7860 with --api flag. ${error.message}`;
+                }
+            },
+        },
+        {
+            name: 'sd_txt2img',
+            description: 'Generates an image using Stable Diffusion text-to-image. Requires a local SD WebUI instance running at localhost:7860. The generated image is saved to the uploads directory and can be displayed using display_image.',
+            parameters: {
+                'type': 'object',
+                'properties': {
+                    'prompt': {
+                        'type': 'string',
+                        'description': 'The text prompt describing the image to generate.',
+                    },
+                    'negative_prompt': {
+                        'type': 'string',
+                        'description': 'Text prompt for concepts to avoid in the generated image.',
+                    },
+                    'model': {
+                        'type': 'string',
+                        'description': 'The exact model/checkpoint name to use. Use sd_list_models to get available names. If not specified, uses whatever model is currently loaded.',
+                    },
+                    'width': {
+                        'type': 'integer',
+                        'description': 'Output image width in pixels. Default: 512.',
+                    },
+                    'height': {
+                        'type': 'integer',
+                        'description': 'Output image height in pixels. Default: 512.',
+                    },
+                    'steps': {
+                        'type': 'integer',
+                        'description': 'Number of sampling steps. Default: 20.',
+                    },
+                    'cfg_scale': {
+                        'type': 'number',
+                        'description': 'Classifier-free guidance scale. Higher values follow the prompt more closely. Default: 7.',
+                    },
+                    'sampler_name': {
+                        'type': 'string',
+                        'description': 'Name of the sampler to use (e.g. "Euler a", "DPM++ 2M Karras"). Default: "Euler a".',
+                    },
+                    'seed': {
+                        'type': 'integer',
+                        'description': 'Random seed for reproducibility. Use -1 for random. Default: -1.',
+                    },
+                },
+                'required': ['prompt'],
+            },
+            action: async ({ prompt, negative_prompt, model, width, height, steps, cfg_scale, sampler_name, seed }) => {
+                try {
+                    const response = await fetch('/api/extensions/tools/sd_txt2img', {
+                        method: 'POST',
+                        headers: getRequestHeaders(),
+                        body: JSON.stringify({
+                            prompt,
+                            negative_prompt: negative_prompt || '',
+                            model: model || '',
+                            width: width || 512,
+                            height: height || 512,
+                            steps: steps || 20,
+                            cfg_scale: cfg_scale || 7,
+                            sampler_name: sampler_name || 'Euler a',
+                            seed: seed ?? -1,
+                        }),
+                    });
+
+                    if (!response.ok) {
+                        const error = await response.json();
+                        return `Error generating image: ${error.error || response.statusText}`;
+                    }
+
+                    const result = await response.json();
+                    return JSON.stringify({ type: 'image_display', filepath: result.filepath, info: result.info || 'Image generated successfully.' });
+                } catch (error) {
+                    return `Error: Could not connect to Stable Diffusion WebUI. Make sure it is running at localhost:7860 with --api flag. ${error.message}`;
+                }
+            },
+        },
     ];
     const dangerousTools = ['write_file', 'execute_shell', 'execute_python'];
+    const imageGenTools = ['sd_list_models', 'sd_txt2img'];
 
     builtinTools.forEach(tool => {
-        // This is the security gate.
+        // Security gate for dangerous tools.
         if (dangerousTools.includes(tool.name) && !power_user.enable_dangerous_tools) {
-            return; // Skip registering the dangerous tool if the setting is off.
+            return;
+        }
+        // Gate for image generation tools.
+        if (imageGenTools.includes(tool.name) && !power_user.enable_image_generation) {
+            return;
         }
         if (!ToolManager.tools.some(t => t.toFunctionOpenAI().function.name === tool.name)) {
             ToolManager.registerFunctionTool(tool);
@@ -1593,6 +1700,12 @@ Here are the available tools:
 export function initToolCalling() {
     eventSource.on(event_types.DANGEROUS_TOOLS_TOGGLED, () => {
         // Only refresh the native tool commands if the feature is currently active.
+        if (oai_settings.native_tool_calling) {
+            ToolManager.registerNativeToolCommand();
+        }
+    });
+
+    eventSource.on(event_types.IMAGE_GENERATION_TOGGLED, () => {
         if (oai_settings.native_tool_calling) {
             ToolManager.registerNativeToolCommand();
         }

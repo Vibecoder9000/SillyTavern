@@ -3788,7 +3788,7 @@ class StreamingProcessor {
                             mes: '<tool_result>\nImage displayed to user.\n</tool_result>',
                             extra: { is_tool_result: true, image: `/api/extensions/tools/download?file=${encodeURIComponent(parsed.filepath)}` },
                         };
-                        stopGeneration = true;
+                        stopGeneration = false;
                     }
                     else if (parsed.type === 'image_context' && parsed.filepath) {
                         resultMessage = {
@@ -3808,7 +3808,7 @@ class StreamingProcessor {
                             mes: '<tool_result>\nVideo displayed to user.\n</tool_result>',
                             extra: { is_tool_result: true, video: `/api/extensions/tools/download?file=${encodeURIComponent(parsed.filepath)}` },
                         };
-                        stopGeneration = true;
+                        stopGeneration = false;
                     }
                 } catch (e) {
                     console.error('[Streaming] Failed to parse special tool result:', e);
@@ -5673,7 +5673,7 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
                             mes: '<tool_result>\nImage displayed to user.\n</tool_result>',
                             extra: { is_tool_result: true, image: `/api/extensions/tools/download?file=${encodeURIComponent(parsed.filepath)}` },
                         };
-                        stopGeneration = true;
+                        stopGeneration = false;
                     }
                     else if (parsed.type === 'image_context' && parsed.filepath) {
                         resultMessage = {
@@ -5693,7 +5693,7 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
                             mes: '<tool_result>\nVideo displayed to user.\n</tool_result>',
                             extra: { is_tool_result: true, video: `/api/extensions/tools/download?file=${encodeURIComponent(parsed.filepath)}` },
                         };
-                        stopGeneration = true;
+                        stopGeneration = false;
                     }
                 } catch (e) {
                     console.error('[Non-Streaming] Failed to parse special tool result:', e);
@@ -12690,7 +12690,7 @@ jQuery(async function () {
                         mes: '<tool_result>\nImage displayed to user.\n</tool_result>',
                         extra: { is_tool_result: true, image: `/api/extensions/tools/download?file=${encodeURIComponent(parsed.filepath)}` },
                     };
-                    stopGeneration = true;
+                    stopGeneration = false;
                 }
                 else if (parsed.type === 'image_context' && parsed.filepath) {
                     resultMessage = {
@@ -12710,7 +12710,7 @@ jQuery(async function () {
                         mes: '<tool_result>\nVideo displayed to user.\n</tool_result>',
                         extra: { is_tool_result: true, video: `/api/extensions/tools/download?file=${encodeURIComponent(parsed.filepath)}` },
                     };
-                    stopGeneration = true;
+                    stopGeneration = false;
                 }
             } catch (e) {
                 console.error('[Manual Tool Execution] Failed to parse special tool result:', e);
