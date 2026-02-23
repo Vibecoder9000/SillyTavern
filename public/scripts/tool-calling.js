@@ -303,37 +303,88 @@ function registerBuiltinTools() {
         },
         {
             name: 'read_file',
-            description: 'Reads the content of a text file from the user\'s uploaded files. Only use this for text.',
+            description: 'Reads the content of one or more text files from the user\'s uploaded files. Only use this for text.',
             parameters: {
                 'type': 'object',
                 'properties': {
                     'filepath': {
                         'type': 'string',
-                        'description': 'The path to the file to read.',
+                        'description': 'The path to a single file to read.',
+                    },
+                    'filepaths': {
+                        'type': 'array',
+                        'description': 'Paths to multiple files to read in one call.',
+                        'items': {
+                            'type': 'string',
+                        },
+                        'minItems': 1,
                     },
                 },
-                'required': ['filepath'],
+                'anyOf': [
+                    { 'required': ['filepath'] },
+                    { 'required': ['filepaths'] },
+                ],
             },
-            action: async ({ filepath }) => {
-                try {
-                    const response = await fetch('/api/extensions/tools/readfile', {
-                        method: 'POST',
-                        headers: getRequestHeaders(),
-                        body: JSON.stringify({ filepath: filepath }),
-                    });
-
-                    const result = await response.json();
-
-                    if (!response.ok) {
-                        const errorMessage = `Error: ${result.error || 'An unknown error occurred.'}`;
-                        return errorMessage;
-                    }
-
-                    return result.content;
-                } catch (error) {
-                    const errorMessage = `Error: Could not connect to the server to read the file. ${error.message}`;
-                    return errorMessage;
+            action: async ({ filepath, filepaths }) => {
+                const requestedPaths = [];
+                if (typeof filepath === 'string' && filepath.trim()) {
+                    requestedPaths.push(filepath.trim());
                 }
+                if (Array.isArray(filepaths)) {
+                    for (const filePath of filepaths) {
+                        if (typeof filePath === 'string' && filePath.trim()) {
+                            requestedPaths.push(filePath.trim());
+                        }
+                    }
+                }
+
+                const uniquePaths = [...new Set(requestedPaths)];
+                if (uniquePaths.length === 0) {
+                    return 'Error: filepath (string) or filepaths (array of strings) is required.';
+                }
+
+                const readOneFile = async (pathToRead) => {
+                    try {
+                        const response = await fetch('/api/extensions/tools/readfile', {
+                            method: 'POST',
+                            headers: getRequestHeaders(),
+                            body: JSON.stringify({ filepath: pathToRead }),
+                        });
+
+                        const result = await response.json();
+
+                        if (!response.ok) {
+                            return {
+                                filepath: pathToRead,
+                                error: `Error: ${result.error || 'An unknown error occurred.'}`,
+                            };
+                        }
+
+                        return {
+                            filepath: pathToRead,
+                            content: result.content,
+                        };
+                    } catch (error) {
+                        return {
+                            filepath: pathToRead,
+                            error: `Error: Could not connect to the server to read the file. ${error.message}`,
+                        };
+                    }
+                };
+
+                const results = await Promise.all(uniquePaths.map(readOneFile));
+                if (results.length === 1) {
+                    return results[0].error || results[0].content;
+                }
+
+                return results
+                    .map(result => {
+                        if (result.error) {
+                            return `=== ${result.filepath} ===\n${result.error}`;
+                        }
+                        return `=== ${result.filepath} ===\n${result.content}`;
+                    })
+                    .join('\n\n');
             },
         },
         {
