@@ -1972,20 +1972,7 @@ export function updateMessageBlock(messageId, message, { rerenderMessage = true 
     const messageElement = chatElement.find(`[mesid="${messageId}"]`);
     if (rerenderMessage) {
         if (message.extra?.is_tool_call && message.extra?.tool_call_info) {
-            const toolInfo = message.extra.tool_call_info;
-            let html = '';
-            if (message.extra.prefix_text) {
-                html += `<p>${DOMPurify.sanitize(message.extra.prefix_text)}</p>`;
-            }
-            html += '<h4><i class="fa-solid fa-cogs"></i> Tool Call</h4>';
-            html += `<div class="tool-action"><p><b>Action:</b> <code>${DOMPurify.sanitize(toolInfo.tool)}</code></p>`;
-            html += `<p><b>Arguments:</b></p><pre><code>${DOMPurify.sanitize(JSON.stringify(toolInfo.args, null, 2))}</code></pre></div>`;
-
-            if (power_user.tool_execution_mode === 'manual') {
-                html += `<button class="tool-execute-button" data-tool-name="${DOMPurify.sanitize(toolInfo.tool)}" data-message-id="${messageId}"><i class="fa-solid fa-play"></i> Execute Tool</button>`;
-            }
-
-            messageElement.find('.mes_text').html(html);
+            messageElement.find('.mes_text').html(getToolCallMessageHtml(message, messageId));
         } else {
             const text = message?.extra?.display_text ?? message.mes;
             messageElement.find('.mes_text').html(messageFormatting(text, message.name, message.is_system, message.is_user, messageId, {}, false));
@@ -2008,6 +1995,63 @@ export function updateMessageBlock(messageId, message, { rerenderMessage = true 
 
     addCopyToCodeBlocks(messageElement);
     appendMediaToMessage(message, messageElement);
+}
+
+/**
+ * Builds formatted HTML for a tool call message.
+ * @param {ChatMessage} message Message object
+ * @param {number} messageId Message ID
+ * @param {object} [options={}] Render options
+ * @param {boolean} [options.includeExecuteButton=true] Include execute button when manual mode is enabled
+ * @returns {string} Tool call HTML
+ */
+function getToolCallMessageHtml(message, messageId, { includeExecuteButton = true } = {}) {
+    const toolInfo = message?.extra?.tool_call_info;
+
+    if (!toolInfo) {
+        return '';
+    }
+
+    let html = '';
+    if (message.extra?.prefix_text) {
+        const prefixHtml = messageFormatting(
+            message.extra.prefix_text,
+            message.name,
+            message.is_system,
+            message.is_user,
+            messageId,
+            {},
+            false,
+        );
+        html += `<div class="tool-prefix-text">${prefixHtml}</div>`;
+    }
+
+    const toolName = DOMPurify.sanitize(toolInfo.tool ?? '');
+    const isAgnosticToolCall = typeof message?.mes === 'string' && message.mes.includes('<tool>');
+    let toolArgs = '{}';
+    try {
+        toolArgs = JSON.stringify(toolInfo.args ?? {}, null, 2);
+        if (isAgnosticToolCall) {
+            // In native/agnostic tool calls, show escaped newlines as actual line breaks for readability.
+            toolArgs = toolArgs
+                .replace(/(^|[^\\])\\r\\n/g, '$1\n')
+                .replace(/(^|[^\\])\\n/g, '$1\n');
+        }
+    } catch {
+        toolArgs = '{}';
+    }
+
+    html += '<div class="tool-call-box">';
+    html += '<h4><i class="fa-solid fa-cogs"></i> Tool Call</h4>';
+    html += `<div class="tool-action"><p><b>Action:</b> <code>${toolName}</code></p>`;
+    html += `<p><b>Arguments:</b></p><pre><code>${DOMPurify.sanitize(toolArgs)}</code></pre></div>`;
+    html += '</div>';
+
+    if (includeExecuteButton && power_user.tool_execution_mode === 'manual') {
+        html += `<button class="tool-execute-button" data-tool-name="${toolName}" data-message-id="${messageId}"><i class="fa-solid fa-play"></i> Execute Tool</button>`;
+    }
+
+    return html;
 }
 
 /**
@@ -2644,24 +2688,9 @@ export function updateMessageElement(mes, { messageId = chat.length - 1, message
         insertSVGIcon(messageElement, mes.extra);
     }
 
-    if (mes.extra?.is_tool_call) {
-        const toolInfo = mes.extra.tool_call_info;
+    if (mes.extra?.is_tool_call && mes.extra?.tool_call_info) {
         messageElement.addClass('tool-call-message');
-        let html = '';
-        if (mes.extra.prefix_text) {
-            html += `<div class="tool-prefix-text"><p>${DOMPurify.sanitize(mes.extra.prefix_text)}</p></div>`;
-        }
-        html += '<div class="tool-call-box">';
-        html += '<h4><i class="fa-solid fa-cogs"></i> Tool Call</h4>';
-        html += `<div class="tool-action"><p><b>Action:</b> <code>${DOMPurify.sanitize(toolInfo.tool)}</code></p>`;
-        html += `<p><b>Arguments:</b></p><pre><code>${DOMPurify.sanitize(JSON.stringify(toolInfo.args, null, 2))}</code></pre></div>`;
-        html += '</div>';
-
-        if (power_user.tool_execution_mode === 'manual') {
-            html += `<button class="tool-execute-button" data-tool-name="${DOMPurify.sanitize(toolInfo.tool)}" data-message-id="${messageId}"><i class="fa-solid fa-play"></i> Execute Tool</button>`;
-        }
-
-        messageElement.find('.mes_text').html(html);
+        messageElement.find('.mes_text').html(getToolCallMessageHtml(mes, messageId));
     }
     else if (mes.extra?.is_tool_result) {
         if (mes.extra.image || mes.extra.video) {
@@ -3744,28 +3773,12 @@ class StreamingProcessor {
                 // Re-render the message element with the special tool call formatting.
                 const toolMessageElement = $(`#chat .mes[mesid="${messageId}"]`);
                 if (toolMessageElement.length) {
-                    const toolInfo = parsedTool.tool_call;
                     toolMessageElement.addClass('tool-call-message');
-                    let html = '';
-                    if (parsedTool.prefix_text) {
-                        html += `<div class="tool-prefix-text"><p>${DOMPurify.sanitize(parsedTool.prefix_text)}</p></div>`;
-                    }
-                    html += '<div class="tool-call-box">';
-                    html += '<h4><i class="fa-solid fa-cogs"></i> Tool Call</h4>';
-                    html += `<div class="tool-action"><p><b>Action:</b> <code>${DOMPurify.sanitize(toolInfo.tool)}</code></p>`;
-                    html += `<p><b>Arguments:</b></p><pre><code>${DOMPurify.sanitize(JSON.stringify(toolInfo.args, null, 2))}</code></pre></div>`;
-                    html += '</div>';
-                    toolMessageElement.find('.mes_text').html(html);
+                    toolMessageElement.find('.mes_text').html(getToolCallMessageHtml(chat[messageId], messageId));
                 }
 
                 // Check for manual execution mode
                 if (power_user.tool_execution_mode === 'manual') {
-                    const manualMessageElement = $(`#chat .mes[mesid="${messageId}"]`);
-                    if (manualMessageElement.length) {
-                        const buttonHtml = `<button class="tool-execute-button" data-tool-name="${DOMPurify.sanitize(parsedTool.tool_call.tool)}" data-message-id="${messageId}"><i class="fa-solid fa-play"></i> Execute Tool</button>`;
-                        manualMessageElement.find('.mes_text').append(buttonHtml);
-                    }
-
                     await saveChatConditional();
                     this.markUIGenStopped();
                     unblockGeneration();
@@ -5626,30 +5639,13 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
                 // Re-render the message element with the special tool call formatting.
                 const messageElement = $('#chat .mes').last();
                 if (messageElement.length) {
-                    const toolInfo = parsedTool.tool_call;
                     messageElement.addClass('tool-call-message');
-                    let html = '';
-                    if (parsedTool.prefix_text) {
-                        html += `<div class="tool-prefix-text"><p>${DOMPurify.sanitize(parsedTool.prefix_text)}</p></div>`;
-                    }
-                    html += '<div class="tool-call-box">';
-                    html += '<h4><i class="fa-solid fa-cogs"></i> Tool Call</h4>';
-                    html += `<div class="tool-action"><p><b>Action:</b> <code>${DOMPurify.sanitize(toolInfo.tool)}</code></p>`;
-                    html += `<p><b>Arguments:</b></p><pre><code>${DOMPurify.sanitize(JSON.stringify(toolInfo.args, null, 2))}</code></pre></div>`;
-                    html += '</div>';
-                    messageElement.find('.mes_text').html(html);
+                    messageElement.find('.mes_text').html(getToolCallMessageHtml(chat[chat.length - 1], chat.length - 1));
                 }
 
                 // Check for manual execution mode
                 const messageId = chat.length - 1;
                 if (power_user.tool_execution_mode === 'manual') {
-                    // Add execute button for manual mode
-                    const manualMsgEl = $('#chat .mes').last();
-                    if (manualMsgEl.length) {
-                        const buttonHtml = `<button class="tool-execute-button" data-tool-name="${DOMPurify.sanitize(parsedTool.tool_call.tool)}" data-message-id="${messageId}"><i class="fa-solid fa-play"></i> Execute Tool</button>`;
-                        manualMsgEl.find('.mes_text').append(buttonHtml);
-                    }
-
                     // Save chat and stop here - user will click the button to continue
                     await saveChatConditional();
                     unblockGeneration(type);
@@ -8237,7 +8233,7 @@ export function setGenerationParamsFromPreset(preset) {
 }
 
 // Common code for message editor done and auto-save
-function updateMessage(div) {
+function updateMessage(div, { preserveToolCallOnParseError = false } = {}) {
     const mesBlock = div.closest('.mes_block');
     let text = mesBlock.find('.edit_textarea').val()
         ?? mesBlock.find('.mes_text').text();
@@ -8277,6 +8273,22 @@ function updateMessage(div) {
         text = removeMacros(text);
     }
     mes.mes = text;
+    const shouldTryParseToolCall = mes.extra?.is_tool_call || text.includes('<tool>');
+    if (shouldTryParseToolCall) {
+        const parsedTool = ToolManager.findAndParseNativeToolCall(text);
+
+        if (parsedTool?.tool_call) {
+            mes.extra.is_tool_call = true;
+            mes.extra.tool_call_info = parsedTool.tool_call;
+            mes.extra.reasoning = parsedTool.reasoning;
+            mes.extra.prefix_text = parsedTool.prefix_text;
+        } else if (!preserveToolCallOnParseError) {
+            delete mes.extra.is_tool_call;
+            delete mes.extra.tool_call_info;
+            delete mes.extra.reasoning;
+            delete mes.extra.prefix_text;
+        }
+    }
     // Keep tool_result_content in sync with mes text for tool result messages
     if (mes.extra?.is_tool_result && mes.extra.tool_result_content !== undefined) {
         mes.extra.tool_result_content = text;
@@ -8320,7 +8332,7 @@ function openMessageDelete(fromSlashCommand) {
 }
 
 function messageEditAuto(div) {
-    const { mesBlock, text, mes, bias } = updateMessage(div);
+    const { mesBlock, text, mes, bias } = updateMessage(div, { preserveToolCallOnParseError: true });
 
     mesBlock.find('.mes_text').val('');
     mesBlock.find('.mes_text').val(messageFormatting(
@@ -8511,6 +8523,9 @@ async function messageEditDone(div) {
     mesBlock.find('.mes_text').empty();
     mesBlock.find('.mes_edit_buttons').css('display', 'none');
     mesBlock.find('.mes_buttons').css('display', '');
+    const mesElement = div.closest('.mes');
+    mesElement.toggleClass('tool-call-message', !!(mes.extra?.is_tool_call && mes.extra?.tool_call_info));
+    mesElement.toggleClass('tool-result-message', !!mes.extra?.is_tool_result);
 
     // Re-render tool call/result messages with their special formatting
     if (mes.extra?.is_tool_result) {
@@ -8523,18 +8538,8 @@ async function messageEditDone(div) {
         pre.append(code);
         toolResultBox.append(header, pre);
         messageTextContainer.append(toolResultBox);
-    } else if (mes.extra?.is_tool_call) {
-        const toolInfo = mes.extra.tool_call_info;
-        let html = '';
-        if (mes.extra.prefix_text) {
-            html += `<div class="tool-prefix-text"><p>${DOMPurify.sanitize(mes.extra.prefix_text)}</p></div>`;
-        }
-        html += '<div class="tool-call-box">';
-        html += '<h4><i class="fa-solid fa-cogs"></i> Tool Call</h4>';
-        html += `<div class="tool-action"><p><b>Action:</b> <code>${DOMPurify.sanitize(toolInfo.tool)}</code></p>`;
-        html += `<p><b>Arguments:</b></p><pre><code>${DOMPurify.sanitize(JSON.stringify(toolInfo.args, null, 2))}</code></pre></div>`;
-        html += '</div>';
-        mesBlock.find('.mes_text').html(html);
+    } else if (mes.extra?.is_tool_call && mes.extra?.tool_call_info) {
+        mesBlock.find('.mes_text').html(getToolCallMessageHtml(mes, this_edit_mes_id));
     } else {
         mesBlock.find('.mes_text').append(
             messageFormatting(
@@ -8551,8 +8556,8 @@ async function messageEditDone(div) {
 
     mesBlock.find('.mes_bias').empty();
     mesBlock.find('.mes_bias').append(messageFormatting(bias, '', false, false, -1, {}, false));
-    appendMediaToMessage(mes, div.closest('.mes'));
-    addCopyToCodeBlocks(div.closest('.mes'));
+    appendMediaToMessage(mes, mesElement);
+    addCopyToCodeBlocks(mesElement);
 
     const reasoningEditDone = mesBlock.find('.mes_reasoning_edit_done:visible');
     if (reasoningEditDone.length > 0) {
