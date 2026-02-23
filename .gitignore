@@ -52,6 +52,7 @@ public/error/
 public/scripts/extensions/third-party
 /certs
 /uploads
+/uploads backup 2
 .aider*
 .env
 /StartDev.bat

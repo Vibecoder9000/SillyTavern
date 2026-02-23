@@ -1973,6 +1973,8 @@ export function updateMessageBlock(messageId, message, { rerenderMessage = true 
     if (rerenderMessage) {
         if (message.extra?.is_tool_call && message.extra?.tool_call_info) {
             messageElement.find('.mes_text').html(getToolCallMessageHtml(message, messageId));
+        } else if (message.extra?.is_tool_result && !message.extra?.image && !message.extra?.video) {
+            messageElement.find('.mes_text').html(getToolResultMessageHtml(message, message.mes));
         } else {
             const text = message?.extra?.display_text ?? message.mes;
             messageElement.find('.mes_text').html(messageFormatting(text, message.name, message.is_system, message.is_user, messageId, {}, false));
@@ -2052,6 +2054,37 @@ function getToolCallMessageHtml(message, messageId, { includeExecuteButton = tru
     }
 
     return html;
+}
+
+/**
+ * Gets tool result text for display.
+ * @param {ChatMessage} message Message object
+ * @param {string} [fallbackText=''] Fallback text if tool_result_content is absent
+ * @returns {string} Display-ready tool result text
+ */
+function getToolResultDisplayText(message, fallbackText = '') {
+    const result = message?.extra?.tool_result_content ?? fallbackText;
+    const resultText = typeof result === 'string' ? result : String(result ?? '');
+    const isAgnosticToolResult = typeof message?.mes === 'string' && message.mes.includes('<tool_result>');
+
+    if (!isAgnosticToolResult) {
+        return resultText;
+    }
+
+    return resultText
+        .replace(/(^|[^\\])\\r\\n/g, '$1\n')
+        .replace(/(^|[^\\])\\n/g, '$1\n');
+}
+
+/**
+ * Builds formatted HTML for a text tool result message.
+ * @param {ChatMessage} message Message object
+ * @param {string} [fallbackText=''] Fallback text if tool_result_content is absent
+ * @returns {string} Tool result HTML
+ */
+function getToolResultMessageHtml(message, fallbackText = '') {
+    const toolResult = getToolResultDisplayText(message, fallbackText);
+    return `<div class="tool-result-box"><h4><i class="fa-solid fa-check-circle"></i> Tool Result</h4><pre><code>${DOMPurify.sanitize(toolResult)}</code></pre></div>`;
 }
 
 /**
@@ -2697,7 +2730,7 @@ export function updateMessageElement(mes, { messageId = chat.length - 1, message
             messageElement.addClass('tool-result-message');
             appendMediaToMessage(mes, messageElement);
         } else {
-            const result = mes.extra.tool_result_content;
+            const result = getToolResultDisplayText(mes, mes.mes);
             messageElement.addClass('tool-result-message');
 
             const messageTextContainer = messageElement.find('.mes_text');
@@ -3740,7 +3773,10 @@ class StreamingProcessor {
                 false,
             );
             if (this.messageTextDom instanceof HTMLElement) {
-                if (power_user.stream_fade_in) {
+                const isTextToolResult = chat[messageId].extra?.is_tool_result && !chat[messageId].extra?.image && !chat[messageId].extra?.video;
+                if (isTextToolResult) {
+                    this.messageTextDom.innerHTML = getToolResultMessageHtml(chat[messageId], processedText);
+                } else if (power_user.stream_fade_in) {
                     applyStreamFadeIn(this.messageTextDom, formattedText);
                 } else {
                     this.messageTextDom.innerHTML = formattedText;
@@ -8529,12 +8565,13 @@ async function messageEditDone(div) {
 
     // Re-render tool call/result messages with their special formatting
     if (mes.extra?.is_tool_result) {
+        const result = getToolResultDisplayText(mes, text);
         const messageTextContainer = mesBlock.find('.mes_text');
         const toolResultBox = $('<div class="tool-result-box"></div>');
         const header = $('<h4><i class="fa-solid fa-check-circle"></i> Tool Result</h4>');
         const pre = $('<pre></pre>');
         const code = $('<code></code>');
-        code.text(text);
+        code.text(result);
         pre.append(code);
         toolResultBox.append(header, pre);
         messageTextContainer.append(toolResultBox);
