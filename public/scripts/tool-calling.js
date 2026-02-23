@@ -126,6 +126,10 @@ function stringify(obj) {
     return typeof obj === 'string' ? obj : JSON.stringify(obj);
 }
 
+const LIST_DIRECTORY_CONTEXT_TIMEOUT_MS = 3000;
+const LIST_DIRECTORY_CONTEXT_TIMEOUT_RESULT = '__list_directory_context_timeout__';
+const LIST_DIRECTORY_CONTEXT_MAX_CHARS = 4000;
+
 /**
  * A class that represents a tool definition.
  */
@@ -665,6 +669,7 @@ export class ToolManager {
      * @type {number}
      */
     static RECURSE_LIMIT = 50;
+    static #lastListDirectoryContext = '';
 
     /**
      * Returns an Array of all tools that have been registered.
@@ -1065,12 +1070,18 @@ export class ToolManager {
             try {
                 const parsed = JSON.parse(jsonString);
                 if (typeof parsed.tool === 'string' && typeof parsed.args === 'object') {
+                    // Extract the continue flag (default true for backward compatibility).
+                    // Treat only explicit false (boolean or "false" string) as "do not continue".
+                    const shouldContinue = parsed.continue === undefined
+                        ? true
+                        : !(parsed.continue === false || String(parsed.continue).trim().toLowerCase() === 'false');
                     // Success!
                     return {
                         tool_call: parsed,
                         reasoning: reasoning,
                         prefix_text: prefixText,
                         original_text: text,
+                        continue: shouldContinue,
                     };
                 }
             } catch (e) {
@@ -1109,10 +1120,54 @@ export class ToolManager {
     }
 
     /**
-     * Constructs the system prompt instructions for native tool calling.
-     * @returns {string|null} The instruction string or null if no tools are available.
+     * Fetches current uploads directory listing for prompt context.
+     * @returns {Promise<string|null>} Formatted context or null when disabled/unavailable.
      */
-    static getNativeToolPrompt() {
+    static async #getListDirectoryPromptContext() {
+        if (!power_user.auto_list_directory_context) {
+            return null;
+        }
+
+        let listResult = await withTimeout(
+            ToolManager.invokeFunctionTool('list_directory', { path: '.' }),
+            LIST_DIRECTORY_CONTEXT_TIMEOUT_MS,
+            LIST_DIRECTORY_CONTEXT_TIMEOUT_RESULT,
+        );
+
+        if (listResult === LIST_DIRECTORY_CONTEXT_TIMEOUT_RESULT) {
+            listResult = this.#lastListDirectoryContext
+                ? this.#lastListDirectoryContext
+                : 'Unavailable: list_directory timed out.';
+        } else if (listResult instanceof Error) {
+            listResult = this.#lastListDirectoryContext
+                ? this.#lastListDirectoryContext
+                : `Unavailable: ${listResult.message}`;
+        } else {
+            listResult = String(listResult ?? '').trim();
+            if (listResult.startsWith('Error:')) {
+                listResult = this.#lastListDirectoryContext
+                    ? this.#lastListDirectoryContext
+                    : `Unavailable: ${listResult}`;
+            }
+        }
+
+        if (typeof listResult !== 'string' || !listResult) {
+            return null;
+        }
+
+        const trimmedListResult = listResult.length > LIST_DIRECTORY_CONTEXT_MAX_CHARS
+            ? `${listResult.slice(0, LIST_DIRECTORY_CONTEXT_MAX_CHARS)}\n... (truncated)`
+            : listResult;
+
+        this.#lastListDirectoryContext = trimmedListResult;
+        return `Current uploads directory listing (auto-fetched using list_directory with path "."):\n${trimmedListResult}`;
+    }
+
+    /**
+     * Constructs the system prompt instructions for native tool calling.
+     * @returns {Promise<string|null>} The instruction string or null if no tools are available.
+     */
+    static async getNativeToolPrompt() {
         if (this.tools.length === 0) {
             return null;
         }
@@ -1120,8 +1175,14 @@ export class ToolManager {
         const finalPromptParts = [];
         finalPromptParts.push(`Always put your tool call in your main response. Only one tool call, at the end of your message, is supported.
 
-Call the tool with the required arguments inside a <tool> block. 
+Call the tool with the required arguments inside a <tool> block.
 To provide a file for the user to download from the uploads directory, use the syntax \`![](filename.ext)\`
+
+The "continue" field controls whether you get a follow-up turn after the tool executes:
+- "continue": true — The tool result will be fed back to you and you will generate another response. Use this when you need to see the result before responding, or when you have no text response yet.
+- "continue": false — The tool runs silently and no follow-up generation occurs. Use this when you have ALREADY written your full response to the user in the same message and the tool call is just a side-effect (e.g. saving data, logging). This prevents a redundant empty reply.
+
+If omitted, "continue" defaults to true.
 
 Format example:
 
@@ -1130,7 +1191,8 @@ Format example:
   "tool": "tool_name",
   "args": {
     "arg_name": "arg_value"
-  }
+  },
+  "continue": true
 }
 </tool>
 
@@ -1146,6 +1208,11 @@ Here are the available tools:
             });
         }).join('\n');
         finalPromptParts.push(toolsString);
+
+        const listDirectoryPromptContext = await this.#getListDirectoryPromptContext();
+        if (listDirectoryPromptContext) {
+            finalPromptParts.push(listDirectoryPromptContext);
+        }
 
         return finalPromptParts.join('\n\n');
     }

@@ -3806,6 +3806,9 @@ class StreamingProcessor {
                 chat[messageId].mes = formattedToolCall;
                 chat[messageId].extra = { is_tool_call: true, tool_call_info: parsedTool.tool_call, reasoning: parsedTool.reasoning, prefix_text: parsedTool.prefix_text };
 
+                // Check if the LLM wants to continue after the tool call (default: true)
+                const shouldContinueAfterTool = parsedTool.continue !== false;
+
                 // Re-render the message element with the special tool call formatting.
                 const toolMessageElement = $(`#chat .mes[mesid="${messageId}"]`);
                 if (toolMessageElement.length) {
@@ -3818,14 +3821,14 @@ class StreamingProcessor {
                     await saveChatConditional();
                     this.markUIGenStopped();
                     unblockGeneration();
-                    return;
+                    return { suppressAutoContinue: true };
                 }
 
                 // Auto mode: execute tool immediately
                 const toolResult = await ToolManager.invokeFunctionTool(parsedTool.tool_call.tool, parsedTool.tool_call.args, this.abortController.signal);
 
                 let resultMessage;
-                let stopGeneration = false;
+                let stopGeneration = !shouldContinueAfterTool;
                 try {
                     const parsed = typeof toolResult === 'string' ? JSON.parse(toolResult) : toolResult;
 
@@ -3884,7 +3887,7 @@ class StreamingProcessor {
 
                 this.markUIGenStopped();
                 unblockGeneration();
-                return;
+                return { suppressAutoContinue: true };
             } else {
                 if (chat[messageId].extra?.is_tool_call) {
                     delete chat[messageId].extra.is_tool_call;
@@ -3954,6 +3957,7 @@ class StreamingProcessor {
         await saveChatConditional();
 
         playMessageSound();
+        return { suppressAutoContinue: false };
     }
 
     onErrorStreaming() {
@@ -5541,9 +5545,11 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
             }
 
             if (isStreamFinished) {
-                await streamingProcessor.onFinishStreaming(streamingProcessor.messageId, getMessage);
+                const finishResult = await streamingProcessor.onFinishStreaming(streamingProcessor.messageId, getMessage);
                 streamingProcessor = null;
-                triggerAutoContinue(messageChunk, isImpersonate);
+                if (!finishResult?.suppressAutoContinue) {
+                    triggerAutoContinue(messageChunk, isImpersonate);
+                }
                 return Object.defineProperties(new String(getMessage), {
                     'messageChunk': { value: messageChunk },
                     'fromStream': { value: true },
@@ -5672,6 +5678,9 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
                 chat[chat.length - 1].mes = formattedToolCall;
                 chat[chat.length - 1].extra = { is_tool_call: true, tool_call_info: parsedTool.tool_call, reasoning: parsedTool.reasoning, prefix_text: parsedTool.prefix_text };
 
+                // Check if the LLM wants to continue after the tool call (default: true)
+                const shouldContinueAfterTool = parsedTool.continue !== false;
+
                 // Re-render the message element with the special tool call formatting.
                 const messageElement = $('#chat .mes').last();
                 if (messageElement.length) {
@@ -5693,7 +5702,7 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
                 const toolResult = await ToolManager.invokeFunctionTool(parsedTool.tool_call.tool, parsedTool.tool_call.args, signal);
 
                 let resultMessage;
-                let stopGeneration = false;
+                let stopGeneration = !shouldContinueAfterTool;
                 try {
                     const parsed = typeof toolResult === 'string' ? JSON.parse(toolResult) : toolResult;
 
@@ -12718,9 +12727,10 @@ jQuery(async function () {
         try {
             const toolInfo = message.extra.tool_call_info;
             const toolResult = await ToolManager.invokeFunctionTool(toolInfo.tool, toolInfo.args, undefined);
+            const shouldContinueAfterTool = !(toolInfo?.continue === false || String(toolInfo?.continue).trim().toLowerCase() === 'false');
 
             let resultMessage;
-            let stopGeneration = false;
+            let stopGeneration = !shouldContinueAfterTool;
             try {
                 const parsed = typeof toolResult === 'string' ? JSON.parse(toolResult) : toolResult;
 

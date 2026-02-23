@@ -349,6 +349,7 @@ export const power_user = {
     pin_styles: true,
     click_to_edit: false,
     hide_tool_messages: false,
+    auto_list_directory_context: false,
     enable_dangerous_tools: false,
     enable_image_generation: false,
     tool_execution_mode: 'auto',
@@ -1797,6 +1798,7 @@ export async function loadPowerUserSettings(settings, data) {
     $('#click_to_edit').prop('checked', power_user.click_to_edit);
     $('#hide_tool_messages').prop('checked', power_user.hide_tool_messages);
     $('body').toggleClass('hide-tool-messages', power_user.hide_tool_messages);
+    $('#auto_list_directory_context').prop('checked', power_user.auto_list_directory_context);
     $('#enable_dangerous_tools').prop('checked', power_user.enable_dangerous_tools);
     $('#enable_image_generation').prop('checked', power_user.enable_image_generation);
     $('#tool_execution_mode').val(power_user.tool_execution_mode);
@@ -4072,6 +4074,11 @@ jQuery(() => {
     $('#hide_tool_messages').on('input', function () {
         power_user.hide_tool_messages = !!$(this).prop('checked');
         $('body').toggleClass('hide-tool-messages', power_user.hide_tool_messages);
+        saveSettingsDebounced();
+    });
+
+    $('#auto_list_directory_context').on('input', function () {
+        power_user.auto_list_directory_context = !!$(this).prop('checked');
         saveSettingsDebounced();
     });
 
