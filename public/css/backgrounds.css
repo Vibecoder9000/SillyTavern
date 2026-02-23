@@ -530,11 +530,11 @@
     text-overflow: ellipsis;
 }
 
-body:not(.in-folder-view) .jg-set-cover {
+#Backgrounds:not(.in-folder-view) .jg-set-cover {
     display: none !important;
 }
 
-body.in-folder-view .jg-set-cover {
+#Backgrounds.in-folder-view .jg-set-cover {
     display: flex !important;
 }
 
