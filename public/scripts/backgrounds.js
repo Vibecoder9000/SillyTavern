@@ -177,7 +177,7 @@ function createThumbnailElement(imageData) {
 
     const url = generateUrlParameter(bg, isCustom);
     const title = isCustom ? bg.split('/').pop() : bg;
-    const friendlyTitle = title.slice(0, title.lastIndexOf('.'));
+    const friendlyTitle = String(title || '').slice(0, title.lastIndexOf('.'));
 
     thumbnail.attr('title', title);
     thumbnail.attr('bgfile', bg);
