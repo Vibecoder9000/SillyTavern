@@ -893,6 +893,12 @@ function onBackToFolders() {
  * Creates a new folder via API.
  */
 async function onCreateFolder() {
+    const currentTab = getActiveBackgroundTab();
+    if (currentTab !== BG_SOURCES.GLOBAL) {
+        toastr.warning(t`Folders can only be created in the Global tab`);
+        return;
+    }
+
     const name = await Popup.show.input(t`Enter folder name:`);
     if (!name || !name.trim()) return;
 
