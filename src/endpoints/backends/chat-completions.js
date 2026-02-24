@@ -2070,10 +2070,13 @@ router.post('/generate', async function (request, response) {
             apiKey = readSecret(request.user.directories, SECRET_KEYS.OPENROUTER);
             // OpenRouter needs to pass the Referer and X-Title: https://openrouter.ai/docs#requests
             headers = { ...OPENROUTER_HEADERS };
+            const includeReasoning = Boolean(request.body.include_reasoning);
             bodyParams = {
-                'transforms': getOpenRouterTransforms(request),
-                'plugins': getOpenRouterPlugins(request),
-                'include_reasoning': Boolean(request.body.include_reasoning),
+                transforms: getOpenRouterTransforms(request),
+                plugins: getOpenRouterPlugins(request),
+                reasoning: {
+                    exclude: !includeReasoning,
+                },
             };
 
             if (request.body.min_p !== undefined) {
@@ -2105,7 +2108,7 @@ router.post('/generate', async function (request, response) {
             }
 
             if (request.body.reasoning_effort) {
-                bodyParams['reasoning'] = { effort: request.body.reasoning_effort };
+                bodyParams['reasoning']['effort'] = request.body.reasoning_effort;
             }
 
             if (request.body.verbosity) {

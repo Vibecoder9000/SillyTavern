@@ -2129,7 +2129,7 @@
                                             <span data-i18n="Allows the model to return its thinking process.">
                                                 Allows the model to return its thinking process.
                                             </span>
-                                            <strong data-i18n="This setting affects visibility only." data-source-mode="except" data-source="zai,moonshot">
+                                            <strong data-i18n="This setting affects visibility only." data-source-mode="except" data-source="zai,moonshot,openrouter">
                                                 This setting affects visibility only.
                                             </strong>
                                         </div>
@@ -2151,6 +2151,9 @@
                                             <div class="toggle-description justifyLeft marginBot5" data-source="openai,custom,xai,aimlapi,openrouter,pollinations,perplexity,cometapi,electronhub,azure_openai,chutes" data-i18n="OpenAI-style options: low, medium, high. Minimum and maximum are aliased to low and high. Auto does not send an effort level.">
                                                 OpenAI-style options: low, medium, high. Minimum and maximum are aliased to low and high. Auto does not send an effort level.
                                             </div>
+                                            <strong class="toggle-description justifyLeft marginBot5" data-source="openrouter">
+                                                Request model reasoning = Off with Reasoning Effort = Minimum disables reasoning entirely on models that support that, but can cause errors with some models.
+                                            </strong>
                                             <div class="toggle-description justifyLeft marginBot5" data-source="claude" data-i18n="Allocates a portion of the response length for thinking (min: 1024 tokens, low: 10%, medium: 25%, high: 50%, max: 95%), but minimum 1024 tokens. Auto does not request thinking.">
                                                 Allocates a portion of the response length for thinking (min: 1024 tokens, low: 10%, medium: 25%, high: 50%, max: 95%), but minimum 1024 tokens. Auto does not request thinking.
                                             </div>
@@ -2457,7 +2460,10 @@
                                     </select>
                                 </div>
                                 <div>
-                                    <h4 data-i18n="Model Providers">Model Providers</h4>
+                                    <h4>
+                                        <span data-i18n="Model Providers">Model Providers</span>
+                                        <i id="openrouter_provider_warning_text" class="fa-solid fa-circle-exclamation displayNone" title="Deselect inapplicable provider(s) or select an applicable provider to avoid a 404 error."></i>
+                                    </h4>
                                     <select id="openrouter_providers_text" class="openrouter_providers" multiple>
                                     </select>
                                     <label class="checkbox_label" data-i18n="[title]Automatically chooses an alternative provider if chosen providers can't serve your request." for="openrouter_allow_fallbacks_textgenerationwebui" title="Automatically chooses an alternative provider if chosen providers can't serve your request.">
@@ -3211,7 +3217,10 @@
                                 </div>
                             </div>
                             <div>
-                                <h4 data-i18n="Model Providers">Model Providers</h4>
+                                <h4>
+                                    <span data-i18n="Model Providers">Model Providers</span>
+                                    <i id="openrouter_provider_warning_chat" class="fa-solid fa-circle-exclamation displayNone" title="Deselect inapplicable provider(s) or select an applicable provider to avoid a 404 error."></i>
+                                </h4>
                                 <select id="openrouter_providers_chat" class="openrouter_providers" multiple>
                                 </select>
                                 <label class="checkbox_label marginTopBot5" for="openrouter_allow_fallbacks" data-i18n="[title]Automatically chooses an alternative provider if chosen providers can't serve your request." title="Automatically chooses an alternative provider if chosen providers can't serve your request.">
