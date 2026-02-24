@@ -1017,7 +1017,7 @@ async function onAssignToFolder(bgFile) {
 
     const content = $(contentEl);
 
-    const result = await callGenericPopup(content, POPUP_TYPE.CONFIRM, '', { okButton: t`Save` });
+    const result = await callGenericPopup(content, POPUP_TYPE.CONFIRM, '', { okButton: t`Save`, cancelButton: t`Cancel` });
     if (!result) return;
 
     // Determine which folders were toggled on/off
