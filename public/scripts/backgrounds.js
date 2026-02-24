@@ -1420,7 +1420,7 @@ function onBackgroundFilterInput() {
         $bg.toggle(hasMatch);
     });
 
-    // Show/hide folder tiles based on whether they contain any matching images
+    // Show/hide folder tiles based on whether folder name matches the filter
     if (!activeFolderId) {
         $('#bg_folder_grid .bg_folder_tile').each(function () {
             const $tile = $(this);
@@ -1429,13 +1429,9 @@ function onBackgroundFilterInput() {
                 $tile.show();
                 return;
             }
-            // Check if any image in this folder matches the filter
-            const hasMatchingImage = cachedSystemBackgrounds.some(img => {
-                const fids = imageFolderMap[img.filename];
-                if (!fids || !fids.includes(folderId)) return false;
-                return img.filename.toLowerCase().includes(filterValue);
-            });
-            $tile.toggle(hasMatchingImage);
+            const folder = folderList.find(f => f.id === folderId);
+            const folderName = folder ? folder.name.toLowerCase() : '';
+            $tile.toggle(folderName.includes(filterValue));
         });
     }
 }
