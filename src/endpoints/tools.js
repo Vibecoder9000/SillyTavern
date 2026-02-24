@@ -216,6 +216,7 @@ router.post('/listdir', async (req, res) => {
 
 router.post('/writefile', async (req, res) => {
     let { filepath, content, append = false } = req.body;
+    const shouldAppend = append === true || append === 'true';
 
     if (!filepath || typeof content !== 'string') {
         return res.status(400).json({ error: 'filepath and content are required.' });
@@ -240,11 +241,11 @@ router.post('/writefile', async (req, res) => {
              return res.status(403).json({ error: 'Access denied: Cannot write to a directory outside the sandbox.' });
         }
 
-        const flag = append ? 'a' : 'w';
+        const flag = shouldAppend ? 'a' : 'w';
         await fs.writeFile(fullPath, content, { flag });
 
         const bytesWritten = Buffer.byteLength(content, 'utf8');
-        res.json({ message: `Successfully ${append ? 'appended' : 'wrote'} ${bytesWritten} bytes to ${filepath}` });
+        res.json({ message: `Successfully ${shouldAppend ? 'appended' : 'wrote'} ${bytesWritten} bytes to ${filepath}` });
     } catch (error) {
         console.error(`Error writing file "${filepath}":`, error);
         res.status(500).json({ error: 'An error occurred while writing the file.' });

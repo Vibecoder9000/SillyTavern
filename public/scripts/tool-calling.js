@@ -262,7 +262,7 @@ function registerBuiltinTools() {
     const builtinTools = [
         {
             name: 'write_file',
-            description: 'Writes or appends content to a file in the user\'s uploaded files. Creates the file and parent directories if they don\'t exist.',
+            description: 'Writes or appends content to a file in the files. Creates the file and parent directories if they don\'t exist.',
             parameters: {
                 'type': 'object',
                 'properties': {
@@ -303,93 +303,42 @@ function registerBuiltinTools() {
         },
         {
             name: 'read_file',
-            description: 'Reads the content of one or more text files from the user\'s uploaded files. Only use this for text.',
+            description: 'Reads the content of a text file from the files. Only use this for text.',
             parameters: {
                 'type': 'object',
                 'properties': {
                     'filepath': {
                         'type': 'string',
-                        'description': 'The path to a single file to read.',
-                    },
-                    'filepaths': {
-                        'type': 'array',
-                        'description': 'Paths to multiple files to read in one call.',
-                        'items': {
-                            'type': 'string',
-                        },
-                        'minItems': 1,
+                        'description': 'The path to the file to read.',
                     },
                 },
-                'anyOf': [
-                    { 'required': ['filepath'] },
-                    { 'required': ['filepaths'] },
-                ],
+                'required': ['filepath'],
             },
-            action: async ({ filepath, filepaths }) => {
-                const requestedPaths = [];
-                if (typeof filepath === 'string' && filepath.trim()) {
-                    requestedPaths.push(filepath.trim());
-                }
-                if (Array.isArray(filepaths)) {
-                    for (const filePath of filepaths) {
-                        if (typeof filePath === 'string' && filePath.trim()) {
-                            requestedPaths.push(filePath.trim());
-                        }
+            action: async ({ filepath }) => {
+                try {
+                    const response = await fetch('/api/extensions/tools/readfile', {
+                        method: 'POST',
+                        headers: getRequestHeaders(),
+                        body: JSON.stringify({ filepath: filepath }),
+                    });
+
+                    const result = await response.json();
+
+                    if (!response.ok) {
+                        const errorMessage = `Error: ${result.error || 'An unknown error occurred.'}`;
+                        return errorMessage;
                     }
+
+                    return result.content;
+                } catch (error) {
+                    const errorMessage = `Error: Could not connect to the server to read the file. ${error.message}`;
+                    return errorMessage;
                 }
-
-                const uniquePaths = [...new Set(requestedPaths)];
-                if (uniquePaths.length === 0) {
-                    return 'Error: filepath (string) or filepaths (array of strings) is required.';
-                }
-
-                const readOneFile = async (pathToRead) => {
-                    try {
-                        const response = await fetch('/api/extensions/tools/readfile', {
-                            method: 'POST',
-                            headers: getRequestHeaders(),
-                            body: JSON.stringify({ filepath: pathToRead }),
-                        });
-
-                        const result = await response.json();
-
-                        if (!response.ok) {
-                            return {
-                                filepath: pathToRead,
-                                error: `Error: ${result.error || 'An unknown error occurred.'}`,
-                            };
-                        }
-
-                        return {
-                            filepath: pathToRead,
-                            content: result.content,
-                        };
-                    } catch (error) {
-                        return {
-                            filepath: pathToRead,
-                            error: `Error: Could not connect to the server to read the file. ${error.message}`,
-                        };
-                    }
-                };
-
-                const results = await Promise.all(uniquePaths.map(readOneFile));
-                if (results.length === 1) {
-                    return results[0].error || results[0].content;
-                }
-
-                return results
-                    .map(result => {
-                        if (result.error) {
-                            return `=== ${result.filepath} ===\n${result.error}`;
-                        }
-                        return `=== ${result.filepath} ===\n${result.content}`;
-                    })
-                    .join('\n\n');
             },
         },
         {
             name: 'list_directory',
-            description: 'Lists the files and directories in a given path within the user\'s uploaded files.',
+            description: 'Lists the files and directories in a given path within the files.',
             parameters: {
                 'type': 'object',
                 'properties': {
@@ -436,7 +385,7 @@ function registerBuiltinTools() {
         },
         {
             name: 'display_image',
-            description: 'Displays an image or video to the user from the uploaded files.',
+            description: 'Displays an image or video to the user from the files.',
             parameters: {
                 'type': 'object',
                 'properties': {
@@ -493,7 +442,7 @@ function registerBuiltinTools() {
         },
         {
             name: 'execute_shell',
-            description: 'Executes a shell command in the sandbox environment. Useful for git, curl, or other command-line tools.',
+            description: 'Executes a shell command in the environment. Useful for git, curl, or other command-line tools.',
             parameters: {
                 'type': 'object',
                 'properties': {
@@ -532,7 +481,7 @@ function registerBuiltinTools() {
         },
         {
             name: 'execute_python',
-            description: 'Executes Python code in a secure environment with access to the user\'s uploaded files. The "subprocess" module is available to run shell commands. Downloading files from the internet (e.g., with yt-dlp) is permitted and encouraged. The current working directory is the user\'s uploaded files.',
+            description: 'Executes Python code in a secure environment with access to the files.',
             parameters: {
                 'type': 'object',
                 'properties': {
@@ -584,7 +533,7 @@ function registerBuiltinTools() {
         },
         {
             name: 'sd_list_models',
-            description: 'Lists the available Stable Diffusion checkpoints (models) on the local SD WebUI instance. Use this to discover which models are available before generating images.',
+            description: 'Lists the available Stable Diffusion checkpoints (models) on the SD WebUI instance. Use this to discover which models are available before generating images.',
             parameters: {
                 'type': 'object',
                 'properties': {},
@@ -611,7 +560,7 @@ function registerBuiltinTools() {
         },
         {
             name: 'sd_txt2img',
-            description: 'Generates an image using Stable Diffusion text-to-image. Requires a local SD WebUI instance running at localhost:7860. The generated image is saved to the uploads directory and can be displayed using display_image.',
+            description: 'Generates an image using Stable Diffusion text-to-image. The generated image is saved to the files and can be displayed using display_image.',
             parameters: {
                 'type': 'object',
                 'properties': {
@@ -1121,18 +1070,16 @@ export class ToolManager {
             try {
                 const parsed = JSON.parse(jsonString);
                 if (typeof parsed.tool === 'string' && typeof parsed.args === 'object') {
-                    // Extract the continue flag (default true for backward compatibility).
-                    // Treat only explicit false (boolean or "false" string) as "do not continue".
-                    const shouldContinue = parsed.continue === undefined
-                        ? true
-                        : !(parsed.continue === false || String(parsed.continue).trim().toLowerCase() === 'false');
+                    // Extract the continue flag (default true for backward compatibility)
+                    const shouldContinue = parsed.continue !== undefined ? !!parsed.continue : true;
+                    console.log(`[ToolManager] Parsed tool call: ${parsed.tool}, continue flag: ${parsed.continue}, resolved: ${shouldContinue}`);
                     // Success!
                     return {
                         tool_call: parsed,
                         reasoning: reasoning,
                         prefix_text: prefixText,
                         original_text: text,
-                        continue: shouldContinue,
+                        'continue': shouldContinue,
                     };
                 }
             } catch (e) {

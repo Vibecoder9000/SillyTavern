@@ -53,6 +53,7 @@ public/scripts/extensions/third-party
 /certs
 /uploads
 /uploads backup 2
+/uploads 2
 .aider*
 .env
 /StartDev.bat
