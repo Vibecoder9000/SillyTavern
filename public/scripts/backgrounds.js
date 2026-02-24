@@ -790,10 +790,7 @@ function renderFolderGrid() {
     const container = $('#bg_folder_grid');
     container.empty();
 
-    const newFolderTile = $('#bg_new_folder_template .bg_new_folder_tile').clone();
-
     if (folderList.length === 0 && !activeFolderId) {
-        container.append(newFolderTile);
         return;
     }
 
@@ -801,8 +798,6 @@ function renderFolderGrid() {
         const tile = createFolderTileElement(folder);
         container.append(tile);
     }
-
-    container.append(newFolderTile);
 }
 
 /**
@@ -1429,10 +1424,6 @@ function onBackgroundFilterInput() {
     if (!activeFolderId) {
         $('#bg_folder_grid .bg_folder_tile').each(function () {
             const $tile = $(this);
-            if ($tile.hasClass('bg_new_folder_tile')) {
-                $tile.toggle(!filterValue); // hide placeholder when searching
-                return;
-            }
             const folderId = $tile.attr('data-folder-id');
             if (!folderId || !filterValue) {
                 $tile.show();
@@ -1470,7 +1461,7 @@ export function initBackgrounds() {
             const folderId = $(this).attr('data-folder-id');
             if (folderId) onFolderDrillIn(folderId);
         })
-        .on('click', '.bg_new_folder_tile', function () {
+        .on('click', '#bg_add_folder_button', function () {
             onCreateFolder();
         })
         .on('click', '#bg_back_to_folders', function () {

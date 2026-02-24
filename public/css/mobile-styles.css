@@ -152,7 +152,8 @@
     }
 
     #add_background_button_top>span,
-    #auto_background>span {
+    #auto_background>span,
+    #bg_add_folder_button>span {
         display: none;
     }
 
