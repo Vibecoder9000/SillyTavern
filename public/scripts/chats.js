@@ -4,11 +4,14 @@ import { Popper, css, DOMPurify } from '../lib.js';
 import {
     addCopyToCodeBlocks,
     appendMediaToMessage,
+    buildSandboxDownloadUrl,
     characters,
     chat,
     eventSource,
     event_types,
     getCurrentChatId,
+    getCurrentSandboxCharacterName,
+    getCurrentSandboxWorkspace,
     getRequestHeaders,
     name2,
     reloadCurrentChat,
@@ -1898,12 +1901,106 @@ export function registerFileConverter(mimeType, converter) {
     converters[mimeType] = converter;
 }
 
+const SANDBOX_MEDIA_TAG_ATTRIBUTES = Object.freeze({
+    IMG: ['src', 'srcset'],
+    AUDIO: ['src'],
+    VIDEO: ['src', 'poster'],
+    SOURCE: ['src', 'srcset'],
+    TRACK: ['src'],
+});
+
+function toSandboxFilePath(rawUrl) {
+    if (typeof rawUrl !== 'string') {
+        return null;
+    }
+
+    const trimmed = rawUrl.trim();
+    if (!trimmed) {
+        return null;
+    }
+
+    if (trimmed.startsWith('#') || trimmed.startsWith('?') || trimmed.startsWith('//')) {
+        return null;
+    }
+
+    if (/^[a-z][a-z0-9+.-]*:/i.test(trimmed)) {
+        return null;
+    }
+
+    let candidate = trimmed.split('#')[0].split('?')[0].replace(/\\/g, '/');
+
+    if (candidate.startsWith('/uploads/')) {
+        candidate = candidate.slice('/uploads/'.length);
+    } else if (candidate.startsWith('uploads/')) {
+        candidate = candidate.slice('uploads/'.length);
+    } else if (candidate.startsWith('/')) {
+        return null;
+    }
+
+    candidate = candidate.replace(/^\.\/+/, '');
+    return candidate || null;
+}
+
+function rewriteSandboxMediaAttribute(node, attributeName) {
+    const currentValue = node.getAttribute(attributeName);
+    if (!currentValue) {
+        return;
+    }
+
+    if (attributeName === 'srcset') {
+        const rewrittenSrcSet = currentValue
+            .split(',')
+            .map((entry) => {
+                const trimmed = entry.trim();
+                if (!trimmed) {
+                    return trimmed;
+                }
+
+                const [rawUrl, ...descriptors] = trimmed.split(/\s+/);
+                const filePath = toSandboxFilePath(rawUrl);
+                if (!filePath) {
+                    return trimmed;
+                }
+
+                const sandboxUrl = buildSandboxDownloadUrl(filePath, getCurrentSandboxWorkspace(), getCurrentSandboxCharacterName());
+                return [sandboxUrl, ...descriptors].join(' ').trim();
+            })
+            .join(', ');
+
+        if (rewrittenSrcSet !== currentValue) {
+            node.setAttribute(attributeName, rewrittenSrcSet);
+        }
+        return;
+    }
+
+    const filePath = toSandboxFilePath(currentValue);
+    if (!filePath) {
+        return;
+    }
+
+    const sandboxUrl = buildSandboxDownloadUrl(filePath, getCurrentSandboxWorkspace(), getCurrentSandboxCharacterName());
+    node.setAttribute(attributeName, sandboxUrl);
+}
+
 export function addDOMPurifyHooks() {
     // Allow target="_blank" in links
     DOMPurify.addHook('afterSanitizeAttributes', function (node) {
         if ('target' in node) {
             node.setAttribute('target', '_blank');
             node.setAttribute('rel', 'noopener');
+        }
+
+        if (!(node instanceof Element)) {
+            return;
+        }
+
+        const mediaAttributes = SANDBOX_MEDIA_TAG_ATTRIBUTES[node.tagName];
+        if (!Array.isArray(mediaAttributes)) {
+            return;
+        }
+
+        for (const attributeName of mediaAttributes) {
+            rewriteSandboxMediaAttribute(node, attributeName);
         }
     });
 
@@ -2113,9 +2210,11 @@ export function initChatUtilities() {
         e.preventDefault();
         e.stopPropagation();
         const filepath = $(this).attr('data-file');
+        const workspace = $(this).attr('data-workspace') || getCurrentSandboxWorkspace();
+        const character = $(this).attr('data-character') || getCurrentSandboxCharacterName();
         if (!filepath) return;
         try {
-            const url = `/api/extensions/tools/download?file=${encodeURIComponent(filepath)}`;
+            const url = buildSandboxDownloadUrl(filepath, workspace, character);
             const response = await fetch(url, {
                 method: 'GET',
                 headers: getRequestHeaders(),
@@ -2251,6 +2350,13 @@ export function initChatUtilities() {
 
         const files = Array.from(fileInput.files);
         let successCount = 0;
+        const workspace = getCurrentSandboxWorkspace();
+        const character = getCurrentSandboxCharacterName();
+        const uploadParams = new URLSearchParams({
+            destination: 'sandbox',
+            workspace,
+            character,
+        });
 
         for (const file of files) {
             try {
@@ -2258,7 +2364,7 @@ export function initChatUtilities() {
                 formData.append('file', file);
 
                 const headers = getRequestHeaders({ omitContentType: true });
-                const response = await fetch('/api/files/upload-multipart?destination=sandbox', {
+                const response = await fetch(`/api/files/upload-multipart?${uploadParams.toString()}`, {
                     method: 'POST',
                     headers: headers,
                     body: formData,
@@ -2278,7 +2384,7 @@ export function initChatUtilities() {
         }
 
         if (successCount > 0) {
-            toastr.success(`${successCount} file(s) uploaded to uploads folder.`);
+            toastr.success(`${successCount} file(s) uploaded to workspace "${workspace}".`);
         }
 
         // Reset the file input

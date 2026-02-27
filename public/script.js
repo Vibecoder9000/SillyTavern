@@ -418,6 +418,8 @@ export let converter;
 
 export const systemUserName = 'SillyTavern System';
 export const neutralCharacterName = 'Assistant';
+export const SANDBOX_ROOT_WORKSPACE = '__root__';
+const DEFAULT_SANDBOX_WORKSPACE = 'default';
 let default_user_name = 'User';
 export let name1 = default_user_name;
 export let name2 = systemUserName;
@@ -538,13 +540,20 @@ async function getClientVersion() {
  * @returns {object[]} Showdown extension array
  */
 function sandboxDownloadExt() {
+    const escapeAttr = (value) => String(value)
+        .replace(/"/g, '&quot;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;');
+
     return [{
         type: 'lang',
         regex: /!\[\]\((?!https?:\/\/)([^)]+)\)/g,
         replace: function (match, filepath) {
-            const sanitizedPath = filepath.replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+            const sanitizedPath = escapeAttr(filepath);
             const fileName = sanitizedPath.split('/').pop();
-            return `<a class="sandbox-download interactable" data-file="${sanitizedPath}" title="Download ${sanitizedPath}" style="color:blue;cursor:pointer;text-decoration:underline;">${fileName}</a>`;
+            const workspace = escapeAttr(getCurrentSandboxWorkspace());
+            const character = escapeAttr(getCurrentSandboxCharacterName());
+            return `<a class="sandbox-download interactable" data-file="${sanitizedPath}" data-workspace="${workspace}" data-character="${character}" title="Download ${sanitizedPath}" style="color:blue;cursor:pointer;text-decoration:underline;">${fileName}</a>`;
         },
     }];
 }
@@ -575,6 +584,57 @@ export function getCurrentChatId() {
     } else if (this_chid !== undefined) {
         return characters[this_chid]?.chat;
     }
+}
+
+function getActiveSandboxCharacterName() {
+    if (this_chid !== undefined) {
+        return String(characters[this_chid]?.name ?? '').trim();
+    }
+
+    return String(name2 ?? '').trim();
+}
+
+export function isAssistantCharacterActive() {
+    return !selected_group && getActiveSandboxCharacterName() === neutralCharacterName;
+}
+
+export function getDefaultSandboxWorkspace() {
+    if (isAssistantCharacterActive()) {
+        return SANDBOX_ROOT_WORKSPACE;
+    }
+
+    if (selected_group) {
+        return DEFAULT_SANDBOX_WORKSPACE;
+    }
+
+    const characterName = getActiveSandboxCharacterName();
+    return characterName || DEFAULT_SANDBOX_WORKSPACE;
+}
+
+export function getCurrentSandboxWorkspace() {
+    const workspace = typeof chat_metadata?.sandbox_workspace === 'string'
+        ? chat_metadata.sandbox_workspace.trim()
+        : '';
+    return workspace || getDefaultSandboxWorkspace();
+}
+
+export function getCurrentSandboxCharacterName() {
+    return isAssistantCharacterActive() ? neutralCharacterName : getActiveSandboxCharacterName();
+}
+
+export function buildSandboxDownloadUrl(filepath, workspace = getCurrentSandboxWorkspace(), character = getCurrentSandboxCharacterName()) {
+    const params = new URLSearchParams();
+    params.set('file', filepath);
+
+    if (typeof workspace === 'string' && workspace.length > 0) {
+        params.set('workspace', workspace);
+    }
+
+    if (typeof character === 'string' && character.length > 0) {
+        params.set('character', character);
+    }
+
+    return `/api/extensions/tools/download?${params.toString()}`;
 }
 
 export const talkativeness_default = 0.5;
@@ -3838,7 +3898,7 @@ class StreamingProcessor {
                             is_user: false,
                             is_system: true,
                             mes: '<tool_result>\nImage displayed to user.\n</tool_result>',
-                            extra: { is_tool_result: true, image: `/api/extensions/tools/download?file=${encodeURIComponent(parsed.filepath)}` },
+                            extra: { is_tool_result: true, image: buildSandboxDownloadUrl(parsed.filepath, parsed.workspace, parsed.character) },
                         };
                         stopGeneration = false;
                     }
@@ -3848,7 +3908,7 @@ class StreamingProcessor {
                             is_user: false,
                             is_system: true,
                             mes: '<tool_result>\nImage provided as context for analysis.\n</tool_result>',
-                            extra: { is_tool_result: true, image: `/api/extensions/tools/download?file=${encodeURIComponent(parsed.filepath)}` },
+                            extra: { is_tool_result: true, image: buildSandboxDownloadUrl(parsed.filepath, parsed.workspace, parsed.character) },
                         };
                         stopGeneration = false;
                     }
@@ -3858,7 +3918,7 @@ class StreamingProcessor {
                             is_user: false,
                             is_system: true,
                             mes: '<tool_result>\nVideo displayed to user.\n</tool_result>',
-                            extra: { is_tool_result: true, video: `/api/extensions/tools/download?file=${encodeURIComponent(parsed.filepath)}` },
+                            extra: { is_tool_result: true, video: buildSandboxDownloadUrl(parsed.filepath, parsed.workspace, parsed.character) },
                         };
                         stopGeneration = false;
                     }
@@ -5712,7 +5772,7 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
                             is_user: false,
                             is_system: true,
                             mes: '<tool_result>\nImage displayed to user.\n</tool_result>',
-                            extra: { is_tool_result: true, image: `/api/extensions/tools/download?file=${encodeURIComponent(parsed.filepath)}` },
+                            extra: { is_tool_result: true, image: buildSandboxDownloadUrl(parsed.filepath, parsed.workspace, parsed.character) },
                         };
                         stopGeneration = false;
                     }
@@ -5722,7 +5782,7 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
                             is_user: false,
                             is_system: true,
                             mes: '<tool_result>\nImage provided as context for analysis.\n</tool_result>',
-                            extra: { is_tool_result: true, image: `/api/extensions/tools/download?file=${encodeURIComponent(parsed.filepath)}` },
+                            extra: { is_tool_result: true, image: buildSandboxDownloadUrl(parsed.filepath, parsed.workspace, parsed.character) },
                         };
                         stopGeneration = false;
                     }
@@ -5732,7 +5792,7 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
                             is_user: false,
                             is_system: true,
                             mes: '<tool_result>\nVideo displayed to user.\n</tool_result>',
-                            extra: { is_tool_result: true, video: `/api/extensions/tools/download?file=${encodeURIComponent(parsed.filepath)}` },
+                            extra: { is_tool_result: true, video: buildSandboxDownloadUrl(parsed.filepath, parsed.workspace, parsed.character) },
                         };
                         stopGeneration = false;
                     }
@@ -12740,7 +12800,7 @@ jQuery(async function () {
                         is_user: false,
                         is_system: true,
                         mes: '<tool_result>\nImage displayed to user.\n</tool_result>',
-                        extra: { is_tool_result: true, image: `/api/extensions/tools/download?file=${encodeURIComponent(parsed.filepath)}` },
+                        extra: { is_tool_result: true, image: buildSandboxDownloadUrl(parsed.filepath, parsed.workspace, parsed.character) },
                     };
                     stopGeneration = false;
                 }
@@ -12750,7 +12810,7 @@ jQuery(async function () {
                         is_user: false,
                         is_system: true,
                         mes: '<tool_result>\nImage provided as context for analysis.\n</tool_result>',
-                        extra: { is_tool_result: true, image: `/api/extensions/tools/download?file=${encodeURIComponent(parsed.filepath)}` },
+                        extra: { is_tool_result: true, image: buildSandboxDownloadUrl(parsed.filepath, parsed.workspace, parsed.character) },
                     };
                     stopGeneration = false;
                 }
@@ -12760,7 +12820,7 @@ jQuery(async function () {
                         is_user: false,
                         is_system: true,
                         mes: '<tool_result>\nVideo displayed to user.\n</tool_result>',
-                        extra: { is_tool_result: true, video: `/api/extensions/tools/download?file=${encodeURIComponent(parsed.filepath)}` },
+                        extra: { is_tool_result: true, video: buildSandboxDownloadUrl(parsed.filepath, parsed.workspace, parsed.character) },
                     };
                     stopGeneration = false;
                 }

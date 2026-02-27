@@ -1,13 +1,12 @@
 import express from 'express';
 import path from 'node:path';
 import fs from 'node:fs/promises';
-import { serverDirectory } from '../server-directory.js';
 import { spawn, spawnSync } from 'node:child_process';
 import crypto from 'node:crypto';
+import { getSandboxDir, isPathInside, SANDBOX_ROOT_DIR } from './sandbox.js';
 
 export const router = express.Router();
 
-const SANDBOX_DIR = path.resolve(path.join(serverDirectory, 'uploads'));
 const SD_WEBUI_URL = 'http://localhost:7860';
 
 // Track active processes to kill previous ones when new ones start
@@ -78,21 +77,24 @@ function resolvePythonLauncher() {
  * It resolves the path and uses fs.realpath to prevent path traversal
  * attacks via symbolic links.
  * @param {string} userPath - The path provided by the user/LLM.
+ * @param {unknown} workspace - Active workspace identifier.
+ * @param {unknown} character - Active character name.
  * @param {object} [options]
  * @param {boolean} [options.checkExists=true] - If true, checks the realpath of an existing file/dir. Set to false for write operations where the path may not exist yet.
  * @returns {Promise<boolean>} - True if the path is safely within the sandbox.
  */
-async function isPathInSandbox(userPath, { checkExists = true } = {}) {
+async function isPathInSandbox(userPath, workspace, character, { checkExists = true } = {}) {
     try {
-        const resolvedPath = path.resolve(SANDBOX_DIR, userPath);
+        const sandboxDir = getSandboxDir(workspace, character);
+        const resolvedPath = path.resolve(sandboxDir, userPath);
 
-        if (!resolvedPath.startsWith(SANDBOX_DIR)) {
+        if (!isPathInside(sandboxDir, resolvedPath)) {
             return false;
         }
 
         if (checkExists) {
             const realPath = await fs.realpath(resolvedPath);
-            if (!realPath.startsWith(SANDBOX_DIR)) {
+            if (!isPathInside(sandboxDir, realPath)) {
                 return false;
             }
         }
@@ -110,8 +112,28 @@ async function isPathInSandbox(userPath, { checkExists = true } = {}) {
     }
 }
 
+router.get('/workspaces', async (_req, res) => {
+    try {
+        await fs.mkdir(SANDBOX_ROOT_DIR, { recursive: true });
+        const dirents = await fs.readdir(SANDBOX_ROOT_DIR, { withFileTypes: true });
+        const workspaces = dirents
+            .filter(dirent => dirent.isDirectory())
+            .map(dirent => dirent.name)
+            .sort((a, b) => a.localeCompare(b));
+
+        return res.json({ workspaces });
+    } catch (error) {
+        console.error('Error listing workspaces:', error);
+        return res.status(500).json({ error: 'An error occurred while listing workspaces.' });
+    }
+});
+
 router.get('/download', async (req, res) => {
     let filepath = req.query.file;
+    const workspace = req.query.workspace;
+    const character = req.query.character;
+    const downloadParam = String(req.query.download ?? '').toLowerCase();
+    const forceDownload = ['1', 'true', 'yes', 'on'].includes(downloadParam);
 
     if (!filepath || typeof filepath !== 'string') {
         return res.status(400).json({ error: 'file query parameter is required.' });
@@ -121,18 +143,32 @@ router.get('/download', async (req, res) => {
         filepath = filepath.substring(1);
     }
 
-    if (!(await isPathInSandbox(filepath, { checkExists: true }))) {
+    if (!(await isPathInSandbox(filepath, workspace, character, { checkExists: true }))) {
         return res.status(403).json({ error: 'Access denied: Path is outside the sandbox.' });
     }
 
     try {
-        const fullPath = path.join(SANDBOX_DIR, filepath);
+        const sandboxDir = getSandboxDir(workspace, character);
+        const fullPath = path.join(sandboxDir, filepath);
         const fileName = path.basename(fullPath);
-        const stat = await fs.stat(fullPath);
-        res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
-        res.setHeader('Content-Length', stat.size);
-        const content = await fs.readFile(fullPath);
-        res.send(content);
+        const onSendComplete = (error) => {
+            if (!error) {
+                return;
+            }
+
+            if (error.code === 'ENOENT') {
+                res.status(404).json({ error: `File not found: ${filepath}` });
+            } else if (!res.headersSent) {
+                console.error(`Error downloading file "${filepath}":`, error);
+                res.status(500).json({ error: 'An error occurred while downloading the file.' });
+            }
+        };
+
+        if (forceDownload) {
+            return res.download(fullPath, fileName, onSendComplete);
+        }
+
+        return res.sendFile(fullPath, onSendComplete);
     } catch (error) {
         if (error.code === 'ENOENT') {
             res.status(404).json({ error: `File not found: ${filepath}` });
@@ -144,7 +180,7 @@ router.get('/download', async (req, res) => {
 });
 
 router.post('/readfile', async (req, res) => {
-    let { filepath } = req.body;
+    let { filepath, workspace, character } = req.body;
 
     if (!filepath) {
         return res.status(400).json({ error: 'filepath is required.' });
@@ -154,13 +190,14 @@ router.post('/readfile', async (req, res) => {
         filepath = filepath.substring(1);
     }
 
-    if (!(await isPathInSandbox(filepath, { checkExists: true }))) {
+    if (!(await isPathInSandbox(filepath, workspace, character, { checkExists: true }))) {
         return res.status(403).json({ error: 'Access denied: Path is outside the sandbox.' });
     }
 
     try {
-        const fullPath = path.join(SANDBOX_DIR, filepath);
-        await fs.mkdir(SANDBOX_DIR, { recursive: true });
+        const sandboxDir = getSandboxDir(workspace, character);
+        const fullPath = path.join(sandboxDir, filepath);
+        await fs.mkdir(sandboxDir, { recursive: true });
         const content = await fs.readFile(fullPath, 'utf-8');
         res.json({ content });
     } catch (error) {
@@ -174,7 +211,8 @@ router.post('/readfile', async (req, res) => {
 });
 
 router.post('/listdir', async (req, res) => {
-    let { path: dirPath = '.' } = req.body;
+    let { path: dirPath = '.', workspace, character } = req.body;
+    const sandboxDir = getSandboxDir(workspace, character);
 
     if (dirPath.startsWith('/')) {
         dirPath = dirPath.substring(1);
@@ -183,13 +221,19 @@ router.post('/listdir', async (req, res) => {
         dirPath = '.';
     }
 
-    if (!(await isPathInSandbox(dirPath, { checkExists: true }))) {
+    try {
+        await fs.mkdir(sandboxDir, { recursive: true });
+    } catch (error) {
+        console.error(`Error creating sandbox directory "${sandboxDir}":`, error);
+        return res.status(500).json({ error: 'An error occurred while preparing the sandbox directory.' });
+    }
+
+    if (!(await isPathInSandbox(dirPath, workspace, character, { checkExists: true }))) {
         return res.status(403).json({ error: 'Access denied: Path is outside the sandbox.' });
     }
 
     try {
-        const fullPath = path.join(SANDBOX_DIR, dirPath);
-        await fs.mkdir(SANDBOX_DIR, { recursive: true });
+        const fullPath = path.join(sandboxDir, dirPath);
         const dirents = await fs.readdir(fullPath, { withFileTypes: true });
 
         const files = [];
@@ -215,7 +259,7 @@ router.post('/listdir', async (req, res) => {
 });
 
 router.post('/writefile', async (req, res) => {
-    let { filepath, content, append = false } = req.body;
+    let { filepath, content, append = false, workspace, character } = req.body;
     const shouldAppend = append === true || append === 'true';
 
     if (!filepath || typeof content !== 'string') {
@@ -226,19 +270,20 @@ router.post('/writefile', async (req, res) => {
         filepath = filepath.substring(1);
     }
 
-    if (!(await isPathInSandbox(filepath, { checkExists: false }))) {
+    if (!(await isPathInSandbox(filepath, workspace, character, { checkExists: false }))) {
         return res.status(403).json({ error: 'Access denied: Path is outside the sandbox.' });
     }
 
     try {
-        const fullPath = path.join(SANDBOX_DIR, filepath);
+        const sandboxDir = getSandboxDir(workspace, character);
+        const fullPath = path.join(sandboxDir, filepath);
         const dir = path.dirname(fullPath);
 
         await fs.mkdir(dir, { recursive: true });
 
         const realDir = await fs.realpath(dir);
-        if (!realDir.startsWith(SANDBOX_DIR)) {
-             return res.status(403).json({ error: 'Access denied: Cannot write to a directory outside the sandbox.' });
+        if (!isPathInside(sandboxDir, realDir)) {
+            return res.status(403).json({ error: 'Access denied: Cannot write to a directory outside the sandbox.' });
         }
 
         const flag = shouldAppend ? 'a' : 'w';
@@ -324,7 +369,7 @@ function spawnPromise(command, options) {
 }
 
 router.post('/executeshell', async (req, res) => {
-    const { command } = req.body;
+    const { command, workspace, character } = req.body;
 
     if (!command) {
         return res.status(400).json({ error: 'command is required.' });
@@ -337,8 +382,10 @@ router.post('/executeshell', async (req, res) => {
     }
 
     try {
+        const sandboxDir = getSandboxDir(workspace, character);
+        await fs.mkdir(sandboxDir, { recursive: true });
         const { stdout, stderr } = await spawnPromise(command, {
-            cwd: SANDBOX_DIR,
+            cwd: sandboxDir,
             signal: req.signal,
         });
 
@@ -358,7 +405,7 @@ router.post('/executeshell', async (req, res) => {
 });
 
 router.post('/executepython', async (req, res) => {
-    const { code } = req.body;
+    const { code, workspace, character } = req.body;
 
     if (!code) {
         return res.status(400).json({ error: 'code is required.' });
@@ -370,9 +417,10 @@ router.post('/executepython', async (req, res) => {
         activeProcesses.python.kill();
     }
 
+    const sandboxDir = getSandboxDir(workspace, character);
     const tempFilename = `exec_${crypto.randomBytes(16).toString('hex')}.py`;
-    const scriptPath = path.join(SANDBOX_DIR, tempFilename);
-    await fs.mkdir(SANDBOX_DIR, { recursive: true });
+    const scriptPath = path.join(sandboxDir, tempFilename);
+    await fs.mkdir(sandboxDir, { recursive: true });
     const launcher = resolvePythonLauncher();
 
     try {
@@ -386,7 +434,7 @@ router.post('/executepython', async (req, res) => {
         res.setHeader('Transfer-Encoding', 'chunked');
 
         const childProcess = spawn(launcher.command, [...launcher.args, '-u', scriptPath], {
-            cwd: SANDBOX_DIR,
+            cwd: sandboxDir,
             shell: false,
             env: {
                 ...process.env,
@@ -464,7 +512,7 @@ router.get('/sd_models', async (_req, res) => {
 
 router.post('/sd_txt2img', async (req, res) => {
     try {
-        const { prompt, negative_prompt, model, width, height, steps, cfg_scale, sampler_name, seed } = req.body;
+        const { prompt, negative_prompt, model, width, height, steps, cfg_scale, sampler_name, seed, workspace, character } = req.body;
 
         if (!prompt) {
             return res.status(400).json({ error: 'prompt is required' });
@@ -513,9 +561,10 @@ router.post('/sd_txt2img', async (req, res) => {
         // Save the first image to the uploads directory
         const imageBuffer = Buffer.from(genResult.images[0], 'base64');
         const filename = `sd_${Date.now()}_${crypto.randomBytes(4).toString('hex')}.png`;
-        const filepath = path.join(SANDBOX_DIR, filename);
+        const sandboxDir = getSandboxDir(workspace, character);
+        const filepath = path.join(sandboxDir, filename);
 
-        await fs.mkdir(SANDBOX_DIR, { recursive: true });
+        await fs.mkdir(sandboxDir, { recursive: true });
         await fs.writeFile(filepath, imageBuffer);
 
         return res.json({

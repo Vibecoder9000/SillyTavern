@@ -63,6 +63,10 @@
     margin-left: 4px;
 }
 
+#sandbox_workspace_setting select:disabled {
+    opacity: 0.7;
+}
+
 body.hide-tool-messages .tool-call-message,
 body.hide-tool-messages .tool-result-message {
     display: none;

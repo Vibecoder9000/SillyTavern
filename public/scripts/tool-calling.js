@@ -1,7 +1,22 @@
 import { DOMPurify } from '../lib.js';
 import { power_user } from './power-user.js';
 
-import { addOneMessage, chat, event_types, eventSource, main_api, getRequestHeaders, saveChatConditional, system_avatar, systemUserName } from '../script.js';
+import {
+    addOneMessage,
+    chat,
+    chat_metadata,
+    event_types,
+    eventSource,
+    getCurrentSandboxCharacterName,
+    getCurrentSandboxWorkspace,
+    getDefaultSandboxWorkspace,
+    main_api,
+    getRequestHeaders,
+    saveChatConditional,
+    SANDBOX_ROOT_WORKSPACE,
+    system_avatar,
+    systemUserName,
+} from '../script.js';
 import { chat_completion_sources, custom_prompt_post_processing_types, getChatCompletionModel, model_list, oai_settings } from './openai.js';
 import { Popup } from './popup.js';
 import { SlashCommand } from './slash-commands/SlashCommand.js';
@@ -11,7 +26,7 @@ import { enumIcons } from './slash-commands/SlashCommandCommonEnumsProvider.js';
 import { enumTypes, SlashCommandEnumValue } from './slash-commands/SlashCommandEnumValue.js';
 import { SlashCommandParser } from './slash-commands/SlashCommandParser.js';
 import { slashCommandReturnHelper } from './slash-commands/SlashCommandReturnHelper.js';
-import { isTrueBoolean } from './utils.js';
+import { getSanitizedFilename, isTrueBoolean } from './utils.js';
 
 /**
  * @typedef {object} ToolInvocation
@@ -129,6 +144,8 @@ function stringify(obj) {
 const LIST_DIRECTORY_CONTEXT_TIMEOUT_MS = 3000;
 const LIST_DIRECTORY_CONTEXT_TIMEOUT_RESULT = '__list_directory_context_timeout__';
 const LIST_DIRECTORY_CONTEXT_MAX_CHARS = 4000;
+const NEW_WORKSPACE_OPTION = '__new_workspace__';
+const WORKSPACE_SEPARATOR_OPTION = '__workspace_separator__';
 
 /**
  * A class that represents a tool definition.
@@ -258,6 +275,13 @@ class ToolDefinition {
     }
 }
 
+function getSandboxRequestContext() {
+    return {
+        workspace: getCurrentSandboxWorkspace(),
+        character: getCurrentSandboxCharacterName(),
+    };
+}
+
 function registerBuiltinTools() {
     const builtinTools = [
         {
@@ -283,10 +307,11 @@ function registerBuiltinTools() {
             },
             action: async ({ filepath, content, append = false }) => {
                 try {
+                    const sandbox = getSandboxRequestContext();
                     const response = await fetch('/api/extensions/tools/writefile', {
                         method: 'POST',
                         headers: getRequestHeaders(),
-                        body: JSON.stringify({ filepath, content, append }),
+                        body: JSON.stringify({ filepath, content, append, ...sandbox }),
                     });
 
                     const result = await response.json();
@@ -316,10 +341,11 @@ function registerBuiltinTools() {
             },
             action: async ({ filepath }) => {
                 try {
+                    const sandbox = getSandboxRequestContext();
                     const response = await fetch('/api/extensions/tools/readfile', {
                         method: 'POST',
                         headers: getRequestHeaders(),
-                        body: JSON.stringify({ filepath: filepath }),
+                        body: JSON.stringify({ filepath: filepath, ...sandbox }),
                     });
 
                     const result = await response.json();
@@ -350,10 +376,11 @@ function registerBuiltinTools() {
             },
             action: async ({ path = '.' }) => {
                 try {
+                    const sandbox = getSandboxRequestContext();
                     const response = await fetch('/api/extensions/tools/listdir', {
                         method: 'POST',
                         headers: getRequestHeaders(),
-                        body: JSON.stringify({ path }),
+                        body: JSON.stringify({ path, ...sandbox }),
                     });
 
                     const result = await response.json();
@@ -399,15 +426,16 @@ function registerBuiltinTools() {
             action: async ({ filepath }) => {
                 const imageExtensions = ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.svg'];
                 const videoExtensions = ['.mp4', '.webm', '.ogg', '.mov'];
+                const sandbox = getSandboxRequestContext();
 
                 const extension = filepath.slice(filepath.lastIndexOf('.')).toLowerCase();
 
                 if (imageExtensions.includes(extension)) {
-                    return JSON.stringify({ type: 'image_display', filepath: filepath });
+                    return JSON.stringify({ type: 'image_display', filepath: filepath, ...sandbox });
                 }
 
                 if (videoExtensions.includes(extension)) {
-                    return JSON.stringify({ type: 'video_display', filepath: filepath });
+                    return JSON.stringify({ type: 'video_display', filepath: filepath, ...sandbox });
                 }
 
                 return `Error: The file "${filepath}" is not a supported image or video type.`;
@@ -429,6 +457,7 @@ function registerBuiltinTools() {
             action: async ({ filepath }) => {
                 const imageExtensions = ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.svg'];
                 const extension = filepath.slice(filepath.lastIndexOf('.')).toLowerCase();
+                const sandbox = getSandboxRequestContext();
 
                 if (!imageExtensions.includes(extension)) {
                     return `Error: The file "${filepath}" is not a supported image type.`;
@@ -437,6 +466,7 @@ function registerBuiltinTools() {
                 return {
                     type: 'image_context',
                     filepath: filepath,
+                    ...sandbox,
                 };
             },
         },
@@ -455,10 +485,11 @@ function registerBuiltinTools() {
             },
             action: async ({ command }, signal) => {
                 try {
+                    const sandbox = getSandboxRequestContext();
                     const response = await fetch('/api/extensions/tools/executeshell', {
                         method: 'POST',
                         headers: getRequestHeaders(),
-                        body: JSON.stringify({ command }),
+                        body: JSON.stringify({ command, ...sandbox }),
                         signal,
                     });
 
@@ -495,10 +526,11 @@ function registerBuiltinTools() {
             action: async ({ code }, signal) => {
                 let fullOutput = '';
                 try {
+                    const sandbox = getSandboxRequestContext();
                     const response = await fetch('/api/extensions/tools/executepython', {
                         method: 'POST',
                         headers: getRequestHeaders(),
-                        body: JSON.stringify({ code }),
+                        body: JSON.stringify({ code, ...sandbox }),
                         signal,
                     });
 
@@ -578,19 +610,19 @@ function registerBuiltinTools() {
                     },
                     'width': {
                         'type': 'integer',
-                        'description': 'Output image width in pixels. Default: 512.',
+                        'description': 'Output image width in pixels. Default: 1200.',
                     },
                     'height': {
                         'type': 'integer',
-                        'description': 'Output image height in pixels. Default: 512.',
+                        'description': 'Output image height in pixels. Default: 1200.',
                     },
                     'steps': {
                         'type': 'integer',
-                        'description': 'Number of sampling steps. Default: 20.',
+                        'description': 'Number of sampling steps. Default: 25.',
                     },
                     'cfg_scale': {
                         'type': 'number',
-                        'description': 'Classifier-free guidance scale. Higher values follow the prompt more closely. Default: 7.',
+                        'description': 'Classifier-free guidance scale. Higher values follow the prompt more closely. Default: 5.',
                     },
                     'sampler_name': {
                         'type': 'string',
@@ -605,6 +637,7 @@ function registerBuiltinTools() {
             },
             action: async ({ prompt, negative_prompt, model, width, height, steps, cfg_scale, sampler_name, seed }) => {
                 try {
+                    const sandbox = getSandboxRequestContext();
                     const response = await fetch('/api/extensions/tools/sd_txt2img', {
                         method: 'POST',
                         headers: getRequestHeaders(),
@@ -612,12 +645,13 @@ function registerBuiltinTools() {
                             prompt,
                             negative_prompt: negative_prompt || '',
                             model: model || '',
-                            width: width || 512,
-                            height: height || 512,
-                            steps: steps || 20,
-                            cfg_scale: cfg_scale || 7,
+                            width: width || 1200,
+                            height: height || 1200,
+                            steps: steps || 25,
+                            cfg_scale: cfg_scale || 5,
                             sampler_name: sampler_name || 'Euler a',
                             seed: seed ?? -1,
+                            ...sandbox,
                         }),
                     });
 
@@ -627,7 +661,12 @@ function registerBuiltinTools() {
                     }
 
                     const result = await response.json();
-                    return JSON.stringify({ type: 'image_display', filepath: result.filepath, info: result.info || 'Image generated successfully.' });
+                    return JSON.stringify({
+                        type: 'image_display',
+                        filepath: result.filepath,
+                        info: result.info || 'Image generated successfully.',
+                        ...sandbox,
+                    });
                 } catch (error) {
                     return `Error: Could not connect to Stable Diffusion WebUI. Make sure it is running at localhost:7860 with --api flag. ${error.message}`;
                 }
@@ -1158,7 +1197,9 @@ export class ToolManager {
             : listResult;
 
         this.#lastListDirectoryContext = trimmedListResult;
-        return `Current uploads directory listing (auto-fetched using list_directory with path "."):\n${trimmedListResult}`;
+        const workspace = getCurrentSandboxWorkspace();
+        const workspaceLabel = workspace === SANDBOX_ROOT_WORKSPACE ? 'root' : workspace;
+        return `Current sandbox workspace listing (workspace "${workspaceLabel}", auto-fetched using list_directory with path "."):\n${trimmedListResult}`;
     }
 
     /**
@@ -1171,13 +1212,13 @@ export class ToolManager {
         }
 
         const finalPromptParts = [];
-        finalPromptParts.push(`Always put your tool call in your main response. Only one tool call, at the end of your message, is supported.
+        finalPromptParts.push(`Always put your tool call in your main response. Only one tool call at the end of your message is supported.
 
-Call the tool with the required arguments inside a <tool> block.
-To provide a file for the user to download from the uploads directory, use the syntax \`![](filename.ext)\`
+Call the tool with the required arguments inside a <tool> block. Use windows syntax always.
+To provide a file for the user to download, use the syntax \`![](filename.ext)\`
 
 The "continue" field controls whether you get a follow-up turn after the tool executes:
-- "continue": true — The tool result will be fed back to you and you will generate another response. Use this when you need to see the result before responding, or when you have no text response yet.
+- "continue": true — The tool result will be shown to you and you will generate another response. Use this when you need to see the result before responding, or when you have no text response yet.
 - "continue": false — The tool runs silently and no follow-up generation occurs. Use this when you have ALREADY written your full response to the user in the same message and the tool call is just a side-effect (e.g. saving data, logging). This prevents a redundant empty reply.
 
 If omitted, "continue" defaults to true.
@@ -1762,6 +1803,192 @@ Here are the available tools:
     }
 }
 
+let sandboxWorkspaceSelectorInitialized = false;
+
+function getSandboxWorkspaceSelectElement() {
+    const element = document.getElementById('sandbox_workspace_select');
+    return element instanceof HTMLSelectElement ? element : null;
+}
+
+async function fetchSandboxWorkspaces() {
+    try {
+        const response = await fetch('/api/extensions/tools/workspaces', {
+            method: 'GET',
+            headers: getRequestHeaders(),
+        });
+
+        if (!response.ok) {
+            const error = await response.json().catch(() => ({ error: 'Failed to load workspaces.' }));
+            throw new Error(error.error || 'Failed to load workspaces.');
+        }
+
+        const result = await response.json();
+        return Array.isArray(result.workspaces) ? result.workspaces : [];
+    } catch (error) {
+        console.error('Failed to fetch sandbox workspaces:', error);
+        toastr.error(`Failed to fetch sandbox workspaces: ${error.message}`);
+        return [];
+    }
+}
+
+async function createSandboxWorkspace(workspace) {
+    try {
+        const response = await fetch('/api/extensions/tools/listdir', {
+            method: 'POST',
+            headers: getRequestHeaders(),
+            body: JSON.stringify({ path: '.', workspace }),
+        });
+
+        if (!response.ok) {
+            const error = await response.json().catch(() => ({ error: 'Failed to create workspace.' }));
+            throw new Error(error.error || 'Failed to create workspace.');
+        }
+
+        return true;
+    } catch (error) {
+        console.error('Failed to create workspace:', error);
+        toastr.error(`Failed to create workspace: ${error.message}`);
+        return false;
+    }
+}
+
+function getMetadataWorkspace() {
+    return typeof chat_metadata?.sandbox_workspace === 'string'
+        ? chat_metadata.sandbox_workspace.trim()
+        : '';
+}
+
+async function refreshSandboxWorkspaceSelector({ persistDefault = false } = {}) {
+    const select = getSandboxWorkspaceSelectElement();
+    if (!select) {
+        return;
+    }
+
+    const assistantRootContext = getDefaultSandboxWorkspace() === SANDBOX_ROOT_WORKSPACE;
+    const metadataWorkspace = getMetadataWorkspace();
+    const fallbackWorkspace = getDefaultSandboxWorkspace();
+    const selectedWorkspace = assistantRootContext
+        ? SANDBOX_ROOT_WORKSPACE
+        : (metadataWorkspace || fallbackWorkspace);
+    const needsPersist = !metadataWorkspace || (assistantRootContext && metadataWorkspace !== SANDBOX_ROOT_WORKSPACE);
+
+    if (needsPersist) {
+        chat_metadata.sandbox_workspace = selectedWorkspace;
+        if (persistDefault) {
+            await saveChatConditional();
+        }
+    }
+
+    const workspaceNames = await fetchSandboxWorkspaces();
+    const uniqueWorkspaces = [...new Set(workspaceNames.map(x => String(x || '').trim()).filter(Boolean))]
+        .sort((a, b) => a.localeCompare(b));
+
+    if (!assistantRootContext && selectedWorkspace !== SANDBOX_ROOT_WORKSPACE && !uniqueWorkspaces.includes(selectedWorkspace)) {
+        uniqueWorkspaces.unshift(selectedWorkspace);
+    }
+
+    select.dataset.loading = 'true';
+    select.innerHTML = '';
+
+    const rootOption = document.createElement('option');
+    rootOption.value = SANDBOX_ROOT_WORKSPACE;
+    rootOption.textContent = 'root';
+    select.append(rootOption);
+
+    if (!assistantRootContext) {
+        for (const workspace of uniqueWorkspaces) {
+            if (workspace === SANDBOX_ROOT_WORKSPACE) {
+                continue;
+            }
+
+            const option = document.createElement('option');
+            option.value = workspace;
+            option.textContent = workspace;
+            select.append(option);
+        }
+
+        const separator = document.createElement('option');
+        separator.value = WORKSPACE_SEPARATOR_OPTION;
+        separator.textContent = '──────────────';
+        separator.disabled = true;
+        select.append(separator);
+
+        const createOption = document.createElement('option');
+        createOption.value = NEW_WORKSPACE_OPTION;
+        createOption.textContent = '+ New workspace...';
+        select.append(createOption);
+    }
+
+    select.value = selectedWorkspace;
+    select.dataset.previousWorkspace = selectedWorkspace;
+    select.disabled = assistantRootContext;
+    select.removeAttribute('data-loading');
+}
+
+async function onSandboxWorkspaceChange(event) {
+    const select = event.target;
+    if (!(select instanceof HTMLSelectElement) || select.dataset.loading === 'true') {
+        return;
+    }
+
+    const selectedValue = String(select.value || '').trim();
+    const previousWorkspace = select.dataset.previousWorkspace || getCurrentSandboxWorkspace();
+
+    if (!selectedValue || selectedValue === WORKSPACE_SEPARATOR_OPTION) {
+        select.value = previousWorkspace;
+        return;
+    }
+
+    if (selectedValue === NEW_WORKSPACE_OPTION) {
+        const input = await Popup.show.input('New Workspace', 'Enter a name for the new workspace:');
+        if (!input) {
+            select.value = previousWorkspace;
+            return;
+        }
+
+        const sanitized = await getSanitizedFilename(String(input));
+        const workspace = String(sanitized || '').trim();
+        if (!workspace) {
+            toastr.warning('Workspace name cannot be empty.');
+            select.value = previousWorkspace;
+            return;
+        }
+
+        const created = await createSandboxWorkspace(workspace);
+        if (!created) {
+            select.value = previousWorkspace;
+            return;
+        }
+
+        chat_metadata.sandbox_workspace = workspace;
+        await saveChatConditional();
+        await refreshSandboxWorkspaceSelector();
+        return;
+    }
+
+    if (selectedValue === previousWorkspace) {
+        return;
+    }
+
+    chat_metadata.sandbox_workspace = selectedValue;
+    select.dataset.previousWorkspace = selectedValue;
+    await saveChatConditional();
+}
+
+async function initSandboxWorkspaceSelector() {
+    const select = getSandboxWorkspaceSelectElement();
+    if (!select) {
+        return;
+    }
+
+    if (!sandboxWorkspaceSelectorInitialized) {
+        select.addEventListener('change', onSandboxWorkspaceChange);
+        sandboxWorkspaceSelectorInitialized = true;
+    }
+
+    await refreshSandboxWorkspaceSelector();
+}
+
 export function initToolCalling() {
     eventSource.on(event_types.DANGEROUS_TOOLS_TOGGLED, () => {
         // Only refresh the native tool commands if the feature is currently active.
@@ -1777,9 +2004,14 @@ export function initToolCalling() {
     });
 
     // Refresh tool registration after all settings (including power_user) have been loaded.
-    eventSource.on(event_types.SETTINGS_LOADED_AFTER, () => {
+    eventSource.on(event_types.SETTINGS_LOADED_AFTER, async () => {
+        await initSandboxWorkspaceSelector();
         if (oai_settings.native_tool_calling) {
             ToolManager.registerNativeToolCommand();
         }
+    });
+
+    eventSource.on(event_types.CHAT_CHANGED, async () => {
+        await refreshSandboxWorkspaceSelector({ persistDefault: true });
     });
 }

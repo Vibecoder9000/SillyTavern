@@ -8,9 +8,7 @@ import { sync as writeFileSyncAtomic } from 'write-file-atomic';
 
 import { validateAssetFileName } from './assets.js';
 import { clientRelativePath } from '../util.js';
-import { serverDirectory } from '../server-directory.js';
-
-const SANDBOX_DIR = path.join(serverDirectory, 'uploads');
+import { getSandboxDir } from './sandbox.js';
 
 export const router = express.Router();
 
@@ -22,7 +20,7 @@ const storage = multer.diskStorage({
             let uploadPath;
 
             if (destination === 'sandbox') {
-                uploadPath = SANDBOX_DIR;
+                uploadPath = getSandboxDir(req.query.workspace, req.query.character);
             } else {
                 // Default to a generic user file upload directory (for temporary character uploads)
                 uploadPath = req.user.directories.files;
@@ -38,7 +36,9 @@ const storage = multer.diskStorage({
     },
     filename: (req, file, cb) => {
         const destination = req.query.destination;
-        const uploadPath = (destination === 'sandbox') ? SANDBOX_DIR : req.user.directories.files;
+        const uploadPath = (destination === 'sandbox')
+            ? getSandboxDir(req.query.workspace, req.query.character)
+            : req.user.directories.files;
 
         const sanitizedFilename = sanitize(path.basename(file.originalname));
         const { name, ext } = path.parse(sanitizedFilename);
@@ -126,7 +126,8 @@ router.get('/download/:filename', (req, res) => {
         return res.status(403).send('Forbidden: Invalid filename.');
     }
 
-    const filePath = path.join(SANDBOX_DIR, sanitizedFilename);
+    const sandboxDir = getSandboxDir(req.query.workspace, req.query.character);
+    const filePath = path.join(sandboxDir, sanitizedFilename);
 
     res.sendFile(filePath, (err) => {
         if (err) {
