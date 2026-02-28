@@ -2583,11 +2583,24 @@ export function appendMediaToMessage(mes, messageElement, scrollBehavior = SCROL
 export function addCopyToCodeBlocks(messageElement) {
     const codeBlocks = $(messageElement).find('pre code');
     for (let i = 0; i < codeBlocks.length; i++) {
-        hljs.highlightElement(codeBlocks.get(i));
+        const block = codeBlocks.get(i);
+        // Only run hljs when the code block has an explicit language class (e.g. class="language-python").
+        // Without a declared language, hljs.highlightElement() falls back to full auto-detection which
+        // probes every registered language — O(N×languages) synchronous work that causes main-thread jank.
+        const hasLanguageClass = Array.from(block.classList).some(c => c.startsWith('language-'));
+        if (hasLanguageClass) {
+            hljs.highlightElement(block);
+        }
+        // Tool-call blocks are rendered as <details><summary>…</summary><pre><code class="language-json">
+        // by tool-calling.js. Skip the copy button for these — they are collapsible JSON payloads, not
+        // user-facing code snippets.
+        if (block.closest('details') !== null) {
+            continue;
+        }
         const copyButton = document.createElement('i');
         copyButton.classList.add('fa-solid', 'fa-copy', 'code-copy', 'interactable');
         copyButton.title = 'Copy code';
-        codeBlocks.get(i).appendChild(copyButton);
+        block.appendChild(copyButton);
         copyButton.addEventListener('click', function (e) {
             e.stopPropagation();
         });
