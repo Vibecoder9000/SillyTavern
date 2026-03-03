@@ -985,9 +985,9 @@ function updateGroupFolderControlsVisibility() {
 /**
  * Shows a folder selection popup and returns the selected folder id.
  * @param {string} headingText
- * @returns {Promise<string|null>}
+ * @returns {Promise<string[]|null>} Array of selected folder IDs, or null if cancelled
  */
-async function selectFolderForGroupAction(headingText) {
+async function selectFoldersForGroupAction(headingText) {
     if (folderList.length === 0) {
         toastr.info(t`Create a folder first`);
         return null;
@@ -998,21 +998,32 @@ async function selectFolderForGroupAction(headingText) {
     heading.textContent = headingText;
     contentEl.appendChild(heading);
 
-    const select = document.createElement('select');
-    select.className = 'text_pole wide100p';
     for (const folder of folderList) {
-        const option = document.createElement('option');
-        option.value = folder.id;
-        option.textContent = folder.name;
-        select.appendChild(option);
+        const label = document.createElement('label');
+        label.className = 'checkbox_label flexGap5';
+        label.style.margin = '4px 0';
+
+        const checkbox = document.createElement('input');
+        checkbox.type = 'checkbox';
+        checkbox.dataset.folderId = folder.id;
+
+        const span = document.createElement('span');
+        span.textContent = folder.name;
+
+        label.appendChild(checkbox);
+        label.appendChild(span);
+        contentEl.appendChild(label);
     }
-    contentEl.appendChild(select);
 
     const content = $(contentEl);
     const result = await callGenericPopup(content, POPUP_TYPE.CONFIRM, '', { okButton: t`Apply`, cancelButton: t`Cancel` });
     if (!result) return null;
 
-    return String(select.value || '');
+    const selectedIds = [];
+    content.find('input[type="checkbox"]:checked').each(function () {
+        selectedIds.push($(this).data('folderId'));
+    });
+    return selectedIds.length > 0 ? selectedIds : null;
 }
 
 /**
@@ -1065,22 +1076,22 @@ async function onAddSelectedToFolder() {
         return;
     }
 
-    const folderId = await selectFolderForGroupAction(t`Add selected backgrounds to folder`);
-    if (!folderId) return;
-
-    const actionableBgFiles = bgFiles.filter(bgFile => {
-        const currentFolderIds = imageFolderMap[bgFile] || [];
-        return !currentFolderIds.includes(folderId);
-    });
-    const skippedCount = bgFiles.length - actionableBgFiles.length;
-
-    if (actionableBgFiles.length === 0) {
-        toastr.info(t`Selected backgrounds are already in this folder`);
-        return;
-    }
+    const folderIds = await selectFoldersForGroupAction(t`Add selected backgrounds to folders`);
+    if (!folderIds) return;
 
     try {
-        await updateFolderAssignments(actionableBgFiles, folderId, false);
+        let totalAdded = 0;
+        for (const folderId of folderIds) {
+            const actionableBgFiles = bgFiles.filter(bgFile => {
+                const currentFolderIds = imageFolderMap[bgFile] || [];
+                return !currentFolderIds.includes(folderId);
+            });
+            if (actionableBgFiles.length > 0) {
+                await updateFolderAssignments(actionableBgFiles, folderId, false);
+                totalAdded += actionableBgFiles.length;
+            }
+        }
+
         renderFolderGrid();
 
         if (activeFolderId) {
@@ -1089,10 +1100,10 @@ async function onAddSelectedToFolder() {
         }
 
         clearBackgroundGroupSelection();
-        if (skippedCount > 0) {
-            toastr.success(t`Added ${actionableBgFiles.length} background(s); ${skippedCount} were already in folder`);
+        if (totalAdded > 0) {
+            toastr.success(t`Added backgrounds to ${folderIds.length} folder(s)`);
         } else {
-            toastr.success(t`Added ${actionableBgFiles.length} background(s) to folder`);
+            toastr.info(t`Selected backgrounds are already in the chosen folders`);
         }
     } catch (error) {
         console.error('Error adding selected backgrounds to folder:', error);
