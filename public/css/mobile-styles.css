@@ -160,7 +160,7 @@
         display: none;
     }
 
-    #bg_group_select_count {
+    #bg_group_select_count:not(:empty) {
         display: inline !important;
     }
 
