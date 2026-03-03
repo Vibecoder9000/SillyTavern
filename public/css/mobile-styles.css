@@ -153,8 +153,28 @@
 
     #add_background_button_top>span,
     #auto_background>span,
-    #bg_add_folder_button>span {
+    #bg_add_folder_button>span,
+    #bg_selection_mode_button>span:not(#bg_group_select_count),
+    #bg_group_add_to_folder_button>span,
+    #bg_folder_remove_selected_button>span {
         display: none;
+    }
+
+    #bg_group_select_count {
+        display: inline !important;
+    }
+
+    .bg_folder_breadcrumb {
+        gap: 5px;
+    }
+
+    .bg_folder_breadcrumb .expander {
+        min-width: 0;
+    }
+
+    #bg_current_folder_name {
+        min-width: 0;
+        flex: 1 1 auto;
     }
 
     #extensions_settings,

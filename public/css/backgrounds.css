@@ -136,19 +136,32 @@
     outline-offset: 0;
 }
 
-.bg_example.locked-background::after {
-    content: '\f023';
+.bg_example.locked-background::after,
+.bg_example.selected-background::before,
+#Backgrounds.bg-selection-mode #bg_menu_content .bg_example.folder-group-selected::after {
     font-family: 'Font Awesome 6 Free';
     font-weight: 900;
-
     position: absolute;
+    z-index: 4;
+    filter: drop-shadow(0 1px 3px rgba(0, 0, 0, 0.8));
+    pointer-events: none;
+}
+
+.bg_example.selected-background::before,
+#Backgrounds.bg-selection-mode #bg_menu_content .bg_example.folder-group-selected::after {
+    content: '\f00c';
+    top: 5px;
+    color: var(--white100);
+    font-size: calc(var(--mainFontSize) * 0.9);
+}
+
+.bg_example.locked-background::after {
+    content: '\f023';
     bottom: 5px;
     right: 5px;
-    z-index: 4;
     color: var(--golden);
     filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.8));
     font-size: calc(var(--mainFontSize) * 0.8);
-    pointer-events: none;
 }
 
 .bg_example:not(.locked-background) .jg-unlock,
@@ -162,17 +175,28 @@
 }
 
 .bg_example.selected-background::before {
-    content: '\f00c';
-    font-family: 'Font Awesome 6 Free';
-    font-weight: 900;
-    position: absolute;
-    top: 5px;
     left: 5px;
-    z-index: 4;
-    color: var(--white100);
-    filter: drop-shadow(0 1px 3px rgba(0, 0, 0, 0.8));
-    font-size: calc(var(--mainFontSize) * 0.9);
-    pointer-events: none;
+}
+
+#bg_selection_mode_button.active {
+    outline: 1px solid var(--interactable-outline-color);
+}
+
+#bg_group_select_count {
+    font-weight: 700;
+}
+
+#Backgrounds.bg-selection-mode #bg_menu_content .bg_example .jg-menu {
+    display: none;
+}
+
+#Backgrounds.bg-selection-mode #bg_menu_content .bg_example.folder-group-selected {
+    outline: 2px solid var(--interactable-outline-color);
+    outline-offset: 0;
+}
+
+#Backgrounds.bg-selection-mode #bg_menu_content .bg_example.folder-group-selected::after {
+    right: 5px;
 }
 
 .bg_example .jg-menu {
