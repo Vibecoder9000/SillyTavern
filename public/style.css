@@ -1346,19 +1346,36 @@ body .panelControlBar {
 
 .swipe_right,
 .swipe_left {
-    display: none !important;
+    opacity: 0 !important;
+    width: 1px !important;
+    height: 1px !important;
+    overflow: hidden !important;
+    pointer-events: none !important;
 }
 
 .swipe_left {
-    display: none !important;
+    position: absolute;
+    bottom: calc(var(--swipeCounterHeight) + var(--swipeCounterMargin));
+    flex-flow: column;
 }
 
 .swipeRightBlock {
-    display: none !important;
+    position: absolute;
+    right: 0;
+    bottom: 0;
+    pointer-events: none;
+    opacity: 0 !important;
+    width: 1px !important;
+    height: 1px !important;
+    overflow: hidden !important;
 }
 
 .swipes-counter {
-    display: none !important;
+    opacity: 0 !important;
+    width: 1px !important;
+    height: 1px !important;
+    overflow: hidden !important;
+    pointer-events: none !important;
 }
 
 
