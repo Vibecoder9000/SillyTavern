@@ -20,7 +20,7 @@ const storage = multer.diskStorage({
             let uploadPath;
 
             if (destination === 'sandbox') {
-                uploadPath = getSandboxDir(req.query.workspace, req.query.character);
+                uploadPath = getSandboxDir(req.user.profile.handle, req.query.workspace, req.query.character);
             } else {
                 // Default to a generic user file upload directory (for temporary character uploads)
                 uploadPath = req.user.directories.files;
@@ -37,7 +37,7 @@ const storage = multer.diskStorage({
     filename: (req, file, cb) => {
         const destination = req.query.destination;
         const uploadPath = (destination === 'sandbox')
-            ? getSandboxDir(req.query.workspace, req.query.character)
+            ? getSandboxDir(req.user.profile.handle, req.query.workspace, req.query.character)
             : req.user.directories.files;
 
         const sanitizedFilename = sanitize(path.basename(file.originalname));
@@ -126,7 +126,7 @@ router.get('/download/:filename', (req, res) => {
         return res.status(403).send('Forbidden: Invalid filename.');
     }
 
-    const sandboxDir = getSandboxDir(req.query.workspace, req.query.character);
+    const sandboxDir = getSandboxDir(req.user.profile.handle, req.query.workspace, req.query.character);
     const filePath = path.join(sandboxDir, sanitizedFilename);
 
     res.sendFile(filePath, (err) => {

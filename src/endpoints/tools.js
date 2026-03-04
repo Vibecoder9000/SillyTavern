@@ -3,7 +3,7 @@ import path from 'node:path';
 import fs from 'node:fs/promises';
 import { spawn, spawnSync } from 'node:child_process';
 import crypto from 'node:crypto';
-import { getSandboxDir, isPathInside, SANDBOX_ROOT_DIR } from './sandbox.js';
+import { getSandboxDir, getUserSandboxRootDir, isPathInside } from './sandbox.js';
 
 export const router = express.Router();
 
@@ -83,9 +83,9 @@ function resolvePythonLauncher() {
  * @param {boolean} [options.checkExists=true] - If true, checks the realpath of an existing file/dir. Set to false for write operations where the path may not exist yet.
  * @returns {Promise<boolean>} - True if the path is safely within the sandbox.
  */
-async function isPathInSandbox(userPath, workspace, character, { checkExists = true } = {}) {
+async function isPathInSandbox(userPath, userHandle, workspace, character, { checkExists = true } = {}) {
     try {
-        const sandboxDir = getSandboxDir(workspace, character);
+        const sandboxDir = getSandboxDir(userHandle, workspace, character);
         const resolvedPath = path.resolve(sandboxDir, userPath);
 
         if (!isPathInside(sandboxDir, resolvedPath)) {
@@ -112,10 +112,11 @@ async function isPathInSandbox(userPath, workspace, character, { checkExists = t
     }
 }
 
-router.get('/workspaces', async (_req, res) => {
+router.get('/workspaces', async (req, res) => {
     try {
-        await fs.mkdir(SANDBOX_ROOT_DIR, { recursive: true });
-        const dirents = await fs.readdir(SANDBOX_ROOT_DIR, { withFileTypes: true });
+        const userSandboxRoot = getUserSandboxRootDir(req.user.profile.handle);
+        await fs.mkdir(userSandboxRoot, { recursive: true });
+        const dirents = await fs.readdir(userSandboxRoot, { withFileTypes: true });
         const workspaces = dirents
             .filter(dirent => dirent.isDirectory())
             .map(dirent => dirent.name)
@@ -143,12 +144,12 @@ router.get('/download', async (req, res) => {
         filepath = filepath.substring(1);
     }
 
-    if (!(await isPathInSandbox(filepath, workspace, character, { checkExists: true }))) {
+    if (!(await isPathInSandbox(filepath, req.user.profile.handle, workspace, character, { checkExists: true }))) {
         return res.status(403).json({ error: 'Access denied: Path is outside the sandbox.' });
     }
 
     try {
-        const sandboxDir = getSandboxDir(workspace, character);
+        const sandboxDir = getSandboxDir(req.user.profile.handle, workspace, character);
         const fullPath = path.join(sandboxDir, filepath);
         const fileName = path.basename(fullPath);
         const onSendComplete = (error) => {
@@ -190,12 +191,12 @@ router.post('/readfile', async (req, res) => {
         filepath = filepath.substring(1);
     }
 
-    if (!(await isPathInSandbox(filepath, workspace, character, { checkExists: true }))) {
+    if (!(await isPathInSandbox(filepath, req.user.profile.handle, workspace, character, { checkExists: true }))) {
         return res.status(403).json({ error: 'Access denied: Path is outside the sandbox.' });
     }
 
     try {
-        const sandboxDir = getSandboxDir(workspace, character);
+        const sandboxDir = getSandboxDir(req.user.profile.handle, workspace, character);
         const fullPath = path.join(sandboxDir, filepath);
         await fs.mkdir(sandboxDir, { recursive: true });
         const content = await fs.readFile(fullPath, 'utf-8');
@@ -212,7 +213,7 @@ router.post('/readfile', async (req, res) => {
 
 router.post('/listdir', async (req, res) => {
     let { path: dirPath = '.', workspace, character } = req.body;
-    const sandboxDir = getSandboxDir(workspace, character);
+    const sandboxDir = getSandboxDir(req.user.profile.handle, workspace, character);
 
     if (dirPath.startsWith('/')) {
         dirPath = dirPath.substring(1);
@@ -228,7 +229,7 @@ router.post('/listdir', async (req, res) => {
         return res.status(500).json({ error: 'An error occurred while preparing the sandbox directory.' });
     }
 
-    if (!(await isPathInSandbox(dirPath, workspace, character, { checkExists: true }))) {
+    if (!(await isPathInSandbox(dirPath, req.user.profile.handle, workspace, character, { checkExists: true }))) {
         return res.status(403).json({ error: 'Access denied: Path is outside the sandbox.' });
     }
 
@@ -270,12 +271,12 @@ router.post('/writefile', async (req, res) => {
         filepath = filepath.substring(1);
     }
 
-    if (!(await isPathInSandbox(filepath, workspace, character, { checkExists: false }))) {
+    if (!(await isPathInSandbox(filepath, req.user.profile.handle, workspace, character, { checkExists: false }))) {
         return res.status(403).json({ error: 'Access denied: Path is outside the sandbox.' });
     }
 
     try {
-        const sandboxDir = getSandboxDir(workspace, character);
+        const sandboxDir = getSandboxDir(req.user.profile.handle, workspace, character);
         const fullPath = path.join(sandboxDir, filepath);
         const dir = path.dirname(fullPath);
 
@@ -382,7 +383,7 @@ router.post('/executeshell', async (req, res) => {
     }
 
     try {
-        const sandboxDir = getSandboxDir(workspace, character);
+        const sandboxDir = getSandboxDir(req.user.profile.handle, workspace, character);
         await fs.mkdir(sandboxDir, { recursive: true });
         const { stdout, stderr } = await spawnPromise(command, {
             cwd: sandboxDir,
@@ -417,7 +418,7 @@ router.post('/executepython', async (req, res) => {
         activeProcesses.python.kill();
     }
 
-    const sandboxDir = getSandboxDir(workspace, character);
+    const sandboxDir = getSandboxDir(req.user.profile.handle, workspace, character);
     const tempFilename = `exec_${crypto.randomBytes(16).toString('hex')}.py`;
     const scriptPath = path.join(sandboxDir, tempFilename);
     await fs.mkdir(sandboxDir, { recursive: true });
@@ -561,7 +562,7 @@ router.post('/sd_txt2img', async (req, res) => {
         // Save the first image to the uploads directory
         const imageBuffer = Buffer.from(genResult.images[0], 'base64');
         const filename = `sd_${Date.now()}_${crypto.randomBytes(4).toString('hex')}.png`;
-        const sandboxDir = getSandboxDir(workspace, character);
+        const sandboxDir = getSandboxDir(req.user.profile.handle, workspace, character);
         const filepath = path.join(sandboxDir, filename);
 
         await fs.mkdir(sandboxDir, { recursive: true });
