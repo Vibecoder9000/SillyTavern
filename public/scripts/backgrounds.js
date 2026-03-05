@@ -943,6 +943,8 @@ function setBackgroundSelectionMode(enabled) {
     if (!enabled) {
         selectedSystemBackgroundFiles.clear();
     }
+    // Clear any open mobile menus
+    $('#bg_menu_content .bg_example.mobile-menu-open').removeClass('mobile-menu-open');
     syncGroupSelectionUi();
 }
 
@@ -1016,7 +1018,12 @@ async function selectFoldersForGroupAction(headingText) {
     }
 
     const content = $(contentEl);
-    const result = await callGenericPopup(content, POPUP_TYPE.CONFIRM, '', { okButton: t`Apply`, cancelButton: t`Cancel` });
+    const result = await callGenericPopup(content, POPUP_TYPE.CONFIRM, '', {
+        okButton: t`Apply`,
+        cancelButton: t`Cancel`,
+        allowVerticalScrolling: true,
+        leftAlign: true,
+    });
     if (!result) return null;
 
     const selectedIds = [];

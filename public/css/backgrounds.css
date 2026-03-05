@@ -138,7 +138,7 @@
 
 .bg_example.locked-background::after,
 .bg_example.selected-background::before,
-#Backgrounds.bg-selection-mode #bg_menu_content .bg_example.folder-group-selected::after {
+#Backgrounds.bg-selection-mode #bg_menu_content .bg_example.folder-group-selected::before {
     font-family: 'Font Awesome 6 Free';
     font-weight: 900;
     position: absolute;
@@ -148,7 +148,7 @@
 }
 
 .bg_example.selected-background::before,
-#Backgrounds.bg-selection-mode #bg_menu_content .bg_example.folder-group-selected::after {
+#Backgrounds.bg-selection-mode #bg_menu_content .bg_example.folder-group-selected::before {
     content: '\f00c';
     top: 5px;
     color: var(--white100);
@@ -195,7 +195,7 @@
     outline-offset: 0;
 }
 
-#Backgrounds.bg-selection-mode #bg_menu_content .bg_example.folder-group-selected::after {
+#Backgrounds.bg-selection-mode #bg_menu_content .bg_example.folder-group-selected::before {
     right: 5px;
 }
 
