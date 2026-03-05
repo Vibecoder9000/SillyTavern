@@ -13,9 +13,11 @@ import {
     main_api,
     getRequestHeaders,
     saveChatConditional,
+    saveSettingsDebounced,
     SANDBOX_ROOT_WORKSPACE,
     system_avatar,
     systemUserName,
+    user_avatar,
 } from '../script.js';
 import { chat_completion_sources, custom_prompt_post_processing_types, getChatCompletionModel, model_list, oai_settings } from './openai.js';
 import { Popup } from './popup.js';
@@ -27,6 +29,7 @@ import { enumTypes, SlashCommandEnumValue } from './slash-commands/SlashCommandE
 import { SlashCommandParser } from './slash-commands/SlashCommandParser.js';
 import { slashCommandReturnHelper } from './slash-commands/SlashCommandReturnHelper.js';
 import { getSanitizedFilename, isTrueBoolean } from './utils.js';
+import { setPersonaDescription } from './personas.js';
 
 /**
  * @typedef {object} ToolInvocation
@@ -669,6 +672,57 @@ function registerBuiltinTools() {
                     });
                 } catch (error) {
                     return `Error: Could not connect to Stable Diffusion WebUI. Make sure it is running at localhost:7860 with --api flag. ${error.message}`;
+                }
+            },
+        },
+        {
+            name: 'bio',
+            displayName: 'Update Bio',
+            description: 'Appends additional information to the user\'s bio. Use this to record new details about the user that they share during conversation, such as preferences, background, traits, or any other personal information. The text will be appended to the existing bio. Nothing can be deleted with this tool; the user can manually edit their bio in the Persona tab if needed.',
+            parameters: {
+                'type': 'object',
+                'properties': {
+                    'text': {
+                        'type': 'string',
+                        'description': 'The text to append to the user\'s bio.',
+                    },
+                },
+                'required': ['text'],
+            },
+            action: async ({ text }) => {
+                try {
+                    if (!text || typeof text !== 'string' || text.trim().length === 0) {
+                        return 'Error: No text provided to append to the bio.';
+                    }
+
+                    const currentDescription = power_user.persona_description || '';
+                    const separator = currentDescription.length > 0 ? '\n' : '';
+                    const newDescription = currentDescription + separator + text.trim();
+
+                    // Update the active persona description
+                    power_user.persona_description = newDescription;
+
+                    // Update the stored persona descriptor if a persona is active
+                    if (user_avatar && power_user.persona_descriptions[user_avatar]) {
+                        power_user.persona_descriptions[user_avatar].description = newDescription;
+                    } else if (user_avatar) {
+                        power_user.persona_descriptions[user_avatar] = {
+                            description: newDescription,
+                            position: power_user.persona_description_position,
+                            depth: power_user.persona_description_depth,
+                            role: power_user.persona_description_role,
+                            lorebook: power_user.persona_description_lorebook,
+                            connections: [],
+                        };
+                    }
+
+                    // Refresh the UI and save
+                    setPersonaDescription();
+                    saveSettingsDebounced();
+
+                    return `Successfully appended to bio. The added text is:\n${text}`;
+                } catch (error) {
+                    return `Error updating bio: ${error.message}`;
                 }
             },
         },
