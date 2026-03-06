@@ -1106,7 +1106,7 @@ async function onAddSelectedToFolder() {
             highlightSelectedBackground();
         }
 
-        clearBackgroundGroupSelection();
+        setBackgroundSelectionMode(false);
         if (totalAdded > 0) {
             toastr.success(t`Added backgrounds to ${folderIds.length} folder(s)`);
         } else {
@@ -1143,7 +1143,7 @@ async function onRemoveSelectedFromCurrentFolder() {
         renderFolderGrid();
         renderSystemBackgrounds(getFilteredImages());
         highlightSelectedBackground();
-        clearBackgroundGroupSelection();
+        setBackgroundSelectionMode(false);
         toastr.success(t`Removed ${bgFiles.length} background(s) from folder`);
     } catch (error) {
         console.error('Error removing selected backgrounds from current folder:', error);
