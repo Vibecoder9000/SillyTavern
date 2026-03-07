@@ -179,7 +179,7 @@
 }
 
 #bg_selection_mode_button.active {
-    outline: 1px solid var(--interactable-outline-color);
+    color: var(--golden);
 }
 
 #bg_group_select_count {
