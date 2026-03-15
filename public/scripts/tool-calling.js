@@ -331,35 +331,95 @@ function registerBuiltinTools() {
         },
         {
             name: 'read_file',
-            description: 'Reads the content of a text file from the files. Only use this for text.',
+            description: 'Reads the content of one or more text files from the files. Only use this for text.',
             parameters: {
                 'type': 'object',
                 'properties': {
                     'filepath': {
                         'type': 'string',
-                        'description': 'The path to the file to read.',
+                        'description': 'The path to the file to read. Use this for single-file reads.',
+                    },
+                    'filepaths': {
+                        'type': 'array',
+                        'items': { 'type': 'string' },
+                        'description': 'Multiple file paths to read in a single tool call (max 20). Prefer this when you need several files at once.',
+                        'minItems': 1,
+                        'maxItems': 20,
                     },
                 },
-                'required': ['filepath'],
             },
-            action: async ({ filepath }) => {
+            action: async ({ filepath, filepaths }, signal) => {
                 try {
                     const sandbox = getSandboxRequestContext();
-                    const response = await fetch('/api/extensions/tools/readfile', {
-                        method: 'POST',
-                        headers: getRequestHeaders(),
-                        body: JSON.stringify({ filepath: filepath, ...sandbox }),
-                    });
 
-                    const result = await response.json();
+                    const sanitizePaths = (paths) => (paths || [])
+                        .map(p => String(p ?? '').trim())
+                        .filter(Boolean);
 
-                    if (!response.ok) {
-                        const errorMessage = `Error: ${result.error || 'An unknown error occurred.'}`;
-                        return errorMessage;
+                    const readOne = async (oneFilepath) => {
+                        const response = await fetch('/api/extensions/tools/readfile', {
+                            method: 'POST',
+                            headers: getRequestHeaders(),
+                            body: JSON.stringify({ filepath: oneFilepath, ...sandbox }),
+                            signal,
+                        });
+
+                        const result = await response.json();
+
+                        if (!response.ok) {
+                            return { ok: false, filepath: oneFilepath, error: result?.error || 'An unknown error occurred.' };
+                        }
+
+                        return { ok: true, filepath: oneFilepath, content: result?.content ?? '' };
+                    };
+
+                    if (Array.isArray(filepaths)) {
+                        const paths = sanitizePaths(filepaths);
+                        if (paths.length === 0) {
+                            return 'Error: "filepaths" must contain at least one filepath.';
+                        }
+                        if (paths.length > 20) {
+                            return 'Error: Too many filepaths. Max is 20.';
+                        }
+
+                        const concurrencyLimit = 4;
+                        const results = new Array(paths.length);
+                        let nextIndex = 0;
+
+                        const worker = async () => {
+                            while (nextIndex < paths.length) {
+                                const index = nextIndex++;
+                                results[index] = await readOne(paths[index]);
+                            }
+                        };
+
+                        await Promise.all(
+                            Array.from({ length: Math.min(concurrencyLimit, paths.length) }, () => worker()),
+                        );
+
+                        return results.map((r) => {
+                            if (r.ok) {
+                                return `=== BEGIN FILE: ${r.filepath} ===\n${r.content}\n=== END FILE: ${r.filepath} ===`;
+                            }
+                            return `=== BEGIN FILE: ${r.filepath} (ERROR) ===\nError: ${r.error}\n=== END FILE: ${r.filepath} ===`;
+                        }).join('\n\n');
                     }
 
-                    return result.content;
+                    const single = String(filepath ?? '').trim();
+                    if (!single) {
+                        return 'Error: "filepath" is required (or provide "filepaths").';
+                    }
+
+                    const singleResult = await readOne(single);
+                    if (!singleResult.ok) {
+                        return `Error: ${singleResult.error}`;
+                    }
+
+                    return singleResult.content;
                 } catch (error) {
+                    if (error?.name === 'AbortError') {
+                        return 'Read was cancelled by the user.';
+                    }
                     const errorMessage = `Error: Could not connect to the server to read the file. ${error.message}`;
                     return errorMessage;
                 }
