@@ -74,6 +74,7 @@
     /* --SmartThemeFastUIBGColor: rgba(0, 0, 0, 0.9); */
     --SmartThemeBlurTintColor: rgba(23, 23, 23, 1);
     --SmartThemeChatTintColor: rgba(23, 23, 23, 1);
+    --SmartThemeBackgroundFilterColor: rgba(0, 0, 0, 0);
     --SmartThemeUserMesBlurTintColor: rgba(0, 0, 0, 0.3);
     --SmartThemeBotMesBlurTintColor: rgba(60, 60, 60, 0.3);
     --SmartThemeBlurStrength: calc(var(--blurStrength) * 1px);

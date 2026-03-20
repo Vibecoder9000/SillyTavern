@@ -10,6 +10,14 @@
     z-index: -1;
 }
 
+#bg1::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background-color: var(--SmartThemeBackgroundFilterColor);
+    pointer-events: none;
+}
+
 /* Fitting options */
 #background_fitting {
     max-width: 8em;
