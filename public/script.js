@@ -2029,12 +2029,14 @@ function insertSVGIcon(mes, extra) {
  * @param {boolean} [options.rerenderMessage=true] Whether to re-render the message content (inside <c>.mes_text</c>)
  */
 export function updateMessageBlock(messageId, message, { rerenderMessage = true } = {}) {
+    hydrateToolResultMedia(message);
+    ensureMessageMediaIsArray(message);
     const messageElement = chatElement.find(`[mesid="${messageId}"]`);
     if (rerenderMessage) {
         if (message.extra?.is_tool_call && message.extra?.tool_call_info) {
             messageElement.find('.mes_text').html(getToolCallMessageHtml(message, messageId));
-        } else if (message.extra?.is_tool_result && !message.extra?.image && !message.extra?.video) {
-            messageElement.find('.mes_text').html(getToolResultMessageHtml(message, message.mes));
+        } else if (message.extra?.is_tool_result) {
+            renderToolResultText(messageElement.find('.mes_text'), message, message.mes);
         } else {
             const text = message?.extra?.display_text ?? message.mes;
             messageElement.find('.mes_text').html(messageFormatting(text, message.name, message.is_system, message.is_user, messageId, {}, false));
@@ -2145,6 +2147,135 @@ function getToolResultDisplayText(message, fallbackText = '') {
 function getToolResultMessageHtml(message, fallbackText = '') {
     const toolResult = getToolResultDisplayText(message, fallbackText);
     return `<div class="tool-result-box"><h4><i class="fa-solid fa-check-circle"></i> Tool Result</h4><pre><code>${DOMPurify.sanitize(toolResult)}</code></pre></div>`;
+}
+
+/**
+ * Renders tool result text into a message container.
+ * Tool results may also include media, so the text should remain visible.
+ * @param {JQuery<HTMLElement>} container
+ * @param {ChatMessage} message
+ * @param {string} [fallbackText='']
+ */
+function renderToolResultText(container, message, fallbackText = '') {
+    container.html(getToolResultMessageHtml(message, fallbackText));
+}
+
+/**
+ * Builds a media attachment from a sandbox tool result payload item.
+ * @param {{ filepath?: string, workspace?: string, character?: string, type?: string }} item
+ * @returns {MediaAttachment|null}
+ */
+function buildToolResultMediaAttachment(item) {
+    if (!item?.filepath) {
+        return null;
+    }
+
+    return {
+        url: buildSandboxDownloadUrl(item.filepath, item.workspace, item.character),
+        type: item.type === 'video_display' ? MEDIA_TYPE.VIDEO : MEDIA_TYPE.IMAGE,
+        title: item.title || item.filepath,
+        source: MEDIA_SOURCE.API,
+    };
+}
+
+/**
+ * Extracts media attachments from structured tool results, including browser screenshots.
+ * @param {any} parsedToolResult Parsed tool result object
+ * @returns {MediaAttachment[]}
+ */
+function extractToolResultMediaAttachments(parsedToolResult) {
+    if (!parsedToolResult || typeof parsedToolResult !== 'object') {
+        return [];
+    }
+
+    const attachments = [];
+    const candidates = [];
+
+    if (parsedToolResult.type === 'image_display' || parsedToolResult.type === 'image_context' || parsedToolResult.type === 'video_display') {
+        candidates.push(parsedToolResult);
+    }
+    if (parsedToolResult.screenshot?.filepath) {
+        candidates.push(parsedToolResult.screenshot);
+    }
+    if (parsedToolResult.pre_click_screenshot?.filepath) {
+        candidates.push(parsedToolResult.pre_click_screenshot);
+    }
+    if (parsedToolResult.opened_tab_screenshot?.filepath) {
+        candidates.push(parsedToolResult.opened_tab_screenshot);
+    }
+
+    for (const candidate of candidates) {
+        const attachment = buildToolResultMediaAttachment(candidate);
+        if (!attachment || attachments.some(existing => existing.url === attachment.url)) {
+            continue;
+        }
+        attachments.push(attachment);
+    }
+
+    return attachments;
+}
+
+/**
+ * Hydrates media attachments from stored tool_result_content for browser/image tool results.
+ * @param {ChatMessage} mes Message object
+ */
+function hydrateToolResultMedia(mes) {
+    if (!mes?.extra?.is_tool_result || Array.isArray(mes.extra.media) && mes.extra.media.length > 0) {
+        return;
+    }
+
+    const rawResult = mes.extra.tool_result_content;
+    if (typeof rawResult !== 'string' || !rawResult.trim()) {
+        return;
+    }
+
+    try {
+        const parsed = JSON.parse(rawResult);
+        const attachments = extractToolResultMediaAttachments(parsed);
+        if (attachments.length === 0) {
+            return;
+        }
+
+        mes.extra.media = attachments;
+        mes.extra.media_index = 0;
+        mes.extra.inline_image = true;
+    } catch {
+        // Text-only tool results are expected here too.
+    }
+}
+
+/**
+ * Builds a media-bearing tool result message when the tool returned an image/video or browser screenshot.
+ * @param {string|object} toolResult Tool result payload
+ * @returns {Promise<ChatMessage|null>}
+ */
+async function createSpecialToolResultMessage(toolResult) {
+    try {
+        const parsed = typeof toolResult === 'string' ? JSON.parse(toolResult) : toolResult;
+        const attachments = extractToolResultMediaAttachments(parsed);
+        if (attachments.length === 0) {
+            return null;
+        }
+
+        const rawToolResult = typeof toolResult === 'string' ? toolResult : JSON.stringify(toolResult);
+        const cappedToolResult = await capToolOutput(rawToolResult);
+        return {
+            name: systemUserName,
+            is_user: false,
+            is_system: true,
+            mes: `<tool_result>\n${cappedToolResult}\n</tool_result>`,
+            extra: {
+                is_tool_result: true,
+                tool_result_content: cappedToolResult,
+                media: attachments,
+                media_index: 0,
+                inline_image: true,
+            },
+        };
+    } catch (error) {
+        console.error('[Tool Result] Failed to parse special tool result:', error);
+        return null;
+    }
 }
 
 /**
@@ -2733,6 +2864,8 @@ export function addOneMessage(mes, { type = undefined, insertAfter = null, scrol
  * @returns {JQuery<HTMLElement>} Rendered HTMLElement.
  */
 export function updateMessageElement(mes, { messageId = chat.length - 1, messageElement = messageTemplate.clone(), adjustMediaScroll = SCROLL_BEHAVIOR.NONE } = {}) {
+    hydrateToolResultMedia(mes);
+    ensureMessageMediaIsArray(mes);
     let avatarImg = getThumbnailUrl('persona', user_avatar);
 
     //for non-user messages
@@ -2799,27 +2932,9 @@ export function updateMessageElement(mes, { messageId = chat.length - 1, message
         messageElement.find('.mes_text').html(getToolCallMessageHtml(mes, messageId));
     }
     else if (mes.extra?.is_tool_result) {
-        if (mes.extra.image || mes.extra.video) {
-            messageElement.addClass('tool-result-message');
-            appendMediaToMessage(mes, messageElement);
-        } else {
-            const result = getToolResultDisplayText(mes, mes.mes);
-            messageElement.addClass('tool-result-message');
-
-            const messageTextContainer = messageElement.find('.mes_text');
-            messageTextContainer.empty();
-
-            const toolResultBox = $('<div class="tool-result-box"></div>');
-            const header = $('<h4><i class="fa-solid fa-check-circle"></i> Tool Result</h4>');
-            const pre = $('<pre></pre>');
-            const code = $('<code></code>');
-
-            code.text(result);
-
-            pre.append(code);
-            toolResultBox.append(header, pre);
-            messageTextContainer.append(toolResultBox);
-        }
+        messageElement.addClass('tool-result-message');
+        renderToolResultText(messageElement.find('.mes_text'), mes, mes.mes);
+        appendMediaToMessage(mes, messageElement);
     }
     else {
         if (mes?.extra?.isSmallSys === true) {
@@ -3846,7 +3961,7 @@ class StreamingProcessor {
                 false,
             );
             if (this.messageTextDom instanceof HTMLElement) {
-                const isTextToolResult = chat[messageId].extra?.is_tool_result && !chat[messageId].extra?.image && !chat[messageId].extra?.video;
+                const isTextToolResult = !!chat[messageId].extra?.is_tool_result;
                 if (isTextToolResult) {
                     this.messageTextDom.innerHTML = getToolResultMessageHtml(chat[messageId], processedText);
                 } else if (power_user.stream_fade_in) {
@@ -3900,44 +4015,8 @@ class StreamingProcessor {
                 // Auto mode: execute tool immediately
                 const toolResult = await ToolManager.invokeFunctionTool(parsedTool.tool_call.tool, parsedTool.tool_call.args, this.abortController.signal);
 
-                let resultMessage;
+                let resultMessage = await createSpecialToolResultMessage(toolResult);
                 let stopGeneration = !shouldContinueAfterTool;
-                try {
-                    const parsed = typeof toolResult === 'string' ? JSON.parse(toolResult) : toolResult;
-
-                    if (parsed.type === 'image_display' && parsed.filepath) {
-                        resultMessage = {
-                            name: systemUserName,
-                            is_user: false,
-                            is_system: true,
-                            mes: '<tool_result>\nImage displayed to user.\n</tool_result>',
-                            extra: { is_tool_result: true, image: buildSandboxDownloadUrl(parsed.filepath, parsed.workspace, parsed.character) },
-                        };
-                        stopGeneration = false;
-                    }
-                    else if (parsed.type === 'image_context' && parsed.filepath) {
-                        resultMessage = {
-                            name: systemUserName,
-                            is_user: false,
-                            is_system: true,
-                            mes: '<tool_result>\nImage provided as context for analysis.\n</tool_result>',
-                            extra: { is_tool_result: true, image: buildSandboxDownloadUrl(parsed.filepath, parsed.workspace, parsed.character) },
-                        };
-                        stopGeneration = false;
-                    }
-                    else if (parsed.type === 'video_display' && parsed.filepath) {
-                        resultMessage = {
-                            name: systemUserName,
-                            is_user: false,
-                            is_system: true,
-                            mes: '<tool_result>\nVideo displayed to user.\n</tool_result>',
-                            extra: { is_tool_result: true, video: buildSandboxDownloadUrl(parsed.filepath, parsed.workspace, parsed.character) },
-                        };
-                        stopGeneration = false;
-                    }
-                } catch (e) {
-                    console.error('[Streaming] Failed to parse special tool result:', e);
-                }
 
                 if (!resultMessage) {
                     const cappedToolResult = await capToolOutput(toolResult);
@@ -5774,44 +5853,8 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
                 // Auto mode: execute tool immediately
                 const toolResult = await ToolManager.invokeFunctionTool(parsedTool.tool_call.tool, parsedTool.tool_call.args, signal);
 
-                let resultMessage;
+                let resultMessage = await createSpecialToolResultMessage(toolResult);
                 let stopGeneration = !shouldContinueAfterTool;
-                try {
-                    const parsed = typeof toolResult === 'string' ? JSON.parse(toolResult) : toolResult;
-
-                    if (parsed.type === 'image_display' && parsed.filepath) {
-                        resultMessage = {
-                            name: systemUserName,
-                            is_user: false,
-                            is_system: true,
-                            mes: '<tool_result>\nImage displayed to user.\n</tool_result>',
-                            extra: { is_tool_result: true, image: buildSandboxDownloadUrl(parsed.filepath, parsed.workspace, parsed.character) },
-                        };
-                        stopGeneration = false;
-                    }
-                    else if (parsed.type === 'image_context' && parsed.filepath) {
-                        resultMessage = {
-                            name: systemUserName,
-                            is_user: false,
-                            is_system: true,
-                            mes: '<tool_result>\nImage provided as context for analysis.\n</tool_result>',
-                            extra: { is_tool_result: true, image: buildSandboxDownloadUrl(parsed.filepath, parsed.workspace, parsed.character) },
-                        };
-                        stopGeneration = false;
-                    }
-                    else if (parsed.type === 'video_display' && parsed.filepath) {
-                        resultMessage = {
-                            name: systemUserName,
-                            is_user: false,
-                            is_system: true,
-                            mes: '<tool_result>\nVideo displayed to user.\n</tool_result>',
-                            extra: { is_tool_result: true, video: buildSandboxDownloadUrl(parsed.filepath, parsed.workspace, parsed.character) },
-                        };
-                        stopGeneration = false;
-                    }
-                } catch (e) {
-                    console.error('[Non-Streaming] Failed to parse special tool result:', e);
-                }
 
                 if (!resultMessage) {
                     const cappedToolResult = await capToolOutput(toolResult);
@@ -8647,16 +8690,9 @@ async function messageEditDone(div) {
 
     // Re-render tool call/result messages with their special formatting
     if (mes.extra?.is_tool_result) {
-        const result = getToolResultDisplayText(mes, text);
-        const messageTextContainer = mesBlock.find('.mes_text');
-        const toolResultBox = $('<div class="tool-result-box"></div>');
-        const header = $('<h4><i class="fa-solid fa-check-circle"></i> Tool Result</h4>');
-        const pre = $('<pre></pre>');
-        const code = $('<code></code>');
-        code.text(result);
-        pre.append(code);
-        toolResultBox.append(header, pre);
-        messageTextContainer.append(toolResultBox);
+        hydrateToolResultMedia(mes);
+        ensureMessageMediaIsArray(mes);
+        renderToolResultText(mesBlock.find('.mes_text'), mes, text);
     } else if (mes.extra?.is_tool_call && mes.extra?.tool_call_info) {
         mesBlock.find('.mes_text').html(getToolCallMessageHtml(mes, this_edit_mes_id));
     } else {
@@ -12802,44 +12838,8 @@ jQuery(async function () {
             const toolResult = await ToolManager.invokeFunctionTool(toolInfo.tool, toolInfo.args, undefined);
             const shouldContinueAfterTool = !(toolInfo?.continue === false || String(toolInfo?.continue).trim().toLowerCase() === 'false');
 
-            let resultMessage;
+            let resultMessage = await createSpecialToolResultMessage(toolResult);
             let stopGeneration = !shouldContinueAfterTool;
-            try {
-                const parsed = typeof toolResult === 'string' ? JSON.parse(toolResult) : toolResult;
-
-                if (parsed.type === 'image_display' && parsed.filepath) {
-                    resultMessage = {
-                        name: systemUserName,
-                        is_user: false,
-                        is_system: true,
-                        mes: '<tool_result>\nImage displayed to user.\n</tool_result>',
-                        extra: { is_tool_result: true, image: buildSandboxDownloadUrl(parsed.filepath, parsed.workspace, parsed.character) },
-                    };
-                    stopGeneration = false;
-                }
-                else if (parsed.type === 'image_context' && parsed.filepath) {
-                    resultMessage = {
-                        name: systemUserName,
-                        is_user: false,
-                        is_system: true,
-                        mes: '<tool_result>\nImage provided as context for analysis.\n</tool_result>',
-                        extra: { is_tool_result: true, image: buildSandboxDownloadUrl(parsed.filepath, parsed.workspace, parsed.character) },
-                    };
-                    stopGeneration = false;
-                }
-                else if (parsed.type === 'video_display' && parsed.filepath) {
-                    resultMessage = {
-                        name: systemUserName,
-                        is_user: false,
-                        is_system: true,
-                        mes: '<tool_result>\nVideo displayed to user.\n</tool_result>',
-                        extra: { is_tool_result: true, video: buildSandboxDownloadUrl(parsed.filepath, parsed.workspace, parsed.character) },
-                    };
-                    stopGeneration = false;
-                }
-            } catch (e) {
-                console.error('[Manual Tool Execution] Failed to parse special tool result:', e);
-            }
 
             if (!resultMessage) {
                 const cappedToolResult = await capToolOutput(String(toolResult));

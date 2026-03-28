@@ -1055,6 +1055,10 @@ export function getPromptRole(role) {
  * @returns {Promise<void>}
  */
 async function populateChatCompletion(prompts, chatCompletion, { bias, quietPrompt, quietImage, type, cyclePrompt, messages, messageExamples }) {
+    const nativeToolPrompt = oai_settings.native_tool_calling
+        ? await ToolManager.getNativeToolPrompt()
+        : null;
+
     // Helper function for preparing a prompt, that already exists within the prompt collection, for completion
     const addToChatCompletion = async (source, target = null) => {
         // We need the prompts array to determine a position for the source.
@@ -1075,6 +1079,12 @@ async function populateChatCompletion(prompts, chatCompletion, { bias, quietProm
         const index = target ? prompts.index(target) : prompts.index(source);
         const collection = new MessageCollection(source);
         const message = await Message.fromPromptAsync(prompt);
+        if (source === 'main' && nativeToolPrompt) {
+            const mainContent = typeof message.content === 'string'
+                ? message.content
+                : '';
+            message.content = [mainContent, nativeToolPrompt].filter(Boolean).join('\n\n');
+        }
         collection.add(message);
         chatCompletion.add(collection, index);
     };
@@ -1083,15 +1093,6 @@ async function populateChatCompletion(prompts, chatCompletion, { bias, quietProm
     // Character and world information
     await addToChatCompletion('worldInfoBefore');
     await addToChatCompletion('main');
-
-    // Add native tool calling prompt with tool details right after the main system prompt
-    if (oai_settings.native_tool_calling) {
-        const nativeToolPrompt = await ToolManager.getNativeToolPrompt();
-        if (nativeToolPrompt) {
-            const nativeToolMessage = await Message.createAsync('system', nativeToolPrompt, 'nativeToolPrompt');
-            chatCompletion.insert(nativeToolMessage, 'main', 'end');
-        }
-    }
 
     await addToChatCompletion('worldInfoAfter');
     await addToChatCompletion('charDescription');

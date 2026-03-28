@@ -149,6 +149,8 @@ const LIST_DIRECTORY_CONTEXT_TIMEOUT_RESULT = '__list_directory_context_timeout_
 const LIST_DIRECTORY_CONTEXT_MAX_CHARS = 4000;
 const NEW_WORKSPACE_OPTION = '__new_workspace__';
 const WORKSPACE_SEPARATOR_OPTION = '__workspace_separator__';
+let lastBrowserSessionId = '';
+let lastBrowserTabIndex = null;
 
 /**
  * A class that represents a tool definition.
@@ -283,6 +285,145 @@ function getSandboxRequestContext() {
         workspace: getCurrentSandboxWorkspace(),
         character: getCurrentSandboxCharacterName(),
     };
+}
+
+/**
+ * Calls a browser tool endpoint.
+ * @param {string} action Browser action name.
+ * @param {object} payload Request payload.
+ * @param {AbortSignal} [signal] Abort signal.
+ * @returns {Promise<any|string>} Parsed response or error string.
+ */
+async function callBrowserTool(action, payload = {}, signal) {
+    try {
+        const sandbox = getSandboxRequestContext();
+        const requestedSessionId = String(payload?.session_id ?? '').trim();
+        const usedImplicitSession = !requestedSessionId && Boolean(lastBrowserSessionId);
+        const buildRequestBody = () => {
+            const body = { ...payload, ...sandbox };
+            if (!body.session_id) {
+                body.session_id = lastBrowserSessionId;
+            }
+            if ((body.tab_index === null || typeof body.tab_index === 'undefined' || body.tab_index === '') && lastBrowserTabIndex !== null) {
+                body.tab_index = lastBrowserTabIndex;
+            }
+            return body;
+        };
+        const sendRequest = async (body) => {
+            const response = await fetch(`/api/extensions/tools/browser/${action}`, {
+                method: 'POST',
+                headers: getRequestHeaders(),
+                body: JSON.stringify(body),
+                signal,
+            });
+            const result = await response.json().catch(() => ({}));
+            return { response, result };
+        };
+
+        let body = buildRequestBody();
+        let { response, result } = await sendRequest(body);
+        if (!response.ok) {
+            const browserSessionError = String(result?.error ?? '');
+            const staleImplicitSession = usedImplicitSession
+                && body.session_id
+                && body.session_id === lastBrowserSessionId
+                && (browserSessionError.includes('No browser session found')
+                    || browserSessionError.includes('has already been closed'));
+            const canRetryFreshSession = staleImplicitSession && (action === 'open' || action === 'search');
+
+            if (staleImplicitSession) {
+                lastBrowserSessionId = '';
+                lastBrowserTabIndex = null;
+            }
+
+            if (canRetryFreshSession) {
+                body = buildRequestBody();
+                ({ response, result } = await sendRequest(body));
+            }
+
+            if (!response.ok) {
+                return `Error: ${result?.error || 'An unknown browser error occurred.'}`;
+            }
+        }
+
+        if (action === 'close') {
+            if (!body.session_id || body.session_id === lastBrowserSessionId || result?.session_id === lastBrowserSessionId) {
+                lastBrowserSessionId = '';
+                lastBrowserTabIndex = null;
+            }
+            return result;
+        }
+
+        if (typeof result?.session_id === 'string' && result.session_id) {
+            lastBrowserSessionId = result.session_id;
+        }
+        if (typeof result?.tab_index === 'number') {
+            lastBrowserTabIndex = result.tab_index;
+        } else if (typeof result?.active_tab_index === 'number') {
+            lastBrowserTabIndex = result.active_tab_index;
+        }
+
+        return result;
+    } catch (error) {
+        if (error?.name === 'AbortError') {
+            return 'Browser action was cancelled by the user.';
+        }
+
+        return `Error: Could not connect to the browser tool server. ${error.message}`;
+    }
+}
+
+/**
+ * Adds image display metadata for browser screenshots returned by backend actions.
+ * @param {any} result Browser tool result.
+ * @returns {any}
+ */
+function augmentBrowserToolResult(result) {
+    if (!result || typeof result !== 'object') {
+        return result;
+    }
+
+    const imageExtensions = ['.png', '.jpg', '.jpeg', '.webp', '.gif', '.bmp', '.svg'];
+    const filepath = String(result.filepath ?? '').trim().toLowerCase();
+    const mimeType = String(result.mime_type ?? '').trim().toLowerCase();
+    const isDownloadedImage = !result.type && filepath && (mimeType.startsWith('image/') || imageExtensions.some(ext => filepath.endsWith(ext)));
+
+    if (result.screenshot_filepath && !result.screenshot) {
+        result.screenshot = {
+            type: 'image_display',
+            filepath: result.screenshot_filepath,
+            title: 'Result page after click',
+            ...getSandboxRequestContext(),
+        };
+    }
+
+    if (result.opened_tab_screenshot_filepath && !result.opened_tab_screenshot) {
+        result.opened_tab_screenshot = {
+            type: 'image_display',
+            filepath: result.opened_tab_screenshot_filepath,
+            title: 'Opened tab',
+            ...getSandboxRequestContext(),
+        };
+    }
+
+    if (result.pre_click_screenshot_filepath && !result.pre_click_screenshot) {
+        result.pre_click_screenshot = {
+            type: 'image_display',
+            filepath: result.pre_click_screenshot_filepath,
+            title: 'Clicked location before click',
+            ...getSandboxRequestContext(),
+        };
+    }
+
+    if (isDownloadedImage && !result.downloaded_file) {
+        result.downloaded_file = {
+            type: 'image_display',
+            filepath: result.filepath,
+            ...getSandboxRequestContext(),
+        };
+    }
+
+    return result;
 }
 
 function registerBuiltinTools() {
@@ -613,9 +754,7 @@ function registerBuiltinTools() {
                         const chunk = decoder.decode(value, { stream: true });
                         fullOutput += chunk;
                     }
-
                     return fullOutput.trim() || 'Script executed with no output.';
-
                 } catch (error) {
                     if (error.name === 'AbortError') {
                         const errorMessage = 'Execution was cancelled by the user. Do not re-attempt.';
@@ -624,6 +763,512 @@ function registerBuiltinTools() {
                     const errorMessage = `Error: Could not connect to the server or stream was interrupted. ${error.message}`;
                     return errorMessage;
                 }
+            },
+        },
+        {
+            name: 'browser_open',
+            description: 'Opens a URL in an isolated Firefox browser session. If a recent session exists, it is reused by default; use new_tab=true to keep the current page open in another tab. The tool saves an automatic screenshot after the page loads. If the result contains an interstitial such as unusual traffic or captcha, switch sites instead of retrying the same engine repeatedly.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    url: {
+                        type: 'string',
+                        description: 'The HTTP or HTTPS URL to open.',
+                    },
+                    session_id: {
+                        type: 'string',
+                        description: 'Optional existing browser session ID to reuse. If omitted, the most recent browser session is reused when available.',
+                    },
+                    tab_index: {
+                        type: 'integer',
+                        description: 'Optional existing tab index to reuse inside the session. If omitted, the active tab is reused.',
+                    },
+                    new_tab: {
+                        type: 'boolean',
+                        description: 'If true, opens the URL in a newly created tab within the existing session instead of replacing the active tab.',
+                    },
+                },
+                required: ['url'],
+            },
+            action: async ({ url, session_id, tab_index, new_tab = false }, signal) => {
+                const result = await callBrowserTool('open', { url, session_id, tab_index, new_tab }, signal);
+                return typeof result === 'string' ? result : augmentBrowserToolResult(result);
+            },
+        },
+        {
+            name: 'browser_search',
+            description: 'Opens a search results page for a query without needing site-specific selectors. Prefer duckduckgo or brave if another engine reports unusual traffic or captcha.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    query: {
+                        type: 'string',
+                        description: 'The search query.',
+                    },
+                    engine: {
+                        type: 'string',
+                        description: 'Search engine to use. One of duckduckgo, brave, bing, or google. Defaults to duckduckgo.',
+                    },
+                    session_id: {
+                        type: 'string',
+                        description: 'Optional existing browser session ID to reuse. If omitted, the most recent browser session is reused when available.',
+                    },
+                    tab_index: {
+                        type: 'integer',
+                        description: 'Optional existing tab index to reuse inside the session.',
+                    },
+                    new_tab: {
+                        type: 'boolean',
+                        description: 'If true, opens the search results in a new tab.',
+                    },
+                },
+                required: ['query'],
+            },
+            action: async ({ query, engine = 'duckduckgo', session_id, tab_index, new_tab = false }, signal) => {
+                const result = await callBrowserTool('search', { query, engine, session_id, tab_index, new_tab }, signal);
+                return typeof result === 'string' ? result : augmentBrowserToolResult(result);
+            },
+        },
+        {
+            name: 'browser_tabs',
+            description: 'Lists, selects, or closes tabs in an existing browser session. Use this to explicitly manage tab indices.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    session_id: {
+                        type: 'string',
+                        description: 'Optional browser session ID. If omitted, the most recent browser session is reused when available.',
+                    },
+                    action: {
+                        type: 'string',
+                        description: 'One of list, select, or close.',
+                    },
+                    tab_index: {
+                        type: 'integer',
+                        description: 'The tab index to select or close. Not needed for action=list.',
+                    },
+                },
+                required: ['action'],
+            },
+            action: async ({ session_id, action, tab_index }, signal) => {
+                const result = await callBrowserTool('tabs', { session_id, action, tab_index }, signal);
+                return typeof result === 'string' ? result : augmentBrowserToolResult(result);
+            },
+        },
+        {
+            name: 'browser_close',
+            description: 'Closes an isolated Firefox browser session.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    session_id: {
+                        type: 'string',
+                        description: 'Optional browser session ID to close. If omitted, closes the most recent browser session when available.',
+                    },
+                },
+                required: [],
+            },
+            action: async ({ session_id }, signal) => {
+                return await callBrowserTool('close', { session_id }, signal);
+            },
+        },
+        {
+            name: 'browser_go_back',
+            description: 'Navigates a browser tab one step back in its history and saves a screenshot of the resulting page.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    session_id: {
+                        type: 'string',
+                        description: 'Optional browser session ID. If omitted, the most recent browser session is reused when available.',
+                    },
+                    tab_index: {
+                        type: 'integer',
+                        description: 'Optional tab index to target. Defaults to the active tab.',
+                    },
+                },
+                required: [],
+            },
+            action: async ({ session_id, tab_index }, signal) => {
+                const result = await callBrowserTool('back', { session_id, tab_index }, signal);
+                return typeof result === 'string' ? result : augmentBrowserToolResult(result);
+            },
+        },
+        {
+            name: 'browser_click',
+            description: 'Clicks in a browser tab using visible text, a CSS selector, a numbered element from dom_fetch interactive or links mode, or viewport coordinates. Prefer element_index immediately after dom_fetch because it is shorter and more reliable for small models. If you provide selector, text, and element_index together, selector is tried first, then text, then the cached element. Use button=right for right click. Saves a screenshot after the action.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    session_id: {
+                        type: 'string',
+                        description: 'Optional browser session ID. If omitted, the most recent browser session is reused when available.',
+                    },
+                    tab_index: {
+                        type: 'integer',
+                        description: 'Optional tab index to target. Defaults to the active tab.',
+                    },
+                    element_index: {
+                        type: 'integer',
+                        description: 'Optional numbered element index from the most recent dom_fetch interactive or links result for this tab. Prefer this right after dom_fetch. Do not reuse stale indices from older pages.',
+                    },
+                    selector: {
+                        type: 'string',
+                        description: 'A CSS selector targeting the element to click. Use this when element_index is unavailable or stale. Do not provide a long copied selector from a different page.',
+                    },
+                    text: {
+                        type: 'string',
+                        description: 'Optional visible text to match on a clickable element across frames.',
+                    },
+                    text_index: {
+                        type: 'integer',
+                        description: 'Optional zero-based index to disambiguate between multiple visible text matches.',
+                    },
+                    button: {
+                        type: 'string',
+                        description: 'Mouse button to use: left, middle, or right. Defaults to left.',
+                    },
+                    x: {
+                        type: 'number',
+                        description: 'Viewport X coordinate to click. Provide this together with y when selector is not used.',
+                    },
+                    y: {
+                        type: 'number',
+                        description: 'Viewport Y coordinate to click. Provide this together with x when selector is not used.',
+                    },
+                },
+                required: [],
+            },
+            action: async ({ session_id, tab_index, element_index, selector, text, text_index, button, x, y }, signal) => {
+                const result = await callBrowserTool('click', { session_id, tab_index, element_index, selector, text, text_index, button, x, y }, signal);
+                return typeof result === 'string' ? result : augmentBrowserToolResult(result);
+            },
+        },
+        {
+            name: 'browser_pixel_click',
+            description: 'Clicks a browser tab at explicit viewport pixel coordinates. Use this when dom_fetch gives x and y for a target or when DOM selectors are unreliable. Prefer coordinates returned by dom_fetch interactive or links mode rather than guessing.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    session_id: {
+                        type: 'string',
+                        description: 'Optional browser session ID. If omitted, the most recent browser session is reused when available.',
+                    },
+                    tab_index: {
+                        type: 'integer',
+                        description: 'Optional tab index to target. Defaults to the active tab.',
+                    },
+                    x: {
+                        type: 'number',
+                        description: 'Viewport X coordinate to click.',
+                    },
+                    y: {
+                        type: 'number',
+                        description: 'Viewport Y coordinate to click.',
+                    },
+                },
+                required: ['x', 'y'],
+            },
+            action: async ({ session_id, tab_index, x, y }, signal) => {
+                const result = await callBrowserTool('click', { session_id, tab_index, x, y }, signal);
+                return typeof result === 'string' ? result : augmentBrowserToolResult(result);
+            },
+        },
+        {
+            name: 'browser_hover',
+            description: 'Hovers in a browser tab using visible text, a CSS selector, a numbered element from dom_fetch interactive or links mode, or viewport coordinates. Prefer element_index right after dom_fetch; if you provide selector, text, and element_index together, selector is tried first, then text, then the cached element.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    session_id: {
+                        type: 'string',
+                        description: 'Optional browser session ID. If omitted, the most recent browser session is reused when available.',
+                    },
+                    tab_index: {
+                        type: 'integer',
+                        description: 'Optional tab index to target. Defaults to the active tab.',
+                    },
+                    element_index: {
+                        type: 'integer',
+                        description: 'Optional numbered element index from the most recent dom_fetch interactive or links result for this tab. Prefer this right after dom_fetch.',
+                    },
+                    text: {
+                        type: 'string',
+                        description: 'Optional visible text to hover across frames.',
+                    },
+                    text_index: {
+                        type: 'integer',
+                        description: 'Optional zero-based index to disambiguate between multiple visible text matches.',
+                    },
+                    selector: {
+                        type: 'string',
+                        description: 'A CSS selector targeting the element to hover. Provide this or x/y coordinates.',
+                    },
+                    x: {
+                        type: 'number',
+                        description: 'Viewport X coordinate to hover.',
+                    },
+                    y: {
+                        type: 'number',
+                        description: 'Viewport Y coordinate to hover.',
+                    },
+                },
+                required: [],
+            },
+            action: async ({ session_id, tab_index, element_index, selector, text, text_index, x, y }, signal) => {
+                const result = await callBrowserTool('hover', { session_id, tab_index, element_index, selector, text, text_index, x, y }, signal);
+                return typeof result === 'string' ? result : augmentBrowserToolResult(result);
+            },
+        },
+        {
+            name: 'browser_type',
+            description: 'Types into an input-like element in a browser tab using either a CSS selector or a numbered element from dom_fetch interactive mode. Prefer element_index right after dom_fetch interactive. If you provide both selector and element_index, the selector is tried first. Saves a screenshot after typing.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    session_id: {
+                        type: 'string',
+                        description: 'Optional browser session ID. If omitted, the most recent browser session is reused when available.',
+                    },
+                    tab_index: {
+                        type: 'integer',
+                        description: 'Optional tab index to target. Defaults to the active tab.',
+                    },
+                    element_index: {
+                        type: 'integer',
+                        description: 'Optional numbered element index from the most recent dom_fetch interactive result for this tab. Prefer this right after dom_fetch interactive.',
+                    },
+                    selector: {
+                        type: 'string',
+                        description: 'A CSS selector targeting the element to type into. You may use this or element_index.',
+                    },
+                    text: {
+                        type: 'string',
+                        description: 'The text to type.',
+                    },
+                    submit: {
+                        type: 'boolean',
+                        description: 'If true, presses Enter after typing.',
+                    },
+                },
+                required: ['text'],
+            },
+            action: async ({ session_id, tab_index, element_index, selector, text, submit = false }, signal) => {
+                const result = await callBrowserTool('type', { session_id, tab_index, element_index, selector, text, submit }, signal);
+                return typeof result === 'string' ? result : augmentBrowserToolResult(result);
+            },
+        },
+        {
+            name: 'browser_key',
+            description: 'Presses one key or a sequence of keys in the active browser tab. Use this for Escape, Enter, Tab, arrow keys, shortcuts, and menu access keys when clicking is unreliable. Saves a screenshot after the key sequence.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    session_id: {
+                        type: 'string',
+                        description: 'Optional browser session ID. If omitted, the most recent browser session is reused when available.',
+                    },
+                    tab_index: {
+                        type: 'integer',
+                        description: 'Optional tab index to target. Defaults to the active tab.',
+                    },
+                    key: {
+                        type: 'string',
+                        description: 'Single key or chord to press, such as Escape, Enter, Tab, ArrowDown, or Alt+H.',
+                    },
+                    keys: {
+                        type: 'array',
+                        items: { type: 'string' },
+                        description: 'Optional sequence of keys to press in order, such as ["Alt+H", "O", "H"].',
+                    },
+                    delay_ms: {
+                        type: 'integer',
+                        description: 'Optional delay between keys in milliseconds. Defaults to 120.',
+                    },
+                },
+                required: [],
+            },
+            action: async ({ session_id, tab_index, key, keys, delay_ms }, signal) => {
+                const result = await callBrowserTool('key', { session_id, tab_index, key, keys, delay_ms }, signal);
+                return typeof result === 'string' ? result : augmentBrowserToolResult(result);
+            },
+        },
+        {
+            name: 'browser_wait',
+            description: 'Waits for text or a CSS selector to appear in a browser tab.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    session_id: {
+                        type: 'string',
+                        description: 'Optional browser session ID. If omitted, the most recent browser session is reused when available.',
+                    },
+                    tab_index: {
+                        type: 'integer',
+                        description: 'Optional tab index to target. Defaults to the active tab.',
+                    },
+                    text: {
+                        type: 'string',
+                        description: 'Text to wait for. Provide this or selector.',
+                    },
+                    selector: {
+                        type: 'string',
+                        description: 'A CSS selector to wait for. Provide this or text.',
+                    },
+                    timeout_ms: {
+                        type: 'integer',
+                        description: 'Timeout in milliseconds. Default 10000, max 30000.',
+                    },
+                },
+                required: [],
+            },
+            action: async ({ session_id, tab_index, text, selector, timeout_ms }, signal) => {
+                return await callBrowserTool('wait', { session_id, tab_index, text, selector, timeout_ms }, signal);
+            },
+        },
+        {
+            name: 'dom_fetch',
+            description: 'Fetches DOM content from a browser tab. Supports readable text, raw HTML, visible text, normalized links, or numbered interactive elements. Interactive and links results include element indices and viewport click coordinates when available.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    session_id: {
+                        type: 'string',
+                        description: 'Optional browser session ID. If omitted, the most recent browser session is reused when available.',
+                    },
+                    tab_index: {
+                        type: 'integer',
+                        description: 'Optional tab index to target. Defaults to the active tab.',
+                    },
+                    mode: {
+                        type: 'string',
+                        description: 'One of readable, html, text, links, or interactive. Defaults to readable.',
+                    },
+                    selector: {
+                        type: 'string',
+                        description: 'Optional CSS selector to scope the fetch.',
+                    },
+                    max_chars: {
+                        type: 'integer',
+                        description: 'Maximum characters to return. Default 12000, hard cap 30000.',
+                    },
+                    limit: {
+                        type: 'integer',
+                        description: 'Maximum number of items to return for links or interactive mode. Default 20. For small models, prefer 8-15 unless you truly need more.',
+                    },
+                    offset: {
+                        type: 'integer',
+                        description: 'Starting offset for links or interactive mode. Default 0.',
+                    },
+                },
+                required: [],
+            },
+            action: async ({ session_id, tab_index, mode, selector, max_chars, limit, offset }, signal) => {
+                return await callBrowserTool('domfetch', { session_id, tab_index, mode, selector, max_chars, limit, offset }, signal);
+            },
+        },
+        {
+            name: 'execute_js',
+            description: 'Executes controlled JavaScript in a browser tab and returns a JSON-safe result. Always return a JSON-serializable value. The snippet can use element, arg, $(selector) for querySelector, and $$(selector) for Array.from(querySelectorAll(...)).',
+            parameters: {
+                type: 'object',
+                properties: {
+                    session_id: {
+                        type: 'string',
+                        description: 'Optional browser session ID. If omitted, the most recent browser session is reused when available.',
+                    },
+                    tab_index: {
+                        type: 'integer',
+                        description: 'Optional tab index to target. Defaults to the active tab.',
+                    },
+                    code: {
+                        type: 'string',
+                        description: 'JavaScript code to run inside the page context. The snippet may use element, arg, $, and $$. It should return a JSON-serializable result. Example: return $$("img").slice(0, 3).map(img => ({ src: img.src, alt: img.alt }));',
+                    },
+                    selector: {
+                        type: 'string',
+                        description: 'Optional CSS selector. If provided, the matched element is passed in as element.',
+                    },
+                    arg: {
+                        description: 'Optional JSON-serializable argument passed into the snippet as arg.',
+                    },
+                },
+                required: ['code'],
+            },
+            action: async ({ session_id, tab_index, code, selector, arg }, signal) => {
+                const result = await callBrowserTool('executejs', { session_id, tab_index, code, selector, arg }, signal);
+                return typeof result === 'string' ? result : augmentBrowserToolResult(result);
+            },
+        },
+        {
+            name: 'browser_screenshot',
+            description: 'Captures a screenshot from a browser tab and saves it to the sandbox.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    session_id: {
+                        type: 'string',
+                        description: 'Optional browser session ID. If omitted, the most recent browser session is reused when available.',
+                    },
+                    tab_index: {
+                        type: 'integer',
+                        description: 'Optional tab index to target. Defaults to the active tab.',
+                    },
+                    filepath: {
+                        type: 'string',
+                        description: 'Optional sandbox filepath for the screenshot PNG.',
+                    },
+                    full_page: {
+                        type: 'boolean',
+                        description: 'If true, attempts a full-page screenshot.',
+                    },
+                },
+                required: [],
+            },
+            action: async ({ session_id, tab_index, filepath, full_page = false }, signal) => {
+                const result = await callBrowserTool('screenshot', { session_id, tab_index, filepath, full_page }, signal);
+                if (typeof result === 'string') {
+                    return result;
+                }
+
+                return {
+                    ...result,
+                    ...getSandboxRequestContext(),
+                };
+            },
+        },
+        {
+            name: 'browser_download',
+            description: 'Downloads a file from a browser tab, either by clicking a selector or by triggering a URL, and saves it to the sandbox.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    session_id: {
+                        type: 'string',
+                        description: 'Optional browser session ID. If omitted, the most recent browser session is reused when available.',
+                    },
+                    tab_index: {
+                        type: 'integer',
+                        description: 'Optional tab index to target. Defaults to the active tab.',
+                    },
+                    selector: {
+                        type: 'string',
+                        description: 'Optional CSS selector to click to trigger the download.',
+                    },
+                    url: {
+                        type: 'string',
+                        description: 'Optional HTTP or HTTPS URL to trigger as a direct download.',
+                    },
+                    filepath: {
+                        type: 'string',
+                        description: 'Optional sandbox filepath for the downloaded file.',
+                    },
+                },
+                required: [],
+            },
+            action: async ({ session_id, tab_index, selector, url, filepath }, signal) => {
+                const result = await callBrowserTool('download', { session_id, tab_index, selector, url, filepath }, signal);
+                return typeof result === 'string' ? result : augmentBrowserToolResult(result);
             },
         },
         {
@@ -789,6 +1434,7 @@ function registerBuiltinTools() {
     ];
     const dangerousTools = ['write_file', 'execute_shell', 'execute_python'];
     const imageGenTools = ['sd_list_models', 'sd_txt2img'];
+    const browserTools = ['browser_open', 'browser_search', 'browser_tabs', 'browser_close', 'browser_go_back', 'browser_click', 'browser_pixel_click', 'browser_hover', 'browser_type', 'browser_key', 'browser_wait', 'dom_fetch', 'execute_js', 'browser_screenshot', 'browser_download'];
 
     builtinTools.forEach(tool => {
         // Security gate for dangerous tools.
@@ -797,6 +1443,10 @@ function registerBuiltinTools() {
         }
         // Gate for image generation tools.
         if (imageGenTools.includes(tool.name) && !power_user.enable_image_generation) {
+            return;
+        }
+        // Gate for browser automation tools.
+        if (browserTools.includes(tool.name) && !power_user.enable_browser_tools) {
             return;
         }
         if (!ToolManager.tools.some(t => t.toFunctionOpenAI().function.name === tool.name)) {
@@ -901,17 +1551,35 @@ export class ToolManager {
 
             const invokeParameters = this.#parseParameters(parameters);
             const tool = this.#tools.get(name);
-            
-            // Apply 10-second timeout for long-running tools (execute_python and execute_shell)
-            const longRunningTools = ['execute_python', 'execute_shell'];
-            const isLongRunningTool = longRunningTools.includes(name);
-            const timeoutMs = isLongRunningTool ? 10000 : 60000; // 10 seconds for long-running, 60 for others
-            const timeoutMessage = 'Tool call run for max duration 10 seconds, ending logging here. Your command is running in the background. Make a new python or bash call to interrupt with the new tool call.';
-            
-            const result = isLongRunningTool
+
+            const toolTimeouts = new Map([
+                ['execute_python', 10000],
+                ['execute_shell', 10000],
+                ['browser_open', 90000],
+                ['browser_search', 90000],
+                ['browser_tabs', 90000],
+                ['browser_close', 90000],
+                ['browser_go_back', 90000],
+                ['browser_click', 90000],
+                ['browser_pixel_click', 90000],
+                ['browser_hover', 90000],
+                ['browser_type', 90000],
+                ['browser_key', 90000],
+                ['browser_wait', 90000],
+                ['dom_fetch', 90000],
+                ['execute_js', 90000],
+                ['browser_screenshot', 90000],
+                ['browser_download', 90000],
+            ]);
+            const timeoutMs = toolTimeouts.get(name);
+            const timeoutMessage = name.startsWith('browser_') || name === 'dom_fetch' || name === 'execute_js'
+                ? `Browser tool "${name}" timed out before returning a result.`
+                : 'Tool call run for max duration 10 seconds, ending logging here. Your command is running in the background. Make a new python or bash call to interrupt with the new tool call.';
+
+            const result = timeoutMs
                 ? await withTimeout(tool.invoke(invokeParameters, signal), timeoutMs, timeoutMessage)
                 : await tool.invoke(invokeParameters, signal);
-            
+
             return typeof result === 'string' ? result : JSON.stringify(result);
         } catch (error) {
             console.error(`[ToolManager] An error occurred while invoking the tool "${name}":`, error);
@@ -993,8 +1661,8 @@ export class ToolManager {
         if (tools.length) {
             console.log('[ToolManager] Registered function tools:', tools);
 
-            data['tools'] = tools;
-            data['tool_choice'] = 'auto';
+            data.tools = tools;
+            data.tool_choice = 'auto';
         }
     }
 
@@ -1329,7 +1997,8 @@ export class ToolManager {
         finalPromptParts.push(`Always put your tool call in your main response. Only one tool call at the end of your message is supported.
 
 Call the tool with the required arguments inside a <tool> block. Use windows syntax always.
-To provide a file for the user to download, use the syntax \`![](filename.ext)\`
+To provide a non-media file for the user to download, use the syntax \`![](filename.ext)\`
+To provide media to the user to download or view, use display_image.
 
 The "continue" field controls whether you get a follow-up turn after the tool executes:
 - "continue": true — The tool result will be shown to you and you will generate another response. Use this when you need to see the result before responding, or when you have no text response yet.
@@ -1620,6 +2289,62 @@ Here are the available tools:
     }
 
     /**
+     * Builds a downloadable sandbox URL for a media filepath.
+     * @param {string} filepath Sandbox-relative path.
+     * @param {string} [workspace]
+     * @param {string} [character]
+     * @returns {string}
+     */
+    static #getSandboxMediaUrl(filepath, workspace, character) {
+        const params = new URLSearchParams({
+            file: String(filepath ?? ''),
+            workspace: String(workspace ?? getCurrentSandboxWorkspace() ?? ''),
+            character: String(character ?? getCurrentSandboxCharacterName() ?? ''),
+        });
+        return `/api/extensions/tools/download?${params.toString()}`;
+    }
+
+    /**
+     * Extracts image media attachments from tool invocation results.
+     * @param {ToolInvocation[]} invocations
+     * @returns {Array<{ url: string, type: string, title: string, source: string }>}
+     */
+    static #extractToolInvocationMedia(invocations) {
+        const media = [];
+        for (const invocation of invocations) {
+            const parsed = tryParse(invocation.result);
+            if (!parsed || typeof parsed !== 'object') {
+                continue;
+            }
+
+            const screenshots = [];
+            if (parsed.type === 'image_display' && parsed.filepath) {
+                screenshots.push(parsed);
+            }
+            if (parsed.screenshot?.filepath) {
+                screenshots.push(parsed.screenshot);
+            }
+            if (parsed.opened_tab_screenshot?.filepath) {
+                screenshots.push(parsed.opened_tab_screenshot);
+            }
+            if (parsed.downloaded_file?.filepath) {
+                screenshots.push(parsed.downloaded_file);
+            }
+
+            for (const screenshot of screenshots) {
+                const url = this.#getSandboxMediaUrl(screenshot.filepath, screenshot.workspace, screenshot.character);
+                media.push({
+                    url,
+                    type: 'image',
+                    title: screenshot.filepath,
+                    source: 'api',
+                });
+            }
+        }
+        return media;
+    }
+
+    /**
      * Saves function tool invocations to the last user chat message extra metadata.
      * @param {ToolInvocation[]} invocations Successful tool invocations
      */
@@ -1636,6 +2361,8 @@ Here are the available tools:
             extra: {
                 isSmallSys: true,
                 tool_invocations: invocations,
+                is_tool_result: true,
+                media: ToolManager.#extractToolInvocationMedia(invocations),
             },
         };
         chat.push(message);
@@ -2112,6 +2839,12 @@ export function initToolCalling() {
     });
 
     eventSource.on(event_types.IMAGE_GENERATION_TOGGLED, () => {
+        if (oai_settings.native_tool_calling) {
+            ToolManager.registerNativeToolCommand();
+        }
+    });
+
+    eventSource.on(event_types.BROWSER_TOOLS_TOGGLED, () => {
         if (oai_settings.native_tool_calling) {
             ToolManager.registerNativeToolCommand();
         }

@@ -352,6 +352,7 @@ export const power_user = {
     auto_list_directory_context: false,
     enable_dangerous_tools: false,
     enable_image_generation: false,
+    enable_browser_tools: false,
     tool_execution_mode: 'auto',
     media_display: MEDIA_DISPLAY.LIST,
     image_overswipe: IMAGE_OVERSWIPE.GENERATE,
@@ -1801,6 +1802,7 @@ export async function loadPowerUserSettings(settings, data) {
     $('#auto_list_directory_context').prop('checked', power_user.auto_list_directory_context);
     $('#enable_dangerous_tools').prop('checked', power_user.enable_dangerous_tools);
     $('#enable_image_generation').prop('checked', power_user.enable_image_generation);
+    $('#enable_browser_tools').prop('checked', power_user.enable_browser_tools);
     $('#tool_execution_mode').val(power_user.tool_execution_mode);
     $('#media_display').val(power_user.media_display);
     $('#image_overswipe').val(power_user.image_overswipe);
@@ -4091,6 +4093,12 @@ jQuery(() => {
     $('#enable_image_generation').on('input', function () {
         power_user.enable_image_generation = !!$(this).prop('checked');
         eventSource.emit(event_types.IMAGE_GENERATION_TOGGLED);
+        saveSettingsDebounced();
+    });
+
+    $('#enable_browser_tools').on('input', function () {
+        power_user.enable_browser_tools = !!$(this).prop('checked');
+        eventSource.emit(event_types.BROWSER_TOOLS_TOGGLED);
         saveSettingsDebounced();
     });
 
