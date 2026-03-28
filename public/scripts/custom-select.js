@@ -26,14 +26,14 @@
         display.setAttribute('aria-haspopup', 'listbox');
         display.setAttribute('aria-expanded', 'false');
 
-    // Dropdown list (rendered as a portal to document.body to avoid
-    // ancestor overflow/transform clipping issues)
-    const dropdown = document.createElement('ul');
-    dropdown.className = 'custom-select-dropdown';
-    dropdown.setAttribute('role', 'listbox');
-    dropdown.tabIndex = -1;
-    // Append to body so it's not clipped by parent stacking/overflow
-    document.body.appendChild(dropdown);
+        // Dropdown list (rendered as a portal to document.body to avoid
+        // ancestor overflow/transform clipping issues)
+        const dropdown = document.createElement('ul');
+        dropdown.className = 'custom-select-dropdown';
+        dropdown.setAttribute('role', 'listbox');
+        dropdown.tabIndex = -1;
+        // Append to body so it's not clipped by parent stacking/overflow
+        document.body.appendChild(dropdown);
 
         // Build items from select options
         function rebuildItems(filter) {
@@ -101,7 +101,9 @@
             try {
                 const jq = window['jQuery'];
                 if (typeof jq === 'function') jq(selectEl).trigger('change');
-            } catch (e) {}
+            } catch {
+                void 0;
+            }
             // mark selected in list
             const items = dropdown.querySelectorAll('.custom-select-item');
             items.forEach(function (it) { it.classList.toggle('selected', it.getAttribute('data-value') === value); });
@@ -144,13 +146,13 @@
         });
 
         // assemble
-    // place elements: native select moved into container but dropdown stays on body
-    selectEl.style.display = 'none';
-    selectEl.parentNode.insertBefore(container, selectEl);
-    container.appendChild(display);
-    container.appendChild(selectEl);
+        // place elements: native select moved into container but dropdown stays on body
+        selectEl.style.display = 'none';
+        selectEl.parentNode.insertBefore(container, selectEl);
+        container.appendChild(display);
+        container.appendChild(selectEl);
 
-    // initial items and value
+        // initial items and value
         rebuildItems('');
         const initial = selectEl.selectedOptions[0];
         if (initial) display.value = initial.textContent || initial.value || '';
@@ -167,5 +169,4 @@
 
     if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);
     else init();
-
 })();

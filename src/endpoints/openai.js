@@ -4,21 +4,13 @@ import { Buffer } from 'node:buffer';
 import fetch from 'node-fetch';
 import FormData from 'form-data';
 import express from 'express';
-import path from 'node:path';
-import multer from 'multer';
 
-import { UPLOADS_DIRECTORY } from '../constants.js';
 import { getConfigValue, mergeObjectWithYaml, excludeKeysByYaml, trimV1, delay } from '../util.js';
 import { setAdditionalHeaders } from '../additional-headers.js';
 import { readSecret, SECRET_KEYS } from './secrets.js';
 import { AIMLAPI_HEADERS, OPENROUTER_HEADERS, SILICONFLOW_ENDPOINT, ZAI_ENDPOINT } from '../constants.js';
 
 export const router = express.Router();
-
-const upload = multer({
-    dest: path.join(globalThis.DATA_ROOT, UPLOADS_DIRECTORY),
-    limits: { fieldSize: 500 * 1024 * 1024 },
-});
 
 router.post('/caption-image', async (request, response) => {
     try {

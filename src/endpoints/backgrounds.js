@@ -5,7 +5,6 @@ import sanitize from 'sanitize-filename';
 import multer from 'multer';
 
 import { UPLOADS_DIRECTORY } from '../constants.js';
-import { getImages } from '../util.js';
 
 import writeFileAtomic from 'write-file-atomic';
 import { uuidv4 } from '../util.js';
@@ -147,7 +146,6 @@ router.post('/all', async function (request, response) {
         }));
 
         response.json({ images: allImages });
-
     } catch (error) {
         console.error('Failed to read or parse backgrounds.json:', error);
         response.json({ images: [] });
@@ -168,7 +166,6 @@ router.post('/folders', async function (request, response) {
         const folders = metadata.folders || [];
 
         response.json({ config, folders });
-
     } catch (error) {
         console.error('Failed to read or parse backgrounds.json for folders:', error);
         response.json({ config: { width: dimensions.bg[0], height: dimensions.bg[1] }, folders: [] });
@@ -210,7 +207,6 @@ router.post('/delete', getFileNameValidationFunction('bg'), async function (requ
         });
 
         return response.status(200).send('ok');
-
     } catch (error) {
         console.error(`Failed to process delete request for ${request.body.bg}:`, error);
         return response.status(500).send('Failed to delete background.');
@@ -282,7 +278,6 @@ router.post('/rename', async function (request, response) {
 
         // 4. Respond with the final unique name and its metadata.
         response.json({ filename: finalNewFilename, ...oldMetadata });
-
     } catch (error) {
         // The startup sync process will correct any inconsistencies on the next launch.
         console.error(`Failed to rename background from ${request.body.old_bg} to ${request.body.new_bg}:`, error);
@@ -377,7 +372,6 @@ router.post('/upload', upload.single('avatar'), async function (request, respons
         });
 
         response.json({ filename: uniqueFilename, ...newMetadata });
-
     } catch (err) {
         const originalFilename = request.file?.originalname ?? 'unknown file';
         console.error(`Background upload failed for ${originalFilename}:`, err);
@@ -421,7 +415,6 @@ router.post('/mark-thumbnail-fail', async function (request, response) {
         });
 
         return response.status(200).send('ok');
-
     } catch (error) {
         console.error(`Failed to mark thumbnail generation as failed for ${request.body.filename}:`, error);
         const statusCode = error.statusCode || 500;
@@ -459,7 +452,6 @@ router.post('/star', async function (request, response) {
         });
 
         return response.status(200).send('ok');
-
     } catch (error) {
         console.error(`Failed to update star status for ${request.body.filename}:`, error);
         const statusCode = error.statusCode || 500;
@@ -497,7 +489,6 @@ router.post('/update-folders', async function (request, response) {
         });
 
         return response.status(200).send('ok');
-
     } catch (error) {
         console.error(`Failed to update folder IDs for ${request.body.filename}:`, error);
         const statusCode = error.statusCode || 500;
@@ -533,7 +524,6 @@ router.post('/folders/create', async function (request, response) {
         });
 
         response.status(201).json(newFolder); // Send back the created folder
-
     } catch (error) {
         console.error('Failed to create folder:', error);
         return response.status(500).send('Failed to update background metadata.');
@@ -570,7 +560,6 @@ router.post('/folders/delete', async function (request, response) {
         });
 
         return response.status(200).send('ok');
-
     } catch (error) {
         console.error('Failed to delete folder:', error);
         return response.status(500).send('Failed to update background metadata.');
@@ -604,7 +593,6 @@ router.post('/folders/rename', async function (request, response) {
         });
 
         return response.status(200).send('ok');
-
     } catch (error) {
         console.error('Failed to rename folder:', error);
         const statusCode = error.statusCode || 500;
@@ -652,7 +640,6 @@ router.post('/folders/add-bulk', async function (request, response) {
         });
 
         return response.status(200).send('ok');
-
     } catch (error) {
         console.error('Failed to bulk add backgrounds to folder:', error);
         const statusCode = error.statusCode || 500;
@@ -689,7 +676,6 @@ router.post('/folders/set-thumbnail', async function (request, response) {
         });
 
         return response.status(200).send('ok');
-
     } catch (error) {
         console.error('Failed to set folder thumbnail:', error);
         const statusCode = error.statusCode || 500;

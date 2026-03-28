@@ -1,6 +1,5 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { performance } from 'node:perf_hooks';
 
 import multer from 'multer';
 import express from 'express';
@@ -13,7 +12,6 @@ import { UPLOADS_DIRECTORY } from '../constants.js';
 import { getConfigValue, invalidateFirefoxCache } from '../util.js';
 import { getThumbnailResolution, isAnimatedWebP, isAnimatedApng, thumbnailDimensions as dimensions } from './image-metadata.js';
 import { ResizeStrategy } from '@jimp/plugin-resize';
-import mime from 'mime-types';
 
 export { dimensions };
 
@@ -261,7 +259,7 @@ async function processSingleImage(file, originalFolder, thumbnailFolder, type) {
  * @param {express.Request} request - The Express request object.
  * @param {express.Response} response - The Express response object.
  */
-apiRouter.post('/upload-generated', upload.single('avatar'), async function(request, response) {
+apiRouter.post('/upload-generated', upload.single('avatar'), async function (request, response) {
     const rawFilename = request.query.originalFilename;
     if (typeof rawFilename !== 'string') {
         console.error('[Thumbnails API] originalFilename query parameter is missing or not a string.');

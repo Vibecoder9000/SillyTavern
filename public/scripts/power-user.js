@@ -44,7 +44,6 @@ import {
     selectInstructPreset,
     updateBindModelTemplatesState,
 } from './instruct-mode.js';
-import { chat_completion_sources, custom_prompt_post_processing_types, getChatCompletionModel, model_list, oai_settings } from './openai.js';
 
 import { getTagsList, tag_import_setting, tag_map, tag_sort_mode, tags } from './tags.js';
 import { tokenizers } from './tokenizers.js';

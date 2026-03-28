@@ -2979,13 +2979,11 @@ export function updateMessageElement(mes, { messageId = chat.length - 1, message
     if (mes.extra?.is_tool_call && mes.extra?.tool_call_info) {
         messageElement.addClass('tool-call-message');
         messageElement.find('.mes_text').html(getToolCallMessageHtml(mes, messageId));
-    }
-    else if (mes.extra?.is_tool_result) {
+    } else if (mes.extra?.is_tool_result) {
         messageElement.addClass('tool-result-message');
         renderToolResultText(messageElement.find('.mes_text'), mes, mes.mes);
         appendMediaToMessage(mes, messageElement);
-    }
-    else {
+    } else {
         if (mes?.extra?.isSmallSys === true) {
             messageElement.addClass('smallSysMes');
         }
@@ -4866,8 +4864,6 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
     // Collect messages with usable content
     const canUseTools = ToolManager.isToolCallingSupported();
     const canPerformToolCalls = !dryRun && ToolManager.canPerformToolCalls(type) && depth < ToolManager.RECURSE_LIMIT;
-    const noNativeToolCallTypes = ['impersonate', 'quiet', 'continue'];
-    const canPerformNativeToolCalls = !dryRun && oai_settings.native_tool_calling && !noNativeToolCallTypes.includes(type) && depth < ToolManager.RECURSE_LIMIT;
     let coreChat = chat.filter(x => !x.is_system || (canUseTools && Array.isArray(x.extra?.tool_invocations)) || x.extra?.is_tool_result);
     if (type === 'swipe') {
         coreChat.pop();
@@ -5951,7 +5947,6 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
                 }
 
                 // Check for manual execution mode
-                const messageId = chat.length - 1;
                 if (power_user.tool_execution_mode === 'manual') {
                     // Save chat and stop here - user will click the button to continue
                     await saveChatConditional();

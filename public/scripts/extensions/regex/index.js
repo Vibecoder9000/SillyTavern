@@ -1,5 +1,5 @@
 import { characters, eventSource, event_types, getCurrentChatId, messageFormatting, reloadCurrentChat, saveSettingsDebounced, this_chid } from '../../../script.js';
-import { extension_settings, renderExtensionTemplateAsync, writeExtensionField } from '../../extensions.js';
+import { extension_settings, renderExtensionTemplateAsync } from '../../extensions.js';
 import { selected_group } from '../../group-chats.js';
 import { callGenericPopup, Popup, POPUP_TYPE } from '../../popup.js';
 import { SlashCommand } from '../../slash-commands/SlashCommand.js';
@@ -1160,7 +1160,7 @@ function populateDebuggerRuleList(container) {
  * Opens the regex debugger.
  * @returns {Promise<void>}
  */
-async function onRegexDebuggerOpenClick() {
+export async function onRegexDebuggerOpenClick() {
     const templateContent = await renderExtensionTemplateAsync('regex', 'debugger');
     const debuggerHtml = $('<div>').html(templateContent);
 

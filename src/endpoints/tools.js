@@ -3122,7 +3122,8 @@ router.post('/browser/domfetch', async (req, res) => {
                 setSessionElementDescriptors(session, page, result.descriptors, result?.url || page.url());
             }
             const interstitial = await detectPageInterstitial(page);
-            const { descriptors, ...publicResult } = result;
+            const publicResult = { ...result };
+            delete publicResult.descriptors;
             return {
                 ...(await formatBrowserPageResult(session, page)),
                 interstitial,

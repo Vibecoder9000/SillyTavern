@@ -67,6 +67,8 @@ const MODULE_NAME = 'sd';
 // This is a 1x1 transparent PNG
 const PNG_PIXEL = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=';
 const CUSTOM_STOP_EVENT = 'sd_stop_generation';
+let activeGenerations = 0;
+let generationToast = null;
 const sources = {
     extras: 'extras',
     horde: 'horde',
@@ -2791,6 +2793,7 @@ async function generatePicture(initiator, args, trigger, message, callback) {
     const stopListener = () => abortController.abort('Aborted by user');
 
     try {
+        startGenerationTracking();
         const combineNegatives = (prefix) => { negativePromptPrefix = combinePrefixes(negativePromptPrefix, prefix); };
 
         // generate the text prompt for the image
@@ -2819,11 +2822,11 @@ async function generatePicture(initiator, args, trigger, message, callback) {
         const errorText = 'SD prompt text generation failed. ' + reason;
         toastr.error(errorText, 'Image Generation');
         throw new Error(errorText);
-    }
-    finally {
+    } finally {
         $(stopButton).hide();
         restoreOriginalDimensions(dimensions);
         eventSource.removeListener(CUSTOM_STOP_EVENT, stopListener);
+        endGenerationTracking();
     }
 
     return imagePath;

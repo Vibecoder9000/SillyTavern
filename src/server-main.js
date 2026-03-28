@@ -57,7 +57,6 @@ import {
     setWindowTitle,
     getConfigValue,
 } from './util.js';
-import { UPLOADS_DIRECTORY } from './constants.js';
 
 // Routers
 import { router as usersPublicRouter } from './endpoints/users-public.js';

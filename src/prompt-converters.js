@@ -963,8 +963,7 @@ export function convertTextCompletionPrompt(messages) {
     messages.forEach(m => {
         if (m.extra?.is_tool_result) {
             messageStrings.push(m.content);
-        }
-        else if (m.role === 'system' && m.name === undefined) {
+        } else if (m.role === 'system' && m.name === undefined) {
             messageStrings.push('System: ' + m.content);
         } else if (m.role === 'system' && m.name !== undefined) {
             messageStrings.push(m.name + ': ' + m.content);

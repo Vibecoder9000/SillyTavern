@@ -427,7 +427,6 @@ export async function syncBackgroundsMetadata(userDirectories) {
         const jsonString = JSON.stringify(metadata, null, 4);
         await writeFileAtomic(backgroundsJsonPath, jsonString, 'utf8');
         console.log('[Background Sync] Synchronization complete.');
-
     } catch (error) {
         console.error('[Background Sync] A critical error occurred during startup synchronization:', error);
     } finally {
@@ -463,7 +462,6 @@ export async function setFolderThumbnail(userDirectories, folderId, filename) {
 
         const jsonString = JSON.stringify(metadata, null, 4);
         await writeFileAtomic(backgroundsJsonPath, jsonString, 'utf8');
-
     } catch (error) {
         console.error(`[SetFolderThumbnail] Failed to update backgrounds.json for user at ${userDirectories.root}:`, error);
         // Re-throw to be handled by the API endpoint caller

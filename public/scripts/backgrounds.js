@@ -59,7 +59,6 @@ async function toggleStarredBackground(filename) {
                 clipper.dataset.isStarred = String(newStarredState);
             }
         });
-
     } catch (error) {
         console.error(`Failed to toggle star for ${filename}:`, error);
         toastr.error(translate('Failed to update starred status.'));
@@ -616,7 +615,6 @@ class BackgroundSelector {
                 e.stopPropagation();
                 scrollContainer.scrollTo({ top: 0, behavior: 'smooth' });
             });
-
         }, 100);
     }
 
@@ -837,7 +835,6 @@ export async function getBackgrounds() {
             highlightSelectedBackground();
         }
         ensureStaticThumbnailsExist(imageDataList);
-
     } catch (error) {
         console.error('Failed to get background data:', error);
         toastr.error('Could not load backgrounds.');
@@ -1292,7 +1289,6 @@ async function onDeleteFolderClick(e) {
         // 3. Re-render the folders UI
         backgroundSelector.renderFolders();
         toastr.success(`Folder "${folder.name}" deleted.`);
-
     } catch (error) {
         console.error('Failed to delete folder:', error);
         toastr.error('Could not delete folder.');
@@ -1333,7 +1329,6 @@ async function onRenameFolderClick(e) {
         folder.name = newName;
         backgroundSelector.renderFolders();
         toastr.success('Folder renamed.');
-
     } catch (error) {
         console.error('Failed to rename folder:', error);
         toastr.error('Could not rename folder.');
@@ -1427,7 +1422,6 @@ async function onRenameBackgroundClick(e) {
         const thumbnailElements = document.querySelectorAll(`.thumbnail[data-bgfile="${bgNames.oldBg}"]`);
         const newFilenameWithoutExt = updatedImageData.filename.substring(0, updatedImageData.filename.lastIndexOf('.')) || updatedImageData.filename;
         thumbnailElements.forEach(thumb => {
-
             const $thumb = $(thumb);
             $thumb.attr('data-bgfile', updatedImageData.filename);
             $thumb.attr('data-url', getBackgroundPath(updatedImageData.filename));
@@ -1446,7 +1440,6 @@ async function onRenameBackgroundClick(e) {
 
         // Display a notification to the user showing the final filename.
         toastr.success(stringFormat(translate('Renamed to "{0}"'), [updatedImageData.filename]));
-
     } catch (error) {
         console.error(error);
         toastr.warning(translate('Failed to rename background'));
@@ -1504,9 +1497,7 @@ async function onDeleteBackgroundClick(e) {
             if (filteredIndexToDelete > -1) {
                 backgroundSelector.filteredImages.splice(filteredIndexToDelete, 1);
             }
-
         }, { once: true });
-
     } catch (error) {
         console.error(error);
         toastr.error('Failed to delete background.');
@@ -1711,9 +1702,8 @@ async function uploadBackground(formData) {
         };
 
         backgroundSelector.images.push(newImageClientData);
-        backgroundSelector.images.sort((a,b) => a.filename.localeCompare(b.filename, undefined, { numeric: true }));
+        backgroundSelector.images.sort((a, b) => a.filename.localeCompare(b.filename, undefined, { numeric: true }));
         backgroundSelector.search($('#bg-filter').val() || '', newBgFilename);
-
     } catch (error) {
         console.error('Error uploading background:', error);
         toastr.error(translate('Failed to upload background.'));
@@ -2198,7 +2188,6 @@ function openCustomFolderPopup(folderId) {
                         throw new Error(`Server responded with ${response.status}`);
                     }
                     toastr.success(`Set thumbnail for "${folder.name}"`);
-
                 } catch (error) {
                     console.error('Failed to set folder thumbnail:', error);
                     toastr.error('Could not set folder thumbnail. Reverting change.');
@@ -2273,7 +2262,6 @@ async function onRemoveFromFolderClick(filename, folderId, renderCallback) {
         if (!response.ok) throw new Error(`Server error: ${response.status}`);
         toastr.success(`'${filename}' removed from folder.`);
         renderCallback(); // Re-render the popup to reflect the removal
-
     } catch (error) {
         console.error('Failed to save folder update:', error);
         toastr.error('Failed to update folder. Reverting change.');
@@ -2368,7 +2356,6 @@ function openFolderChooserPopup(filename) {
 
                         if (!response.ok) throw new Error(`Server error: ${response.status}`);
                         toastr.success(`'${filename}' added to folder.`);
-
                     } catch (error) {
                         console.error('Failed to save folder update:', error);
                         toastr.error('Failed to update folder. Reverting change.');
@@ -2593,7 +2580,7 @@ export async function initBackgrounds() {
                 }
             }
         })
-        .off('click', '.blank-folder-button').on('click', '.blank-folder-button', function(e) {
+        .off('click', '.blank-folder-button').on('click', '.blank-folder-button', function (e) {
             e.stopPropagation();
             const folderId = this.dataset.folderId;
             if (folderId) {
@@ -2604,7 +2591,7 @@ export async function initBackgrounds() {
                 }
             }
         })
-        .off('click', '.mobile-only-menu-toggle').on('click', '.mobile-only-menu-toggle', function(e) {
+        .off('click', '.mobile-only-menu-toggle').on('click', '.mobile-only-menu-toggle', function (e) {
             e.stopPropagation();
             // we find the parent context, which can be a thumbnail or a folder button
             const $context = $(this).closest('.thumbnail, .folder-button');
@@ -2651,17 +2638,17 @@ export async function initBackgrounds() {
                     break;
             }
         })
-        .off('click', '.thumbnail').on('click', '.thumbnail', function(e) {
+        .off('click', '.thumbnail').on('click', '.thumbnail', function (e) {
             if (isSelectionModeActive) {
                 handleThumbnailBulkSelect(this);
             } else {
                 onSelectBackgroundClick.call(this, e);
             }
         })
-        .off('dragstart', '.thumbnail').on('dragstart', '.thumbnail', function() {
+        .off('dragstart', '.thumbnail').on('dragstart', '.thumbnail', function () {
             window.isDraggingInternalThumbnail = true;
         })
-        .off('dragend', '.thumbnail').on('dragend', '.thumbnail', function() {
+        .off('dragend', '.thumbnail').on('dragend', '.thumbnail', function () {
             window.isDraggingInternalThumbnail = false;
         });
 
