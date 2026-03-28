@@ -27,6 +27,7 @@ import {
     tryReadFileSync,
     tryDeleteFile,
     readFirstLine,
+    isPathUnderParent,
 } from '../util.js';
 
 const isBackupEnabled = !!getConfigValue('backups.chat.enabled', true, 'boolean');
@@ -480,6 +481,9 @@ router.post('/save', validateAvatarUrlMiddleware, async function (request, respo
         const chatData = request.body.chat;
         const chatFileName = `${String(request.body.file_name)}.jsonl`;
         const chatFilePath = path.join(request.user.directories.chats, cardName, sanitize(chatFileName));
+        if (!isPathUnderParent(request.user.directories.chats, chatFilePath)) {
+            return response.sendStatus(400);
+        }
 
         if (Array.isArray(chatData)) {
             await trySaveChat(chatData, chatFilePath, request.body.force, handle, cardName, request.user.directories.backups);
@@ -521,6 +525,9 @@ router.post('/get', validateAvatarUrlMiddleware, function (request, response) {
     try {
         const dirName = String(request.body.avatar_url).replace('.png', '');
         const directoryPath = path.join(request.user.directories.chats, dirName);
+        if (!isPathUnderParent(request.user.directories.chats, directoryPath)) {
+            return response.sendStatus(400);
+        }
         const chatDirExists = fs.existsSync(directoryPath);
 
         //if no chat dir for the character is found, make one with the character name
@@ -552,6 +559,9 @@ router.post('/rename', validateAvatarUrlMiddleware, async function (request, res
         const pathToFolder = request.body.is_group
             ? request.user.directories.groupChats
             : path.join(request.user.directories.chats, String(request.body.avatar_url).replace('.png', ''));
+        if (!request.body.is_group && !isPathUnderParent(request.user.directories.chats, pathToFolder)) {
+            return response.sendStatus(400);
+        }
         const pathToOriginalFile = path.join(pathToFolder, sanitize(request.body.original_file));
         const pathToRenamedFile = path.join(pathToFolder, sanitize(request.body.renamed_file));
         const sanitizedFileName = path.parse(pathToRenamedFile).name;
@@ -582,6 +592,9 @@ router.post('/delete', validateAvatarUrlMiddleware, function (request, response)
         const dirName = String(request.body.avatar_url).replace('.png', '');
         const chatFileName = String(request.body.chatfile);
         const chatFilePath = path.join(request.user.directories.chats, dirName, sanitize(chatFileName));
+        if (!isPathUnderParent(request.user.directories.chats, chatFilePath)) {
+            return response.sendStatus(400);
+        }
         //Return success if the file was deleted.
         if (tryDeleteFile(chatFilePath)) {
             return response.send({ ok: true });
@@ -602,7 +615,10 @@ router.post('/export', validateAvatarUrlMiddleware, async function (request, res
     const pathToFolder = request.body.is_group
         ? request.user.directories.groupChats
         : path.join(request.user.directories.chats, String(request.body.avatar_url).replace('.png', ''));
-    let filename = path.join(pathToFolder, sanitize(request.body.file));
+    const filename = path.join(pathToFolder, sanitize(request.body.file));
+    if (!request.body.is_group && !isPathUnderParent(request.user.directories.chats, filename)) {
+        return response.sendStatus(400);
+    }
     let exportfilename = request.body.exportfilename;
     if (!fs.existsSync(filename)) {
         const errorMessage = {
@@ -689,11 +705,16 @@ router.post('/import', upload.single('file'), validateAvatarUrlMiddleware, funct
 
     const format = request.body.file_type;
     const avatarUrl = (request.body.avatar_url).replace('.png', '');
-    const characterName = request.body.character_name;
-    const userName = request.body.user_name || 'User';
+    const characterName = sanitize(request.body.character_name) || 'Character';
+    const userName = sanitize(request.body.user_name) || 'User';
     const fileNames = [];
 
     if (!request.file) {
+        return response.sendStatus(400);
+    }
+
+    const directoryPath = path.join(request.user.directories.chats, avatarUrl);
+    if (!isPathUnderParent(request.user.directories.chats, directoryPath)) {
         return response.sendStatus(400);
     }
 
@@ -725,7 +746,7 @@ router.post('/import', upload.single('file'), validateAvatarUrlMiddleware, funct
 
             const handleChat = (chat) => {
                 const fileName = `${characterName} - ${humanizedDateTime()} imported.jsonl`;
-                const filePath = path.join(request.user.directories.chats, avatarUrl, fileName);
+                const filePath = path.join(directoryPath, fileName);
                 fileNames.push(fileName);
                 writeFileAtomicSync(filePath, chat, 'utf8');
             };
@@ -764,7 +785,7 @@ router.post('/import', upload.single('file'), validateAvatarUrlMiddleware, funct
             }
 
             const fileName = `${characterName} - ${humanizedDateTime()} imported.jsonl`;
-            const filePath = path.join(request.user.directories.chats, avatarUrl, fileName);
+            const filePath = path.join(directoryPath, fileName);
             fileNames.push(fileName);
             if (flattenedChat !== data) {
                 writeFileAtomicSync(filePath, flattenedChat, 'utf8');

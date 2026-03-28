@@ -38,6 +38,8 @@ import { setPersonaDescription } from './personas.js';
  * @property {string} name - The name of the tool.
  * @property {string} parameters - The parameters for the tool invocation.
  * @property {string} result - The result of the tool invocation.
+ * @property {string?} signature - The thought signature associated with the tool invocation.
+ * @property {string?} reasoning - The plaintext reasoning associated with this tool call turn.
  */
 
 /**
@@ -2196,7 +2198,7 @@ Here are the available tools:
      * @param {any} data Reply data
      * @returns {Promise<ToolInvocationResult>} Successful tool invocations
      */
-    static async invokeFunctionTools(data) {
+    static async invokeFunctionTools(data, { reasoningText = null } = {}) {
         /** @type {ToolInvocationResult} */
         const result = {
             invocations: [],
@@ -2244,6 +2246,8 @@ Here are the available tools:
                 name,
                 parameters: stringify(parameters),
                 result: toolResult,
+                signature: toolCall.signature || null,
+                reasoning: reasoningText || null,
             };
             result.invocations.push(invocation);
         }

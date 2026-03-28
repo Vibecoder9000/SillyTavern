@@ -176,6 +176,8 @@ export const SWIPE_SOURCE = {
     KEYBOARD: 'keyboard',
     BACK: 'back',
     AUTO_SWIPE: 'auto_swipe',
+    SLASH_COMMAND: 'slash_command',
+    SWIPE_PICKER: 'swipe_picker',
 };
 
 /**
