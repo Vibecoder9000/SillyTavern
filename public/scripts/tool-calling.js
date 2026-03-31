@@ -2766,7 +2766,7 @@ async function refreshSandboxWorkspaceSelector({ persistDefault = false } = {}) 
 
     select.value = selectedWorkspace;
     select.dataset.previousWorkspace = selectedWorkspace;
-    select.disabled = assistantRootContext;
+    select.disabled = false;
     select.removeAttribute('data-loading');
 }
 

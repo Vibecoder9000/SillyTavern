@@ -59,7 +59,7 @@ if "%TS_IP%"=="" (
 )
 
 echo ========================================================================================================================
-echo Your SillyTavern remote URL:  http://%TS_IP%:8000
+echo Your SillyTavern remote URL:  http://%TS_IP%:8003
 echo ========================================================================================================================
 echo.
 echo Use this URL on any device connected to your Tailscale network.
