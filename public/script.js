@@ -262,7 +262,7 @@ import { initInputMarkdown } from './scripts/input-md-formatting.js';
 import { AbortReason } from './scripts/util/AbortReason.js';
 import { initSystemPrompts } from './scripts/sysprompt.js';
 import { registerExtensionSlashCommands as initExtensionSlashCommands } from './scripts/extensions-slashcommands.js';
-import { ToolManager, initToolCalling, stopActiveShellRun } from './scripts/tool-calling.js';
+import { ToolManager, initToolCalling, stopActivePythonRun, stopActiveShellRun } from './scripts/tool-calling.js';
 import { addShowdownPatch } from './scripts/util/showdown-patch.js';
 import { applyBrowserFixes } from './scripts/browser-fixes.js';
 import { initServerHistory } from './scripts/server-history.js';
@@ -2142,6 +2142,32 @@ function isShellToolCall(toolInfo) {
 }
 
 /**
+ * Checks if the provided tool call targets the Python executor.
+ * @param {any} toolInfo
+ * @returns {boolean}
+ */
+function isPythonToolCall(toolInfo) {
+    return toolInfo?.tool === 'execute_python';
+}
+
+/**
+ * Gets the live command tool kind for a tool call.
+ * @param {any} toolInfo
+ * @returns {'shell'|'python'|null}
+ */
+function getLiveCommandToolKind(toolInfo) {
+    if (isShellToolCall(toolInfo)) {
+        return 'shell';
+    }
+
+    if (isPythonToolCall(toolInfo)) {
+        return 'python';
+    }
+
+    return null;
+}
+
+/**
  * Builds a one-line PowerShell command preview.
  * @param {string} command
  * @param {string} cwd
@@ -2175,6 +2201,8 @@ function formatShellStatusLabel(status) {
             return 'Failed';
         case 'stopped':
             return 'Stopped';
+        case 'timed_out':
+            return 'Timed out';
         default:
             return 'Completed';
     }
@@ -2212,7 +2240,8 @@ function getToolCallMessageHtml(message, messageId, { includeExecuteButton = tru
     const toolName = DOMPurify.sanitize(toolInfo.tool ?? '');
     const isAgnosticToolCall = typeof message?.mes === 'string' && message.mes.includes('<tool>');
     const toolArgsObject = parseToolCallArguments(toolInfo.args);
-    const canExecuteTool = includeExecuteButton && power_user.tool_execution_mode === 'manual' && !message.extra?.tool_call_started;
+    const hasAdjacentToolResult = !!chat[messageId + 1]?.extra?.is_tool_result;
+    const canExecuteTool = includeExecuteButton && power_user.tool_execution_mode === 'manual' && !hasAdjacentToolResult;
 
     if (isShellToolCall(toolInfo)) {
         const explanation = String(toolArgsObject.explanation ?? '').trim() || 'Runs a PowerShell command.';
@@ -2288,6 +2317,7 @@ function getToolResultDisplayText(message, fallbackText = '') {
 function getToolResultMessageHtml(message, messageId, fallbackText = '') {
     const toolResult = getToolResultDisplayText(message, fallbackText);
     const shellCommand = message?.extra?.shell_command;
+    const pythonCommand = message?.extra?.python_command;
 
     if (shellCommand) {
         const status = typeof shellCommand.status === 'string' ? shellCommand.status : 'completed';
@@ -2296,7 +2326,7 @@ function getToolResultMessageHtml(message, messageId, fallbackText = '') {
             ? ''
             : `<span class="tool-shell-status tool-shell-status-${DOMPurify.sanitize(status)}">${statusLabel}</span>`;
         const stopButton = status === 'running'
-            ? `<button class="tool-stop-command-button" data-message-id="${messageId}"><i class="fa-solid fa-stop"></i> Stop command</button>`
+            ? `<button class="tool-stop-command-button" data-command-kind="shell" data-message-id="${messageId}"><i class="fa-solid fa-stop"></i> Stop command</button>`
             : '';
         const outputHtml = toolResult
             ? `<pre><code>${DOMPurify.sanitize(toolResult)}</code></pre>`
@@ -2306,6 +2336,33 @@ function getToolResultMessageHtml(message, messageId, fallbackText = '') {
             <div class="tool-result-box tool-shell-result-box">
                 <div class="tool-shell-header">
                     <h4><i class="fa-solid fa-terminal"></i> Powershell</h4>
+                    <div class="tool-shell-header-actions">
+                        ${statusBadge}
+                        ${stopButton}
+                    </div>
+                </div>
+                ${outputHtml}
+            </div>
+        `;
+    }
+
+    if (pythonCommand) {
+        const status = typeof pythonCommand.status === 'string' ? pythonCommand.status : 'completed';
+        const statusLabel = formatShellStatusLabel(status);
+        const stopButton = status === 'running'
+            ? `<button class="tool-stop-command-button" data-command-kind="python" data-message-id="${messageId}"><i class="fa-solid fa-stop"></i> Stop command</button>`
+            : '';
+        const statusBadge = status === 'running'
+            ? ''
+            : `<span class="tool-shell-status tool-shell-status-${DOMPurify.sanitize(status)}">${statusLabel}</span>`;
+        const outputHtml = toolResult
+            ? `<pre><code>${DOMPurify.sanitize(toolResult)}</code></pre>`
+            : `<div class="tool-shell-empty">${status === 'running' ? 'Waiting for output...' : 'No output.'}</div>`;
+
+        return `
+            <div class="tool-result-box tool-shell-result-box tool-python-result-box">
+                <div class="tool-shell-header">
+                    <h4><i class="fa-brands fa-python"></i> Python</h4>
                     <div class="tool-shell-header-actions">
                         ${statusBadge}
                         ${stopButton}
@@ -2473,6 +2530,33 @@ function createShellToolResultMessage(toolInfo) {
                 explanation,
                 started_at: Date.now(),
                 status: 'running',
+            },
+        },
+    };
+}
+
+/**
+ * Creates a live Python result message in the running state.
+ * @param {any} toolInfo
+ * @returns {ChatMessage}
+ */
+function createPythonToolResultMessage(toolInfo) {
+    const toolArgs = parseToolCallArguments(toolInfo?.args);
+    const timeoutMs = Number.isFinite(Number(toolArgs.timeout_ms))
+        ? Math.floor(Number(toolArgs.timeout_ms))
+        : null;
+    return {
+        name: systemUserName,
+        is_user: false,
+        is_system: true,
+        mes: '<tool_result>\n\n</tool_result>',
+        extra: {
+            is_tool_result: true,
+            tool_result_content: '',
+            python_command: {
+                started_at: Date.now(),
+                status: 'running',
+                timeout_ms: timeoutMs,
             },
         },
     };
@@ -4326,26 +4410,28 @@ class StreamingProcessor {
                 }
 
                 // Auto mode: execute tool immediately
-                const isShellTool = isShellToolCall(parsedTool.tool_call);
-                let liveShellMessageId = null;
-                if (isShellTool) {
-                    const liveShellMessage = createShellToolResultMessage(parsedTool.tool_call);
+                const liveCommandToolKind = getLiveCommandToolKind(parsedTool.tool_call);
+                let liveCommandMessageId = null;
+                if (liveCommandToolKind) {
+                    const liveShellMessage = liveCommandToolKind === 'shell'
+                        ? createShellToolResultMessage(parsedTool.tool_call)
+                        : createPythonToolResultMessage(parsedTool.tool_call);
                     chat.push(liveShellMessage);
-                    liveShellMessageId = chat.length - 1;
+                    liveCommandMessageId = chat.length - 1;
                     addOneMessage(liveShellMessage);
                 }
 
                 const toolResult = await ToolManager.invokeFunctionTool(parsedTool.tool_call.tool, parsedTool.tool_call.args, {
                     signal: this.abortController.signal,
-                    liveMessageId: liveShellMessageId,
+                    liveMessageId: liveCommandMessageId,
                 });
 
                 let stopGeneration = !shouldContinueAfterTool;
-                if (isShellTool) {
-                    const shellStatus = liveShellMessageId !== null
-                        ? chat[liveShellMessageId]?.extra?.shell_command?.status
+                if (liveCommandToolKind) {
+                    const commandStatus = liveCommandMessageId !== null
+                        ? chat[liveCommandMessageId]?.extra?.shell_command?.status ?? chat[liveCommandMessageId]?.extra?.python_command?.status
                         : null;
-                    if (shellStatus === 'stopped') {
+                    if (commandStatus === 'stopped') {
                         stopGeneration = true;
                     }
                 } else {
@@ -4356,7 +4442,8 @@ class StreamingProcessor {
 
                 if (!stopGeneration) {
                     const newOptions = { ...this.generateOptions, depth: this.generateOptions.depth + 1 };
-                    Generate('normal', newOptions, this.dryRun);
+                    await Generate('normal', newOptions, this.dryRun);
+                    return { suppressAutoContinue: true };
                 }
 
                 unblockGeneration();
@@ -6150,26 +6237,28 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
                 }
 
                 // Auto mode: execute tool immediately
-                const isShellTool = isShellToolCall(parsedTool.tool_call);
-                let liveShellMessageId = null;
-                if (isShellTool) {
-                    const liveShellMessage = createShellToolResultMessage(parsedTool.tool_call);
+                const liveCommandToolKind = getLiveCommandToolKind(parsedTool.tool_call);
+                let liveCommandMessageId = null;
+                if (liveCommandToolKind) {
+                    const liveShellMessage = liveCommandToolKind === 'shell'
+                        ? createShellToolResultMessage(parsedTool.tool_call)
+                        : createPythonToolResultMessage(parsedTool.tool_call);
                     chat.push(liveShellMessage);
-                    liveShellMessageId = chat.length - 1;
+                    liveCommandMessageId = chat.length - 1;
                     addOneMessage(liveShellMessage);
                 }
 
                 const toolResult = await ToolManager.invokeFunctionTool(parsedTool.tool_call.tool, parsedTool.tool_call.args, {
                     signal,
-                    liveMessageId: liveShellMessageId,
+                    liveMessageId: liveCommandMessageId,
                 });
 
                 let stopGeneration = !shouldContinueAfterTool;
-                if (isShellTool) {
-                    const shellStatus = liveShellMessageId !== null
-                        ? chat[liveShellMessageId]?.extra?.shell_command?.status
+                if (liveCommandToolKind) {
+                    const commandStatus = liveCommandMessageId !== null
+                        ? chat[liveCommandMessageId]?.extra?.shell_command?.status ?? chat[liveCommandMessageId]?.extra?.python_command?.status
                         : null;
-                    if (shellStatus === 'stopped') {
+                    if (commandStatus === 'stopped') {
                         stopGeneration = true;
                     }
                 } else {
@@ -13258,28 +13347,33 @@ jQuery(async function () {
 
         try {
             const toolInfo = message.extra.tool_call_info;
-            const isShellTool = isShellToolCall(toolInfo);
+            const liveCommandToolKind = getLiveCommandToolKind(toolInfo);
             message.extra.tool_call_started = true;
             updateMessageBlock(messageId, message);
 
-            let liveShellMessageId = null;
-            if (isShellTool) {
-                const liveShellMessage = createShellToolResultMessage(toolInfo);
+            let liveCommandMessageId = null;
+            if (liveCommandToolKind) {
+                const liveShellMessage = liveCommandToolKind === 'shell'
+                    ? createShellToolResultMessage(toolInfo)
+                    : createPythonToolResultMessage(toolInfo);
                 chat.push(liveShellMessage);
-                liveShellMessageId = chat.length - 1;
+                liveCommandMessageId = chat.length - 1;
                 addOneMessage(liveShellMessage);
             }
 
+            message.extra.tool_call_started = false;
+            updateMessageBlock(messageId, message);
+
             const toolResult = await ToolManager.invokeFunctionTool(toolInfo.tool, toolInfo.args, {
-                liveMessageId: liveShellMessageId,
+                liveMessageId: liveCommandMessageId,
             });
             const shouldContinueAfterTool = !(toolInfo?.continue === false || String(toolInfo?.continue).trim().toLowerCase() === 'false');
             let stopGeneration = !shouldContinueAfterTool;
-            if (isShellTool) {
-                const shellStatus = liveShellMessageId !== null
-                    ? chat[liveShellMessageId]?.extra?.shell_command?.status
+            if (liveCommandToolKind) {
+                const commandStatus = liveCommandMessageId !== null
+                    ? chat[liveCommandMessageId]?.extra?.shell_command?.status ?? chat[liveCommandMessageId]?.extra?.python_command?.status
                     : null;
-                if (shellStatus === 'stopped') {
+                if (commandStatus === 'stopped') {
                     stopGeneration = true;
                 }
             } else {
@@ -13314,6 +13408,7 @@ jQuery(async function () {
         e.preventDefault();
         const button = $(this);
         const messageId = Number(button.data('message-id'));
+        const commandKind = String(button.data('command-kind') ?? '').trim().toLowerCase();
 
         if (!Number.isInteger(messageId) || button.prop('disabled')) {
             return;
@@ -13323,16 +13418,20 @@ jQuery(async function () {
         button.addClass('executing');
         button.html('<i class="fa-solid fa-spinner fa-spin"></i> Stopping...');
 
-        const stopped = await stopActiveShellRun(messageId);
+        const stopped = commandKind === 'python'
+            ? await stopActivePythonRun(messageId)
+            : await stopActiveShellRun(messageId);
         if (!stopped) {
             button.prop('disabled', false);
             button.removeClass('executing');
             button.html('<i class="fa-solid fa-stop"></i> Stop command');
-            toastr.error('Unable to stop the running PowerShell command.');
+            toastr.error(commandKind === 'python'
+                ? 'Unable to stop the running Python command.'
+                : 'Unable to stop the running PowerShell command.');
         }
     });
 
-    $(document).on('click', '.tool-shell-call-box, .tool-shell-result-box', function (e) {
+    $(document).on('click', '.tool-shell-call-box, .tool-shell-result-box, .tool-python-result-box', function (e) {
         e.stopPropagation();
     });
 

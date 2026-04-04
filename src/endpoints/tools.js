@@ -13,6 +13,8 @@ const BROWSER_SESSION_SWEEP_INTERVAL_MS = 60 * 1000;
 const BROWSER_MAX_SESSIONS_PER_USER = 32;
 const BROWSER_DEFAULT_WAIT_TIMEOUT_MS = 10_000;
 const BROWSER_MAX_WAIT_TIMEOUT_MS = 30_000;
+const DEFAULT_PYTHON_TIMEOUT_MS = 120_000;
+const MAX_PYTHON_TIMEOUT_MS = 900_000;
 const DOM_FETCH_DEFAULT_MAX_CHARS = 12_000;
 const DOM_FETCH_MAX_CHARS = 30_000;
 const EXECUTE_JS_TIMEOUT_MS = 5_000;
@@ -2370,6 +2372,54 @@ function buildPowerShellInvocationArgs(command) {
 }
 
 /**
+ * Filters PowerShell CLIXML progress noise from stderr while preserving normal text.
+ * @param {{ cliXmlBuffer?: string|null }} shellProcess
+ * @param {string} chunk
+ * @returns {string}
+ */
+function filterPowerShellStderrChunk(shellProcess, chunk) {
+    const stderrChunk = String(chunk ?? '');
+    if (!stderrChunk) {
+        return '';
+    }
+
+    const existingBuffer = typeof shellProcess.cliXmlBuffer === 'string' ? shellProcess.cliXmlBuffer : '';
+    const startIndex = existingBuffer
+        ? 0
+        : stderrChunk.indexOf('#< CLIXML');
+
+    if (!existingBuffer && startIndex === -1) {
+        return stderrChunk;
+    }
+
+    const prefix = existingBuffer
+        ? ''
+        : stderrChunk.slice(0, startIndex);
+    let buffer = existingBuffer
+        ? `${existingBuffer}${stderrChunk}`
+        : `${stderrChunk.slice(startIndex)}`;
+
+    const endTag = '</Objs>';
+    const endIndex = buffer.indexOf(endTag);
+    if (endIndex === -1) {
+        shellProcess.cliXmlBuffer = buffer;
+        return prefix;
+    }
+
+    const xmlEndIndex = endIndex + endTag.length;
+    const cliXmlPayload = buffer.slice(0, xmlEndIndex);
+    const suffix = buffer.slice(xmlEndIndex);
+    shellProcess.cliXmlBuffer = '';
+
+    const sanitizedPayload = cliXmlPayload.replace(/^#< CLIXML\r?\n?/, '').trim();
+    const shouldSuppress = /<Obj\b[^>]*\sS="progress"/i.test(sanitizedPayload)
+        || /<PR\b[^>]*\sN="Record"/i.test(sanitizedPayload);
+
+    const preservedCliXml = shouldSuppress ? '' : cliXmlPayload;
+    return `${prefix}${preservedCliXml}${filterPowerShellStderrChunk(shellProcess, suffix)}`;
+}
+
+/**
  * Writes a structured shell execution event to the streaming response.
  * @param {express.Response} res
  * @param {Record<string, any>} payload
@@ -2407,6 +2457,37 @@ function stopActiveShellProcess(reason, expectedRunId) {
 
     if (!activeShell.childProcess.killed) {
         activeShell.childProcess.kill();
+    }
+
+    return true;
+}
+
+/**
+ * Stops the currently tracked Python process, if any.
+ * @param {string} reason
+ * @param {string} [expectedRunId]
+ * @returns {boolean}
+ */
+function stopActivePythonProcess(reason, expectedRunId) {
+    const activePython = activeProcesses.python;
+    if (!activePython) {
+        return false;
+    }
+
+    if (expectedRunId && activePython.runId !== expectedRunId) {
+        return false;
+    }
+
+    if (activePython.stopRequested) {
+        return true;
+    }
+
+    activePython.stopRequested = true;
+    activePython.stopReason = reason;
+    activePython.timedOut = reason === 'timed_out';
+
+    if (!activePython.childProcess.killed) {
+        activePython.childProcess.kill();
     }
 
     return true;
@@ -2520,6 +2601,7 @@ router.post('/executeshell', async (req, res) => {
     const shellProcess = {
         runId,
         childProcess,
+        cliXmlBuffer: '',
         stopRequested: false,
         stopReason: null,
     };
@@ -2538,7 +2620,12 @@ router.post('/executeshell', async (req, res) => {
     });
 
     childProcess.stderr.on('data', (data) => {
-        writeShellEvent(res, { type: 'stderr', runId, chunk: data.toString('utf-8') });
+        const filteredChunk = filterPowerShellStderrChunk(shellProcess, data.toString('utf-8'));
+        if (!filteredChunk) {
+            return;
+        }
+
+        writeShellEvent(res, { type: 'stderr', runId, chunk: filteredChunk });
     });
 
     childProcess.on('close', (code) => {
@@ -2626,16 +2713,24 @@ router.post('/executeshell/stop', (req, res) => {
 });
 
 router.post('/executepython', async (req, res) => {
-    const { code, workspace, character } = req.body;
+    const { code, timeout_ms, workspace, character } = req.body;
 
     if (!code) {
         return res.status(400).json({ error: 'code is required.' });
     }
 
-    // Kill any previous Python process
-    if (activeProcesses.python && !activeProcesses.python.killed) {
-        console.log('Killing previous Python process.');
-        activeProcesses.python.kill();
+    let timeoutMs = DEFAULT_PYTHON_TIMEOUT_MS;
+    if (timeout_ms !== undefined) {
+        if (!Number.isFinite(Number(timeout_ms)) || Number(timeout_ms) <= 0) {
+            return res.status(400).json({ error: 'timeout_ms must be a positive number.' });
+        }
+
+        timeoutMs = Math.min(MAX_PYTHON_TIMEOUT_MS, Math.floor(Number(timeout_ms)));
+    }
+
+    if (activeProcesses.python) {
+        console.log('Stopping previous Python process.');
+        stopActivePythonProcess('replaced');
     }
 
     const sandboxDir = getSandboxDir(req.user.profile.handle, workspace, character);
@@ -2646,13 +2741,29 @@ router.post('/executepython', async (req, res) => {
 
     try {
         if (!launcher) {
-            return res.status(500).send('Python runtime not found. Install Python and ensure `python`, `python3`, or `py` is available on PATH.');
+            return res.status(500).json({ error: 'Python runtime not found. Install Python and ensure `python`, `python3`, or `py` is available on PATH.' });
         }
 
         await fs.writeFile(scriptPath, code, 'utf-8');
 
-        res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+        const cleanupScript = async () => {
+            try {
+                await fs.unlink(scriptPath);
+            } catch (unlinkError) {
+                if (unlinkError.code !== 'ENOENT') {
+                    console.error(`Failed to delete temp script: ${scriptPath}`, unlinkError);
+                }
+            }
+        };
+
+        const runId = crypto.randomBytes(16).toString('hex');
+        let clientDisconnected = false;
+        let responseEnded = false;
+
+        res.setHeader('Content-Type', 'application/x-ndjson; charset=utf-8');
         res.setHeader('Transfer-Encoding', 'chunked');
+        res.setHeader('Cache-Control', 'no-store');
+        res.flushHeaders?.();
 
         const childProcess = spawn(launcher.command, [...launcher.args, '-u', scriptPath], {
             cwd: sandboxDir,
@@ -2666,53 +2777,148 @@ router.post('/executepython', async (req, res) => {
             },
         });
 
-        // Track this process so we can kill it when a new one starts
-        activeProcesses.python = childProcess;
+        const pythonProcess = {
+            runId,
+            childProcess,
+            stopRequested: false,
+            stopReason: null,
+            timedOut: false,
+        };
+        activeProcesses.python = pythonProcess;
+
+        const timeoutHandle = setTimeout(() => {
+            if (activeProcesses.python?.runId !== runId) {
+                return;
+            }
+
+            pythonProcess.timedOut = true;
+            stopActivePythonProcess('timed_out', runId);
+        }, timeoutMs);
+
+        writeShellEvent(res, {
+            type: 'started',
+            runId,
+            timeoutMs,
+        });
 
         childProcess.stdout.on('data', (data) => {
-            res.write(data);
+            writeShellEvent(res, { type: 'stdout', runId, chunk: data.toString('utf-8') });
         });
 
         childProcess.stderr.on('data', (data) => {
-            res.write(data);
+            writeShellEvent(res, { type: 'stderr', runId, chunk: data.toString('utf-8') });
         });
 
-        childProcess.on('close', (code) => {
+        childProcess.on('close', async (code) => {
+            clearTimeout(timeoutHandle);
             console.log(`Python process exited with code ${code}`);
+            if (activeProcesses.python?.runId === runId) {
+                activeProcesses.python = null;
+            }
+
+            await cleanupScript();
+
+            if (clientDisconnected || responseEnded) {
+                return;
+            }
+
+            responseEnded = true;
+            if (pythonProcess.timedOut) {
+                writeShellEvent(res, {
+                    type: 'timed_out',
+                    runId,
+                    exitCode: code ?? null,
+                    timeoutMs,
+                });
+            } else if (pythonProcess.stopRequested) {
+                writeShellEvent(res, {
+                    type: 'stopped',
+                    runId,
+                    exitCode: code ?? null,
+                    reason: pythonProcess.stopReason || 'stopped',
+                });
+            } else if (code === 0) {
+                writeShellEvent(res, { type: 'completed', runId, exitCode: 0 });
+            } else {
+                writeShellEvent(res, {
+                    type: 'failed',
+                    runId,
+                    exitCode: code ?? null,
+                    message: `Python exited with code ${code ?? 'unknown'}.`,
+                });
+            }
             res.end();
         });
 
-        req.on('close', () => {
-            console.log('Client disconnected, killing Python process.');
-            childProcess.kill();
-        });
+        const handleClientDisconnect = async () => {
+            if (responseEnded) {
+                return;
+            }
 
-        childProcess.on('error', (err) => {
+            clientDisconnected = true;
+            clearTimeout(timeoutHandle);
+            if (activeProcesses.python?.runId === runId) {
+                activeProcesses.python = null;
+            }
+
+            if (!childProcess.killed) {
+                console.log('Client disconnected, killing Python process.');
+                childProcess.kill();
+            }
+
+            await cleanupScript();
+        };
+
+        req.on('aborted', handleClientDisconnect);
+        res.on('close', handleClientDisconnect);
+
+        childProcess.on('error', async (err) => {
+            clearTimeout(timeoutHandle);
             console.error('Failed to start subprocess.', err);
+            if (activeProcesses.python?.runId === runId) {
+                activeProcesses.python = null;
+            }
+
+            await cleanupScript();
+
+            if (clientDisconnected || responseEnded) {
+                return;
+            }
+
+            responseEnded = true;
             if (!res.headersSent) {
-                res.status(500).send(`Failed to start subprocess: ${err.message}`);
+                res.status(500).json({ error: `Failed to start subprocess: ${err.message}` });
             } else {
+                writeShellEvent(res, {
+                    type: 'failed',
+                    runId,
+                    message: `Failed to start Python: ${err.message}`,
+                });
                 res.end();
             }
         });
     } catch (error) {
         console.error('Error setting up Python execution:', error);
         if (!res.headersSent) {
-            res.status(500).send(`Server error: ${error.message}`);
+            res.status(500).json({ error: `Server error: ${error.message}` });
         } else {
             res.end();
         }
-    } finally {
-        setTimeout(async () => {
-            try {
-                await fs.unlink(scriptPath);
-            } catch (unlinkError) {
-                if (unlinkError.code !== 'ENOENT') {
-                    console.error(`Failed to delete temp script: ${scriptPath}`, unlinkError);
-                }
-            }
-        }, 1000);
     }
+});
+
+router.post('/executepython/stop', (req, res) => {
+    const { runId } = req.body ?? {};
+
+    if (typeof runId !== 'string' || !runId.trim()) {
+        return res.status(400).json({ error: 'runId is required.' });
+    }
+
+    if (!stopActivePythonProcess('stopped', runId)) {
+        return res.status(404).json({ error: 'No running Python command found for this run.' });
+    }
+
+    return res.json({ ok: true });
 });
 
 // ========== Stable Diffusion Image Generation Endpoints ==========

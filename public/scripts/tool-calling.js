@@ -155,6 +155,7 @@ const LIST_DIRECTORY_CONTEXT_MAX_CHARS = 4000;
 const NEW_WORKSPACE_OPTION = '__new_workspace__';
 const WORKSPACE_SEPARATOR_OPTION = '__workspace_separator__';
 const activeShellRuns = new Map();
+const activePythonRuns = new Map();
 const pendingShellRenders = new Set();
 
 /**
@@ -222,6 +223,22 @@ function updateShellResultMessage(messageId, mutator) {
 }
 
 /**
+ * Applies a mutation to a live Python result message and re-renders it.
+ * @param {number} messageId
+ * @param {(message: any) => void} mutator
+ */
+function updatePythonResultMessage(messageId, mutator) {
+    const message = getChatMessageById(messageId);
+    if (!message?.extra?.python_command) {
+        return;
+    }
+
+    mutator(message);
+    syncToolResultMessageContent(message);
+    scheduleShellMessageRender(messageId);
+}
+
+/**
  * Requests that an active shell run stop.
  * @param {number} messageId
  * @returns {Promise<boolean>}
@@ -255,6 +272,45 @@ export async function stopActiveShellRun(messageId) {
         return false;
     } catch (error) {
         console.error('[execute_shell] Failed to stop PowerShell run:', error);
+        run.fetchController?.abort();
+        return false;
+    }
+}
+
+/**
+ * Requests that an active Python run stop.
+ * @param {number} messageId
+ * @returns {Promise<boolean>}
+ */
+export async function stopActivePythonRun(messageId) {
+    const run = activePythonRuns.get(messageId);
+    if (!run || run.stopping || run.completed) {
+        return false;
+    }
+
+    run.stopping = true;
+    run.stoppedByUser = true;
+
+    if (!run.runId) {
+        run.fetchController?.abort();
+        return true;
+    }
+
+    try {
+        const response = await fetch('/api/extensions/tools/executepython/stop', {
+            method: 'POST',
+            headers: getRequestHeaders(),
+            body: JSON.stringify({ runId: run.runId }),
+        });
+
+        if (response.ok) {
+            return true;
+        }
+
+        run.fetchController?.abort();
+        return false;
+    } catch (error) {
+        console.error('[execute_python] Failed to stop Python run:', error);
         run.fetchController?.abort();
         return false;
     }
@@ -1533,44 +1589,244 @@ function registerBuiltinTools() {
                         'type': 'string',
                         'description': 'The Python code to execute.',
                     },
+                    'timeout_ms': {
+                        'type': 'integer',
+                        'description': 'Optional timeout in milliseconds for the Python process.',
+                    },
                 },
                 'required': ['code'],
             },
-            action: async ({ code }, signal) => {
+            action: async ({ code, timeout_ms }, signal, context = {}) => {
+                if (typeof code !== 'string' || !code.trim()) {
+                    return 'Error: code is required.';
+                }
+
+                if (timeout_ms !== undefined && (!Number.isFinite(Number(timeout_ms)) || Number(timeout_ms) <= 0)) {
+                    return 'Error: timeout_ms must be a positive number.';
+                }
+
+                const sandbox = getSandboxRequestContext();
+                const liveMessageId = Number.isInteger(context?.liveMessageId) ? context.liveMessageId : null;
+                const fetchController = new AbortController();
+                const runState = {
+                    completed: false,
+                    fetchController,
+                    runId: null,
+                    stoppedByUser: false,
+                    stopping: false,
+                };
+
+                let signalCleanup = null;
+                if (signal instanceof AbortSignal) {
+                    if (signal.aborted) {
+                        fetchController.abort();
+                    } else {
+                        const abortHandler = () => fetchController.abort();
+                        signal.addEventListener('abort', abortHandler, { once: true });
+                        signalCleanup = () => signal.removeEventListener('abort', abortHandler);
+                    }
+                }
+
+                if (liveMessageId !== null) {
+                    activePythonRuns.set(liveMessageId, runState);
+                }
+
                 let fullOutput = '';
+                let finalStatus = 'completed';
+                let exitCode = null;
+                let receivedTerminalEvent = false;
+
+                const applyTerminalStatus = (status, extra = {}) => {
+                    finalStatus = status;
+                    if (Object.prototype.hasOwnProperty.call(extra, 'exitCode')) {
+                        exitCode = extra.exitCode;
+                    }
+
+                    if (liveMessageId === null) {
+                        return;
+                    }
+
+                    updatePythonResultMessage(liveMessageId, (message) => {
+                        const pythonCommand = message.extra.python_command;
+                        pythonCommand.status = status;
+                        pythonCommand.ended_at = Date.now();
+                        if (Object.prototype.hasOwnProperty.call(extra, 'exitCode')) {
+                            pythonCommand.exit_code = extra.exitCode;
+                        }
+                        if (Object.prototype.hasOwnProperty.call(extra, 'timeoutMs')) {
+                            pythonCommand.timeout_ms = extra.timeoutMs;
+                        }
+                        if (extra.reason) {
+                            pythonCommand.stop_reason = extra.reason;
+                        }
+                    });
+                };
+
+                const appendPythonOutput = (chunk) => {
+                    if (typeof chunk !== 'string' || !chunk) {
+                        return;
+                    }
+
+                    fullOutput += chunk;
+                    if (liveMessageId === null) {
+                        return;
+                    }
+
+                    updatePythonResultMessage(liveMessageId, (message) => {
+                        message.extra.tool_result_content += chunk;
+                    });
+                };
+
+                const applyPythonEvent = (event) => {
+                    if (!event || typeof event !== 'object') {
+                        return;
+                    }
+
+                    switch (event.type) {
+                        case 'started':
+                            runState.runId = typeof event.runId === 'string' ? event.runId : null;
+                            if (liveMessageId !== null) {
+                                updatePythonResultMessage(liveMessageId, (message) => {
+                                    const pythonCommand = message.extra.python_command;
+                                    pythonCommand.status = 'running';
+                                    pythonCommand.run_id = runState.runId;
+                                    pythonCommand.timeout_ms = Number.isFinite(Number(event.timeoutMs))
+                                        ? Math.floor(Number(event.timeoutMs))
+                                        : pythonCommand.timeout_ms;
+                                    pythonCommand.started_at = Date.now();
+                                });
+                            }
+                            break;
+                        case 'stdout':
+                        case 'stderr':
+                            appendPythonOutput(typeof event.chunk === 'string' ? event.chunk : '');
+                            break;
+                        case 'completed':
+                            receivedTerminalEvent = true;
+                            applyTerminalStatus('completed', { exitCode: event.exitCode ?? 0 });
+                            break;
+                        case 'failed':
+                            receivedTerminalEvent = true;
+                            if (!fullOutput.trim() && typeof event.message === 'string' && event.message) {
+                                appendPythonOutput(`${event.message}\n`);
+                            }
+                            applyTerminalStatus('failed', { exitCode: event.exitCode ?? null });
+                            break;
+                        case 'stopped':
+                            receivedTerminalEvent = true;
+                            applyTerminalStatus('stopped', {
+                                exitCode: event.exitCode ?? null,
+                                reason: typeof event.reason === 'string' ? event.reason : null,
+                            });
+                            break;
+                        case 'timed_out':
+                            receivedTerminalEvent = true;
+                            applyTerminalStatus('timed_out', {
+                                exitCode: event.exitCode ?? null,
+                                timeoutMs: Number.isFinite(Number(event.timeoutMs)) ? Math.floor(Number(event.timeoutMs)) : null,
+                            });
+                            break;
+                    }
+                };
+
                 try {
-                    const sandbox = getSandboxRequestContext();
                     const response = await fetch('/api/extensions/tools/executepython', {
                         method: 'POST',
                         headers: getRequestHeaders(),
-                        body: JSON.stringify({ code, ...sandbox }),
-                        signal,
+                        body: JSON.stringify({ code, timeout_ms, ...sandbox }),
+                        signal: fetchController.signal,
                     });
 
                     if (!response.ok) {
                         const errorText = await response.text();
-                        return `Error: ${errorText}`;
+                        const message = `Error: ${errorText}`;
+                        applyTerminalStatus(runState.stopping ? 'stopped' : 'failed');
+                        if (!fullOutput.trim() && liveMessageId !== null) {
+                            updatePythonResultMessage(liveMessageId, (chatMessage) => {
+                                chatMessage.extra.tool_result_content = message;
+                            });
+                        }
+                        return message;
+                    }
+
+                    if (!response.body) {
+                        throw new Error('Python execution stream was not available.');
                     }
 
                     const reader = response.body.getReader();
                     const decoder = new TextDecoder();
+                    let buffer = '';
 
                     while (true) {
                         const { done, value } = await reader.read();
                         if (done) {
                             break;
                         }
-                        const chunk = decoder.decode(value, { stream: true });
-                        fullOutput += chunk;
+
+                        buffer += decoder.decode(value, { stream: true });
+                        let newlineIndex = buffer.indexOf('\n');
+                        while (newlineIndex !== -1) {
+                            const line = buffer.slice(0, newlineIndex).trim();
+                            buffer = buffer.slice(newlineIndex + 1);
+                            if (line) {
+                                applyPythonEvent(JSON.parse(line));
+                            }
+                            newlineIndex = buffer.indexOf('\n');
+                        }
                     }
-                    return fullOutput.trim() || 'Script executed with no output.';
+
+                    buffer += decoder.decode();
+                    if (buffer.trim()) {
+                        applyPythonEvent(JSON.parse(buffer.trim()));
+                    }
+
+                    if (!receivedTerminalEvent) {
+                        applyTerminalStatus(runState.stopping ? 'stopped' : 'completed', { exitCode });
+                    }
+
+                    const trimmedOutput = fullOutput.trim();
+                    if (trimmedOutput) {
+                        return trimmedOutput;
+                    }
+
+                    if (finalStatus === 'stopped') {
+                        return 'Python command was stopped.';
+                    }
+
+                    if (finalStatus === 'timed_out') {
+                        const appliedTimeout = Number.isFinite(Number(timeout_ms)) ? Math.floor(Number(timeout_ms)) : null;
+                        return appliedTimeout
+                            ? `Python command timed out after ${appliedTimeout} ms.`
+                            : 'Python command timed out.';
+                    }
+
+                    if (finalStatus === 'failed') {
+                        return exitCode === null
+                            ? 'Python command failed.'
+                            : `Python exited with code ${exitCode}.`;
+                    }
+
+                    return 'Python command completed with no output.';
                 } catch (error) {
                     if (error.name === 'AbortError') {
-                        const errorMessage = 'Execution was cancelled by the user. Do not re-attempt.';
-                        return errorMessage;
+                        applyTerminalStatus('stopped', { exitCode, reason: runState.stoppedByUser ? 'stopped' : 'aborted' });
+                        return fullOutput.trim() || 'Python command was stopped.';
                     }
+
                     const errorMessage = `Error: Could not connect to the server or stream was interrupted. ${error.message}`;
+                    applyTerminalStatus('failed', { exitCode });
+                    if (!fullOutput.trim() && liveMessageId !== null) {
+                        updatePythonResultMessage(liveMessageId, (chatMessage) => {
+                            chatMessage.extra.tool_result_content = errorMessage;
+                        });
+                    }
                     return errorMessage;
+                } finally {
+                    signalCleanup?.();
+                    runState.completed = true;
+                    if (liveMessageId !== null) {
+                        activePythonRuns.delete(liveMessageId);
+                    }
                 }
             },
         },
@@ -2368,7 +2624,6 @@ export class ToolManager {
                 : undefined;
 
             const toolTimeouts = new Map([
-                ['execute_python', 10000],
                 ['browser_open', 90000],
                 ['browser_search', 90000],
                 ['browser_tabs', 90000],
@@ -2388,7 +2643,7 @@ export class ToolManager {
             const timeoutMs = toolTimeouts.get(name);
             const timeoutMessage = name.startsWith('browser_') || name === 'dom_fetch' || name === 'execute_js'
                 ? `Browser tool "${name}" timed out before returning a result.`
-                : 'Tool call run for max duration 10 seconds, ending logging here. Your command is running in the background. Make a new python or bash call to interrupt with the new tool call.';
+                : `Tool "${name}" timed out before returning a result.`;
 
             const result = timeoutMs
                 ? await withTimeout(tool.invoke(invokeParameters, signal, invocationOptions), timeoutMs, timeoutMessage)
