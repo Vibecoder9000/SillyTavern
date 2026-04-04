@@ -8034,6 +8034,34 @@
                         <div id="send_but" class="fa-solid fa-paper-plane interactable displayNone" title="Send a message" data-i18n="[title]Send a message"></div>
                     </div>
                 </div>
+                <div id="ask_user_panel" hidden>
+                    <div class="ask_user_panel_header">
+                        <div class="ask_user_panel_heading">
+                            <div id="ask_user_title" class="ask_user_panel_title"></div>
+                            <div id="ask_user_context" class="ask_user_panel_context" hidden></div>
+                        </div>
+                        <div class="ask_user_panel_nav">
+                            <button id="ask_user_prev" type="button" class="menu_button ask_user_nav_button" aria-label="Previous question" title="Previous question">
+                                <i class="fa-solid fa-chevron-left"></i>
+                            </button>
+                            <div id="ask_user_counter" class="ask_user_panel_counter">1 of 1</div>
+                            <button id="ask_user_next" type="button" class="menu_button ask_user_nav_button" aria-label="Next question" title="Next question">
+                                <i class="fa-solid fa-chevron-right"></i>
+                            </button>
+                        </div>
+                    </div>
+                    <div id="ask_user_options" class="ask_user_panel_options"></div>
+                    <div class="ask_user_panel_actions">
+                        <button id="ask_user_dismiss" type="button" class="menu_button ask_user_action_button ask_user_action_secondary">
+                            <span>Dismiss</span>
+                            <kbd>ESC</kbd>
+                        </button>
+                        <button id="ask_user_continue" type="button" class="menu_button ask_user_action_button ask_user_action_primary">
+                            <span>Continue</span>
+                            <i class="fa-solid fa-arrow-turn-down-left"></i>
+                        </button>
+                    </div>
+                </div>
             </div>
         </div>
     </div>
