@@ -17,6 +17,7 @@ import {
     SANDBOX_ROOT_WORKSPACE,
     system_avatar,
     systemUserName,
+    updateMessageBlock,
     user_avatar,
 } from '../script.js';
 import { chat_completion_sources, custom_prompt_post_processing_types, getChatCompletionModel, model_list, oai_settings } from './openai.js';
@@ -41,11 +42,12 @@ import { setPersonaDescription } from './personas.js';
  * @property {string} result - The result of the tool invocation.
  * @property {string?} signature - The thought signature associated with the tool invocation.
  * @property {string?} reasoning - The plaintext reasoning associated with this tool call turn.
+ * @property {boolean} [error] - Whether the tool invocation failed.
  */
 
 /**
  * @typedef {object} ToolInvocationResult
- * @property {ToolInvocation[]} invocations Successful tool invocations
+ * @property {ToolInvocation[]} invocations Tool invocations (both successful and failed)
  * @property {Error[]} errors Errors that occurred during tool invocation
  * @property {string[]} stealthCalls Names of stealth tools that were invoked
  */
@@ -152,6 +154,111 @@ const LIST_DIRECTORY_CONTEXT_TIMEOUT_RESULT = '__list_directory_context_timeout_
 const LIST_DIRECTORY_CONTEXT_MAX_CHARS = 4000;
 const NEW_WORKSPACE_OPTION = '__new_workspace__';
 const WORKSPACE_SEPARATOR_OPTION = '__workspace_separator__';
+const activeShellRuns = new Map();
+const pendingShellRenders = new Set();
+
+/**
+ * Gets a chat message by message ID.
+ * @param {number} messageId
+ * @returns {any|null}
+ */
+function getChatMessageById(messageId) {
+    return Number.isInteger(messageId) && messageId >= 0 && messageId < chat.length
+        ? chat[messageId]
+        : null;
+}
+
+/**
+ * Keeps the serialized tool-result wrapper in sync with structured result content.
+ * @param {any} message
+ */
+function syncToolResultMessageContent(message) {
+    if (!message?.extra) {
+        return;
+    }
+
+    const content = typeof message.extra.tool_result_content === 'string'
+        ? message.extra.tool_result_content
+        : String(message.extra.tool_result_content ?? '');
+    message.extra.tool_result_content = content;
+    message.mes = `<tool_result>\n${content}\n</tool_result>`;
+}
+
+/**
+ * Schedules a re-render for a live shell result message.
+ * @param {number} messageId
+ */
+function scheduleShellMessageRender(messageId) {
+    if (pendingShellRenders.has(messageId)) {
+        return;
+    }
+
+    pendingShellRenders.add(messageId);
+    requestAnimationFrame(() => {
+        pendingShellRenders.delete(messageId);
+        const message = getChatMessageById(messageId);
+        if (!message) {
+            return;
+        }
+
+        updateMessageBlock(messageId, message);
+    });
+}
+
+/**
+ * Applies a mutation to a live shell result message and re-renders it.
+ * @param {number} messageId
+ * @param {(message: any) => void} mutator
+ */
+function updateShellResultMessage(messageId, mutator) {
+    const message = getChatMessageById(messageId);
+    if (!message?.extra?.shell_command) {
+        return;
+    }
+
+    mutator(message);
+    syncToolResultMessageContent(message);
+    scheduleShellMessageRender(messageId);
+}
+
+/**
+ * Requests that an active shell run stop.
+ * @param {number} messageId
+ * @returns {Promise<boolean>}
+ */
+export async function stopActiveShellRun(messageId) {
+    const run = activeShellRuns.get(messageId);
+    if (!run || run.stopping || run.completed) {
+        return false;
+    }
+
+    run.stopping = true;
+    run.stoppedByUser = true;
+
+    if (!run.runId) {
+        run.fetchController?.abort();
+        return true;
+    }
+
+    try {
+        const response = await fetch('/api/extensions/tools/executeshell/stop', {
+            method: 'POST',
+            headers: getRequestHeaders(),
+            body: JSON.stringify({ runId: run.runId }),
+        });
+
+        if (response.ok) {
+            return true;
+        }
+
+        run.fetchController?.abort();
+        return false;
+    } catch (error) {
+        console.error('[execute_shell] Failed to stop PowerShell run:', error);
+        run.fetchController?.abort();
+        return false;
+    }
+}
 let lastBrowserSessionId = '';
 let lastBrowserTabIndex = null;
 const ASK_USER_MAX_QUESTIONS = 4;
@@ -259,8 +366,8 @@ class ToolDefinition {
      * @param {AbortSignal} signal The AbortSignal to use for cancellation.
      * @returns {Promise<any>} The result of the tool's action function.
      */
-    async invoke(parameters, signal) {
-        return await this.#action(parameters, signal);
+    async invoke(parameters, signal, context) {
+        return await this.#action(parameters, signal, context);
     }
 
     /**
@@ -1177,41 +1284,242 @@ function registerBuiltinTools() {
         },
         {
             name: 'execute_shell',
-            description: 'Executes a shell command in the environment. Useful for git, curl, or other command-line tools.',
+            description: 'Runs a PowerShell command in the current sandbox workspace. Supports quoted arguments, pipelines, redirection, and other normal PowerShell syntax.',
             parameters: {
                 'type': 'object',
                 'properties': {
                     'command': {
                         'type': 'string',
-                        'description': 'The shell command to execute.',
+                        'description': 'The full PowerShell command to execute.',
+                    },
+                    'explanation': {
+                        'type': 'string',
+                        'description': 'A short human explanation of what the command does, for example "lists the files in /cards" or "runs a python script that summarizes logs".',
+                    },
+                    'cwd': {
+                        'type': 'string',
+                        'description': 'Optional sandbox-relative working directory to run the command from.',
                     },
                 },
-                'required': ['command'],
+                'required': ['command', 'explanation'],
             },
-            action: async ({ command }, signal) => {
+            formatMessage: async ({ explanation, command, cwd }) => explanation?.trim()
+                ? `${explanation.trim()}${cwd?.trim() ? ` (cwd: ${cwd.trim()})` : ''}`
+                : `Running PowerShell command: ${command}`,
+            action: async ({ command, explanation, cwd }, signal, context = {}) => {
+                if (typeof command !== 'string' || !command.trim()) {
+                    return 'Error: command is required.';
+                }
+
+                if (typeof explanation !== 'string' || !explanation.trim()) {
+                    return 'Error: explanation is required and must describe what the command does.';
+                }
+
+                const sandbox = getSandboxRequestContext();
+                const liveMessageId = Number.isInteger(context?.liveMessageId) ? context.liveMessageId : null;
+                const fetchController = new AbortController();
+                const runState = {
+                    completed: false,
+                    fetchController,
+                    runId: null,
+                    stoppedByUser: false,
+                    stopping: false,
+                };
+
+                let signalCleanup = null;
+                if (signal instanceof AbortSignal) {
+                    if (signal.aborted) {
+                        fetchController.abort();
+                    } else {
+                        const abortHandler = () => fetchController.abort();
+                        signal.addEventListener('abort', abortHandler, { once: true });
+                        signalCleanup = () => signal.removeEventListener('abort', abortHandler);
+                    }
+                }
+
+                if (liveMessageId !== null) {
+                    activeShellRuns.set(liveMessageId, runState);
+                }
+
+                let fullOutput = '';
+                let finalStatus = 'completed';
+                let exitCode = null;
+                let receivedTerminalEvent = false;
+
+                const applyTerminalStatus = (status, extra = {}) => {
+                    finalStatus = status;
+                    if (Object.prototype.hasOwnProperty.call(extra, 'exitCode')) {
+                        exitCode = extra.exitCode;
+                    }
+
+                    if (liveMessageId === null) {
+                        return;
+                    }
+
+                    updateShellResultMessage(liveMessageId, (message) => {
+                        const shellCommand = message.extra.shell_command;
+                        shellCommand.status = status;
+                        shellCommand.ended_at = Date.now();
+                        if (Object.prototype.hasOwnProperty.call(extra, 'exitCode')) {
+                            shellCommand.exit_code = extra.exitCode;
+                        }
+                        if (extra.reason) {
+                            shellCommand.stop_reason = extra.reason;
+                        }
+                    });
+                };
+
+                const appendShellOutput = (chunk) => {
+                    if (typeof chunk !== 'string' || !chunk) {
+                        return;
+                    }
+
+                    fullOutput += chunk;
+                    if (liveMessageId === null) {
+                        return;
+                    }
+
+                    updateShellResultMessage(liveMessageId, (message) => {
+                        message.extra.tool_result_content += chunk;
+                    });
+                };
+
+                const applyShellEvent = (event) => {
+                    if (!event || typeof event !== 'object') {
+                        return;
+                    }
+
+                    switch (event.type) {
+                        case 'started':
+                            runState.runId = typeof event.runId === 'string' ? event.runId : null;
+                            if (liveMessageId !== null) {
+                                updateShellResultMessage(liveMessageId, (message) => {
+                                    const shellCommand = message.extra.shell_command;
+                                    shellCommand.status = 'running';
+                                    shellCommand.run_id = runState.runId;
+                                    shellCommand.command = typeof event.command === 'string' ? event.command : command;
+                                    shellCommand.explanation = typeof event.explanation === 'string' ? event.explanation : explanation;
+                                    shellCommand.cwd = typeof event.cwd === 'string' && event.cwd.trim() ? event.cwd : (cwd?.trim() || '.');
+                                    shellCommand.started_at = Date.now();
+                                });
+                            }
+                            break;
+                        case 'stdout':
+                        case 'stderr':
+                            appendShellOutput(typeof event.chunk === 'string' ? event.chunk : '');
+                            break;
+                        case 'completed':
+                            receivedTerminalEvent = true;
+                            applyTerminalStatus('completed', { exitCode: event.exitCode ?? 0 });
+                            break;
+                        case 'failed':
+                            receivedTerminalEvent = true;
+                            if (!fullOutput.trim() && typeof event.message === 'string' && event.message) {
+                                appendShellOutput(`${event.message}\n`);
+                            }
+                            applyTerminalStatus('failed', { exitCode: event.exitCode ?? null });
+                            break;
+                        case 'stopped':
+                            receivedTerminalEvent = true;
+                            applyTerminalStatus('stopped', {
+                                exitCode: event.exitCode ?? null,
+                                reason: typeof event.reason === 'string' ? event.reason : null,
+                            });
+                            break;
+                    }
+                };
+
                 try {
-                    const sandbox = getSandboxRequestContext();
                     const response = await fetch('/api/extensions/tools/executeshell', {
                         method: 'POST',
                         headers: getRequestHeaders(),
-                        body: JSON.stringify({ command, ...sandbox }),
-                        signal,
+                        body: JSON.stringify({ command, explanation, cwd, ...sandbox }),
+                        signal: fetchController.signal,
                     });
 
                     if (!response.ok) {
                         const errorText = await response.text();
-                        return `Error executing command. Status: ${response.status}. Message: ${errorText}`;
+                        const message = `Error executing command. Status: ${response.status}. Message: ${errorText}`;
+                        applyTerminalStatus(runState.stopping ? 'stopped' : 'failed');
+                        if (!fullOutput.trim() && liveMessageId !== null) {
+                            updateShellResultMessage(liveMessageId, (chatMessage) => {
+                                chatMessage.extra.tool_result_content = message;
+                            });
+                        }
+                        return message;
                     }
 
-                    const result = await response.json();
-                    const fullOutput = result.output;
+                    if (!response.body) {
+                        throw new Error('PowerShell execution stream was not available.');
+                    }
 
-                    return fullOutput.trim() || 'Command executed with no output.';
+                    const reader = response.body.getReader();
+                    const decoder = new TextDecoder();
+                    let buffer = '';
+
+                    while (true) {
+                        const { value, done } = await reader.read();
+                        if (done) {
+                            break;
+                        }
+
+                        buffer += decoder.decode(value, { stream: true });
+                        let newlineIndex = buffer.indexOf('\n');
+                        while (newlineIndex !== -1) {
+                            const line = buffer.slice(0, newlineIndex).trim();
+                            buffer = buffer.slice(newlineIndex + 1);
+                            if (line) {
+                                applyShellEvent(JSON.parse(line));
+                            }
+                            newlineIndex = buffer.indexOf('\n');
+                        }
+                    }
+
+                    buffer += decoder.decode();
+                    if (buffer.trim()) {
+                        applyShellEvent(JSON.parse(buffer.trim()));
+                    }
+
+                    if (!receivedTerminalEvent) {
+                        applyTerminalStatus(runState.stopping ? 'stopped' : 'completed', { exitCode });
+                    }
+
+                    const trimmedOutput = fullOutput.trim();
+                    if (trimmedOutput) {
+                        return trimmedOutput;
+                    }
+
+                    if (finalStatus === 'stopped') {
+                        return 'PowerShell command was stopped.';
+                    }
+
+                    if (finalStatus === 'failed') {
+                        return exitCode === null
+                            ? 'PowerShell command failed.'
+                            : `PowerShell exited with code ${exitCode}.`;
+                    }
+
+                    return 'PowerShell command completed with no output.';
                 } catch (error) {
                     if (error.name === 'AbortError') {
-                        return 'Execution was cancelled by the user.';
+                        applyTerminalStatus('stopped', { exitCode, reason: runState.stoppedByUser ? 'stopped' : 'aborted' });
+                        return fullOutput.trim() || 'PowerShell command was stopped.';
                     }
-                    return `Error: Could not connect to server. ${error.message}`;
+
+                    const message = `Error: Could not connect to server. ${error.message}`;
+                    applyTerminalStatus('failed', { exitCode });
+                    if (!fullOutput.trim() && liveMessageId !== null) {
+                        updateShellResultMessage(liveMessageId, (chatMessage) => {
+                            chatMessage.extra.tool_result_content = message;
+                        });
+                    }
+                    return message;
+                } finally {
+                    signalCleanup?.();
+                    runState.completed = true;
+                    if (liveMessageId !== null) {
+                        activeShellRuns.delete(liveMessageId);
+                    }
                 }
             },
         },
@@ -2041,10 +2349,10 @@ export class ToolManager {
      * Invokes a tool by name. Returns the result of the tool's action function.
      * @param {string} name The name of the tool to invoke.
      * @param {object} parameters Function parameters. For example, if the tool requires a "name" parameter, you would pass {name: "value"}.
-     * @param {AbortSignal} signal The AbortSignal to use for cancellation.
+     * @param {AbortSignal|{ signal?: AbortSignal, liveMessageId?: number }} signalOrOptions Cancellation signal or invocation options.
      * @returns {Promise<string|Error>} The result of the tool's action function. If an error occurs, null is returned. Non-string results are JSON-stringified.
      */
-    static async invokeFunctionTool(name, parameters, signal) {
+    static async invokeFunctionTool(name, parameters, signalOrOptions) {
         try {
             if (!this.#tools.has(name)) {
                 throw new Error(`No tool with the name "${name}" has been registered.`);
@@ -2052,10 +2360,15 @@ export class ToolManager {
 
             const invokeParameters = this.#parseParameters(parameters);
             const tool = this.#tools.get(name);
+            const invocationOptions = signalOrOptions instanceof AbortSignal
+                ? { signal: signalOrOptions }
+                : (signalOrOptions && typeof signalOrOptions === 'object' ? signalOrOptions : {});
+            const signal = invocationOptions.signal instanceof AbortSignal
+                ? invocationOptions.signal
+                : undefined;
 
             const toolTimeouts = new Map([
                 ['execute_python', 10000],
-                ['execute_shell', 10000],
                 ['browser_open', 90000],
                 ['browser_search', 90000],
                 ['browser_tabs', 90000],
@@ -2078,8 +2391,8 @@ export class ToolManager {
                 : 'Tool call run for max duration 10 seconds, ending logging here. Your command is running in the background. Make a new python or bash call to interrupt with the new tool call.';
 
             const result = timeoutMs
-                ? await withTimeout(tool.invoke(invokeParameters, signal), timeoutMs, timeoutMessage)
-                : await tool.invoke(invokeParameters, signal);
+                ? await withTimeout(tool.invoke(invokeParameters, signal, invocationOptions), timeoutMs, timeoutMessage)
+                : await tool.invoke(invokeParameters, signal, invocationOptions);
 
             return typeof result === 'string' ? result : JSON.stringify(result);
         } catch (error) {
@@ -2087,10 +2400,10 @@ export class ToolManager {
 
             if (error instanceof Error) {
                 error.cause = name;
-                return error.toString();
+                return error;
             }
 
-            return new Error('Unknown error occurred while invoking the tool.', { cause: name }).toString();
+            return new Error('Unknown error occurred while invoking the tool.', { cause: name });
         }
     }
 
@@ -2727,9 +3040,23 @@ Here are the available tools:
             toastr.clear(toast);
             console.log('[ToolManager] Function tool result:', result);
 
-            // Save a successful invocation
+            // Handle tool errors — still create an invocation so the LLM sees the failure
             if (toolResult instanceof Error) {
                 result.errors.push(toolResult);
+                if (isStealth) {
+                    result.stealthCalls.push(name);
+                } else {
+                    result.invocations.push({
+                        id,
+                        displayName,
+                        name,
+                        parameters: stringify(parameters),
+                        result: toolResult.toString(),
+                        error: true,
+                        signature: toolCall.signature || null,
+                        reasoning: reasoningText || null,
+                    });
+                }
                 continue;
             }
 
@@ -2745,6 +3072,7 @@ Here are the available tools:
                 name,
                 parameters: stringify(parameters),
                 result: toolResult,
+                error: false,
                 signature: toolCall.signature || null,
                 reasoning: reasoningText || null,
             };

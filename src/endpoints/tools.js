@@ -31,18 +31,6 @@ const BROWSER_SCREENSHOT_GRID_STEP_PX = 200;
 const BROWSER_SCREENSHOT_GRID_MAJOR_STEP_PX = 600;
 const BROWSER_SCREENSHOT_GRID_PERSIST_MS = 3_000;
 const BROWSER_SCREENSHOT_CLICK_PERSIST_MS = 5_000;
-const SAFE_POWERSHELL_BUILTINS = new Set([
-    'cat',
-    'dir',
-    'echo',
-    'gc',
-    'gci',
-    'get-childitem',
-    'get-content',
-    'ls',
-    'pwd',
-    'type',
-]);
 const browserStates = new Map();
 
 // Track active processes to kill previous ones when new ones start
@@ -66,6 +54,7 @@ const COMMAND_DENYLIST = new Set([
     'ren',
     'icacls',
 ]);
+const POWERSHELL_COMMAND = process.platform === 'win32' ? 'powershell.exe' : 'powershell';
 
 let cachedPythonLauncher = null;
 let playwrightModulePromise = null;
@@ -2342,123 +2331,280 @@ router.post('/writefile', async (req, res) => {
 });
 
 /**
- * Executes a command safely using `spawn` and returns a promise.
- * Most commands execute directly with `shell: false`. A small allowlist of simple
- * Windows read-only shell builtins is routed through PowerShell so commands such as
- * `dir` work without enabling arbitrary shell chaining.
- * @param {string} command - The full command string to execute.
- * @param {object} options - Options to pass to spawn, including `cwd` and `signal`.
- * @returns {Promise<{stdout: string, stderr: string, code: number}>}
+ * Best-effort extraction of the first invoked command from a PowerShell command string.
+ * This is only used for the denylist check; sandboxing remains the primary safety boundary.
+ * @param {string} command
+ * @returns {string}
  */
-function spawnPromise(command, options) {
-    return new Promise((resolve, reject) => {
-        const parts = command.trim().split(/\s+/);
-        const cmd = parts[0];
-        const args = parts.slice(1);
+function getPowerShellCommandCandidate(command) {
+    const trimmedCommand = String(command ?? '').trim();
+    if (!trimmedCommand) {
+        return '';
+    }
 
-        if (!cmd) {
-            return reject(new Error('Command cannot be empty.'));
-        }
+    const normalizedCommand = trimmedCommand.replace(/^&\s*/, '');
+    const commandMatch = normalizedCommand.match(/^(['"]?)([^'"`\s|&;><()]+)\1/);
+    if (!commandMatch) {
+        return '';
+    }
 
-        const normalizedCmd = path.basename(cmd).toLowerCase();
+    return path.basename(commandMatch[2]).toLowerCase();
+}
 
-        if (COMMAND_DENYLIST.has(normalizedCmd)) {
-            const errorMessage = `Error: The command "${normalizedCmd}" is forbidden for security reasons.`;
-            console.warn(`Blocked forbidden command: ${command}`);
-            return reject(new Error(errorMessage));
-        }
+/**
+ * Writes a structured shell execution event to the streaming response.
+ * @param {express.Response} res
+ * @param {Record<string, any>} payload
+ */
+function writeShellEvent(res, payload) {
+    if (res.writableEnded || res.destroyed) {
+        return;
+    }
 
-        const hasShellMetacharacters = /[;&|><`\r\n]/.test(command);
-        const usePowerShell = process.platform === 'win32'
-            && SAFE_POWERSHELL_BUILTINS.has(normalizedCmd)
-            && !hasShellMetacharacters;
-        const spawnCommand = usePowerShell ? 'powershell.exe' : cmd;
-        const spawnArgs = usePowerShell
-            ? ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', command]
-            : args;
+    res.write(`${JSON.stringify(payload)}\n`);
+}
 
-        const childProcess = spawn(spawnCommand, spawnArgs, {
-            ...options,
-            shell: false,
-            env: {
-                ...process.env,
-                ...(options.env || {}),
-                PYTHONIOENCODING: 'utf-8',
-                PYTHONUTF8: '1',
-            },
-        });
+/**
+ * Stops the currently tracked shell process, if any.
+ * @param {string} reason
+ * @param {string} [expectedRunId]
+ * @returns {boolean}
+ */
+function stopActiveShellProcess(reason, expectedRunId) {
+    const activeShell = activeProcesses.shell;
+    if (!activeShell) {
+        return false;
+    }
 
-        let stdout = '';
-        let stderr = '';
+    if (expectedRunId && activeShell.runId !== expectedRunId) {
+        return false;
+    }
 
-        childProcess.stdout.on('data', (data) => { stdout += data.toString(); });
-        childProcess.stderr.on('data', (data) => { stderr += data.toString(); });
+    if (activeShell.stopRequested) {
+        return true;
+    }
 
-        const killProcess = () => {
-            if (!childProcess.killed) {
-                childProcess.kill();
-            }
+    activeShell.stopRequested = true;
+    activeShell.stopReason = reason;
+
+    if (!activeShell.childProcess.killed) {
+        activeShell.childProcess.kill();
+    }
+
+    return true;
+}
+
+/**
+ * Resolves and validates the requested shell working directory.
+ * @param {string} userHandle
+ * @param {unknown} workspace
+ * @param {unknown} character
+ * @param {unknown} cwd
+ * @returns {Promise<{ sandboxDir: string, workingDir: string, displayCwd: string }>}
+ */
+async function resolveShellWorkingDirectory(userHandle, workspace, character, cwd) {
+    const sandboxDir = getSandboxDir(userHandle, workspace, character);
+    await fs.mkdir(sandboxDir, { recursive: true });
+
+    if (cwd === undefined || cwd === null || String(cwd).trim() === '') {
+        return {
+            sandboxDir,
+            workingDir: sandboxDir,
+            displayCwd: '.',
         };
+    }
 
-        const onError = (error) => {
-            killProcess();
-            error.stdout = stdout;
-            error.stderr = stderr;
-            reject(error);
-        };
+    if (typeof cwd !== 'string') {
+        const error = new Error('cwd must be a string.');
+        error.statusCode = 400;
+        throw error;
+    }
 
-        childProcess.on('error', onError);
+    if (!(await isPathInSandbox(cwd, userHandle, workspace, character, { checkExists: true }))) {
+        const error = new Error('cwd must stay inside the sandbox and refer to an existing directory.');
+        error.statusCode = 403;
+        throw error;
+    }
 
-        childProcess.on('close', (code) => {
-            resolve({ stdout, stderr, code });
-        });
+    const workingDir = path.resolve(sandboxDir, cwd);
+    const stat = await fs.stat(workingDir);
+    if (!stat.isDirectory()) {
+        const error = new Error('cwd must point to a directory.');
+        error.statusCode = 400;
+        throw error;
+    }
 
-        if (options.signal) {
-            options.signal.addEventListener('abort', () => {
-                killProcess();
-                reject(new Error('Execution was cancelled by the user.'));
-            });
-        }
-    });
+    return {
+        sandboxDir,
+        workingDir,
+        displayCwd: workingDir.replaceAll('\\', '/'),
+    };
 }
 
 router.post('/executeshell', async (req, res) => {
-    const { command, workspace, character } = req.body;
+    const { command, explanation, cwd, workspace, character } = req.body ?? {};
 
-    if (!command) {
+    if (typeof command !== 'string' || !command.trim()) {
         return res.status(400).json({ error: 'command is required.' });
     }
 
-    // Kill any previous shell process
-    if (activeProcesses.shell && !activeProcesses.shell.killed) {
-        console.log('Killing previous shell process.');
-        activeProcesses.shell.kill();
+    if (typeof explanation !== 'string' || !explanation.trim()) {
+        return res.status(400).json({ error: 'explanation is required and must describe what the command does.' });
     }
 
+    const normalizedCandidate = getPowerShellCommandCandidate(command);
+    if (normalizedCandidate && COMMAND_DENYLIST.has(normalizedCandidate)) {
+        const errorMessage = `Error: The command "${normalizedCandidate}" is forbidden for security reasons.`;
+        console.warn(`Blocked forbidden command: ${command}`);
+        return res.status(403).json({ error: errorMessage });
+    }
+
+    let sandboxDir;
+    let workingDir;
+    let displayCwd;
     try {
-        const sandboxDir = getSandboxDir(req.user.profile.handle, workspace, character);
-        await fs.mkdir(sandboxDir, { recursive: true });
-        const { stdout, stderr } = await spawnPromise(command, {
-            cwd: sandboxDir,
-            signal: req.signal,
-            env: {
-                ST_SANDBOX_DIR: sandboxDir,
-                ST_UPLOADS_DIR: sandboxDir,
-            },
-        });
-
-        const fullOutput = stdout + stderr;
-        res.json({ output: fullOutput });
+        ({ sandboxDir, workingDir, displayCwd } = await resolveShellWorkingDirectory(req.user.profile.handle, workspace, character, cwd));
     } catch (error) {
-        console.error(`Error executing command "${command}":`, error);
-        const fullOutput = (error.stdout || '') + (error.stderr || '');
+        const statusCode = Number(error?.statusCode) || 500;
+        const message = error instanceof Error ? error.message : 'Failed to resolve the shell working directory.';
+        if (statusCode >= 500) {
+            console.error('Error resolving shell working directory:', error);
+        }
+        return res.status(statusCode).json({ error: message });
+    }
 
-        if (error.message.includes('forbidden for security reasons')) {
-            return res.status(403).json({ output: error.message });
+    if (activeProcesses.shell) {
+        console.log('Stopping previous shell process.');
+        stopActiveShellProcess('replaced');
+    }
+
+    const runId = crypto.randomBytes(16).toString('hex');
+    let clientDisconnected = false;
+    let responseEnded = false;
+
+    res.setHeader('Content-Type', 'application/x-ndjson; charset=utf-8');
+    res.setHeader('Transfer-Encoding', 'chunked');
+    res.setHeader('Cache-Control', 'no-store');
+    res.flushHeaders?.();
+
+    const childProcess = spawn(POWERSHELL_COMMAND, ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', command], {
+        cwd: workingDir,
+        shell: false,
+        env: {
+            ...process.env,
+            ST_SANDBOX_DIR: sandboxDir,
+            ST_UPLOADS_DIR: sandboxDir,
+            PYTHONIOENCODING: 'utf-8',
+            PYTHONUTF8: '1',
+        },
+    });
+
+    const shellProcess = {
+        runId,
+        childProcess,
+        stopRequested: false,
+        stopReason: null,
+    };
+    activeProcesses.shell = shellProcess;
+
+    writeShellEvent(res, {
+        type: 'started',
+        runId,
+        explanation,
+        command,
+        cwd: displayCwd,
+    });
+
+    childProcess.stdout.on('data', (data) => {
+        writeShellEvent(res, { type: 'stdout', runId, chunk: data.toString('utf-8') });
+    });
+
+    childProcess.stderr.on('data', (data) => {
+        writeShellEvent(res, { type: 'stderr', runId, chunk: data.toString('utf-8') });
+    });
+
+    childProcess.on('close', (code) => {
+        console.log(`PowerShell process exited with code ${code}`);
+        if (activeProcesses.shell?.runId === runId) {
+            activeProcesses.shell = null;
         }
 
-        res.json({ output: fullOutput || `Command failed with error: ${error.message}` });
+        if (clientDisconnected || responseEnded) {
+            return;
+        }
+
+        responseEnded = true;
+        if (shellProcess.stopRequested) {
+            writeShellEvent(res, {
+                type: 'stopped',
+                runId,
+                exitCode: code ?? null,
+                reason: shellProcess.stopReason || 'stopped',
+            });
+        } else if (code === 0) {
+            writeShellEvent(res, { type: 'completed', runId, exitCode: 0 });
+        } else {
+            writeShellEvent(res, {
+                type: 'failed',
+                runId,
+                exitCode: code ?? null,
+                message: `PowerShell exited with code ${code ?? 'unknown'}.`,
+            });
+        }
+        res.end();
+    });
+
+    childProcess.on('error', (error) => {
+        console.error('Failed to start PowerShell process.', error);
+        if (activeProcesses.shell?.runId === runId) {
+            activeProcesses.shell = null;
+        }
+
+        if (clientDisconnected || responseEnded) {
+            return;
+        }
+
+        responseEnded = true;
+        writeShellEvent(res, {
+            type: 'failed',
+            runId,
+            message: `Failed to start PowerShell: ${error.message}`,
+        });
+        res.end();
+    });
+
+    const handleClientDisconnect = () => {
+        if (responseEnded) {
+            return;
+        }
+
+        clientDisconnected = true;
+        if (activeProcesses.shell?.runId === runId) {
+            activeProcesses.shell = null;
+        }
+
+        if (!childProcess.killed) {
+            console.log('Client disconnected, killing PowerShell process.');
+            childProcess.kill();
+        }
+    };
+
+    req.on('aborted', handleClientDisconnect);
+    res.on('close', handleClientDisconnect);
+});
+
+router.post('/executeshell/stop', (req, res) => {
+    const { runId } = req.body ?? {};
+
+    if (typeof runId !== 'string' || !runId.trim()) {
+        return res.status(400).json({ error: 'runId is required.' });
     }
+
+    if (!stopActiveShellProcess('stopped', runId)) {
+        return res.status(404).json({ error: 'No running PowerShell command found for this run.' });
+    }
+
+    return res.json({ ok: true });
 });
 
 router.post('/executepython', async (req, res) => {

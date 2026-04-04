@@ -262,7 +262,7 @@ import { initInputMarkdown } from './scripts/input-md-formatting.js';
 import { AbortReason } from './scripts/util/AbortReason.js';
 import { initSystemPrompts } from './scripts/sysprompt.js';
 import { registerExtensionSlashCommands as initExtensionSlashCommands } from './scripts/extensions-slashcommands.js';
-import { ToolManager, initToolCalling } from './scripts/tool-calling.js';
+import { ToolManager, initToolCalling, stopActiveShellRun } from './scripts/tool-calling.js';
 import { addShowdownPatch } from './scripts/util/showdown-patch.js';
 import { applyBrowserFixes } from './scripts/browser-fixes.js';
 import { initServerHistory } from './scripts/server-history.js';
@@ -2085,7 +2085,7 @@ export function updateMessageBlock(messageId, message, { rerenderMessage = true 
         if (message.extra?.is_tool_call && message.extra?.tool_call_info) {
             messageElement.find('.mes_text').html(getToolCallMessageHtml(message, messageId));
         } else if (message.extra?.is_tool_result) {
-            renderToolResultText(messageElement.find('.mes_text'), message, message.mes);
+            renderToolResultText(messageElement.find('.mes_text'), message, messageId, message.mes);
         } else {
             const text = message?.extra?.display_text ?? message.mes;
             messageElement.find('.mes_text').html(messageFormatting(text, message.name, message.is_system, message.is_user, messageId, {}, false));
@@ -2108,6 +2108,76 @@ export function updateMessageBlock(messageId, message, { rerenderMessage = true 
 
     addCopyToCodeBlocks(messageElement);
     appendMediaToMessage(message, messageElement);
+}
+
+/**
+ * Safely parses tool-call arguments into an object.
+ * @param {any} args
+ * @returns {Record<string, any>}
+ */
+function parseToolCallArguments(args) {
+    if (args && typeof args === 'object' && !Array.isArray(args)) {
+        return args;
+    }
+
+    if (typeof args === 'string') {
+        try {
+            const parsed = JSON.parse(args);
+            return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+        } catch {
+            return {};
+        }
+    }
+
+    return {};
+}
+
+/**
+ * Checks if the provided tool call targets the PowerShell executor.
+ * @param {any} toolInfo
+ * @returns {boolean}
+ */
+function isShellToolCall(toolInfo) {
+    return toolInfo?.tool === 'execute_shell';
+}
+
+/**
+ * Builds a one-line PowerShell command preview.
+ * @param {string} command
+ * @param {string} cwd
+ * @returns {string}
+ */
+function getShellCommandDetailsHtml(command, cwd) {
+    const trimmedCommand = String(command ?? '');
+    const trimmedCwd = String(cwd ?? '').trim();
+    const commandLine = trimmedCwd && trimmedCwd !== '.'
+        ? `${trimmedCwd}> ${trimmedCommand}`
+        : trimmedCommand;
+    return `
+        <div class="tool-shell-details">
+            <div class="tool-shell-detail-row tool-shell-command-row">
+                <pre class="tool-shell-command"><code>${DOMPurify.sanitize(commandLine)}</code></pre>
+            </div>
+        </div>
+    `;
+}
+
+/**
+ * Formats a shell run status for display.
+ * @param {string} status
+ * @returns {string}
+ */
+function formatShellStatusLabel(status) {
+    switch (status) {
+        case 'running':
+            return 'Running';
+        case 'failed':
+            return 'Failed';
+        case 'stopped':
+            return 'Stopped';
+        default:
+            return 'Completed';
+    }
 }
 
 /**
@@ -2141,9 +2211,30 @@ function getToolCallMessageHtml(message, messageId, { includeExecuteButton = tru
 
     const toolName = DOMPurify.sanitize(toolInfo.tool ?? '');
     const isAgnosticToolCall = typeof message?.mes === 'string' && message.mes.includes('<tool>');
+    const toolArgsObject = parseToolCallArguments(toolInfo.args);
+    const canExecuteTool = includeExecuteButton && power_user.tool_execution_mode === 'manual' && !message.extra?.tool_call_started;
+
+    if (isShellToolCall(toolInfo)) {
+        const explanation = String(toolArgsObject.explanation ?? '').trim() || 'Runs a PowerShell command.';
+        const command = String(toolArgsObject.command ?? '');
+        const cwd = String(toolArgsObject.cwd ?? '.').trim() || '.';
+
+        html += '<div class="tool-call-box tool-shell-call-box">';
+        html += '<h4><i class="fa-solid fa-terminal"></i> Powershell</h4>';
+        html += `<div class="tool-shell-summary"><p class="tool-shell-explanation">${DOMPurify.sanitize(explanation)}</p></div>`;
+        html += getShellCommandDetailsHtml(command, cwd);
+        html += '</div>';
+
+        if (canExecuteTool) {
+            html += `<button class="tool-execute-button" data-tool-name="${toolName}" data-message-id="${messageId}"><i class="fa-solid fa-play"></i> Execute Tool</button>`;
+        }
+
+        return html;
+    }
+
     let toolArgs = '{}';
     try {
-        toolArgs = JSON.stringify(toolInfo.args ?? {}, null, 2);
+        toolArgs = JSON.stringify(toolArgsObject, null, 2);
         if (isAgnosticToolCall) {
             // In native/agnostic tool calls, show escaped newlines as actual line breaks for readability.
             toolArgs = toolArgs
@@ -2160,7 +2251,7 @@ function getToolCallMessageHtml(message, messageId, { includeExecuteButton = tru
     html += `<p><b>Arguments:</b></p><pre><code>${DOMPurify.sanitize(toolArgs)}</code></pre></div>`;
     html += '</div>';
 
-    if (includeExecuteButton && power_user.tool_execution_mode === 'manual') {
+    if (canExecuteTool) {
         html += `<button class="tool-execute-button" data-tool-name="${toolName}" data-message-id="${messageId}"><i class="fa-solid fa-play"></i> Execute Tool</button>`;
     }
 
@@ -2190,11 +2281,43 @@ function getToolResultDisplayText(message, fallbackText = '') {
 /**
  * Builds formatted HTML for a text tool result message.
  * @param {ChatMessage} message Message object
+ * @param {number} messageId Message ID
  * @param {string} [fallbackText=''] Fallback text if tool_result_content is absent
  * @returns {string} Tool result HTML
  */
-function getToolResultMessageHtml(message, fallbackText = '') {
+function getToolResultMessageHtml(message, messageId, fallbackText = '') {
     const toolResult = getToolResultDisplayText(message, fallbackText);
+    const shellCommand = message?.extra?.shell_command;
+
+    if (shellCommand) {
+        const status = typeof shellCommand.status === 'string' ? shellCommand.status : 'completed';
+        const statusLabel = formatShellStatusLabel(status);
+        const explanation = DOMPurify.sanitize(shellCommand.explanation || 'PowerShell command');
+        const statusBadge = status === 'running'
+            ? ''
+            : `<span class="tool-shell-status tool-shell-status-${DOMPurify.sanitize(status)}">${statusLabel}</span>`;
+        const stopButton = status === 'running'
+            ? `<button class="tool-stop-command-button" data-message-id="${messageId}"><i class="fa-solid fa-stop"></i> Stop command</button>`
+            : '';
+        const outputHtml = toolResult
+            ? `<pre><code>${DOMPurify.sanitize(toolResult)}</code></pre>`
+            : `<div class="tool-shell-empty">${status === 'running' ? 'Waiting for output...' : 'No output.'}</div>`;
+
+        return `
+            <div class="tool-result-box tool-shell-result-box">
+                <div class="tool-shell-header">
+                    <h4><i class="fa-solid fa-terminal"></i> Powershell</h4>
+                    ${statusBadge}
+                </div>
+                <div class="tool-shell-summary-row">
+                    <div class="tool-shell-explanation">${explanation}</div>
+                    ${stopButton}
+                </div>
+                ${outputHtml}
+            </div>
+        `;
+    }
+
     return `<div class="tool-result-box"><h4><i class="fa-solid fa-check-circle"></i> Tool Result</h4><pre><code>${DOMPurify.sanitize(toolResult)}</code></pre></div>`;
 }
 
@@ -2203,10 +2326,11 @@ function getToolResultMessageHtml(message, fallbackText = '') {
  * Tool results may also include media, so the text should remain visible.
  * @param {JQuery<HTMLElement>} container
  * @param {ChatMessage} message
+ * @param {number} messageId
  * @param {string} [fallbackText='']
  */
-function renderToolResultText(container, message, fallbackText = '') {
-    container.html(getToolResultMessageHtml(message, fallbackText));
+function renderToolResultText(container, message, messageId, fallbackText = '') {
+    container.html(getToolResultMessageHtml(message, messageId, fallbackText));
 }
 
 /**
@@ -2325,6 +2449,61 @@ async function createSpecialToolResultMessage(toolResult) {
         console.error('[Tool Result] Failed to parse special tool result:', error);
         return null;
     }
+}
+
+/**
+ * Creates a live PowerShell result message in the running state.
+ * @param {any} toolInfo
+ * @returns {ChatMessage}
+ */
+function createShellToolResultMessage(toolInfo) {
+    const toolArgs = parseToolCallArguments(toolInfo?.args);
+    const command = String(toolArgs.command ?? '');
+    const explanation = String(toolArgs.explanation ?? '').trim() || 'PowerShell command';
+    const cwd = String(toolArgs.cwd ?? '.').trim() || '.';
+    return {
+        name: systemUserName,
+        is_user: false,
+        is_system: true,
+        mes: '<tool_result>\n\n</tool_result>',
+        extra: {
+            is_tool_result: true,
+            tool_result_content: '',
+            shell_command: {
+                command,
+                cwd,
+                explanation,
+                started_at: Date.now(),
+                status: 'running',
+            },
+        },
+    };
+}
+
+/**
+ * Builds a plain text tool result message for tools that do not return media.
+ * @param {string|object} toolResult
+ * @returns {Promise<ChatMessage>}
+ */
+async function createTextToolResultMessage(toolResult) {
+    const cappedToolResult = await capToolOutput(String(toolResult));
+    return {
+        name: systemUserName,
+        is_user: false,
+        is_system: true,
+        mes: `<tool_result>\n${cappedToolResult}\n</tool_result>`,
+        extra: { is_tool_result: true, tool_result_content: cappedToolResult },
+    };
+}
+
+/**
+ * Builds the persisted result message for a completed non-shell tool invocation.
+ * @param {string|object} toolResult
+ * @returns {Promise<ChatMessage>}
+ */
+async function createCompletedToolResultMessage(toolResult) {
+    const specialMessage = await createSpecialToolResultMessage(toolResult);
+    return specialMessage || createTextToolResultMessage(toolResult);
 }
 
 /**
@@ -2981,7 +3160,7 @@ export function updateMessageElement(mes, { messageId = chat.length - 1, message
         messageElement.find('.mes_text').html(getToolCallMessageHtml(mes, messageId));
     } else if (mes.extra?.is_tool_result) {
         messageElement.addClass('tool-result-message');
-        renderToolResultText(messageElement.find('.mes_text'), mes, mes.mes);
+        renderToolResultText(messageElement.find('.mes_text'), mes, messageId, mes.mes);
         appendMediaToMessage(mes, messageElement);
     } else {
         if (mes?.extra?.isSmallSys === true) {
@@ -3289,6 +3468,11 @@ export function substituteParamsLegacy(content, _name1, _name2, _original, _grou
  */
 export function substituteParams(content, options = {}) {
     if (!content) return '';
+
+    if (typeof content !== 'string') {
+        console.warn('substituteParams: content will be coerced to string', content);
+        content = String(content);
+    }
 
     // Handle legacy signature calls to substituteParams
     // We'll simply re-route them to a temporary legacy function. In the future, we'll remove this and cleanly build the options object ourselves.
@@ -4032,7 +4216,7 @@ class StreamingProcessor {
             if (this.messageTextDom instanceof HTMLElement) {
                 const isTextToolResult = !!chat[messageId].extra?.is_tool_result;
                 if (isTextToolResult) {
-                    this.messageTextDom.innerHTML = getToolResultMessageHtml(chat[messageId], processedText);
+                    this.messageTextDom.innerHTML = getToolResultMessageHtml(chat[messageId], messageId, processedText);
                 } else if (power_user.stream_fade_in) {
                     applyStreamFadeIn(this.messageTextDom, formattedText);
                 } else {
@@ -4144,24 +4328,33 @@ class StreamingProcessor {
                 }
 
                 // Auto mode: execute tool immediately
-                const toolResult = await ToolManager.invokeFunctionTool(parsedTool.tool_call.tool, parsedTool.tool_call.args, this.abortController.signal);
-
-                let resultMessage = await createSpecialToolResultMessage(toolResult);
-                let stopGeneration = !shouldContinueAfterTool;
-
-                if (!resultMessage) {
-                    const cappedToolResult = await capToolOutput(toolResult);
-                    resultMessage = {
-                        name: systemUserName,
-                        is_user: false,
-                        is_system: true,
-                        mes: `<tool_result>\n${cappedToolResult}\n</tool_result>`,
-                        extra: { is_tool_result: true, tool_result_content: cappedToolResult },
-                    };
+                const isShellTool = isShellToolCall(parsedTool.tool_call);
+                let liveShellMessageId = null;
+                if (isShellTool) {
+                    const liveShellMessage = createShellToolResultMessage(parsedTool.tool_call);
+                    chat.push(liveShellMessage);
+                    liveShellMessageId = chat.length - 1;
+                    addOneMessage(liveShellMessage);
                 }
 
-                chat.push(resultMessage);
-                addOneMessage(resultMessage);
+                const toolResult = await ToolManager.invokeFunctionTool(parsedTool.tool_call.tool, parsedTool.tool_call.args, {
+                    signal: this.abortController.signal,
+                    liveMessageId: liveShellMessageId,
+                });
+
+                let stopGeneration = !shouldContinueAfterTool;
+                if (isShellTool) {
+                    const shellStatus = liveShellMessageId !== null
+                        ? chat[liveShellMessageId]?.extra?.shell_command?.status
+                        : null;
+                    if (shellStatus === 'stopped') {
+                        stopGeneration = true;
+                    }
+                } else {
+                    const resultMessage = await createCompletedToolResultMessage(toolResult);
+                    chat.push(resultMessage);
+                    addOneMessage(resultMessage);
+                }
 
                 if (!stopGeneration) {
                     const newOptions = { ...this.generateOptions, depth: this.generateOptions.depth + 1 };
@@ -4301,9 +4494,7 @@ export function createRawPrompt(prompt, api, instructOverride, quietToLoud, syst
 
     // If the prompt was given as a string, convert to a message-style object assuming user role
     if (typeof prompt === 'string') {
-        const message = api === 'openai'
-            ? { role: 'user', content: prompt.trim() }
-            : { role: 'system', content: prompt };
+        const message = { role: 'user', content: prompt.trim() };
         prompt = [message];
     } else {  // checks for message-style object
         if (prompt.length === 0 && !systemPrompt) throw Error('No messages provided');
@@ -4330,7 +4521,12 @@ export function createRawPrompt(prompt, api, instructOverride, quietToLoud, syst
     // prepend system prompt, if provided
     if (systemPrompt) {
         systemPrompt = substituteParams(systemPrompt);
-        systemPrompt = isInstruct ? (formatInstructModeStoryString(systemPrompt) + '\n') : systemPrompt.trim();
+        systemPrompt = isInstruct ? formatInstructModeStoryString(systemPrompt) : systemPrompt.trim();
+        if (isInstruct && systemPrompt.length > 0 && !systemPrompt.endsWith('\n')) {
+            if (power_user.instruct.wrap && !power_user.instruct.story_string_suffix) {
+                systemPrompt += '\n';
+            }
+        }
         prompt.unshift({ role: 'system', content: systemPrompt });
     }
 
@@ -5956,24 +6152,35 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
                 }
 
                 // Auto mode: execute tool immediately
-                const toolResult = await ToolManager.invokeFunctionTool(parsedTool.tool_call.tool, parsedTool.tool_call.args, signal);
-
-                let resultMessage = await createSpecialToolResultMessage(toolResult);
-                let stopGeneration = !shouldContinueAfterTool;
-
-                if (!resultMessage) {
-                    const cappedToolResult = await capToolOutput(toolResult);
-                    resultMessage = {
-                        name: systemUserName,
-                        is_user: false,
-                        is_system: true,
-                        mes: `<tool_result>\n${cappedToolResult}\n</tool_result>`,
-                        extra: { is_tool_result: true, tool_result_content: cappedToolResult },
-                    };
+                const isShellTool = isShellToolCall(parsedTool.tool_call);
+                let liveShellMessageId = null;
+                if (isShellTool) {
+                    const liveShellMessage = createShellToolResultMessage(parsedTool.tool_call);
+                    chat.push(liveShellMessage);
+                    liveShellMessageId = chat.length - 1;
+                    addOneMessage(liveShellMessage);
                 }
 
-                chat.push(resultMessage);
-                addOneMessage(resultMessage);
+                const toolResult = await ToolManager.invokeFunctionTool(parsedTool.tool_call.tool, parsedTool.tool_call.args, {
+                    signal,
+                    liveMessageId: liveShellMessageId,
+                });
+
+                let stopGeneration = !shouldContinueAfterTool;
+                if (isShellTool) {
+                    const shellStatus = liveShellMessageId !== null
+                        ? chat[liveShellMessageId]?.extra?.shell_command?.status
+                        : null;
+                    if (shellStatus === 'stopped') {
+                        stopGeneration = true;
+                    }
+                } else {
+                    const resultMessage = await createCompletedToolResultMessage(toolResult);
+                    chat.push(resultMessage);
+                    addOneMessage(resultMessage);
+                }
+
+                await saveChatConditional();
 
                 if (stopGeneration) {
                     unblockGeneration(type);
@@ -6348,11 +6555,11 @@ export async function sendMessageAsUser(messageText, messageBias, insertAt = nul
         await eventSource.emit(event_types.USER_MESSAGE_RENDERED, insertAt);
     } else {
         chat.push(message);
+        await saveChatConditional();
         const chat_id = (chat.length - 1);
         await eventSource.emit(event_types.MESSAGE_SENT, chat_id);
         addOneMessage(message);
         await eventSource.emit(event_types.USER_MESSAGE_RENDERED, chat_id);
-        await saveChatConditional();
     }
 
     return message;
@@ -8851,7 +9058,7 @@ async function messageEditDone(div) {
     if (mes.extra?.is_tool_result) {
         hydrateToolResultMedia(mes);
         ensureMessageMediaIsArray(mes);
-        renderToolResultText(mesBlock.find('.mes_text'), mes, text);
+        renderToolResultText(mesBlock.find('.mes_text'), mes, this_edit_mes_id, text);
     } else if (mes.extra?.is_tool_call && mes.extra?.tool_call_info) {
         mesBlock.find('.mes_text').html(getToolCallMessageHtml(mes, this_edit_mes_id));
     } else {
@@ -13053,29 +13260,39 @@ jQuery(async function () {
 
         try {
             const toolInfo = message.extra.tool_call_info;
-            const toolResult = await ToolManager.invokeFunctionTool(toolInfo.tool, toolInfo.args, undefined);
+            const isShellTool = isShellToolCall(toolInfo);
+            message.extra.tool_call_started = true;
+            updateMessageBlock(messageId, message);
+
+            let liveShellMessageId = null;
+            if (isShellTool) {
+                const liveShellMessage = createShellToolResultMessage(toolInfo);
+                chat.push(liveShellMessage);
+                liveShellMessageId = chat.length - 1;
+                addOneMessage(liveShellMessage);
+            }
+
+            const toolResult = await ToolManager.invokeFunctionTool(toolInfo.tool, toolInfo.args, {
+                liveMessageId: liveShellMessageId,
+            });
             const shouldContinueAfterTool = !(toolInfo?.continue === false || String(toolInfo?.continue).trim().toLowerCase() === 'false');
-
-            let resultMessage = await createSpecialToolResultMessage(toolResult);
             let stopGeneration = !shouldContinueAfterTool;
-
-            if (!resultMessage) {
-                const cappedToolResult = await capToolOutput(String(toolResult));
-                resultMessage = {
-                    name: systemUserName,
-                    is_user: false,
-                    is_system: true,
-                    mes: `<tool_result>\n${cappedToolResult}\n</tool_result>`,
-                    extra: { is_tool_result: true, tool_result_content: cappedToolResult },
-                };
+            if (isShellTool) {
+                const shellStatus = liveShellMessageId !== null
+                    ? chat[liveShellMessageId]?.extra?.shell_command?.status
+                    : null;
+                if (shellStatus === 'stopped') {
+                    stopGeneration = true;
+                }
+            } else {
+                const resultMessage = await createCompletedToolResultMessage(toolResult);
+                chat.push(resultMessage);
+                addOneMessage(resultMessage);
             }
 
             // Remove the execute button from the UI
             button.remove();
 
-            // Add the result message to chat
-            chat.push(resultMessage);
-            addOneMessage(resultMessage);
             await saveChatConditional();
 
             // Continue generation unless it's a stop-generating tool
@@ -13086,10 +13303,39 @@ jQuery(async function () {
             }
         } catch (error) {
             console.error('[Manual Tool Execution] Error:', error);
+            message.extra.tool_call_started = false;
+            updateMessageBlock(messageId, message);
             toastr.error('Failed to execute tool: ' + String(error));
             button.removeClass('executing');
             button.html('<i class="fa-solid fa-play"></i> Execute Tool');
         }
+    });
+
+    $(document).on('click', '.tool-stop-command-button', async function (e) {
+        e.stopPropagation();
+        e.preventDefault();
+        const button = $(this);
+        const messageId = Number(button.data('message-id'));
+
+        if (!Number.isInteger(messageId) || button.prop('disabled')) {
+            return;
+        }
+
+        button.prop('disabled', true);
+        button.addClass('executing');
+        button.html('<i class="fa-solid fa-spinner fa-spin"></i> Stopping...');
+
+        const stopped = await stopActiveShellRun(messageId);
+        if (!stopped) {
+            button.prop('disabled', false);
+            button.removeClass('executing');
+            button.html('<i class="fa-solid fa-stop"></i> Stop command');
+            toastr.error('Unable to stop the running PowerShell command.');
+        }
+    });
+
+    $(document).on('click', '.tool-shell-call-box, .tool-shell-result-box', function (e) {
+        e.stopPropagation();
     });
 
     // Added here to prevent execution before script.js is loaded and get rid of quirky timeouts

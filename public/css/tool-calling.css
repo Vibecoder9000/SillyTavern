@@ -44,6 +44,94 @@
     margin: 0 0 5px 0;
 }
 
+.tool-shell-summary,
+.tool-shell-summary-row {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 10px;
+}
+
+.tool-shell-summary-row {
+    flex-wrap: wrap;
+}
+
+.tool-shell-summary-row .tool-stop-command-button {
+    margin-top: 0;
+}
+
+.tool-shell-explanation {
+    margin: 0;
+    font-size: 0.95em;
+    line-height: 1.5;
+}
+
+.tool-shell-details {
+    margin-bottom: 10px;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 4px;
+    background-color: rgba(0, 0, 0, 0.15);
+}
+
+.tool-shell-detail-row {
+    padding: 10px;
+}
+
+.tool-shell-command {
+    margin: 0;
+}
+
+.tool-shell-command-row {
+    padding: 10px;
+}
+
+.tool-shell-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.tool-shell-status {
+    display: inline-flex;
+    align-items: center;
+    padding: 4px 10px;
+    border-radius: 999px;
+    font-size: 0.8em;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+
+.tool-shell-status-running {
+    background-color: rgba(72, 187, 120, 0.18);
+    color: #92f0b2;
+}
+
+.tool-shell-status-completed {
+    background-color: rgba(76, 144, 250, 0.18);
+    color: #9fc7ff;
+}
+
+.tool-shell-status-failed {
+    background-color: rgba(245, 101, 101, 0.2);
+    color: #ffb0b0;
+}
+
+.tool-shell-status-stopped {
+    background-color: rgba(237, 137, 54, 0.2);
+    color: #ffd0a1;
+}
+
+.tool-shell-empty {
+    padding: 10px;
+    border-radius: 4px;
+    background-color: rgba(0, 0, 0, 0.15);
+    color: #bbb;
+    font-style: italic;
+}
+
 .tool-call-box pre,
 .tool-result-box pre {
     white-space: pre-wrap;
@@ -73,7 +161,8 @@ body.hide-tool-messages .tool-result-message {
 }
 
 /* Manual Tool Execution Button */
-.tool-execute-button {
+.tool-execute-button,
+.tool-stop-command-button {
     display: inline-flex;
     align-items: center;
     gap: 6px;
@@ -90,22 +179,31 @@ body.hide-tool-messages .tool-result-message {
     box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
 }
 
-.tool-execute-button:hover {
+.tool-stop-command-button {
+    background: linear-gradient(135deg, #c05a3b 0%, #aa3333 100%);
+}
+
+.tool-execute-button:hover,
+.tool-stop-command-button:hover {
     filter: brightness(1.1);
     box-shadow: 0 3px 6px rgba(0, 0, 0, 0.3);
     transform: translateY(-1px);
 }
 
-.tool-execute-button:active {
+.tool-execute-button:active,
+.tool-stop-command-button:active {
     transform: translateY(0);
     box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
 }
 
-.tool-execute-button i {
+.tool-execute-button i,
+.tool-stop-command-button i {
     font-size: 0.85em;
 }
 
-.tool-execute-button.executing {
+.tool-execute-button.executing,
+.tool-stop-command-button.executing,
+.tool-stop-command-button:disabled {
     opacity: 0.7;
     pointer-events: none;
 }
