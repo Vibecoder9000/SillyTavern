@@ -93,6 +93,13 @@
     gap: 12px;
 }
 
+.tool-shell-header-actions {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+
 .tool-shell-status {
     display: inline-flex;
     align-items: center;

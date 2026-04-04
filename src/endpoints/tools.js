@@ -55,6 +55,13 @@ const COMMAND_DENYLIST = new Set([
     'icacls',
 ]);
 const POWERSHELL_COMMAND = process.platform === 'win32' ? 'powershell.exe' : 'powershell';
+const POWERSHELL_UTF8_PREAMBLE = [
+    '$utf8NoBom = New-Object System.Text.UTF8Encoding $false',
+    '[Console]::InputEncoding = $utf8NoBom',
+    '[Console]::OutputEncoding = $utf8NoBom',
+    '$OutputEncoding = $utf8NoBom',
+    "$ProgressPreference = 'SilentlyContinue'",
+].join('; ');
 
 let cachedPythonLauncher = null;
 let playwrightModulePromise = null;
@@ -2352,6 +2359,17 @@ function getPowerShellCommandCandidate(command) {
 }
 
 /**
+ * Builds PowerShell arguments that force UTF-8 I/O before running the user command.
+ * @param {string} command
+ * @returns {string[]}
+ */
+function buildPowerShellInvocationArgs(command) {
+    const script = `${POWERSHELL_UTF8_PREAMBLE}; & {\n${command}\n}`;
+    const encodedCommand = Buffer.from(script, 'utf16le').toString('base64');
+    return ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', encodedCommand];
+}
+
+/**
  * Writes a structured shell execution event to the streaming response.
  * @param {express.Response} res
  * @param {Record<string, any>} payload
@@ -2487,7 +2505,7 @@ router.post('/executeshell', async (req, res) => {
     res.setHeader('Cache-Control', 'no-store');
     res.flushHeaders?.();
 
-    const childProcess = spawn(POWERSHELL_COMMAND, ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', command], {
+    const childProcess = spawn(POWERSHELL_COMMAND, buildPowerShellInvocationArgs(command), {
         cwd: workingDir,
         shell: false,
         env: {

@@ -2292,7 +2292,6 @@ function getToolResultMessageHtml(message, messageId, fallbackText = '') {
     if (shellCommand) {
         const status = typeof shellCommand.status === 'string' ? shellCommand.status : 'completed';
         const statusLabel = formatShellStatusLabel(status);
-        const explanation = DOMPurify.sanitize(shellCommand.explanation || 'PowerShell command');
         const statusBadge = status === 'running'
             ? ''
             : `<span class="tool-shell-status tool-shell-status-${DOMPurify.sanitize(status)}">${statusLabel}</span>`;
@@ -2307,11 +2306,10 @@ function getToolResultMessageHtml(message, messageId, fallbackText = '') {
             <div class="tool-result-box tool-shell-result-box">
                 <div class="tool-shell-header">
                     <h4><i class="fa-solid fa-terminal"></i> Powershell</h4>
-                    ${statusBadge}
-                </div>
-                <div class="tool-shell-summary-row">
-                    <div class="tool-shell-explanation">${explanation}</div>
-                    ${stopButton}
+                    <div class="tool-shell-header-actions">
+                        ${statusBadge}
+                        ${stopButton}
+                    </div>
                 </div>
                 ${outputHtml}
             </div>
