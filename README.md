@@ -1,4 +1,4 @@
-# SillyTavern (Vibecoder Fork)
+# SillyTavern
 
 LLM Frontend for Power Users
 
