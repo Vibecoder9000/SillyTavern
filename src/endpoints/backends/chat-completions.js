@@ -89,6 +89,7 @@ const API_ZAI_COMMON = 'https://api.z.ai/api/paas/v4';
 const API_ZAI_CODING = 'https://api.z.ai/api/coding/paas/v4';
 const API_SILICONFLOW = 'https://api.siliconflow.com/v1';
 const API_SILICONFLOW_CN = 'https://api.siliconflow.cn/v1';
+const API_ASCII = 'http://localhost:4773';
 const API_OPENROUTER = 'https://openrouter.ai/api/v1';
 
 /**
@@ -1662,6 +1663,10 @@ router.post('/status', async function (request, statusResponse) {
             apiKey = readSecret(request.user.directories, SECRET_KEYS.CUSTOM, request.body.secret_id);
             headers = {};
             mergeObjectWithYaml(headers, request.body.custom_include_headers);
+        } else if (request.body.chat_completion_source === CHAT_COMPLETION_SOURCES.ASCII) {
+            apiUrl = trimTrailingSlash(request.body.ascii_url || API_ASCII);
+            apiKey = '';
+            headers = {};
         } else if (request.body.chat_completion_source === CHAT_COMPLETION_SOURCES.COHERE) {
             apiUrl = API_COHERE_V1;
             apiKey = readSecret(request.user.directories, SECRET_KEYS.COHERE, request.body.secret_id);
@@ -1838,7 +1843,9 @@ router.post('/status', async function (request, statusResponse) {
             return statusResponse.status(400).send({ error: true });
         }
 
-        if (!apiKey && !request.body.reverse_proxy && request.body.chat_completion_source !== CHAT_COMPLETION_SOURCES.CUSTOM) {
+        if (!apiKey
+            && !request.body.reverse_proxy
+            && ![CHAT_COMPLETION_SOURCES.CUSTOM, CHAT_COMPLETION_SOURCES.ASCII].includes(request.body.chat_completion_source)) {
             console.warn('Chat Completion API key is missing.');
             return statusResponse.status(400).send({ error: true });
         }
@@ -1847,12 +1854,17 @@ router.post('/status', async function (request, statusResponse) {
         Object.keys(queryParams).forEach(key => {
             modelsUrl.searchParams.append(key, queryParams[key]);
         });
+        /** @type {Record<string, string>} */
+        const statusHeaders = {
+            ...headers,
+        };
+        if (apiKey) {
+            statusHeaders.Authorization = `Bearer ${apiKey}`;
+        }
+
         const response = await fetch(modelsUrl, {
             method: 'GET',
-            headers: {
-                'Authorization': 'Bearer ' + apiKey,
-                ...headers,
-            },
+            headers: statusHeaders,
         });
 
         if (response.ok) {
@@ -2176,6 +2188,20 @@ router.post('/generate', async function (request, response) {
 
             mergeObjectWithYaml(bodyParams, request.body.custom_include_body);
             mergeObjectWithYaml(headers, request.body.custom_include_headers);
+        } else if (request.body.chat_completion_source === CHAT_COMPLETION_SOURCES.ASCII) {
+            apiUrl = trimTrailingSlash(request.body.ascii_url || API_ASCII);
+            apiKey = '';
+            headers = {};
+            bodyParams = {
+                logprobs: request.body.logprobs,
+                top_logprobs: undefined,
+            };
+
+            if (!isTextCompletion && bodyParams.logprobs > 0) {
+                bodyParams.top_logprobs = bodyParams.logprobs;
+                bodyParams.logprobs = true;
+            }
+
             embedOpenRouterMedia(request.body.messages, { audio: true, video: false });
         } else if (request.body.chat_completion_source === CHAT_COMPLETION_SOURCES.PERPLEXITY) {
             apiUrl = API_PERPLEXITY;
@@ -2321,19 +2347,21 @@ router.post('/generate', async function (request, response) {
         }
 
         // A few of OpenAIs reasoning models support reasoning effort
-        if (request.body.reasoning_effort && [CHAT_COMPLETION_SOURCES.CUSTOM, CHAT_COMPLETION_SOURCES.OPENAI].includes(request.body.chat_completion_source)) {
+        if (request.body.reasoning_effort && [CHAT_COMPLETION_SOURCES.CUSTOM, CHAT_COMPLETION_SOURCES.OPENAI, CHAT_COMPLETION_SOURCES.ASCII].includes(request.body.chat_completion_source)) {
             if (OPENAI_REASONING_EFFORT_MODELS.includes(request.body.model)) {
                 bodyParams['reasoning_effort'] = OPENAI_FIXED_REASONING_EFFORT[request.body.model] ?? OPENAI_REASONING_EFFORT_MAP[request.body.reasoning_effort] ?? request.body.reasoning_effort;
             }
         }
 
-        if (request.body.verbosity && [CHAT_COMPLETION_SOURCES.CUSTOM, CHAT_COMPLETION_SOURCES.OPENAI].includes(request.body.chat_completion_source)) {
+        if (request.body.verbosity && [CHAT_COMPLETION_SOURCES.CUSTOM, CHAT_COMPLETION_SOURCES.OPENAI, CHAT_COMPLETION_SOURCES.ASCII].includes(request.body.chat_completion_source)) {
             if (OPENAI_VERBOSITY_MODELS.test(request.body.model)) {
                 bodyParams['verbosity'] = request.body.verbosity;
             }
         }
 
-        if (!apiKey && !request.body.reverse_proxy && request.body.chat_completion_source !== CHAT_COMPLETION_SOURCES.CUSTOM) {
+        if (!apiKey
+            && !request.body.reverse_proxy
+            && ![CHAT_COMPLETION_SOURCES.CUSTOM, CHAT_COMPLETION_SOURCES.ASCII].includes(request.body.chat_completion_source)) {
             console.warn('OpenAI API key is missing.');
             return response.status(400).send({ error: true });
         }
@@ -2393,14 +2421,19 @@ router.post('/generate', async function (request, response) {
             excludeKeysByYaml(requestBody, request.body.custom_exclude_body);
         }
 
+        /** @type {Record<string, string>} */
+        const requestHeaders = {
+            'Content-Type': 'application/json',
+            ...headers,
+        };
+        if (apiKey) {
+            requestHeaders.Authorization = `Bearer ${apiKey}`;
+        }
+
         /** @type {import('node-fetch').RequestInit} */
         const config = {
             method: 'post',
-            headers: {
-                'Content-Type': 'application/json',
-                'Authorization': 'Bearer ' + apiKey,
-                ...headers,
-            },
+            headers: requestHeaders,
             body: JSON.stringify(requestBody),
             signal: controller.signal,
         };

@@ -170,6 +170,9 @@ const textCompletionModels = [
 
 let biasCache = undefined;
 export let model_list = [];
+let asciiTopLevelPicker = null;
+let isUpdatingAsciiFamilySelection = false;
+let isUpdatingAsciiFeatureSelection = false;
 
 export const chat_completion_sources = {
     OPENAI: 'openai',
@@ -180,6 +183,7 @@ export const chat_completion_sources = {
     VERTEXAI: 'vertexai',
     MISTRALAI: 'mistralai',
     CUSTOM: 'custom',
+    ASCII: 'ascii',
     COHERE: 'cohere',
     PERPLEXITY: 'perplexity',
     GROQ: 'groq',
@@ -272,6 +276,7 @@ const sensitiveFields = [
     'reverse_proxy',
     'proxy_password',
     'custom_url',
+    'ascii_url',
     'custom_include_body',
     'custom_exclude_body',
     'custom_include_headers',
@@ -326,8 +331,10 @@ export const settingsToUpdate = {
     moonshot_model: ['#model_moonshot_select', 'moonshot_model', false, true],
     fireworks_model: ['#model_fireworks_select', 'fireworks_model', false, true],
     cometapi_model: ['#model_cometapi_select', 'cometapi_model', false, true],
+    ascii_model: ['#model_ascii_select', 'ascii_model', false, true],
     custom_model: ['#custom_model_id', 'custom_model', false, true],
     custom_url: ['#custom_api_url_text', 'custom_url', false, true],
+    ascii_url: ['#ascii_api_url_text', 'ascii_url', false, true],
     custom_include_body: ['#custom_include_body', 'custom_include_body', false, true],
     custom_exclude_body: ['#custom_exclude_body', 'custom_exclude_body', false, true],
     custom_include_headers: ['#custom_include_headers', 'custom_include_headers', false, true],
@@ -434,6 +441,8 @@ const default_settings = {
     xai_model: 'grok-3-beta',
     pollinations_model: 'openai',
     cometapi_model: 'gpt-4o',
+    ascii_model: '',
+    ascii_model_family: '',
     moonshot_model: 'kimi-latest',
     fireworks_model: 'accounts/fireworks/models/kimi-k2-instruct',
     zai_model: 'glm-4.6',
@@ -444,6 +453,8 @@ const default_settings = {
     azure_openai_model: '',
     custom_model: '',
     custom_url: '',
+    ascii_url: 'http://localhost:4773',
+    ascii_model_controls: {},
     custom_include_body: '',
     custom_exclude_body: '',
     custom_include_headers: '',
@@ -1680,6 +1691,869 @@ function checkModerationError(data, { quiet = false } = {}) {
     }
 }
 
+const ASCII_UI_ROW_TYPES = Object.freeze({
+    MODEL: 'model',
+    HEADER: 'header',
+    SEPARATOR: 'separator',
+});
+
+const ASCII_SORT_FALLBACK = Number.MAX_SAFE_INTEGER;
+
+/**
+ * Gets provider-specific UI details for an ASCII model row.
+ * @param {any} model Model row
+ * @returns {Record<string, any> | null}
+ */
+function getAsciiUiDetails(model) {
+    if (!model || typeof model !== 'object') {
+        return null;
+    }
+
+    const uiDetails = model.ui_details ?? model.uiDetails ?? model.ascii_ui ?? model.ui;
+    return uiDetails && typeof uiDetails === 'object' && !Array.isArray(uiDetails) ? uiDetails : null;
+}
+
+/**
+ * Gets the ASCII UI row type.
+ * @param {Record<string, any> | null} uiDetails UI details
+ * @returns {string}
+ */
+function getAsciiUiRowType(uiDetails) {
+    const rowType = String(uiDetails?.row_type ?? uiDetails?.rowType ?? uiDetails?.type ?? ASCII_UI_ROW_TYPES.MODEL).toLowerCase();
+    return Object.values(ASCII_UI_ROW_TYPES).includes(rowType) ? rowType : ASCII_UI_ROW_TYPES.MODEL;
+}
+
+/**
+ * Gets the stable machine group key for an ASCII row.
+ * @param {Record<string, any> | null} uiDetails UI details
+ * @param {any} model Model row
+ * @returns {string}
+ */
+function getAsciiUiGroupKey(uiDetails, model) {
+    const groupKey = String(
+        uiDetails?.group_key ??
+        uiDetails?.provider_key ??
+        model?.group_key ??
+        model?.provider_key ??
+        uiDetails?.group ??
+        uiDetails?.provider ??
+        model?.provider ??
+        model?.family ??
+        '',
+    ).trim();
+    return groupKey || 'ungrouped';
+}
+
+/**
+ * Gets the display label for an ASCII row group.
+ * @param {Record<string, any> | null} uiDetails UI details
+ * @param {any} model Model row
+ * @returns {string}
+ */
+function getAsciiUiGroupLabel(uiDetails, model) {
+    const groupLabel = String(
+        uiDetails?.group_label ??
+        uiDetails?.provider_label ??
+        model?.group_label ??
+        model?.provider_label ??
+        uiDetails?.group ??
+        uiDetails?.provider ??
+        model?.provider ??
+        model?.family ??
+        '',
+    ).trim();
+    return groupLabel || 'Ungrouped';
+}
+
+/**
+ * Gets an ASCII UI sort number.
+ * @param {any} value Sort value
+ * @param {number} [fallback]
+ * @returns {number}
+ */
+function getAsciiUiSortNumber(value, fallback = ASCII_SORT_FALLBACK) {
+    const number = Number(value);
+    return Number.isFinite(number) ? number : fallback;
+}
+
+/**
+ * Gets display text for an ASCII row.
+ * @param {any} model Model row
+ * @param {Record<string, any> | null} uiDetails UI details
+ * @param {string} rowType Row type
+ * @returns {string}
+ */
+function getAsciiUiDisplayText(model, uiDetails, rowType) {
+    if (rowType === ASCII_UI_ROW_TYPES.SEPARATOR) {
+        return '────────';
+    }
+
+    if (rowType === ASCII_UI_ROW_TYPES.HEADER) {
+        return String(uiDetails?.name ?? uiDetails?.label ?? uiDetails?.group_label ?? getAsciiUiGroupLabel(uiDetails, model)).trim();
+    }
+
+    return String(model?.name ?? model?.id ?? '').trim() || String(model?.id ?? '');
+}
+
+/**
+ * Checks if an ASCII row is selectable.
+ * @param {any} model Model row
+ * @param {Record<string, any> | null} uiDetails UI details
+ * @param {string} rowType Row type
+ * @returns {boolean}
+ */
+function getAsciiUiSelectable(model, uiDetails, rowType) {
+    if (rowType !== ASCII_UI_ROW_TYPES.MODEL) {
+        return false;
+    }
+
+    if (!model?.id) {
+        return false;
+    }
+
+    if (uiDetails?.disabled === true) {
+        return false;
+    }
+
+    if (typeof uiDetails?.selectable === 'boolean') {
+        return uiDetails.selectable;
+    }
+
+    if (typeof uiDetails?.enabled === 'boolean') {
+        return uiDetails.enabled;
+    }
+
+    return true;
+}
+
+/**
+ * Gets disabled reason text for an ASCII row.
+ * @param {Record<string, any> | null} uiDetails UI details
+ * @returns {string}
+ */
+function getAsciiUiDisabledReason(uiDetails) {
+    return String(uiDetails?.disabled_reason ?? uiDetails?.disabledReason ?? '').trim();
+}
+
+/**
+ * Gets a sanitized icon class list for ASCII UI rendering.
+ * @param {Record<string, any> | null} uiDetails UI details
+ * @returns {string}
+ */
+function getAsciiUiIconClass(uiDetails) {
+    const icon = String(uiDetails?.icon ?? uiDetails?.icon_class ?? uiDetails?.iconClass ?? '').trim();
+    if (!icon) {
+        return '';
+    }
+
+    return icon
+        .split(/\s+/)
+        .filter(token => /^[a-z0-9_-]+$/i.test(token))
+        .join(' ');
+}
+
+/**
+ * Gets a sanitized CSS color for ASCII UI rendering.
+ * @param {any} color Color value
+ * @returns {string}
+ */
+function getAsciiUiColor(color) {
+    const value = String(color ?? '').trim();
+    if (!value) {
+        return '';
+    }
+
+    const isHex = /^#([0-9a-f]{3}|[0-9a-f]{6}|[0-9a-f]{8})$/i.test(value);
+    const isRgb = /^(rgb|rgba|hsl|hsla)\([\d\s.,%]+\)$/i.test(value);
+    const isNamed = /^[a-z]{3,30}$/i.test(value);
+    return (isHex || isRgb || isNamed) ? value : '';
+}
+
+/**
+ * Gets a sanitized rich HTML label for ASCII UI rows.
+ * @param {Record<string, any> | null} uiDetails UI details
+ * @returns {string}
+ */
+function getAsciiUiSafeHtmlLabel(uiDetails) {
+    const html = String(uiDetails?.html_label ?? uiDetails?.label_html ?? uiDetails?.labelHtml ?? '').trim();
+    if (!html) {
+        return '';
+    }
+
+    return DOMPurify.sanitize(html, {
+        ALLOWED_TAGS: ['b', 'strong', 'i', 'em', 'small', 'code', 'span', 'div', 'br'],
+        ALLOWED_ATTR: ['class'],
+    });
+}
+
+/**
+ * Gets ASCII dropdown controls.
+ * @param {Record<string, any> | null} uiDetails UI details
+ * @returns {Record<string, any>[]}
+ */
+function getAsciiUiControls(uiDetails) {
+    const controls = uiDetails?.controls ?? uiDetails?.dropdowns ?? uiDetails?.dropdown_controls;
+    return Array.isArray(controls) ? controls.filter(x => x && typeof x === 'object') : [];
+}
+
+/**
+ * Gets options for an ASCII dropdown control.
+ * @param {Record<string, any>} control Control descriptor
+ * @returns {Record<string, any>[]}
+ */
+function getAsciiUiControlOptions(control) {
+    const options = control?.options ?? control?.items ?? control?.values;
+    return Array.isArray(options) ? options.filter(x => x && typeof x === 'object') : [];
+}
+
+/**
+ * Gets a normalized identifier for an ASCII control.
+ * @param {Record<string, any>} control Control descriptor
+ * @param {number} index Fallback index
+ * @returns {string}
+ */
+function getAsciiUiControlId(control, index) {
+    return String(control?.id ?? control?.key ?? `control_${index}`);
+}
+
+/**
+ * Gets a normalized value for an ASCII control option.
+ * @param {Record<string, any>} option Option descriptor
+ * @param {number} index Fallback index
+ * @returns {string}
+ */
+function getAsciiUiControlValue(option, index) {
+    return String(option?.value ?? option?.id ?? option?.key ?? option?.label ?? `option_${index}`);
+}
+
+/**
+ * Gets a display label for an ASCII control option.
+ * @param {Record<string, any>} option Option descriptor
+ * @param {string} fallback Fallback label
+ * @returns {string}
+ */
+function getAsciiUiControlLabel(option, fallback) {
+    return String(option?.label ?? option?.name ?? option?.text ?? fallback);
+}
+
+/**
+ * Gets the canonical model string sent for an ASCII control option.
+ * @param {Record<string, any>} option Option descriptor
+ * @returns {string}
+ */
+function getAsciiUiControlSendModel(option) {
+    return String(option?.send_model ?? '').trim();
+}
+
+/**
+ * Checks whether an ASCII control option is disabled.
+ * @param {Record<string, any>} option Option descriptor
+ * @returns {boolean}
+ */
+function isAsciiUiControlOptionDisabled(option) {
+    return option?.disabled === true || !getAsciiUiControlSendModel(option);
+}
+
+/**
+ * Gets disabled reason text for an ASCII control option.
+ * @param {Record<string, any>} option Option descriptor
+ * @returns {string}
+ */
+function getAsciiUiControlOptionDisabledReason(option) {
+    if (!getAsciiUiControlSendModel(option)) {
+        return String(option?.disabled_reason ?? option?.disabledReason ?? 'Missing send_model').trim();
+    }
+
+    return String(option?.disabled_reason ?? option?.disabledReason ?? '').trim();
+}
+
+/**
+ * Gets top-level ASCII model picker metadata from a /models response.
+ * @param {any} responseData /models payload
+ * @returns {Record<string, any> | null}
+ */
+function getAsciiTopLevelPicker(responseData) {
+    const picker = responseData?.model_picker ?? responseData?.ascii_ui;
+    if (!picker || typeof picker !== 'object' || Array.isArray(picker)) {
+        return null;
+    }
+
+    const selectors = Array.isArray(picker.selectors)
+        ? picker.selectors.filter(selector => selector && typeof selector === 'object')
+        : [];
+    if (!selectors.length) {
+        return null;
+    }
+
+    return {
+        ...picker,
+        selectors,
+    };
+}
+
+/**
+ * Gets a top-level ASCII selector definition by id.
+ * @param {string} selectorId Selector id
+ * @returns {Record<string, any> | null}
+ */
+function getAsciiPickerSelector(selectorId) {
+    if (!asciiTopLevelPicker) {
+        return null;
+    }
+
+    const normalizedId = String(selectorId ?? '').trim().toLowerCase();
+    if (!normalizedId) {
+        return null;
+    }
+
+    return asciiTopLevelPicker.selectors.find((selector) => {
+        const id = String(selector?.id ?? selector?.key ?? '').trim().toLowerCase();
+        return id === normalizedId;
+    }) ?? null;
+}
+
+/**
+ * Gets a nested object property by dot path.
+ * @param {any} source Source object
+ * @param {string} path Dot-delimited path
+ * @returns {any}
+ */
+function getAsciiPickerValueByPath(source, path) {
+    const normalizedPath = String(path ?? '').trim();
+    if (!normalizedPath) {
+        return undefined;
+    }
+
+    return normalizedPath
+        .split('.')
+        .filter(Boolean)
+        .reduce((cursor, segment) => {
+            if (!cursor || typeof cursor !== 'object') {
+                return undefined;
+            }
+            return cursor[segment];
+        }, source);
+}
+
+/**
+ * Normalizes a feature token derived from send_model suffixes.
+ * @param {any} token Raw token value
+ * @returns {string}
+ */
+function normalizeAsciiFeatureToken(token) {
+    return String(token ?? '').trim().toLowerCase();
+}
+
+/**
+ * Builds a stable key for a set of feature tokens.
+ * @param {string[]} featureTokens Feature token list
+ * @returns {string}
+ */
+function getAsciiFeatureSetKey(featureTokens) {
+    return Array
+        .from(new Set(featureTokens.map(normalizeAsciiFeatureToken).filter(Boolean)))
+        .sort()
+        .join('|');
+}
+
+/**
+ * Extracts feature suffix tokens from a send_model value.
+ * @param {string} baseModelId Base model ID
+ * @param {string} sendModel send_model value
+ * @returns {string[]}
+ */
+function getAsciiSendModelFeatureTokens(baseModelId, sendModel) {
+    const base = String(baseModelId ?? '').trim();
+    const send = String(sendModel ?? '').trim();
+    if (!send) {
+        return [];
+    }
+
+    let suffix = '';
+    if (base && send === base) {
+        suffix = '';
+    } else if (base && send.startsWith(`${base}:`)) {
+        suffix = send.slice(base.length + 1);
+    } else {
+        const parts = send.split(':').map(part => part.trim()).filter(Boolean);
+        suffix = parts.slice(1).join(':');
+    }
+
+    if (!suffix) {
+        return [];
+    }
+
+    return suffix
+        .split(':')
+        .map(normalizeAsciiFeatureToken)
+        .filter(Boolean);
+}
+
+/**
+ * Builds a user-facing feature label from a normalized token.
+ * @param {string} featureToken Feature token
+ * @returns {string}
+ */
+function getAsciiFeatureLabel(featureToken) {
+    const token = normalizeAsciiFeatureToken(featureToken);
+    const labelOverrides = {
+        'none-reasoning': t`No reasoning`,
+    };
+    if (labelOverrides[token]) {
+        return labelOverrides[token];
+    }
+
+    return token
+        .split(/[-_]+/g)
+        .filter(Boolean)
+        .map(part => part.charAt(0).toUpperCase() + part.slice(1))
+        .join(' ');
+}
+
+/**
+ * Builds normalized option metadata for ASCII feature controls.
+ * @param {string} modelId Model ID
+ * @param {Record<string, any>} control Control descriptor
+ * @returns {Array<{ value: string; label: string; sendModel: string; disabled: boolean; featureTokens: string[]; featureSetKey: string; }>}
+ */
+function buildAsciiFeatureOptionInfos(modelId, control) {
+    const featuresSelector = getAsciiPickerSelector('features');
+    const optionValueField = String(featuresSelector?.option_value_field ?? featuresSelector?.optionValueField ?? 'value');
+    const optionLabelField = String(featuresSelector?.option_label_field ?? featuresSelector?.optionLabelField ?? 'label');
+    const sendModelField = String(featuresSelector?.send_model_field ?? featuresSelector?.sendModelField ?? 'send_model');
+
+    return getAsciiUiControlOptions(control).map((option, optionIndex) => {
+        const valueFromField = getAsciiPickerValueByPath(option, optionValueField);
+        const optionValue = String(valueFromField ?? getAsciiUiControlValue(option, optionIndex));
+        const labelFromField = getAsciiPickerValueByPath(option, optionLabelField);
+        const optionLabel = String(labelFromField ?? getAsciiUiControlLabel(option, optionValue));
+        const sendModelFromField = getAsciiPickerValueByPath(option, sendModelField);
+        const rawSendModel = String(sendModelFromField ?? getAsciiUiControlSendModel(option) ?? '').trim();
+        const sendModel = rawSendModel || modelId;
+        const disabled = option?.disabled === true || !rawSendModel;
+        const featureTokens = getAsciiSendModelFeatureTokens(modelId, sendModel);
+        return {
+            value: optionValue,
+            label: optionLabel,
+            sendModel,
+            disabled,
+            featureTokens,
+            featureSetKey: getAsciiFeatureSetKey(featureTokens),
+        };
+    });
+}
+
+/**
+ * Finds and normalizes the feature control context for the selected model.
+ * @param {string} modelId Model ID
+ * @returns {{ control: Record<string, any>; controlId: string; enabledOptions: Array<{ value: string; label: string; sendModel: string; disabled: boolean; featureTokens: string[]; featureSetKey: string; }>; allFeatureTokens: string[]; } | null}
+ */
+function getAsciiFeatureControlContext(modelId) {
+    const selectedModel = Array.isArray(model_list) ? model_list.find(model => model.id === modelId) : null;
+    if (!selectedModel) {
+        return null;
+    }
+
+    const controls = getAsciiUiControls(getAsciiUiDetails(selectedModel));
+    if (!controls.length) {
+        return null;
+    }
+
+    const featuresSelector = getAsciiPickerSelector('features');
+    const targetControlId = String(featuresSelector?.control_id ?? featuresSelector?.controlId ?? 'mode');
+    const controlIndex = controls.findIndex((control, index) => getAsciiUiControlId(control, index) === targetControlId);
+    const resolvedIndex = controlIndex >= 0 ? controlIndex : 0;
+    const control = controls[resolvedIndex];
+    if (!control) {
+        return null;
+    }
+
+    const controlId = getAsciiUiControlId(control, resolvedIndex);
+    const enabledOptions = buildAsciiFeatureOptionInfos(modelId, control).filter(option => !option.disabled);
+    if (!enabledOptions.length) {
+        return null;
+    }
+
+    const allFeatureTokens = [];
+    enabledOptions.forEach((option) => {
+        option.featureTokens.forEach((featureToken) => {
+            if (!allFeatureTokens.includes(featureToken)) {
+                allFeatureTokens.push(featureToken);
+            }
+        });
+    });
+
+    return {
+        control,
+        controlId,
+        enabledOptions,
+        allFeatureTokens,
+    };
+}
+
+/**
+ * Chooses the best control option for the selected feature set.
+ * @param {Array<{ value: string; label: string; sendModel: string; disabled: boolean; featureTokens: string[]; featureSetKey: string; }>} options Enabled control options
+ * @param {string[]} selectedFeatureTokens Selected feature tokens
+ * @param {string} [fallbackValue] Fallback option value
+ * @returns {{ value: string; label: string; sendModel: string; disabled: boolean; featureTokens: string[]; featureSetKey: string; } | undefined}
+ */
+function resolveAsciiFeatureOption(options, selectedFeatureTokens, fallbackValue = '') {
+    if (!options.length) {
+        return undefined;
+    }
+
+    const normalizedSelection = Array.from(
+        new Set(selectedFeatureTokens.map(normalizeAsciiFeatureToken).filter(Boolean)),
+    );
+    const selectionKey = getAsciiFeatureSetKey(normalizedSelection);
+
+    const exactMatch = options.find(option => option.featureSetKey === selectionKey);
+    if (exactMatch) {
+        return exactMatch;
+    }
+
+    if (fallbackValue) {
+        const fallback = options.find(option => option.value === fallbackValue);
+        if (fallback) {
+            return fallback;
+        }
+    }
+
+    return options.find(option => option.featureTokens.length === 0) ?? options[0];
+}
+
+/**
+ * Gets the per-control key used to persist selected feature tokens.
+ * @param {string} controlId Control ID
+ * @returns {string}
+ */
+function getAsciiFeatureStateKey(controlId) {
+    return `${controlId}__features`;
+}
+
+/**
+ * Reads normalized feature token selections from persisted control state.
+ * @param {Record<string, string>} controlState Stored control state
+ * @param {string} controlId Control ID
+ * @returns {string[]}
+ */
+function getAsciiStoredFeatureTokens(controlState, controlId) {
+    const serialized = String(controlState?.[getAsciiFeatureStateKey(controlId)] ?? '');
+    if (!serialized) {
+        return [];
+    }
+
+    return Array.from(
+        new Set(
+            serialized
+                .split('|')
+                .map(token => normalizeAsciiFeatureToken(token))
+                .filter(Boolean),
+        ),
+    );
+}
+
+/**
+ * Persists normalized feature token selections for a control.
+ * @param {Record<string, string>} controlState Stored control state
+ * @param {string} controlId Control ID
+ * @param {string[]} featureTokens Feature tokens
+ * @returns {void}
+ */
+function setAsciiStoredFeatureTokens(controlState, controlId, featureTokens) {
+    const serialized = Array.from(
+        new Set(featureTokens.map(token => normalizeAsciiFeatureToken(token)).filter(Boolean)),
+    ).join('|');
+    controlState[getAsciiFeatureStateKey(controlId)] = serialized;
+}
+
+/**
+ * Syncs the ASCII feature multi-select value without triggering recursive updates.
+ * @param {string[]} featureTokens Feature tokens to select
+ * @returns {void}
+ */
+function setAsciiFeatureSelection(featureTokens) {
+    const featureSelect = $('#ascii_feature_select');
+    if (!featureSelect.length) {
+        return;
+    }
+
+    isUpdatingAsciiFeatureSelection = true;
+    try {
+        featureSelect.val(featureTokens).trigger('change');
+    } finally {
+        isUpdatingAsciiFeatureSelection = false;
+    }
+}
+
+/**
+ * Enables only feature toggles that can resolve to a supported option set.
+ * @param {{ enabledOptions: Array<{ featureSetKey: string }> }} context Feature context
+ * @param {string[]} selectedFeatureTokens Current selected features
+ * @returns {void}
+ */
+function updateAsciiFeatureOptionAvailability(context, selectedFeatureTokens) {
+    const featureSelect = $('#ascii_feature_select');
+    if (!featureSelect.length || !context) {
+        return;
+    }
+
+    const selectedSet = new Set(
+        Array.from(new Set(selectedFeatureTokens.map(normalizeAsciiFeatureToken).filter(Boolean))),
+    );
+    const availableFeatureSets = new Set(context.enabledOptions.map(option => option.featureSetKey));
+
+    featureSelect.find('option').each(function () {
+        const optionValue = normalizeAsciiFeatureToken($(this).val());
+        if (!optionValue) {
+            return;
+        }
+
+        if (selectedSet.has(optionValue)) {
+            $(this).prop('disabled', false);
+            return;
+        }
+
+        const candidateSet = getAsciiFeatureSetKey([...selectedSet, optionValue]);
+        $(this).prop('disabled', !availableFeatureSets.has(candidateSet));
+    });
+    featureSelect.trigger('change.select2');
+}
+
+/**
+ * Populates the ASCII model select based on the currently selected family.
+ * @param {boolean} [triggerModelChange]
+ * @returns {void}
+ */
+function populateAsciiModelsForSelectedFamily(triggerModelChange = true) {
+    const modelSelect = $('#model_ascii_select');
+    if (!modelSelect.length || !asciiTopLevelPicker) {
+        return;
+    }
+
+    const modelSelector = getAsciiPickerSelector('model');
+    const familyField = String(modelSelector?.family_field ?? modelSelector?.familyField ?? 'ui_details.group_key');
+    const labelField = String(modelSelector?.label_field ?? modelSelector?.labelField ?? 'name');
+    const selectedFamily = String(oai_settings.ascii_model_family ?? '');
+
+    const selectableRows = buildAsciiRowsForUi(Array.isArray(model_list) ? model_list : [])
+        .filter(row => row.rowType === ASCII_UI_ROW_TYPES.MODEL && row.selectable)
+        .filter((row) => {
+            if (!selectedFamily) {
+                return true;
+            }
+
+            const familyValue = String(getAsciiPickerValueByPath(row.model, familyField) ?? '');
+            return familyValue === selectedFamily;
+        });
+
+    modelSelect.empty();
+    modelSelect.append('<option value="">None</option>');
+
+    selectableRows.forEach((row) => {
+        const optionValue = String(row.model?.id ?? getAsciiPickerValueByPath(row.model, valueField) ?? '');
+        if (!optionValue) {
+            return;
+        }
+
+        const optionLabel = String(
+            getAsciiPickerValueByPath(row.model, labelField) ??
+            row.model?.name ??
+            row.displayText ??
+            optionValue,
+        );
+
+        const option = $('<option>', {
+            value: optionValue,
+            text: optionLabel,
+        });
+        option.attr('data-model', JSON.stringify(row.model));
+        modelSelect.append(option);
+    });
+
+    const availableModelIds = selectableRows.map((row) => String(row.model?.id ?? ''));
+    const preferredModel = String(oai_settings.ascii_model ?? '');
+    const selectedModel = availableModelIds.includes(preferredModel)
+        ? preferredModel
+        : (availableModelIds[0] ?? '');
+
+    oai_settings.ascii_model = selectedModel;
+    modelSelect.val(selectedModel);
+    if (triggerModelChange) {
+        modelSelect.trigger('change');
+    }
+}
+
+/**
+ * Populates ASCII family options from top-level picker metadata.
+ * @returns {void}
+ */
+function populateAsciiFamilySelector() {
+    const familyBlock = $('#ascii_family_selector_block');
+    const familySelect = $('#ascii_family_select');
+    if (!familyBlock.length || !familySelect.length || !asciiTopLevelPicker) {
+        return;
+    }
+
+    const familySelector = getAsciiPickerSelector('family');
+    const familyOptions = Array.isArray(familySelector?.options)
+        ? familySelector.options.filter(option => option && typeof option === 'object')
+        : [];
+
+    familySelect.empty();
+    familyOptions.forEach((option) => {
+        const optionValue = String(option?.value ?? option?.id ?? '');
+        if (!optionValue) {
+            return;
+        }
+
+        const optionLabel = String(option?.label ?? option?.name ?? option?.text ?? optionValue);
+        familySelect.append(new Option(optionLabel, optionValue, false, false));
+        familySelect.find(`option[value="${CSS.escape(optionValue)}"]`).prop('disabled', option?.disabled === true);
+    });
+
+    const selectedFamily = (() => {
+        const currentFamily = String(oai_settings.ascii_model_family ?? '');
+        const currentOption = familyOptions.find(option => String(option?.value ?? option?.id ?? '') === currentFamily);
+        if (currentOption && currentOption?.disabled !== true) {
+            return currentFamily;
+        }
+
+        const modelSelector = getAsciiPickerSelector('model');
+        const familyField = String(modelSelector?.family_field ?? modelSelector?.familyField ?? 'ui_details.group_key');
+        const selectedModelId = String(oai_settings.ascii_model ?? '');
+        const selectedModel = Array.isArray(model_list)
+            ? model_list.find(model => model?.id === selectedModelId)
+            : null;
+        const selectedModelFamily = String(getAsciiPickerValueByPath(selectedModel, familyField) ?? '');
+        const selectedModelFamilyOption = familyOptions.find(option =>
+            String(option?.value ?? option?.id ?? '') === selectedModelFamily,
+        );
+        if (selectedModelFamilyOption && selectedModelFamilyOption?.disabled !== true) {
+            return selectedModelFamily;
+        }
+
+        const defaultFamily = String(familySelector?.default_value ?? familySelector?.defaultValue ?? '');
+        const defaultOption = familyOptions.find(option => String(option?.value ?? option?.id ?? '') === defaultFamily);
+        if (defaultOption && defaultOption?.disabled !== true) {
+            return defaultFamily;
+        }
+
+        const firstEnabled = familyOptions.find(option => option?.disabled !== true);
+        return String(firstEnabled?.value ?? firstEnabled?.id ?? '');
+    })();
+
+    oai_settings.ascii_model_family = selectedFamily;
+    isUpdatingAsciiFamilySelection = true;
+    try {
+        familySelect.val(selectedFamily).trigger('change');
+    } finally {
+        isUpdatingAsciiFamilySelection = false;
+    }
+    familyBlock.toggle(familyOptions.length > 0);
+}
+
+/**
+ * Ensures ASCII model control state exists in settings.
+ * @param {ChatCompletionSettings} settings Chat completion settings
+ * @returns {Record<string, Record<string, string>>}
+ */
+function ensureAsciiModelControls(settings = oai_settings) {
+    if (!settings.ascii_model_controls || typeof settings.ascii_model_controls !== 'object' || Array.isArray(settings.ascii_model_controls)) {
+        settings.ascii_model_controls = {};
+    }
+
+    return settings.ascii_model_controls;
+}
+
+/**
+ * Ensures control state exists for a specific ASCII model.
+ * @param {ChatCompletionSettings} settings Chat completion settings
+ * @param {string} modelId Model ID
+ * @returns {Record<string, string>}
+ */
+function ensureAsciiModelControlState(settings = oai_settings, modelId = '') {
+    const controls = ensureAsciiModelControls(settings);
+    if (!controls[modelId] || typeof controls[modelId] !== 'object' || Array.isArray(controls[modelId])) {
+        controls[modelId] = {};
+    }
+
+    return controls[modelId];
+}
+
+/**
+ * Gets the effective ASCII model sent in API requests.
+ * @param {ChatCompletionSettings} settings Chat completion settings
+ * @returns {string}
+ */
+function getAsciiResolvedModel(settings = null) {
+    settings = settings ?? oai_settings;
+    const baseModel = String(settings.ascii_model ?? '');
+    if (!baseModel || !Array.isArray(model_list)) {
+        return baseModel;
+    }
+
+    const modelInfo = model_list.find(model => model.id === baseModel);
+    const uiDetails = getAsciiUiDetails(modelInfo);
+    const controls = getAsciiUiControls(uiDetails);
+    if (!controls.length) {
+        return baseModel;
+    }
+
+    const controlState = ensureAsciiModelControlState(settings, baseModel);
+    let resolvedModel = baseModel;
+    const featureContext = getAsciiFeatureControlContext(baseModel);
+
+    controls.forEach((control, controlIndex) => {
+        const controlId = getAsciiUiControlId(control, controlIndex);
+        if (featureContext && controlId === featureContext.controlId) {
+            const defaultValue = String(
+                featureContext.control?.default_value ?? featureContext.control?.defaultValue ?? '',
+            );
+            const fallbackValue = String(controlState[controlId] ?? '') || defaultValue;
+            let selectedFeatures = getAsciiStoredFeatureTokens(controlState, controlId);
+            if (selectedFeatures.length === 0 && fallbackValue) {
+                const fallbackOption = featureContext.enabledOptions.find(option => option.value === fallbackValue);
+                if (fallbackOption) {
+                    selectedFeatures = fallbackOption.featureTokens;
+                }
+            }
+            const resolvedFeatureOption = resolveAsciiFeatureOption(
+                featureContext.enabledOptions,
+                selectedFeatures,
+                fallbackValue,
+            );
+            if (resolvedFeatureOption) {
+                controlState[controlId] = resolvedFeatureOption.value;
+                setAsciiStoredFeatureTokens(controlState, controlId, resolvedFeatureOption.featureTokens);
+                resolvedModel = resolvedFeatureOption.sendModel || resolvedModel;
+                return;
+            }
+        }
+
+        const options = getAsciiUiControlOptions(control);
+        if (!options.length) {
+            return;
+        }
+
+        const enabledOptions = options.filter(option => !isAsciiUiControlOptionDisabled(option));
+        if (!enabledOptions.length) {
+            return;
+        }
+
+        const fallbackValue = getAsciiUiControlValue(enabledOptions[0], 0);
+        const selectedValue = controlState[controlId] ?? fallbackValue;
+        const selectedOption = options.find((option, optionIndex) =>
+            getAsciiUiControlValue(option, optionIndex) === selectedValue
+            && !isAsciiUiControlOptionDisabled(option),
+        ) ?? enabledOptions[0];
+        resolvedModel = getAsciiUiControlSendModel(selectedOption) || resolvedModel;
+    });
+
+    return resolvedModel;
+}
+
 /**
  * Gets the API model for the selected chat completion source.
  * @param {ChatCompletionSettings} settings Chat completion settings
@@ -1705,6 +2579,8 @@ export function getChatCompletionModel(settings = null) {
             return settings.mistralai_model;
         case chat_completion_sources.CUSTOM:
             return settings.custom_model;
+        case chat_completion_sources.ASCII:
+            return getAsciiResolvedModel(settings);
         case chat_completion_sources.COHERE:
             return settings.cohere_model;
         case chat_completion_sources.PERPLEXITY:
@@ -1908,9 +2784,429 @@ function calculateChutesCost() {
     $('#chutes_max_prompt_cost').text(cost);
 }
 
-function saveModelList(data) {
+/**
+ * Builds sorted ASCII rows with provider-specific UI metadata.
+ * @param {any[]} models Model rows from /models
+ * @returns {Array<{ model: any; uiDetails: Record<string, any> | null; rowType: string; groupKey: string; groupLabel: string; groupOrder: number; itemOrder: number; displayText: string; selectable: boolean; disabledReason: string; sourceIndex: number; }>}
+ */
+function buildAsciiRowsForUi(models) {
+    const rows = models.map((model, sourceIndex) => {
+        const uiDetails = getAsciiUiDetails(model);
+        const rowType = getAsciiUiRowType(uiDetails);
+        return {
+            model,
+            uiDetails,
+            rowType,
+            groupKey: getAsciiUiGroupKey(uiDetails, model),
+            groupLabel: getAsciiUiGroupLabel(uiDetails, model),
+            groupOrder: getAsciiUiSortNumber(uiDetails?.group_order ?? uiDetails?.groupOrder),
+            itemOrder: getAsciiUiSortNumber(uiDetails?.item_order ?? uiDetails?.itemOrder ?? uiDetails?.order),
+            displayText: getAsciiUiDisplayText(model, uiDetails, rowType),
+            selectable: getAsciiUiSelectable(model, uiDetails, rowType),
+            disabledReason: getAsciiUiDisabledReason(uiDetails),
+            sourceIndex,
+        };
+    });
+
+    const groupsWithSelectableModels = new Set(
+        rows
+            .filter(row => row.rowType === ASCII_UI_ROW_TYPES.MODEL && row.selectable)
+            .map(row => row.groupKey),
+    );
+
+    return rows
+        .filter(row => row.rowType !== ASCII_UI_ROW_TYPES.HEADER || groupsWithSelectableModels.has(row.groupKey))
+        .sort((a, b) => {
+            if (a.groupOrder !== b.groupOrder) {
+                return a.groupOrder - b.groupOrder;
+            }
+            if (a.groupKey !== b.groupKey) {
+                return a.groupKey.localeCompare(b.groupKey);
+            }
+            if (a.itemOrder !== b.itemOrder) {
+                return a.itemOrder - b.itemOrder;
+            }
+            return a.sourceIndex - b.sourceIndex;
+        });
+}
+
+/**
+ * Renders the Select2 template for ASCII model rows.
+ * @param {any} option Select2 option
+ * @returns {any}
+ */
+function getAsciiModelTemplate(option) {
+    const model = (() => {
+        try {
+            return JSON.parse(String(option?.element?.dataset?.model ?? 'null'));
+        } catch {
+            return null;
+        }
+    })();
+    if (!option.id || !model) {
+        return option.text;
+    }
+
+    const uiDetails = getAsciiUiDetails(model);
+    if (!uiDetails) {
+        return option.text;
+    }
+
+    const rowType = getAsciiUiRowType(uiDetails);
+    if (rowType === ASCII_UI_ROW_TYPES.SEPARATOR) {
+        return $('<div><hr style="margin: 4px 0;"></div>');
+    }
+
+    const displayText = getAsciiUiDisplayText(model, uiDetails, rowType);
+    const groupLabel = getAsciiUiGroupLabel(uiDetails, model);
+    const iconClass = getAsciiUiIconClass(uiDetails);
+    const textColor = getAsciiUiColor(uiDetails?.text_color ?? uiDetails?.textColor);
+    const backgroundColor = getAsciiUiColor(uiDetails?.background_color ?? uiDetails?.backgroundColor);
+    const disabledReason = getAsciiUiDisabledReason(uiDetails);
+    const safeHtmlLabel = getAsciiUiSafeHtmlLabel(uiDetails);
+    const labelElement = $('<span>');
+    if (safeHtmlLabel) {
+        labelElement.html(safeHtmlLabel);
+    } else {
+        labelElement.text(displayText);
+    }
+
+    const row = $('<div class="flex-container alignItemsCenter gap5"></div>');
+    if (iconClass) {
+        row.append($('<i>').addClass(iconClass));
+    }
+
+    if (rowType === ASCII_UI_ROW_TYPES.HEADER) {
+        row.append($('<strong>').append(labelElement));
+    } else {
+        row.append(labelElement);
+        row.append($('<small class="text_muted">').text(`| ${groupLabel}`));
+    }
+
+    if (disabledReason) {
+        row.append($('<small class="text_muted">').text(`(${disabledReason})`));
+    }
+
+    if (textColor) {
+        row.css('color', textColor);
+    }
+    if (backgroundColor) {
+        row.css('background-color', backgroundColor);
+    }
+
+    return row;
+}
+
+/**
+ * Gets searchable plain text for an ASCII option row.
+ * @param {any} model Model row
+ * @param {string} optionText Option text
+ * @returns {string}
+ */
+function getAsciiSearchableText(model, optionText = '') {
+    const uiDetails = getAsciiUiDetails(model);
+    const safeHtmlLabel = getAsciiUiSafeHtmlLabel(uiDetails).replace(/<[^>]+>/g, ' ');
+    const fields = [
+        optionText,
+        model?.id,
+        model?.name,
+        getAsciiUiGroupLabel(uiDetails, model),
+        safeHtmlLabel,
+    ].filter(Boolean);
+    return fields.join(' ').toLowerCase();
+}
+
+/**
+ * Checks if an ASCII model row matches a search term.
+ * @param {any} model Model row
+ * @param {string} optionText Option text
+ * @param {string} searchTerm Lower-cased search term
+ * @returns {boolean}
+ */
+function isAsciiModelSearchMatch(model, optionText, searchTerm) {
+    return getAsciiSearchableText(model, optionText).includes(searchTerm);
+}
+
+/**
+ * Select2 matcher for ASCII rows that hides empty headers during filtering.
+ * @param {object} params Select2 search params
+ * @param {any} data Select2 row data
+ * @returns {any}
+ */
+function asciiModelMatcher(params, data) {
+    const term = String(params?.term ?? '').trim().toLowerCase();
+    if (!term) {
+        return data;
+    }
+
+    const model = (() => {
+        try {
+            return JSON.parse(String(data?.element?.dataset?.model ?? 'null'));
+        } catch {
+            return null;
+        }
+    })();
+
+    if (!model) {
+        return textValueMatcher(params, data);
+    }
+
+    const uiDetails = getAsciiUiDetails(model);
+    const rowType = getAsciiUiRowType(uiDetails);
+
+    if (rowType === ASCII_UI_ROW_TYPES.SEPARATOR) {
+        return null;
+    }
+
+    if (rowType === ASCII_UI_ROW_TYPES.MODEL) {
+        return isAsciiModelSearchMatch(model, data.text, term) ? data : null;
+    }
+
+    const groupKey = getAsciiUiGroupKey(uiDetails, model);
+    const groupHasMatchingModels = Array
+        .from(document.querySelectorAll('#model_ascii_select option[data-model]'))
+        .some(option => {
+            try {
+                const optionModel = JSON.parse(String(option.dataset.model ?? 'null'));
+                const optionUiDetails = getAsciiUiDetails(optionModel);
+                if (getAsciiUiRowType(optionUiDetails) !== ASCII_UI_ROW_TYPES.MODEL) {
+                    return false;
+                }
+                if (!getAsciiUiSelectable(optionModel, optionUiDetails, ASCII_UI_ROW_TYPES.MODEL)) {
+                    return false;
+                }
+                if (getAsciiUiGroupKey(optionUiDetails, optionModel) !== groupKey) {
+                    return false;
+                }
+                return isAsciiModelSearchMatch(optionModel, option.text, term);
+            } catch {
+                return false;
+            }
+        });
+
+    return groupHasMatchingModels ? data : null;
+}
+
+/**
+ * Renders model-specific dropdown controls for the selected ASCII model.
+ * @returns {void}
+ */
+function renderAsciiModelControls() {
+    const controlsContainer = $('#ascii_model_controls');
+    if (!controlsContainer.length) {
+        return;
+    }
+
+    controlsContainer.empty().hide();
+
+    const modelId = String(oai_settings.ascii_model ?? '');
+    if (!modelId || oai_settings.chat_completion_source !== chat_completion_sources.ASCII || !Array.isArray(model_list)) {
+        return;
+    }
+
+    const selectedModel = model_list.find(model => model.id === modelId);
+    const controls = getAsciiUiControls(getAsciiUiDetails(selectedModel));
+    if (!controls.length) {
+        return;
+    }
+
+    const controlState = ensureAsciiModelControlState(oai_settings, modelId);
+
+    for (const [controlIndex, control] of controls.entries()) {
+        const options = getAsciiUiControlOptions(control);
+        if (!options.length) {
+            continue;
+        }
+
+        const controlId = getAsciiUiControlId(control, controlIndex);
+        const inputId = `ascii_model_control_${controlId.replace(/[^a-z0-9_-]+/gi, '_')}`;
+        const select = $('<select class="text_pole"></select>').attr('id', inputId).attr('data-control-id', controlId);
+
+        options.forEach((option, optionIndex) => {
+            const optionValue = getAsciiUiControlValue(option, optionIndex);
+            const optionLabel = getAsciiUiControlLabel(option, optionValue);
+            const optionDisabled = isAsciiUiControlOptionDisabled(option);
+            const optionDisabledReason = getAsciiUiControlOptionDisabledReason(option);
+            select.append(
+                $('<option>', {
+                    value: optionValue,
+                    text: optionLabel,
+                    disabled: optionDisabled,
+                    title: optionDisabledReason || undefined,
+                }),
+            );
+        });
+
+        const enabledOptions = options.filter(option => !isAsciiUiControlOptionDisabled(option));
+        if (!enabledOptions.length) {
+            continue;
+        }
+
+        const fallbackValue = getAsciiUiControlValue(enabledOptions[0], 0);
+        const selectedValue = controlState[controlId] ?? fallbackValue;
+        const hasSelectedValue = options.some((option, optionIndex) =>
+            getAsciiUiControlValue(option, optionIndex) === selectedValue
+            && !isAsciiUiControlOptionDisabled(option),
+        );
+        select.val(hasSelectedValue ? selectedValue : fallbackValue);
+        controlState[controlId] = String(select.val() ?? fallbackValue);
+
+        select.on('change', function () {
+            const state = ensureAsciiModelControlState(oai_settings, modelId);
+            state[controlId] = String($(this).val() ?? '');
+            saveSettingsDebounced();
+            updateFeatureSupportFlags();
+        });
+
+        const label = String(control?.label ?? control?.name ?? controlId);
+        const row = $('<div class="flex-container flexFlowColumn marginTopBot5"></div>');
+        row.append($('<label>').attr('for', inputId).text(label));
+        row.append(select);
+        controlsContainer.append(row);
+    }
+
+    if (controlsContainer.children().length > 0) {
+        controlsContainer.show();
+    }
+}
+
+/**
+ * Renders the top-level ASCII feature selector for the selected model.
+ * @returns {void}
+ */
+function renderAsciiModelFeatureSelector() {
+    const featureBlock = $('#ascii_feature_selector_block');
+    const featureSelect = $('#ascii_feature_select');
+    const controlsContainer = $('#ascii_model_controls');
+    if (!featureBlock.length || !featureSelect.length) {
+        return;
+    }
+
+    featureSelect.empty();
+    featureBlock.hide();
+    controlsContainer.hide();
+
+    if (!asciiTopLevelPicker || oai_settings.chat_completion_source !== chat_completion_sources.ASCII) {
+        return;
+    }
+
+    const modelId = String(oai_settings.ascii_model ?? '');
+    if (!modelId) {
+        return;
+    }
+
+    const context = getAsciiFeatureControlContext(modelId);
+    if (!context || context.allFeatureTokens.length === 0) {
+        return;
+    }
+
+    const controlState = ensureAsciiModelControlState(oai_settings, modelId);
+    const defaultValue = String(context.control?.default_value ?? context.control?.defaultValue ?? '');
+    let selectedOption = context.enabledOptions.find(option =>
+        option.value === String(controlState[context.controlId] ?? ''),
+    ) ?? context.enabledOptions.find(option => option.value === defaultValue)
+        ?? context.enabledOptions[0];
+    const persistedFeatureSelection = getAsciiStoredFeatureTokens(controlState, context.controlId);
+    if (persistedFeatureSelection.length > 0) {
+        selectedOption = resolveAsciiFeatureOption(
+            context.enabledOptions,
+            persistedFeatureSelection,
+            selectedOption?.value ?? defaultValue,
+        ) ?? selectedOption;
+    }
+    if (!selectedOption) {
+        return;
+    }
+
+    controlState[context.controlId] = selectedOption.value;
+    setAsciiStoredFeatureTokens(controlState, context.controlId, selectedOption.featureTokens);
+    context.allFeatureTokens.forEach((featureToken) => {
+        featureSelect.append(new Option(getAsciiFeatureLabel(featureToken), featureToken, false, false));
+    });
+
+    setAsciiFeatureSelection(selectedOption.featureTokens);
+    updateAsciiFeatureOptionAvailability(context, selectedOption.featureTokens);
+    featureBlock.show();
+}
+
+/**
+ * Handles family selection changes for top-level ASCII model picker UI.
+ * @returns {void}
+ */
+function onAsciiFamilyChange() {
+    if (isUpdatingAsciiFamilySelection || !asciiTopLevelPicker) {
+        return;
+    }
+
+    oai_settings.ascii_model_family = String($(this).val() ?? '');
+    populateAsciiModelsForSelectedFamily(true);
+}
+
+/**
+ * Handles top-level ASCII feature selection changes.
+ * @returns {void}
+ */
+function onAsciiFeatureSelectionChange() {
+    if (isUpdatingAsciiFeatureSelection || !asciiTopLevelPicker) {
+        return;
+    }
+
+    const modelId = String(oai_settings.ascii_model ?? '');
+    if (!modelId) {
+        return;
+    }
+
+    const context = getAsciiFeatureControlContext(modelId);
+    if (!context) {
+        return;
+    }
+
+    const selectedFeaturesRaw = $('#ascii_feature_select').val();
+    const selectedFeatures = Array.isArray(selectedFeaturesRaw)
+        ? selectedFeaturesRaw.map(token => normalizeAsciiFeatureToken(token)).filter(Boolean)
+        : [];
+    const controlState = ensureAsciiModelControlState(oai_settings, modelId);
+    const defaultValue = String(context.control?.default_value ?? context.control?.defaultValue ?? '');
+    const resolvedOption = resolveAsciiFeatureOption(
+        context.enabledOptions,
+        selectedFeatures,
+        String(controlState[context.controlId] ?? '') || defaultValue,
+    );
+    if (!resolvedOption) {
+        return;
+    }
+
+    controlState[context.controlId] = resolvedOption.value;
+    setAsciiStoredFeatureTokens(controlState, context.controlId, resolvedOption.featureTokens);
+    setAsciiFeatureSelection(resolvedOption.featureTokens);
+    updateAsciiFeatureOptionAvailability(context, resolvedOption.featureTokens);
+
+    if (oai_settings.chat_completion_source === chat_completion_sources.ASCII) {
+        const resolvedAsciiModel = getAsciiResolvedModel(oai_settings);
+        const maxContext = getAsciiMaxContext(resolvedAsciiModel, oai_settings.max_context_unlocked);
+        $('#openai_max_context').attr('max', maxContext);
+        oai_settings.openai_max_context = Math.min(
+            Number($('#openai_max_context').attr('max')),
+            oai_settings.openai_max_context,
+        );
+        $('#openai_max_context').val(oai_settings.openai_max_context).trigger('input');
+        $('#temp_openai').attr('max', oai_max_temp).val(oai_settings.temp_openai).trigger('input');
+        $('#openai_max_context_counter').attr('max', Number($('#openai_max_context').attr('max')));
+    }
+
+    saveSettingsDebounced();
+    updateFeatureSupportFlags();
+    eventSource.emit(event_types.CHATCOMPLETION_MODEL_CHANGED, modelId);
+}
+
+function saveModelList(data, responseData = null) {
     model_list = data.map((model) => ({ ...model }));
-    model_list.sort((a, b) => a?.id && b?.id && a.id.localeCompare(b.id));
+    asciiTopLevelPicker = oai_settings.chat_completion_source === chat_completion_sources.ASCII
+        ? getAsciiTopLevelPicker(responseData)
+        : null;
+    if (oai_settings.chat_completion_source !== chat_completion_sources.ASCII) {
+        model_list.sort((a, b) => a?.id && b?.id && a.id.localeCompare(b.id));
+    }
 
     if (oai_settings.chat_completion_source == chat_completion_sources.OPENROUTER) {
         model_list = openRouterSortBy(model_list, oai_settings.openrouter_sort_models);
@@ -1956,6 +3252,49 @@ function saveModelList(data) {
 
         if (!oai_settings.custom_model && model_list.length > 0) {
             $('#model_custom_select').val(model_list[0].id).trigger('change');
+        }
+    }
+
+    if (oai_settings.chat_completion_source == chat_completion_sources.ASCII) {
+        if (asciiTopLevelPicker) {
+            populateAsciiFamilySelector();
+            populateAsciiModelsForSelectedFamily(true);
+        } else {
+            $('#ascii_family_selector_block').hide();
+            $('#ascii_feature_selector_block').hide();
+            $('#ascii_feature_select').empty();
+            $('#model_ascii_select').empty();
+            $('#model_ascii_select').append('<option value="">None</option>');
+
+            const asciiRows = buildAsciiRowsForUi(model_list);
+            model_list = asciiRows.map(row => row.model);
+
+            asciiRows.forEach((row, rowIndex) => {
+                const optionValue = row.selectable ? row.model.id : `__ascii_${row.rowType}_${rowIndex}`;
+                const disabledReason = row.disabledReason || (!row.selectable && row.rowType !== ASCII_UI_ROW_TYPES.MODEL ? `${row.rowType} row` : '');
+                const option = $('<option>', {
+                    value: optionValue,
+                    text: row.displayText,
+                    selected: row.selectable && row.model.id == oai_settings.ascii_model,
+                    disabled: !row.selectable,
+                    title: disabledReason || undefined,
+                });
+                option.attr('data-model', JSON.stringify(row.model));
+                $('#model_ascii_select').append(option);
+            });
+
+            const selectableRows = asciiRows.filter(row => row.selectable);
+            const selectedModel = selectableRows.find(row => row.model.id === oai_settings.ascii_model);
+            if ((!selectedModel || !oai_settings.ascii_model) && selectableRows.length > 0) {
+                oai_settings.ascii_model = selectableRows[0].model.id;
+            }
+
+            if (!selectableRows.length) {
+                oai_settings.ascii_model = '';
+            }
+
+            $('#model_ascii_select').val(oai_settings.ascii_model || '').trigger('change');
+            renderAsciiModelControls();
         }
     }
 
@@ -2432,6 +3771,7 @@ function getReasoningEffort(settings = null, model = null) {
         chat_completion_sources.OPENAI,
         chat_completion_sources.AZURE_OPENAI,
         chat_completion_sources.CUSTOM,
+        chat_completion_sources.ASCII,
         chat_completion_sources.XAI,
         chat_completion_sources.AIMLAPI,
         chat_completion_sources.OPENROUTER,
@@ -2528,6 +3868,7 @@ export async function createGenerationParameters(settings, model, type, messages
         chat_completion_sources.OPENROUTER,
         chat_completion_sources.MISTRALAI,
         chat_completion_sources.CUSTOM,
+        chat_completion_sources.ASCII,
         chat_completion_sources.COHERE,
         chat_completion_sources.GROQ,
         chat_completion_sources.ELECTRONHUB,
@@ -2556,6 +3897,7 @@ export async function createGenerationParameters(settings, model, type, messages
         chat_completion_sources.OPENAI,
         chat_completion_sources.AZURE_OPENAI,
         chat_completion_sources.CUSTOM,
+        chat_completion_sources.ASCII,
         chat_completion_sources.DEEPSEEK,
         chat_completion_sources.XAI,
         chat_completion_sources.AIMLAPI,
@@ -2570,6 +3912,7 @@ export async function createGenerationParameters(settings, model, type, messages
         chat_completion_sources.ELECTRONHUB,
         chat_completion_sources.CHUTES,
         chat_completion_sources.CUSTOM,
+        chat_completion_sources.ASCII,
     ];
 
     // Sources that support "n" parameter for multi-swipe
@@ -2577,6 +3920,7 @@ export async function createGenerationParameters(settings, model, type, messages
         chat_completion_sources.OPENAI,
         chat_completion_sources.AZURE_OPENAI,
         chat_completion_sources.CUSTOM,
+        chat_completion_sources.ASCII,
         chat_completion_sources.XAI,
         chat_completion_sources.AIMLAPI,
         chat_completion_sources.MOONSHOT,
@@ -2724,6 +4068,10 @@ export async function createGenerationParameters(settings, model, type, messages
         generate_data.custom_include_body = settings.custom_include_body;
         generate_data.custom_exclude_body = settings.custom_exclude_body;
         generate_data.custom_include_headers = settings.custom_include_headers;
+    }
+
+    if (settings.chat_completion_source === chat_completion_sources.ASCII) {
+        generate_data.ascii_url = settings.ascii_url;
     }
 
     if (settings.chat_completion_source === chat_completion_sources.COHERE) {
@@ -3024,7 +4372,7 @@ export function getStreamingReply(data, state, { chatCompletionSource = null, ov
             }
         });
         return data.choices?.[0]?.delta?.content ?? data.choices?.[0]?.message?.content ?? data.choices?.[0]?.text ?? '';
-    } else if ([chat_completion_sources.CUSTOM, chat_completion_sources.POLLINATIONS, chat_completion_sources.AIMLAPI, chat_completion_sources.MOONSHOT, chat_completion_sources.COMETAPI, chat_completion_sources.ELECTRONHUB, chat_completion_sources.NANOGPT, chat_completion_sources.ZAI, chat_completion_sources.SILICONFLOW, chat_completion_sources.CHUTES].includes(chat_completion_source)) {
+    } else if ([chat_completion_sources.CUSTOM, chat_completion_sources.ASCII, chat_completion_sources.POLLINATIONS, chat_completion_sources.AIMLAPI, chat_completion_sources.MOONSHOT, chat_completion_sources.COMETAPI, chat_completion_sources.ELECTRONHUB, chat_completion_sources.NANOGPT, chat_completion_sources.ZAI, chat_completion_sources.SILICONFLOW, chat_completion_sources.CHUTES].includes(chat_completion_source)) {
         if (show_thoughts) {
             state.reasoning +=
                 data.choices?.filter(x => x?.delta?.reasoning_content)?.[0]?.delta?.reasoning_content ??
@@ -3064,6 +4412,7 @@ function parseChatCompletionLogprobs(data) {
         case chat_completion_sources.DEEPSEEK:
         case chat_completion_sources.XAI:
         case chat_completion_sources.CUSTOM:
+        case chat_completion_sources.ASCII:
         case chat_completion_sources.CHUTES:
             if (!data.choices?.length) {
                 return null;
@@ -4093,6 +5442,11 @@ function loadOpenAISettings(data, settings) {
         }
     }
 
+    oai_settings.ascii_model_family = String(oai_settings.ascii_model_family ?? '');
+    asciiTopLevelPicker = null;
+    $('#ascii_family_selector_block').hide();
+    $('#ascii_feature_selector_block').hide();
+
     $(`#settings_preset_openai option[value="${openai_setting_names[oai_settings.preset_settings_openai]}"]`).prop('selected', true);
     $('#bind_preset_to_connection').prop('checked', oai_settings.bind_preset_to_connection);
     $('#openai_external_category').toggle(oai_settings.show_external_models);
@@ -4274,6 +5628,12 @@ async function getStatusOpen() {
         return resultCheckStatus();
     }
 
+    if (oai_settings.chat_completion_source === chat_completion_sources.ASCII && !isValidUrl(oai_settings.ascii_url)) {
+        console.debug('Invalid endpoint URL of ASCII API:', oai_settings.ascii_url);
+        setOnlineStatus(t`Invalid endpoint URL. Requests may fail.`);
+        return resultCheckStatus();
+    }
+
     if (oai_settings.chat_completion_source === chat_completion_sources.AZURE_OPENAI && !isValidUrl(oai_settings.azure_base_url)) {
         console.debug('Invalid endpoint URL of Azure OpenAI API:', oai_settings.azure_base_url);
         setOnlineStatus(t`Invalid Azure endpoint URL. Requests may fail.`);
@@ -4303,6 +5663,17 @@ async function getStatusOpen() {
         $('.model_custom_select').empty();
         data.custom_url = oai_settings.custom_url;
         data.custom_include_headers = oai_settings.custom_include_headers;
+    }
+
+    if (oai_settings.chat_completion_source === chat_completion_sources.ASCII) {
+        $('#model_ascii_select').empty();
+        $('#ascii_family_select').empty();
+        $('#ascii_feature_select').empty();
+        $('#ascii_family_selector_block').hide();
+        $('#ascii_feature_selector_block').hide();
+        $('#ascii_model_controls').hide();
+        asciiTopLevelPicker = null;
+        data.ascii_url = oai_settings.ascii_url;
     }
 
     if (oai_settings.chat_completion_source === chat_completion_sources.AZURE_OPENAI) {
@@ -4336,7 +5707,7 @@ async function getStatusOpen() {
         const responseData = await response.json();
 
         if ('data' in responseData && Array.isArray(responseData.data)) {
-            saveModelList(responseData.data);
+            saveModelList(responseData.data, responseData);
         }
         if (!('error' in responseData)) {
             setOnlineStatus(t`Valid`);
@@ -4806,6 +6177,13 @@ function onSettingsPresetChange() {
     }).finally(async () => {
         if (oai_settings.bind_preset_to_connection) {
             $('.model_custom_select').empty();
+            $('#model_ascii_select').empty();
+            $('#ascii_family_select').empty();
+            $('#ascii_feature_select').empty();
+            $('#ascii_family_selector_block').hide();
+            $('#ascii_feature_selector_block').hide();
+            $('#ascii_model_controls').hide();
+            asciiTopLevelPicker = null;
         }
 
         for (const [key, [selector, setting, isCheckbox, isConnection]] of Object.entries(settingsToUpdate)) {
@@ -5117,6 +6495,32 @@ function getChutesMaxContext(model, isUnlocked) {
 }
 
 /**
+ * Get the maximum context size for the ASCII model
+ * @param {string} model Model identifier
+ * @param {boolean} isUnlocked Whether context limits are unlocked
+ * @returns {number} Maximum context size in tokens
+ */
+function getAsciiMaxContext(model, isUnlocked) {
+    if (isUnlocked) {
+        return unlocked_max;
+    }
+
+    if (Array.isArray(model_list)) {
+        const modelInfo = model_list.find(m => m.id === model);
+        const contextLength = Number(
+            modelInfo?.context_length ??
+            modelInfo?.context_window ??
+            modelInfo?.max_context_length,
+        );
+        if (Number.isFinite(contextLength) && contextLength > 0) {
+            return contextLength;
+        }
+    }
+
+    return max_128k;
+}
+
+/**
  * Get the maximum context size for the ElectronHub model
  * @param {string} model Model identifier
  * @param {boolean} isUnlocked Whether context limits are unlocked
@@ -5296,6 +6700,16 @@ async function onModelChange() {
         console.log('Custom model changed to', value);
         oai_settings.custom_model = value;
         $('#custom_model_id').val(value).trigger('input');
+    }
+
+    if ($(this).is('#model_ascii_select')) {
+        console.log('ASCII model changed to', value);
+        oai_settings.ascii_model = value;
+        if (asciiTopLevelPicker) {
+            renderAsciiModelFeatureSelector();
+        } else {
+            renderAsciiModelControls();
+        }
     }
 
     if (value && $(this).is('#model_pollinations_select')) {
@@ -5517,6 +6931,15 @@ async function onModelChange() {
 
     if (oai_settings.chat_completion_source == chat_completion_sources.CUSTOM) {
         $('#openai_max_context').attr('max', unlocked_max);
+        oai_settings.openai_max_context = Math.min(Number($('#openai_max_context').attr('max')), oai_settings.openai_max_context);
+        $('#openai_max_context').val(oai_settings.openai_max_context).trigger('input');
+        $('#temp_openai').attr('max', oai_max_temp).val(oai_settings.temp_openai).trigger('input');
+    }
+
+    if (oai_settings.chat_completion_source == chat_completion_sources.ASCII) {
+        const resolvedAsciiModel = getAsciiResolvedModel(oai_settings);
+        const maxContext = getAsciiMaxContext(resolvedAsciiModel, oai_settings.max_context_unlocked);
+        $('#openai_max_context').attr('max', maxContext);
         oai_settings.openai_max_context = Math.min(Number($('#openai_max_context').attr('max')), oai_settings.openai_max_context);
         $('#openai_max_context').val(oai_settings.openai_max_context).trigger('input');
         $('#temp_openai').attr('max', oai_max_temp).val(oai_settings.temp_openai).trigger('input');
@@ -5812,6 +7235,8 @@ function toggleChatCompletionForms() {
         $('#model_nanogpt_select').trigger('change');
     } else if (oai_settings.chat_completion_source == chat_completion_sources.CUSTOM) {
         $('#model_custom_select').trigger('change');
+    } else if (oai_settings.chat_completion_source == chat_completion_sources.ASCII) {
+        $('#model_ascii_select').trigger('change');
     } else if (oai_settings.chat_completion_source == chat_completion_sources.DEEPSEEK) {
         $('#model_deepseek_select').trigger('change');
     } else if (oai_settings.chat_completion_source == chat_completion_sources.AIMLAPI) {
@@ -5988,6 +7413,21 @@ export function isImageInliningSupported() {
             return (Array.isArray(model_list) && model_list.find(m => m.id === oai_settings.openrouter_model)?.architecture?.input_modalities?.includes('image'));
         case chat_completion_sources.CUSTOM:
             return true;
+        case chat_completion_sources.ASCII: {
+            const resolvedAsciiModel = getAsciiResolvedModel(oai_settings);
+            if (!Array.isArray(model_list)) {
+                return visionSupportedModels.some(model => resolvedAsciiModel.includes(model));
+            }
+
+            const modelInfo = model_list.find(m => m.id === resolvedAsciiModel)
+                ?? model_list.find(m => m.id === oai_settings.ascii_model);
+            return !!(
+                modelInfo?.input_modalities?.includes('image') ||
+                modelInfo?.architecture?.input_modalities?.includes('image') ||
+                modelInfo?.capabilities?.vision ||
+                visionSupportedModels.some(model => resolvedAsciiModel.includes(model))
+            );
+        }
         case chat_completion_sources.MISTRALAI:
             return (Array.isArray(model_list) && model_list.find(m => m.id === oai_settings.mistralai_model)?.capabilities?.vision);
         case chat_completion_sources.COHERE:
@@ -6753,6 +8193,11 @@ export function initOpenAI() {
         saveSettingsDebounced();
     });
 
+    $('#ascii_api_url_text').on('input', function () {
+        oai_settings.ascii_url = String($(this).val());
+        saveSettingsDebounced();
+    });
+
     $('#custom_model_id').on('input', function () {
         oai_settings.custom_model = String($(this).val());
         saveSettingsDebounced();
@@ -6914,6 +8359,29 @@ export function initOpenAI() {
             templateResult: getChutesModelTemplate,
             matcher: textValueMatcher,
         });
+        $('#ascii_family_select').select2({
+            placeholder: t`Select a family`,
+            searchInputPlaceholder: t`Search families...`,
+            searchInputCssClass: 'text_pole',
+            width: '100%',
+            matcher: textValueMatcher,
+        });
+        $('#model_ascii_select').select2({
+            placeholder: t`Select a model`,
+            searchInputPlaceholder: t`Search models...`,
+            searchInputCssClass: 'text_pole',
+            width: '100%',
+            templateResult: getAsciiModelTemplate,
+            matcher: asciiModelMatcher,
+        });
+        $('#ascii_feature_select').select2({
+            placeholder: t`Select features`,
+            searchInputPlaceholder: t`Search features...`,
+            searchInputCssClass: 'text_pole',
+            width: '100%',
+            closeOnSelect: false,
+            matcher: textValueMatcher,
+        });
         $('#completion_prompt_manager_popup_entry_form_injection_trigger').select2({
             placeholder: t`All types (default)`,
             width: '100%',
@@ -6984,6 +8452,9 @@ export function initOpenAI() {
     $('#model_deepseek_select').on('change', onModelChange);
     $('#model_aimlapi_select').on('change', onModelChange);
     $('#model_custom_select').on('change', onModelChange);
+    $('#ascii_family_select').on('change', onAsciiFamilyChange);
+    $('#model_ascii_select').on('change', onModelChange);
+    $('#ascii_feature_select').on('change', onAsciiFeatureSelectionChange);
     $('#model_xai_select').on('change', onModelChange);
     $('#model_pollinations_select').on('change', onModelChange);
     $('#model_cometapi_select').on('change', onModelChange);

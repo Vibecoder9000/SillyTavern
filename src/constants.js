@@ -221,6 +221,8 @@ export const CHAT_COMPLETION_SOURCES = {
     VERTEXAI: 'vertexai',
     MISTRALAI: 'mistralai',
     CUSTOM: 'custom',
+    ASCII: 'ascii',
+    MODEL_PICKER: 'model_picker',
     COHERE: 'cohere',
     PERPLEXITY: 'perplexity',
     GROQ: 'groq',

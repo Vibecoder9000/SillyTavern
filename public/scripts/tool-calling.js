@@ -3152,6 +3152,7 @@ Here are the available tools:
         const supportedSources = [
             chat_completion_sources.OPENAI,
             chat_completion_sources.CUSTOM,
+            chat_completion_sources.ASCII,
             chat_completion_sources.MISTRALAI,
             chat_completion_sources.CLAUDE,
             chat_completion_sources.OPENROUTER,

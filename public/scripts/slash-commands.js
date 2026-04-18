@@ -6371,6 +6371,7 @@ function getModelOptions(quiet) {
         { id: 'model_vertexai_select', api: 'openai', type: chat_completion_sources.VERTEXAI },
         { id: 'model_mistralai_select', api: 'openai', type: chat_completion_sources.MISTRALAI },
         { id: 'custom_model_id', api: 'openai', type: chat_completion_sources.CUSTOM },
+        { id: 'model_ascii_select', api: 'openai', type: chat_completion_sources.ASCII },
         { id: 'model_cohere_select', api: 'openai', type: chat_completion_sources.COHERE },
         { id: 'model_perplexity_select', api: 'openai', type: chat_completion_sources.PERPLEXITY },
         { id: 'model_groq_select', api: 'openai', type: chat_completion_sources.GROQ },
@@ -6668,6 +6669,26 @@ function setPromptEntryCallback(args, targetState) {
 async function setApiUrlCallback({ api = null, connect = 'true', quiet = 'false' }, url) {
     const isQuiet = isTrueBoolean(quiet);
     const autoConnect = isTrueBoolean(connect);
+
+    const isCurrentlyAscii = main_api === 'openai' && oai_settings.chat_completion_source === chat_completion_sources.ASCII;
+    if (api === chat_completion_sources.ASCII || (!api && isCurrentlyAscii)) {
+        if (!url) {
+            return oai_settings.ascii_url ?? '';
+        }
+
+        if (!isCurrentlyAscii && autoConnect) {
+            toastr.warning(t`ASCII API is not the currently selected API, so we cannot do an auto-connect. Consider switching to it via /api beforehand.`);
+            return '';
+        }
+
+        $('#ascii_api_url_text').val(url).trigger('input');
+
+        if (autoConnect) {
+            $('#api_button_openai').trigger('click');
+        }
+
+        return url;
+    }
 
     // Special handling for Chat Completion Custom OpenAI compatible, that one can also support API url handling
     const isCurrentlyCustomOpenai = main_api === 'openai' && oai_settings.chat_completion_source === chat_completion_sources.CUSTOM;
