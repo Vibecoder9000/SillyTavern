@@ -157,6 +157,110 @@ const WORKSPACE_SEPARATOR_OPTION = '__workspace_separator__';
 const activeShellRuns = new Map();
 const activePythonRuns = new Map();
 const pendingShellRenders = new Set();
+const sdToolModelsCache = {
+    modelNames: [],
+};
+
+function resolveToolRegistrationValue(value) {
+    return typeof value === 'function' ? value() : value;
+}
+
+function getCurrentPlatformSyntaxLabel() {
+    const userAgentData = /** @type {{ platform?: string } | undefined} */ (navigator).userAgentData;
+    const rawPlatform = String(userAgentData?.platform || navigator.platform || '').toLowerCase();
+
+    if (rawPlatform.includes('win')) {
+        return 'Windows';
+    }
+
+    if (rawPlatform.includes('mac') || rawPlatform.includes('darwin')) {
+        return 'macOS';
+    }
+
+    if (rawPlatform.includes('linux') || rawPlatform.includes('x11')) {
+        return 'Linux';
+    }
+
+    return 'Commodore 64';
+}
+
+async function refreshSdToolModelsCache() {
+    try {
+        const response = await fetch('/api/extensions/tools/sd_models', {
+            method: 'GET',
+            headers: getRequestHeaders(),
+        });
+
+        if (!response.ok) {
+            sdToolModelsCache.modelNames = [];
+            return sdToolModelsCache.modelNames;
+        }
+
+        const models = await response.json();
+        sdToolModelsCache.modelNames = [...new Set((Array.isArray(models) ? models : [])
+            .map(model => String(model?.title || model?.model_name || '').trim())
+            .filter(Boolean))];
+    } catch {
+        sdToolModelsCache.modelNames = [];
+    }
+
+    return sdToolModelsCache.modelNames;
+}
+
+function getSdTxt2ImgToolParameters() {
+    const modelProperty = {
+        type: 'string',
+        description: 'Checkpoint name.',
+    };
+
+    if (sdToolModelsCache.modelNames.length) {
+        modelProperty.enum = sdToolModelsCache.modelNames;
+    }
+
+    return {
+        type: 'object',
+        properties: {
+            prompt: {
+                type: 'string',
+                description: 'Postive prompt',
+            },
+            negative_prompt: {
+                type: 'string',
+                description: 'Negative prompt',
+            },
+            model: modelProperty,
+            width: {
+                type: 'integer',
+                description: 'Pixel width',
+            },
+            height: {
+                type: 'integer',
+                description: 'Pixel height',
+            },
+            steps: {
+                type: 'integer',
+                description: 'Steps 1-150',
+            },
+            cfg_scale: {
+                type: 'number',
+                description: 'CFG 1-30',
+            },
+            sampler_name: {
+                type: 'string',
+                description: 'Name of the sampler to use',
+            },
+            seed: {
+                type: 'integer',
+                description: 'Seed -1 is random',
+            },
+            alwayson_scripts: {
+                type: 'object',
+                description: 'Optional dictionary of scripts, localhost:7860/sdapi/v1/script-info for args',
+            },
+        },
+        required: ['prompt'],
+    };
+}
 
 /**
  * Gets a chat message by message ID.
@@ -407,8 +511,8 @@ class ToolDefinition {
             type: 'function',
             function: {
                 name: this.#name,
-                description: this.#description,
-                parameters: this.#parameters,
+                description: resolveToolRegistrationValue(this.#description),
+                parameters: resolveToolRegistrationValue(this.#parameters),
             },
             toString: function () {
                 return `<div><b>${this.function.name}</b></div><div><small>${this.function.description}</small></div><pre class="justifyLeft wordBreakAll"><code class="flex padding5">${JSON.stringify(this.function.parameters, null, 2)}</code></pre><hr>`;
@@ -2337,81 +2441,9 @@ function registerBuiltinTools() {
             },
         },
         {
-            name: 'sd_list_models',
-            description: 'Lists the available Stable Diffusion checkpoints (models) on the SD WebUI instance. Use this to discover which models are available before generating images.',
-            parameters: {
-                'type': 'object',
-                'properties': {},
-            },
-            action: async () => {
-                try {
-                    const response = await fetch('/api/extensions/tools/sd_models', {
-                        method: 'GET',
-                        headers: getRequestHeaders(),
-                    });
-
-                    if (!response.ok) {
-                        const error = await response.json();
-                        return `Error fetching models: ${error.error || response.statusText}`;
-                    }
-
-                    const models = await response.json();
-                    const modelNames = models.map(m => m.title || m.model_name);
-                    return JSON.stringify({ available_models: modelNames });
-                } catch (error) {
-                    return `Error: Could not connect to Stable Diffusion WebUI. Make sure it is running at localhost:7860 with --api flag. ${error.message}`;
-                }
-            },
-        },
-{
             name: 'sd_txt2img',
-            description: 'Generates using Stable Diffusion text-to-image. The image is saved to disk',
-            parameters: {
-                'type': 'object',
-                'properties': {
-                    'prompt': {
-                        'type': 'string',
-                        'description': 'Postive prompt',
-                    },
-                    'negative_prompt': {
-                        'type': 'string',
-                        'description': 'Negative prompt',
-                    },
-                    'model': {
-                        'type': 'string',
-                        'description': 'The exact model name. Use sd_list_models to get models',
-                    },
-                    'width': {
-                        'type': 'integer',
-                        'description': 'Pixel width',
-                    },
-                    'height': {
-                        'type': 'integer',
-                        'description': 'Pixel height',
-                    },
-                    'steps': {
-                        'type': 'integer',
-                        'description': 'Steps 1-150',
-                    },
-                    'cfg_scale': {
-                        'type': 'number',
-                        'description': 'CFG 1-30',
-                    },
-                    'sampler_name': {
-                        'type': 'string',
-                        'description': 'Name of the sampler to use',
-                    },
-                    'seed': {
-                        'type': 'integer',
-                        'description': 'Seed -1 is random',
-                    },
-                    'alwayson_scripts': {
-                        'type': 'object',
-                        'description': 'Optional dictionary of scripts, localhost:7860/sdapi/v1/script-info for args',
-                    },
-                },
-                'required': ['prompt'],
-            },
+            description: 'Generates a Stable Diffusion image and saves it to disk.',
+            parameters: getSdTxt2ImgToolParameters,
             action: async ({ prompt, negative_prompt, model, width, height, steps, cfg_scale, sampler_name, seed, alwayson_scripts }) => {
                 try {
                     const sandbox = getSandboxRequestContext();
@@ -2509,7 +2541,7 @@ function registerBuiltinTools() {
         },
     ];
     const dangerousTools = ['write_file', 'execute_shell', 'execute_python'];
-    const imageGenTools = ['sd_list_models', 'sd_txt2img'];
+    const imageGenTools = ['sd_txt2img'];
     const browserTools = ['browser_open', 'browser_search', 'browser_tabs', 'browser_close', 'browser_go_back', 'browser_click', 'browser_pixel_click', 'browser_hover', 'browser_type', 'browser_key', 'browser_wait', 'dom_fetch', 'execute_js', 'browser_screenshot', 'browser_download'];
 
     builtinTools.forEach(tool => {
@@ -3073,18 +3105,25 @@ export class ToolManager {
             return null;
         }
 
+        const needsSdModelContext = this.tools.some(tool => {
+            const name = tool.toFunctionOpenAI().function.name;
+            return name === 'sd_txt2img';
+        });
+
+        if (needsSdModelContext) {
+            await refreshSdToolModelsCache();
+        }
+
         const finalPromptParts = [];
         finalPromptParts.push(`Always put your tool call in your main response. Only one tool call at the end of your message is supported.
 
-Call the tool with the required arguments inside a <tool> block. Use windows syntax always.
+Call the tool with the required arguments inside a <tool> block. Use ${getCurrentPlatformSyntaxLabel()} syntax always.
 To provide a non-media file for the user to download, use the syntax \`![](filename.ext)\`
 To provide media to the user to download or view, use display_image.
 
 The "continue" field controls whether you get a follow-up turn after the tool executes:
 - "continue": true — The tool result will be shown to you and you will generate another response. Use this when you need to see the result before responding, or when you have no text response yet.
 - "continue": false — The tool runs silently and no follow-up generation occurs. Use this when you have ALREADY written your full response to the user in the same message and the tool call is just a side-effect (e.g. saving data, logging). This prevents a redundant empty reply.
-
-If omitted, "continue" defaults to true.
 
 Format example:
 
