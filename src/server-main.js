@@ -5,6 +5,8 @@ import util from 'node:util';
 import net from 'node:net';
 import dns from 'node:dns';
 import process from 'node:process';
+import http from 'node:http';
+import https from 'node:https';
 
 import cors from 'cors';
 import { csrfSync } from 'csrf-sync';
@@ -36,6 +38,7 @@ import {
     getSessionCookieAge,
     verifySecuritySettings,
     loginPageMiddleware,
+    migratePublicOverrides,
 } from './users.js';
 
 import getWebpackServeMiddleware from './middleware/webpack-serve.js';
@@ -47,6 +50,7 @@ import initRequestProxy from './request-proxy.js';
 import cacheBuster from './middleware/cacheBuster.js';
 import corsProxyMiddleware from './middleware/corsProxy.js';
 import hostWhitelistMiddleware from './middleware/hostWhitelist.js';
+import userCssMiddleware from './middleware/userCss.js';
 import {
     getVersion,
     color,
@@ -90,6 +94,10 @@ if (!cliArgs.enableIPv6 && !cliArgs.enableIPv4) {
     console.error('error: You can\'t disable all internet protocols: at least IPv6 or IPv4 must be enabled.');
     process.exit(1);
 }
+
+// Set keep-alive preference for all HTTP/HTTPS requests.
+http.globalAgent = new http.Agent({ keepAlive: cliArgs.enableKeepAlive });
+https.globalAgent = new https.Agent({ keepAlive: cliArgs.enableKeepAlive });
 
 const app = express();
 app.use(helmet({
@@ -235,6 +243,7 @@ app.get('/login', loginPageMiddleware);
 // Host frontend assets
 const webpackMiddleware = getWebpackServeMiddleware();
 app.use(webpackMiddleware);
+app.use(userCssMiddleware);
 app.use(express.static(path.join(serverDirectory, 'public'), {}));
 
 // Public API
@@ -341,7 +350,7 @@ async function preSetupTasks() {
     });
 
     // Add request proxy.
-    initRequestProxy({ enabled: cliArgs.requestProxyEnabled, url: cliArgs.requestProxyUrl, bypass: cliArgs.requestProxyBypass });
+    initRequestProxy({ enabled: cliArgs.requestProxyEnabled, url: cliArgs.requestProxyUrl, bypass: cliArgs.requestProxyBypass, enableKeepAlive: cliArgs.enableKeepAlive });
 
     // Wait for frontend libs to compile
     await webpackMiddleware.runWebpackCompiler({ pruneCache: true });
@@ -446,7 +455,7 @@ async function postSetupTasks(result) {
  * Registers a not-found error response if a not-found error page exists. Should only be called after all other middlewares have been registered.
  */
 function apply404Middleware() {
-    const notFoundWebpage = safeReadFileSync(path.join(serverDirectory, 'public/error/url-not-found.html')) ?? '';
+    const notFoundWebpage = safeReadFileSync(path.join(globalThis.DATA_ROOT, '_errors', 'url-not-found.html')) ?? '';
     app.use((req, res) => {
         res.status(404).send(notFoundWebpage);
     });
@@ -475,6 +484,7 @@ initUserStorage(globalThis.DATA_ROOT)
     .then(ensurePublicDirectoriesExist)
     .then(migrateUserData)
     .then(migrateSystemPrompts)
+    .then(migratePublicOverrides)
     .then(verifySecuritySettings)
     .then(preSetupTasks)
     .then(apply404Middleware)

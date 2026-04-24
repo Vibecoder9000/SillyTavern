@@ -41,6 +41,9 @@ port: 8000
 # Interval in seconds to write a heartbeat file. Set to 0 to disable.
 # This is used primarily for Docker healthchecks.
 heartbeatInterval: 0
+# Enable HTTP/HTTPS keep-alive globally.
+# Disabling restores old Node 18 behavior, can help if ECONNRESET and other network errors occur.
+enableKeepAlive: false
 # -- SSL options --
 ssl:
   # Enable SSL/TLS encryption
@@ -127,6 +130,13 @@ sso:
   # as that used for authentik. (Ensure the username in authentik
   # is an exact match in lowercase with that in sillytavern).
   authentikAuth: false
+  # List of trusted proxy IPs for SSO authentication.
+  # Supports wildcards or CIDR notation for subnets.
+  # Example: ['127.0.0.1', '192.168.1.1']
+  # Set to ['*'] to trust all proxies (NOT RECOMMENDED unless you have other security measures in place)
+  trustedProxies:
+    - ::1
+    - 127.0.0.1
 
 # Host whitelist configuration. Recommended if you're using a listen mode
 hostWhitelist:

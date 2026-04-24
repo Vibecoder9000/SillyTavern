@@ -76,6 +76,7 @@ export const SECRET_KEYS = {
     POLLINATIONS: 'api_key_pollinations',
     VOLCENGINE_APP_ID: 'volcengine_app_id',
     VOLCENGINE_ACCESS_KEY: 'volcengine_access_key',
+    WORKERS_AI: 'api_key_workers_ai',
 };
 
 const FRIENDLY_NAMES = {
@@ -129,7 +130,7 @@ const FRIENDLY_NAMES = {
     [SECRET_KEYS.LINGVA_URL]: 'Lingva Endpoint (e.g. https://lingva.ml/api/v1)',
     [SECRET_KEYS.ONERING_URL]: 'OneRingTranslator Endpoint (e.g. http://127.0.0.1:4990/translate)',
     [SECRET_KEYS.DEEPLX_URL]: 'DeepLX Endpoint (e.g. http://127.0.0.1:1188/translate)',
-    [SECRET_KEYS.MINIMAX]: 'MiniMax TTS',
+    [SECRET_KEYS.MINIMAX]: 'MiniMax',
     [SECRET_KEYS.MINIMAX_GROUP_ID]: 'MiniMax Group ID',
     [SECRET_KEYS.MOONSHOT]: 'Moonshot AI',
     [SECRET_KEYS.COMETAPI]: 'CometAPI',
@@ -140,6 +141,7 @@ const FRIENDLY_NAMES = {
     [SECRET_KEYS.POLLINATIONS]: 'Pollinations',
     [SECRET_KEYS.VOLCENGINE_APP_ID]: 'Volcengine App ID',
     [SECRET_KEYS.VOLCENGINE_ACCESS_KEY]: 'Volcengine Access Key',
+    [SECRET_KEYS.WORKERS_AI]: 'Cloudflare Workers AI',
 };
 
 const INPUT_MAP = {
@@ -182,8 +184,9 @@ const INPUT_MAP = {
     [SECRET_KEYS.AZURE_OPENAI]: '#api_key_azure_openai',
     [SECRET_KEYS.ZAI]: '#api_key_zai',
     [SECRET_KEYS.SILICONFLOW]: '#api_key_siliconflow',
-    [SECRET_KEYS.COMFY_RUNPOD]: '#api_key_comfy_runpod',
+    [SECRET_KEYS.MINIMAX]: '#api_key_minimax',
     [SECRET_KEYS.POLLINATIONS]: '#api_key_pollinations',
+    [SECRET_KEYS.WORKERS_AI]: '#api_key_workers_ai',
 };
 
 const getLabel = () => moment().format('L LT');
@@ -1118,5 +1121,28 @@ export async function initSecrets() {
         warningElement.toggle(value.length > 0);
     });
     $('.openrouter_authorize').on('click', authorizeOpenRouter);
+    $(document).on('click', '.openrouter_view_credits', async function (event) {
+        event.preventDefault();
+        const display = $(this).siblings('.openrouter_credits_display').first();
+        display.text(t`Loading…`);
+        try {
+            const response = await fetch('/api/openrouter/credits', {
+                method: 'POST',
+                headers: getRequestHeaders(),
+            });
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}`);
+            }
+            const data = await response.json();
+            if (typeof data.remaining !== 'number') {
+                throw new Error('Invalid response');
+            }
+            display.text(`$${data.remaining.toFixed(2)}`);
+        } catch (error) {
+            console.error('Failed to fetch OpenRouter credits:', error);
+            display.text('');
+            toastr.error(t`Could not fetch OpenRouter credits. Please try again.`);
+        }
+    });
     registerSecretSlashCommands();
 }

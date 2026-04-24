@@ -3196,6 +3196,8 @@ Here are the available tools:
                     return currentModel.supported_features?.includes('tools');
                 case chat_completion_sources.ELECTRONHUB:
                     return currentModel.metadata?.function_call;
+                case chat_completion_sources.WORKERS_AI:
+                    return Array.isArray(currentModel.properties) && currentModel.properties.some(p => p.property_id === 'function_calling' && p.value === 'true');
             }
         }
 
@@ -3222,6 +3224,9 @@ Here are the available tools:
             chat_completion_sources.AZURE_OPENAI,
             chat_completion_sources.ZAI,
             chat_completion_sources.SILICONFLOW,
+            chat_completion_sources.NANOGPT,
+            chat_completion_sources.WORKERS_AI,
+            chat_completion_sources.MINIMAX,
         ];
         return supportedSources.includes(settings.chat_completion_source);
     }
