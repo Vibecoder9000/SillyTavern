@@ -2940,7 +2940,11 @@ router.get('/sd_models', async (_req, res) => {
 
 router.post('/sd_txt2img', async (req, res) => {
     try {
-        const { prompt, negative_prompt, model, width, height, steps, cfg_scale, sampler_name, seed, workspace, character } = req.body;
+        const { 
+            prompt, negative_prompt, model, width, height, 
+            steps, cfg_scale, sampler_name, seed, 
+            workspace, character, alwayson_scripts 
+        } = req.body;
 
         if (!prompt) {
             return res.status(400).json({ error: 'prompt is required' });
@@ -2959,20 +2963,26 @@ router.post('/sd_txt2img', async (req, res) => {
             }
         }
 
+        const payload = {
+            prompt,
+            negative_prompt,
+            width,
+            height,
+            steps,
+            cfg_scale,
+            sampler_name,
+            seed,
+        };
+
+        if (alwayson_scripts) {
+            payload.alwayson_scripts = alwayson_scripts;
+        }
+
         // Generate the image
         const genResponse = await fetch(`${SD_WEBUI_URL}/sdapi/v1/txt2img`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                prompt,
-                negative_prompt: negative_prompt || '',
-                width: width || 512,
-                height: height || 512,
-                steps: steps || 20,
-                cfg_scale: cfg_scale || 7,
-                sampler_name: sampler_name || 'Euler a',
-                seed: seed ?? -1,
-            }),
+            body: JSON.stringify(payload),
         });
 
         if (!genResponse.ok) {

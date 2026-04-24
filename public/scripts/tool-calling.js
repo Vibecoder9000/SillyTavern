@@ -2363,69 +2363,80 @@ function registerBuiltinTools() {
                 }
             },
         },
-        {
+{
             name: 'sd_txt2img',
-            description: 'Generates an image using Stable Diffusion text-to-image. The generated image is saved to the files and can be displayed using display_image.',
+            description: 'Generates using Stable Diffusion text-to-image. The image is saved to disk',
             parameters: {
                 'type': 'object',
                 'properties': {
                     'prompt': {
                         'type': 'string',
-                        'description': 'The text prompt describing the image to generate.',
+                        'description': 'Postive prompt',
                     },
                     'negative_prompt': {
                         'type': 'string',
-                        'description': 'Text prompt for concepts to avoid in the generated image.',
+                        'description': 'Negative prompt',
                     },
                     'model': {
                         'type': 'string',
-                        'description': 'The exact model/checkpoint name to use. Use sd_list_models to get available names. If not specified, uses whatever model is currently loaded.',
+                        'description': 'The exact model name. Use sd_list_models to get models',
                     },
                     'width': {
                         'type': 'integer',
-                        'description': 'Output image width in pixels. Default: 1200.',
+                        'description': 'Pixel width',
                     },
                     'height': {
                         'type': 'integer',
-                        'description': 'Output image height in pixels. Default: 1200.',
+                        'description': 'Pixel height',
                     },
                     'steps': {
                         'type': 'integer',
-                        'description': 'Number of sampling steps. Default: 25.',
+                        'description': 'Steps 1-150',
                     },
                     'cfg_scale': {
                         'type': 'number',
-                        'description': 'Classifier-free guidance scale. Higher values follow the prompt more closely. Default: 5.',
+                        'description': 'CFG 1-30',
                     },
                     'sampler_name': {
                         'type': 'string',
-                        'description': 'Name of the sampler to use (e.g. "Euler a", "DPM++ 2M Karras"). Default: "Euler a".',
+                        'description': 'Name of the sampler to use',
                     },
                     'seed': {
                         'type': 'integer',
-                        'description': 'Random seed for reproducibility. Use -1 for random. Default: -1.',
+                        'description': 'Seed -1 is random',
+                    },
+                    'alwayson_scripts': {
+                        'type': 'object',
+                        'description': 'Optional dictionary of scripts, localhost:7860/sdapi/v1/script-info for args',
                     },
                 },
                 'required': ['prompt'],
             },
-            action: async ({ prompt, negative_prompt, model, width, height, steps, cfg_scale, sampler_name, seed }) => {
+            action: async ({ prompt, negative_prompt, model, width, height, steps, cfg_scale, sampler_name, seed, alwayson_scripts }) => {
                 try {
                     const sandbox = getSandboxRequestContext();
+
+                    const payload = {
+                        prompt,
+                        negative_prompt: negative_prompt || '',
+                        model: model || '',
+                        width: width || 1024,
+                        height: height || 1024,
+                        steps: steps || 25,
+                        cfg_scale: cfg_scale || 5,
+                        sampler_name: sampler_name || 'Euler a',
+                        seed: seed ?? -1,
+                        ...sandbox,
+                    };
+
+                    if (alwayson_scripts) {
+                        payload.alwayson_scripts = alwayson_scripts;
+                    }
+
                     const response = await fetch('/api/extensions/tools/sd_txt2img', {
                         method: 'POST',
                         headers: getRequestHeaders(),
-                        body: JSON.stringify({
-                            prompt,
-                            negative_prompt: negative_prompt || '',
-                            model: model || '',
-                            width: width || 1200,
-                            height: height || 1200,
-                            steps: steps || 25,
-                            cfg_scale: cfg_scale || 5,
-                            sampler_name: sampler_name || 'Euler a',
-                            seed: seed ?? -1,
-                            ...sandbox,
-                        }),
+                        body: JSON.stringify(payload),
                     });
 
                     if (!response.ok) {
