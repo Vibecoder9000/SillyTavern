@@ -255,7 +255,7 @@ function getSdTxt2ImgToolParameters() {
             },
             alwayson_scripts: {
                 type: 'object',
-                description: 'Optional dictionary of scripts, localhost:7860/sdapi/v1/script-info for args',
+                description: 'Script arguments. See localhost:7860/sdapi/v1/script-info',
             },
         },
         required: ['prompt'],
@@ -419,8 +419,6 @@ export async function stopActivePythonRun(messageId) {
         return false;
     }
 }
-let lastBrowserSessionId = '';
-let lastBrowserTabIndex = null;
 const ASK_USER_MAX_QUESTIONS = 4;
 const ASK_USER_MAX_OPTIONS = 4;
 const ASK_USER_DEFAULT_FREE_FIELD_LABEL = 'Something else';
@@ -563,6 +561,52 @@ function getSandboxRequestContext() {
     };
 }
 
+function isMissingBrowserArg(value) {
+    return value === null || typeof value === 'undefined' || String(value).trim() === '';
+}
+
+function validateBrowserToolPayload(action, payload = {}) {
+    const requireSessionAndTabActions = new Set([
+        'back',
+        'click',
+        'hover',
+        'type',
+        'key',
+        'wait',
+        'domfetch',
+        'executejs',
+        'screenshot',
+        'download',
+    ]);
+
+    if (requireSessionAndTabActions.has(action)) {
+        if (isMissingBrowserArg(payload.session_id)) {
+            return 'Error: session_id is required.';
+        }
+
+        if (isMissingBrowserArg(payload.tab_index)) {
+            return 'Error: tab_index is required.';
+        }
+    }
+
+    if (action === 'close' && isMissingBrowserArg(payload.session_id)) {
+        return 'Error: session_id is required.';
+    }
+
+    if (action === 'tabs') {
+        if (isMissingBrowserArg(payload.session_id)) {
+            return 'Error: session_id is required.';
+        }
+
+        const tabAction = String(payload.action ?? '').trim().toLowerCase();
+        if ((tabAction === 'select' || tabAction === 'close') && isMissingBrowserArg(payload.tab_index)) {
+            return 'Error: tab_index is required.';
+        }
+    }
+
+    return null;
+}
+
 /**
  * Calls a browser tool endpoint.
  * @param {string} action Browser action name.
@@ -573,18 +617,12 @@ function getSandboxRequestContext() {
 async function callBrowserTool(action, payload = {}, signal) {
     try {
         const sandbox = getSandboxRequestContext();
-        const requestedSessionId = String(payload?.session_id ?? '').trim();
-        const usedImplicitSession = !requestedSessionId && Boolean(lastBrowserSessionId);
-        const buildRequestBody = () => {
-            const body = { ...payload, ...sandbox };
-            if (!body.session_id) {
-                body.session_id = lastBrowserSessionId;
-            }
-            if ((body.tab_index === null || typeof body.tab_index === 'undefined' || body.tab_index === '') && lastBrowserTabIndex !== null) {
-                body.tab_index = lastBrowserTabIndex;
-            }
-            return body;
-        };
+        const validationError = validateBrowserToolPayload(action, payload);
+        if (validationError) {
+            return validationError;
+        }
+
+        const body = { ...payload, ...sandbox };
         const sendRequest = async (body) => {
             const response = await fetch(`/api/extensions/tools/browser/${action}`, {
                 method: 'POST',
@@ -596,47 +634,9 @@ async function callBrowserTool(action, payload = {}, signal) {
             return { response, result };
         };
 
-        let body = buildRequestBody();
         let { response, result } = await sendRequest(body);
         if (!response.ok) {
-            const browserSessionError = String(result?.error ?? '');
-            const staleImplicitSession = usedImplicitSession
-                && body.session_id
-                && body.session_id === lastBrowserSessionId
-                && (browserSessionError.includes('No browser session found')
-                    || browserSessionError.includes('has already been closed'));
-            const canRetryFreshSession = staleImplicitSession && (action === 'open' || action === 'search');
-
-            if (staleImplicitSession) {
-                lastBrowserSessionId = '';
-                lastBrowserTabIndex = null;
-            }
-
-            if (canRetryFreshSession) {
-                body = buildRequestBody();
-                ({ response, result } = await sendRequest(body));
-            }
-
-            if (!response.ok) {
-                return `Error: ${result?.error || 'An unknown browser error occurred.'}`;
-            }
-        }
-
-        if (action === 'close') {
-            if (!body.session_id || body.session_id === lastBrowserSessionId || result?.session_id === lastBrowserSessionId) {
-                lastBrowserSessionId = '';
-                lastBrowserTabIndex = null;
-            }
-            return result;
-        }
-
-        if (typeof result?.session_id === 'string' && result.session_id) {
-            lastBrowserSessionId = result.session_id;
-        }
-        if (typeof result?.tab_index === 'number') {
-            lastBrowserTabIndex = result.tab_index;
-        } else if (typeof result?.active_tab_index === 'number') {
-            lastBrowserTabIndex = result.active_tab_index;
+            return `Error: ${result?.error || 'An unknown browser error occurred.'}`;
         }
 
         return result;
@@ -1154,7 +1154,7 @@ function registerBuiltinTools() {
                 properties: {
                     questions: {
                         type: 'array',
-                        description: 'Up to 4 questions. Each question may include up to 4 options.',
+                        description: 'Questions',
                         minItems: 1,
                         maxItems: 4,
                         items: {
@@ -1162,15 +1162,15 @@ function registerBuiltinTools() {
                             properties: {
                                 prompt: {
                                     type: 'string',
-                                    description: 'Question shown to the user.',
+                                    description: 'Question text',
                                 },
                                 context: {
                                     type: 'string',
-                                    description: 'Explanatory text.',
+                                    description: 'Help text',
                                 },
                                 options: {
                                     type: 'array',
-                                    description: 'Up to 4 options.',
+                                    description: 'Answer options',
                                     maxItems: 4,
                                     items: {
                                         type: 'string',
@@ -1198,21 +1198,21 @@ function registerBuiltinTools() {
         },
         {
             name: 'write_file',
-            description: 'Writes or appends content to a file in the files. Creates the file and parent directories if they don\'t exist.',
+            description: 'Writes text to a file',
             parameters: {
                 'type': 'object',
                 'properties': {
                     'filepath': {
                         'type': 'string',
-                        'description': 'The path to the file to write to, relative to the uploads directory.',
+                        'description': 'File path',
                     },
                     'content': {
                         'type': 'string',
-                        'description': 'The content to write to the file.',
+                        'description': 'File contents',
                     },
                     'append': {
                         'type': 'boolean',
-                        'description': 'If true, appends the content to the end of the file. If false (default), overwrites the file.',
+                        'description': 'Append instead of overwrite',
                     },
                 },
                 'required': ['filepath', 'content'],
@@ -1240,18 +1240,18 @@ function registerBuiltinTools() {
         },
         {
             name: 'read_file',
-            description: 'Reads the content of one or more text files from the files. Only use this for text.',
+            description: 'Reads one or more text files',
             parameters: {
                 'type': 'object',
                 'properties': {
                     'filepath': {
                         'type': 'string',
-                        'description': 'The path to the file to read. Use this for single-file reads.',
+                        'description': 'File path',
                     },
                     'filepaths': {
                         'type': 'array',
                         'items': { 'type': 'string' },
-                        'description': 'Multiple file paths to read in a single tool call (max 20). Prefer this when you need several files at once.',
+                        'description': 'File paths',
                         'minItems': 1,
                         'maxItems': 20,
                     },
@@ -1336,13 +1336,13 @@ function registerBuiltinTools() {
         },
         {
             name: 'list_directory',
-            description: 'Lists the files and directories in a given path within the files.',
+            description: 'Lists files and directories',
             parameters: {
                 'type': 'object',
                 'properties': {
                     'path': {
                         'type': 'string',
-                        'description': 'The path to the directory to list. Omit or use "." to list the root of the sandbox.',
+                        'description': 'Directory path',
                     },
                 },
             },
@@ -1384,13 +1384,13 @@ function registerBuiltinTools() {
         },
         {
             name: 'display_image',
-            description: 'Displays an image or video to the user from the files.',
+            description: 'Displays media to the user',
             parameters: {
                 'type': 'object',
                 'properties': {
                     'filepath': {
                         'type': 'string',
-                        'description': 'The path to the image or video file to display, relative to the uploads directory.',
+                        'description': 'Media path'
                     },
                 },
                 'required': ['filepath'],
@@ -1415,13 +1415,13 @@ function registerBuiltinTools() {
         },
         {
             name: 'view_image_file',
-            description: 'Provides an uploaded image to the model as multimodal context for further analysis. Use this when you need to inspect image contents before answering.',
+            description: 'Reads an image instead of showing it to the user',
             parameters: {
                 'type': 'object',
                 'properties': {
                     'filepath': {
                         'type': 'string',
-                        'description': 'The path to the image file, relative to the uploads directory.',
+                        'description': 'Image path',
                     },
                 },
                 'required': ['filepath'],
@@ -1444,21 +1444,21 @@ function registerBuiltinTools() {
         },
         {
             name: 'execute_shell',
-            description: 'Runs a PowerShell command in the current sandbox workspace. Supports quoted arguments, pipelines, redirection, and other normal PowerShell syntax.',
+            description: 'Runs a PowerShell command',
             parameters: {
                 'type': 'object',
                 'properties': {
                     'command': {
                         'type': 'string',
-                        'description': 'The full PowerShell command to execute.',
+                        'description': 'PowerShell command',
                     },
                     'explanation': {
                         'type': 'string',
-                        'description': 'A short human explanation of what the command does, for example "lists the files in /cards" or "runs a python script that summarizes logs".',
+                        'description': 'Short explaination',
                     },
                     'cwd': {
                         'type': 'string',
-                        'description': 'Optional sandbox-relative working directory to run the command from.',
+                        'description': 'Working directory',
                     },
                 },
                 'required': ['command', 'explanation'],
@@ -1685,17 +1685,17 @@ function registerBuiltinTools() {
         },
         {
             name: 'execute_python',
-            description: 'Executes Python code in a secure environment with access to the files.',
+            description: 'Runs Python code',
             parameters: {
                 'type': 'object',
                 'properties': {
                     'code': {
                         'type': 'string',
-                        'description': 'The Python code to execute.',
+                        'description': 'Python code',
                     },
                     'timeout_ms': {
                         'type': 'integer',
-                        'description': 'Optional timeout in milliseconds for the Python process.',
+                        'description': 'Timeout in ms',
                     },
                 },
                 'required': ['code'],
@@ -1936,25 +1936,25 @@ function registerBuiltinTools() {
         },
         {
             name: 'browser_open',
-            description: 'Opens a URL in an isolated Firefox browser session. If a recent session exists, it is reused by default; use new_tab=true to keep the current page open in another tab. The tool saves an automatic screenshot after the page loads. If the result contains an interstitial such as unusual traffic or captcha, switch sites instead of retrying the same engine repeatedly.',
+            description: 'Opens a URL in the browser',
             parameters: {
                 type: 'object',
                 properties: {
                     url: {
                         type: 'string',
-                        description: 'The HTTP or HTTPS URL to open.',
+                        description: 'URL',
                     },
                     session_id: {
                         type: 'string',
-                        description: 'Optional existing browser session ID to reuse. If omitted, the most recent browser session is reused when available.',
+                        description: 'Browser session ID',
                     },
                     tab_index: {
                         type: 'integer',
-                        description: 'Optional existing tab index to reuse inside the session. If omitted, the active tab is reused.',
+                        description: 'Tab index',
                     },
                     new_tab: {
                         type: 'boolean',
-                        description: 'If true, opens the URL in a newly created tab within the existing session instead of replacing the active tab.',
+                        description: 'Open in a new tab',
                     },
                 },
                 required: ['url'],
@@ -1966,29 +1966,29 @@ function registerBuiltinTools() {
         },
         {
             name: 'browser_search',
-            description: 'Opens a search results page for a query without needing site-specific selectors. Prefer duckduckgo or brave if another engine reports unusual traffic or captcha.',
+            description: 'Searches the web in the browser',
             parameters: {
                 type: 'object',
                 properties: {
                     query: {
                         type: 'string',
-                        description: 'The search query.',
+                        description: 'Search query',
                     },
                     engine: {
                         type: 'string',
-                        description: 'Search engine to use. One of duckduckgo, brave, bing, or google. Defaults to duckduckgo.',
+                        description: 'Search engine',
                     },
                     session_id: {
                         type: 'string',
-                        description: 'Optional existing browser session ID to reuse. If omitted, the most recent browser session is reused when available.',
+                        description: 'Browser session ID',
                     },
                     tab_index: {
                         type: 'integer',
-                        description: 'Optional existing tab index to reuse inside the session.',
+                        description: 'Tab index',
                     },
                     new_tab: {
                         type: 'boolean',
-                        description: 'If true, opens the search results in a new tab.',
+                        description: 'Open in a new tab',
                     },
                 },
                 required: ['query'],
@@ -2000,24 +2000,24 @@ function registerBuiltinTools() {
         },
         {
             name: 'browser_tabs',
-            description: 'Lists, selects, or closes tabs in an existing browser session. Use this to explicitly manage tab indices.',
+            description: 'Manages browser tabs',
             parameters: {
                 type: 'object',
                 properties: {
                     session_id: {
                         type: 'string',
-                        description: 'Optional browser session ID. If omitted, the most recent browser session is reused when available.',
+                        description: 'Browser session ID',
                     },
                     action: {
                         type: 'string',
-                        description: 'One of list, select, or close.',
+                        description: 'list, select, or close',
                     },
                     tab_index: {
                         type: 'integer',
-                        description: 'The tab index to select or close. Not needed for action=list.',
+                        description: 'Tab index',
                     },
                 },
-                required: ['action'],
+                required: ['action', 'session_id'],
             },
             action: async ({ session_id, action, tab_index }, signal) => {
                 const result = await callBrowserTool('tabs', { session_id, action, tab_index }, signal);
@@ -2026,16 +2026,16 @@ function registerBuiltinTools() {
         },
         {
             name: 'browser_close',
-            description: 'Closes an isolated Firefox browser session.',
+            description: 'Closes a browser session',
             parameters: {
                 type: 'object',
                 properties: {
                     session_id: {
                         type: 'string',
-                        description: 'Optional browser session ID to close. If omitted, closes the most recent browser session when available.',
+                        description: 'Browser session ID',
                     },
                 },
-                required: [],
+                required: ['session_id'],
             },
             action: async ({ session_id }, signal) => {
                 return await callBrowserTool('close', { session_id }, signal);
@@ -2043,20 +2043,20 @@ function registerBuiltinTools() {
         },
         {
             name: 'browser_go_back',
-            description: 'Navigates a browser tab one step back in its history and saves a screenshot of the resulting page.',
+            description: 'Goes back in browser history',
             parameters: {
                 type: 'object',
                 properties: {
                     session_id: {
                         type: 'string',
-                        description: 'Optional browser session ID. If omitted, the most recent browser session is reused when available.',
+                        description: 'Browser session ID',
                     },
                     tab_index: {
                         type: 'integer',
-                        description: 'Optional tab index to target. Defaults to the active tab.',
+                        description: 'Tab index',
                     },
                 },
-                required: [],
+                required: ['session_id', 'tab_index'],
             },
             action: async ({ session_id, tab_index }, signal) => {
                 const result = await callBrowserTool('back', { session_id, tab_index }, signal);
@@ -2065,48 +2065,48 @@ function registerBuiltinTools() {
         },
         {
             name: 'browser_click',
-            description: 'Clicks in a browser tab using visible text, a CSS selector, a numbered element from dom_fetch interactive or links mode, or viewport coordinates. Prefer element_index immediately after dom_fetch because it is shorter and more reliable for small models. If you provide selector, text, and element_index together, selector is tried first, then text, then the cached element. Use button=right for right click. Saves a screenshot after the action.',
+            description: 'Clicks an element or coordinates in the browser',
             parameters: {
                 type: 'object',
                 properties: {
                     session_id: {
                         type: 'string',
-                        description: 'Optional browser session ID. If omitted, the most recent browser session is reused when available.',
+                        description: 'Browser session ID',
                     },
                     tab_index: {
                         type: 'integer',
-                        description: 'Optional tab index to target. Defaults to the active tab.',
+                        description: 'Tab index',
                     },
                     element_index: {
                         type: 'integer',
-                        description: 'Optional numbered element index from the most recent dom_fetch interactive or links result for this tab. Prefer this right after dom_fetch. Do not reuse stale indices from older pages.',
+                        description: 'Element index from dom_fetch',
                     },
                     selector: {
                         type: 'string',
-                        description: 'A CSS selector targeting the element to click. Use this when element_index is unavailable or stale. Do not provide a long copied selector from a different page.',
+                        description: 'CSS selector',
                     },
                     text: {
                         type: 'string',
-                        description: 'Optional visible text to match on a clickable element across frames.',
+                        description: 'Visible text',
                     },
                     text_index: {
                         type: 'integer',
-                        description: 'Optional zero-based index to disambiguate between multiple visible text matches.',
+                        description: 'Text match index',
                     },
                     button: {
                         type: 'string',
-                        description: 'Mouse button to use: left, middle, or right. Defaults to left.',
+                        description: 'left, middle, or right',
                     },
                     x: {
                         type: 'number',
-                        description: 'Viewport X coordinate to click. Provide this together with y when selector is not used.',
+                        description: 'Viewport X coordinate',
                     },
                     y: {
                         type: 'number',
-                        description: 'Viewport Y coordinate to click. Provide this together with x when selector is not used.',
+                        description: 'Viewport Y coordinate',
                     },
                 },
-                required: [],
+                required: ['session_id', 'tab_index'],
             },
             action: async ({ session_id, tab_index, element_index, selector, text, text_index, button, x, y }, signal) => {
                 const result = await callBrowserTool('click', { session_id, tab_index, element_index, selector, text, text_index, button, x, y }, signal);
@@ -2115,28 +2115,28 @@ function registerBuiltinTools() {
         },
         {
             name: 'browser_pixel_click',
-            description: 'Clicks a browser tab at explicit viewport pixel coordinates. Use this when dom_fetch gives x and y for a target or when DOM selectors are unreliable. Prefer coordinates returned by dom_fetch interactive or links mode rather than guessing.',
+            description: 'Clicks browser coordinates',
             parameters: {
                 type: 'object',
                 properties: {
                     session_id: {
                         type: 'string',
-                        description: 'Optional browser session ID. If omitted, the most recent browser session is reused when available.',
+                        description: 'Browser session ID',
                     },
                     tab_index: {
                         type: 'integer',
-                        description: 'Optional tab index to target. Defaults to the active tab.',
+                        description: 'Tab index',
                     },
                     x: {
                         type: 'number',
-                        description: 'Viewport X coordinate to click.',
+                        description: 'Viewport X coordinate to click',
                     },
                     y: {
                         type: 'number',
-                        description: 'Viewport Y coordinate to click.',
+                        description: 'Viewport Y coordinate to click',
                     },
                 },
-                required: ['x', 'y'],
+                required: ['session_id', 'tab_index', 'x', 'y'],
             },
             action: async ({ session_id, tab_index, x, y }, signal) => {
                 const result = await callBrowserTool('click', { session_id, tab_index, x, y }, signal);
@@ -2145,33 +2145,33 @@ function registerBuiltinTools() {
         },
         {
             name: 'browser_hover',
-            description: 'Hovers in a browser tab using visible text, a CSS selector, a numbered element from dom_fetch interactive or links mode, or viewport coordinates. Prefer element_index right after dom_fetch; if you provide selector, text, and element_index together, selector is tried first, then text, then the cached element.',
+            description: 'Hovers an element or coordinates',
             parameters: {
                 type: 'object',
                 properties: {
                     session_id: {
                         type: 'string',
-                        description: 'Optional browser session ID. If omitted, the most recent browser session is reused when available.',
+                        description: 'Browser session ID',
                     },
                     tab_index: {
                         type: 'integer',
-                        description: 'Optional tab index to target. Defaults to the active tab.',
+                        description: 'Tab index',
                     },
                     element_index: {
                         type: 'integer',
-                        description: 'Optional numbered element index from the most recent dom_fetch interactive or links result for this tab. Prefer this right after dom_fetch.',
+                        description: 'Element index from dom_fetch',
                     },
                     text: {
                         type: 'string',
-                        description: 'Optional visible text to hover across frames.',
+                        description: 'Visible text',
                     },
                     text_index: {
                         type: 'integer',
-                        description: 'Optional zero-based index to disambiguate between multiple visible text matches.',
+                        description: 'Text match index',
                     },
                     selector: {
                         type: 'string',
-                        description: 'A CSS selector targeting the element to hover. Provide this or x/y coordinates.',
+                        description: 'CSS selector',
                     },
                     x: {
                         type: 'number',
@@ -2182,7 +2182,7 @@ function registerBuiltinTools() {
                         description: 'Viewport Y coordinate to hover.',
                     },
                 },
-                required: [],
+                required: ['session_id', 'tab_index'],
             },
             action: async ({ session_id, tab_index, element_index, selector, text, text_index, x, y }, signal) => {
                 const result = await callBrowserTool('hover', { session_id, tab_index, element_index, selector, text, text_index, x, y }, signal);
@@ -2191,25 +2191,25 @@ function registerBuiltinTools() {
         },
         {
             name: 'browser_type',
-            description: 'Types into an input-like element in a browser tab using either a CSS selector or a numbered element from dom_fetch interactive mode. Prefer element_index right after dom_fetch interactive. If you provide both selector and element_index, the selector is tried first. Saves a screenshot after typing.',
+            description: 'Types into a browser input',
             parameters: {
                 type: 'object',
                 properties: {
                     session_id: {
                         type: 'string',
-                        description: 'Optional browser session ID. If omitted, the most recent browser session is reused when available.',
+                        description: 'Browser session ID',
                     },
                     tab_index: {
                         type: 'integer',
-                        description: 'Optional tab index to target. Defaults to the active tab.',
+                        description: 'Tab index',
                     },
                     element_index: {
                         type: 'integer',
-                        description: 'Optional numbered element index from the most recent dom_fetch interactive result for this tab. Prefer this right after dom_fetch interactive.',
+                        description: 'Element index from dom_fetch',
                     },
                     selector: {
                         type: 'string',
-                        description: 'A CSS selector targeting the element to type into. You may use this or element_index.',
+                        description: 'CSS selector',
                     },
                     text: {
                         type: 'string',
@@ -2217,10 +2217,10 @@ function registerBuiltinTools() {
                     },
                     submit: {
                         type: 'boolean',
-                        description: 'If true, presses Enter after typing.',
+                        description: 'Press Enter after typing',
                     },
                 },
-                required: ['text'],
+                required: ['session_id', 'tab_index', 'text'],
             },
             action: async ({ session_id, tab_index, element_index, selector, text, submit = false }, signal) => {
                 const result = await callBrowserTool('type', { session_id, tab_index, element_index, selector, text, submit }, signal);
@@ -2229,33 +2229,33 @@ function registerBuiltinTools() {
         },
         {
             name: 'browser_key',
-            description: 'Presses one key or a sequence of keys in the active browser tab. Use this for Escape, Enter, Tab, arrow keys, shortcuts, and menu access keys when clicking is unreliable. Saves a screenshot after the key sequence.',
+            description: 'Presses keys in the browser',
             parameters: {
                 type: 'object',
                 properties: {
                     session_id: {
                         type: 'string',
-                        description: 'Optional browser session ID. If omitted, the most recent browser session is reused when available.',
+                        description: 'Browser session ID',
                     },
                     tab_index: {
                         type: 'integer',
-                        description: 'Optional tab index to target. Defaults to the active tab.',
+                        description: 'Tab index',
                     },
                     key: {
                         type: 'string',
-                        description: 'Single key or chord to press, such as Escape, Enter, Tab, ArrowDown, or Alt+H.',
+                        description: 'Key or shortcut',
                     },
                     keys: {
                         type: 'array',
                         items: { type: 'string' },
-                        description: 'Optional sequence of keys to press in order, such as ["Alt+H", "O", "H"].',
+                        description: 'Keys to press in order',
                     },
                     delay_ms: {
                         type: 'integer',
-                        description: 'Optional delay between keys in milliseconds. Defaults to 120.',
+                        description: 'Delay between keys in ms',
                     },
                 },
-                required: [],
+                required: ['session_id', 'tab_index'],
             },
             action: async ({ session_id, tab_index, key, keys, delay_ms }, signal) => {
                 const result = await callBrowserTool('key', { session_id, tab_index, key, keys, delay_ms }, signal);
@@ -2264,32 +2264,32 @@ function registerBuiltinTools() {
         },
         {
             name: 'browser_wait',
-            description: 'Waits for text or a CSS selector to appear in a browser tab.',
+            description: 'Waits for text or a selector in the browser',
             parameters: {
                 type: 'object',
                 properties: {
                     session_id: {
                         type: 'string',
-                        description: 'Optional browser session ID. If omitted, the most recent browser session is reused when available.',
+                        description: 'Browser session ID',
                     },
                     tab_index: {
                         type: 'integer',
-                        description: 'Optional tab index to target. Defaults to the active tab.',
+                        description: 'Tab index',
                     },
                     text: {
                         type: 'string',
-                        description: 'Text to wait for. Provide this or selector.',
+                        description: 'Text to wait for',
                     },
                     selector: {
                         type: 'string',
-                        description: 'A CSS selector to wait for. Provide this or text.',
+                        description: 'CSS selector to wait for',
                     },
                     timeout_ms: {
                         type: 'integer',
-                        description: 'Timeout in milliseconds. Default 10000, max 30000.',
+                        description: 'Timeout in ms',
                     },
                 },
-                required: [],
+                required: ['session_id', 'tab_index'],
             },
             action: async ({ session_id, tab_index, text, selector, timeout_ms }, signal) => {
                 return await callBrowserTool('wait', { session_id, tab_index, text, selector, timeout_ms }, signal);
@@ -2297,40 +2297,40 @@ function registerBuiltinTools() {
         },
         {
             name: 'dom_fetch',
-            description: 'Fetches DOM content from a browser tab. Supports readable text, raw HTML, visible text, normalized links, or numbered interactive elements. Interactive and links results include element indices and viewport click coordinates when available.',
+            description: 'Fetches DOM content from the browser',
             parameters: {
                 type: 'object',
                 properties: {
                     session_id: {
                         type: 'string',
-                        description: 'Optional browser session ID. If omitted, the most recent browser session is reused when available.',
+                        description: 'Browser session ID',
                     },
                     tab_index: {
                         type: 'integer',
-                        description: 'Optional tab index to target. Defaults to the active tab.',
+                        description: 'Tab index',
                     },
                     mode: {
                         type: 'string',
-                        description: 'One of readable, html, text, links, or interactive. Defaults to readable.',
+                        description: 'readable, html, text, links, or interactive',
                     },
                     selector: {
                         type: 'string',
-                        description: 'Optional CSS selector to scope the fetch.',
+                        description: 'CSS selector',
                     },
                     max_chars: {
                         type: 'integer',
-                        description: 'Maximum characters to return. Default 12000, hard cap 30000.',
+                        description: 'Maximum characters',
                     },
                     limit: {
                         type: 'integer',
-                        description: 'Maximum number of items to return for links or interactive mode. Default 20. For small models, prefer 8-15 unless you truly need more.',
+                        description: 'Maximum items',
                     },
                     offset: {
                         type: 'integer',
-                        description: 'Starting offset for links or interactive mode. Default 0.',
+                        description: 'Starting offset',
                     },
                 },
-                required: [],
+                required: ['session_id', 'tab_index'],
             },
             action: async ({ session_id, tab_index, mode, selector, max_chars, limit, offset }, signal) => {
                 return await callBrowserTool('domfetch', { session_id, tab_index, mode, selector, max_chars, limit, offset }, signal);
@@ -2338,31 +2338,31 @@ function registerBuiltinTools() {
         },
         {
             name: 'execute_js',
-            description: 'Executes controlled JavaScript in a browser tab and returns a JSON-safe result. Always return a JSON-serializable value. The snippet can use element, arg, $(selector) for querySelector, and $$(selector) for Array.from(querySelectorAll(...)).',
+            description: 'Runs JavaScript in the browser',
             parameters: {
                 type: 'object',
                 properties: {
                     session_id: {
                         type: 'string',
-                        description: 'Optional browser session ID. If omitted, the most recent browser session is reused when available.',
+                        description: 'Browser session ID',
                     },
                     tab_index: {
                         type: 'integer',
-                        description: 'Optional tab index to target. Defaults to the active tab.',
+                        description: 'Tab index',
                     },
                     code: {
                         type: 'string',
-                        description: 'JavaScript code to run inside the page context. The snippet may use element, arg, $, and $$. It should return a JSON-serializable result. Example: return $$("img").slice(0, 3).map(img => ({ src: img.src, alt: img.alt }));',
+                        description: 'JavaScript code. Return JSON-safe data',
                     },
                     selector: {
                         type: 'string',
-                        description: 'Optional CSS selector. If provided, the matched element is passed in as element.',
+                        description: 'CSS selector for element',
                     },
                     arg: {
-                        description: 'Optional JSON-serializable argument passed into the snippet as arg.',
+                        description: 'Argument passed to the code',
                     },
                 },
-                required: ['code'],
+                required: ['session_id', 'tab_index', 'code'],
             },
             action: async ({ session_id, tab_index, code, selector, arg }, signal) => {
                 const result = await callBrowserTool('executejs', { session_id, tab_index, code, selector, arg }, signal);
@@ -2371,28 +2371,28 @@ function registerBuiltinTools() {
         },
         {
             name: 'browser_screenshot',
-            description: 'Captures a screenshot from a browser tab and saves it to the sandbox.',
+            description: 'Saves a browser screenshot',
             parameters: {
                 type: 'object',
                 properties: {
                     session_id: {
                         type: 'string',
-                        description: 'Optional browser session ID. If omitted, the most recent browser session is reused when available.',
+                        description: 'Browser session ID',
                     },
                     tab_index: {
                         type: 'integer',
-                        description: 'Optional tab index to target. Defaults to the active tab.',
+                        description: 'Tab index',
                     },
                     filepath: {
                         type: 'string',
-                        description: 'Optional sandbox filepath for the screenshot PNG.',
+                        description: 'Output file path',
                     },
                     full_page: {
                         type: 'boolean',
-                        description: 'If true, attempts a full-page screenshot.',
+                        description: 'Capture full page',
                     },
                 },
-                required: [],
+                required: ['session_id', 'tab_index'],
             },
             action: async ({ session_id, tab_index, filepath, full_page = false }, signal) => {
                 const result = await callBrowserTool('screenshot', { session_id, tab_index, filepath, full_page }, signal);
@@ -2408,32 +2408,32 @@ function registerBuiltinTools() {
         },
         {
             name: 'browser_download',
-            description: 'Downloads a file from a browser tab, either by clicking a selector or by triggering a URL, and saves it to the sandbox.',
+            description: 'Downloads a file',
             parameters: {
                 type: 'object',
                 properties: {
                     session_id: {
                         type: 'string',
-                        description: 'Optional browser session ID. If omitted, the most recent browser session is reused when available.',
+                        description: 'Browser session ID',
                     },
                     tab_index: {
                         type: 'integer',
-                        description: 'Optional tab index to target. Defaults to the active tab.',
+                        description: 'Tab index',
                     },
                     selector: {
                         type: 'string',
-                        description: 'Optional CSS selector to click to trigger the download.',
+                        description: 'CSS selector to click',
                     },
                     url: {
                         type: 'string',
-                        description: 'Optional HTTP or HTTPS URL to trigger as a direct download.',
+                        description: 'Download URL',
                     },
                     filepath: {
                         type: 'string',
-                        description: 'Optional sandbox filepath for the downloaded file.',
+                        description: 'Output file path',
                     },
                 },
-                required: [],
+                required: ['session_id', 'tab_index'],
             },
             action: async ({ session_id, tab_index, selector, url, filepath }, signal) => {
                 const result = await callBrowserTool('download', { session_id, tab_index, selector, url, filepath }, signal);
@@ -2491,13 +2491,13 @@ function registerBuiltinTools() {
         {
             name: 'bio',
             displayName: 'Update Bio',
-            description: 'Appends additional information to the user\'s bio. Use this to record new details about the user that they share during conversation, such as preferences, background, traits, or any other personal information. The text will be appended to the existing bio. Nothing can be deleted with this tool; the user can manually edit their bio in the Persona tab if needed.',
+            description: 'Appends text to the user\'s bio',
             parameters: {
                 'type': 'object',
                 'properties': {
                     'text': {
                         'type': 'string',
-                        'description': 'The text to append to the user\'s bio.',
+                        'description': 'Bio text',
                     },
                 },
                 'required': ['text'],
