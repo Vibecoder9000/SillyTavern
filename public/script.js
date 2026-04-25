@@ -2322,6 +2322,81 @@ function getToolResultDisplayText(message, fallbackText = '') {
 }
 
 /**
+ * Gets the main editable text for a message.
+ * Keeps reasoning in its dedicated editor instead of duplicating inline `<think>` blocks in the main textarea.
+ * @param {ChatMessage} message Message object
+ * @returns {string} Editable message text
+ */
+function getMessageEditText(message) {
+    if (message?.extra?.is_tool_call && message.extra?.tool_call_info) {
+        let text = '';
+        const prefixText = String(message.extra?.prefix_text ?? '');
+
+        if (prefixText) {
+            text += prefixText;
+            if (!prefixText.endsWith('\n')) {
+                text += '\n';
+            }
+        }
+
+        let toolJson = '{}';
+        try {
+            toolJson = JSON.stringify(message.extra.tool_call_info, null, 2);
+        } catch {
+            toolJson = '{}';
+        }
+
+        return `${text}<tool>\n${toolJson}\n</tool>`;
+    }
+
+    if (message?.extra?.is_tool_result) {
+        return getToolResultDisplayText(message, message.mes);
+    }
+
+    return String(message?.mes ?? '');
+}
+
+/**
+ * Normalizes a parsed native tool call against the current message state.
+ * This keeps streamed reasoning separate from any leftover raw `</think>` or duplicated reasoning text
+ * that may still be present in the final accumulated output.
+ * @param {object} parsedTool Parsed tool call payload
+ * @param {ChatMessage} [message=null] Existing message state
+ * @returns {object} Normalized parsed tool call payload
+ */
+function normalizeNativeToolCallParse(parsedTool, message = null) {
+    const existingReasoning = trimSpaces(String(message?.extra?.reasoning ?? ''));
+    const reasoning = trimSpaces(String(parsedTool?.reasoning ?? '')) || existingReasoning;
+    let prefixText = String(parsedTool?.prefix_text ?? '');
+
+    // Strip dangling closing tags that can be left behind when reasoning was already streamed separately.
+    prefixText = prefixText.replace(/^\s*<\/think>\s*/i, '');
+
+    if (reasoning) {
+        const normalizedPrefix = trimSpaces(
+            prefixText
+                .replace(/^<think>\s*/i, '')
+                .replace(/\s*<\/think>\s*$/i, ''),
+        );
+
+        if (!normalizedPrefix || normalizedPrefix === reasoning) {
+            prefixText = '';
+        } else {
+            const duplicatedReasoningPattern = new RegExp(`^\\s*${escapeRegex(reasoning)}(?:\\s*<\\/think>)?\\s*`, 's');
+            prefixText = prefixText.replace(duplicatedReasoningPattern, '');
+        }
+    }
+
+    prefixText = trimSpaces(prefixText);
+
+    return {
+        ...parsedTool,
+        reasoning,
+        prefix_text: prefixText,
+    };
+}
+
+/**
  * Builds formatted HTML for a text tool result message.
  * @param {ChatMessage} message Message object
  * @param {number} messageId Message ID
@@ -4401,20 +4476,23 @@ class StreamingProcessor {
         if (oai_settings.native_tool_calling && this.type !== 'impersonate' && this.type !== 'regenerate') {
             const parsedTool = ToolManager.findAndParseNativeToolCall(text);
             if (parsedTool) {
+                const normalizedTool = normalizeNativeToolCallParse(parsedTool, chat[messageId]);
                 // Reconstruct the message to ensure it's well-formed and doesn't contain partial tags.
-                const formattedToolCall = ToolManager.formatNativeToolCallForDisplay(parsedTool);
+                const formattedToolCall = ToolManager.formatNativeToolCallForDisplay(normalizedTool);
                 chat[messageId].mes = formattedToolCall;
-                chat[messageId].extra = { is_tool_call: true, tool_call_info: parsedTool.tool_call, reasoning: parsedTool.reasoning, prefix_text: parsedTool.prefix_text };
+                chat[messageId].extra = {
+                    ...(chat[messageId].extra ?? {}),
+                    is_tool_call: true,
+                    tool_call_info: normalizedTool.tool_call,
+                    reasoning: normalizedTool.reasoning,
+                    prefix_text: normalizedTool.prefix_text,
+                };
 
                 // Check if the LLM wants to continue after the tool call (default: true)
-                const shouldContinueAfterTool = parsedTool.continue !== false;
+                const shouldContinueAfterTool = normalizedTool.continue !== false;
 
                 // Re-render the message element with the special tool call formatting.
-                const toolMessageElement = $(`#chat .mes[mesid="${messageId}"]`);
-                if (toolMessageElement.length) {
-                    toolMessageElement.addClass('tool-call-message');
-                    toolMessageElement.find('.mes_text').html(getToolCallMessageHtml(chat[messageId], messageId));
-                }
+                updateMessageBlock(messageId, chat[messageId]);
 
                 // Check for manual execution mode
                 if (power_user.tool_execution_mode === 'manual') {
@@ -4428,14 +4506,14 @@ class StreamingProcessor {
                 let liveCommandMessageId = null;
                 if (liveCommandToolKind) {
                     const liveShellMessage = liveCommandToolKind === 'shell'
-                        ? createShellToolResultMessage(parsedTool.tool_call)
-                        : createPythonToolResultMessage(parsedTool.tool_call);
+                        ? createShellToolResultMessage(normalizedTool.tool_call)
+                        : createPythonToolResultMessage(normalizedTool.tool_call);
                     chat.push(liveShellMessage);
                     liveCommandMessageId = chat.length - 1;
                     addOneMessage(liveShellMessage);
                 }
 
-                const toolResult = await ToolManager.invokeFunctionTool(parsedTool.tool_call.tool, parsedTool.tool_call.args, {
+                const toolResult = await ToolManager.invokeFunctionTool(normalizedTool.tool_call.tool, normalizedTool.tool_call.args, {
                     signal: this.abortController.signal,
                     liveMessageId: liveCommandMessageId,
                 });
@@ -6232,20 +6310,23 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
         if (oai_settings.native_tool_calling && depth < ToolManager.RECURSE_LIMIT) {
             const parsedTool = ToolManager.findAndParseNativeToolCall(getMessage);
             if (parsedTool) {
+                const normalizedTool = normalizeNativeToolCallParse(parsedTool, chat[chat.length - 1]);
                 // Reconstruct the message to ensure it's well-formed and doesn't contain partial tags.
-                const formattedToolCall = ToolManager.formatNativeToolCallForDisplay(parsedTool);
+                const formattedToolCall = ToolManager.formatNativeToolCallForDisplay(normalizedTool);
                 chat[chat.length - 1].mes = formattedToolCall;
-                chat[chat.length - 1].extra = { is_tool_call: true, tool_call_info: parsedTool.tool_call, reasoning: parsedTool.reasoning, prefix_text: parsedTool.prefix_text };
+                chat[chat.length - 1].extra = {
+                    ...(chat[chat.length - 1].extra ?? {}),
+                    is_tool_call: true,
+                    tool_call_info: normalizedTool.tool_call,
+                    reasoning: normalizedTool.reasoning,
+                    prefix_text: normalizedTool.prefix_text,
+                };
 
                 // Check if the LLM wants to continue after the tool call (default: true)
-                const shouldContinueAfterTool = parsedTool.continue !== false;
+                const shouldContinueAfterTool = normalizedTool.continue !== false;
 
                 // Re-render the message element with the special tool call formatting.
-                const messageElement = $('#chat .mes').last();
-                if (messageElement.length) {
-                    messageElement.addClass('tool-call-message');
-                    messageElement.find('.mes_text').html(getToolCallMessageHtml(chat[chat.length - 1], chat.length - 1));
-                }
+                updateMessageBlock(chat.length - 1, chat[chat.length - 1]);
 
                 // Check for manual execution mode
                 if (power_user.tool_execution_mode === 'manual') {
@@ -8910,12 +8991,15 @@ function updateMessage(div, { preserveToolCallOnParseError = false } = {}) {
     const shouldTryParseToolCall = mes.extra?.is_tool_call || text.includes('<tool>');
     if (shouldTryParseToolCall) {
         const parsedTool = ToolManager.findAndParseNativeToolCall(text);
+        const hasInlineReasoning = /<think>[\s\S]*?<\/think>/.test(text);
 
         if (parsedTool?.tool_call) {
             mes.extra.is_tool_call = true;
             mes.extra.tool_call_info = parsedTool.tool_call;
-            mes.extra.reasoning = parsedTool.reasoning;
             mes.extra.prefix_text = parsedTool.prefix_text;
+            if (parsedTool.reasoning || hasInlineReasoning) {
+                mes.extra.reasoning = parsedTool.reasoning;
+            }
         } else if (!preserveToolCallOnParseError) {
             delete mes.extra.is_tool_call;
             delete mes.extra.tool_call_info;
@@ -9025,7 +9109,7 @@ export async function messageEdit(editMessageId) {
     editTextArea.dataset.macros = '';
     messageText.append(editTextArea);
 
-    const text = trimSpaces(editMessage.mes || '');
+    const text = trimSpaces(getMessageEditText(editMessage));
     const $editTextArea = $(editTextArea);
     $editTextArea.val(text);
 
@@ -9053,7 +9137,6 @@ export async function messageEdit(editMessageId) {
  * @param {number} [messageId=this_edit_mes_id]
  */
 async function messageEditCancel(messageId = this_edit_mes_id) {
-    let text = chat[messageId].mes;
     let thisMesDiv;
     // If this is the button then select it's parent. Otherwise, select by messageId.
     if (this?.classList?.contains('mes_edit_cancel')) {
@@ -9066,23 +9149,13 @@ async function messageEditCancel(messageId = this_edit_mes_id) {
     thisMesBlock.find('.mes_text').empty();
     thisMesDiv.find('.mes_edit_buttons').css('display', 'none');
     thisMesBlock.find('.mes_buttons').css('display', '');
-    thisMesBlock.find('.mes_text')
-        .append(messageFormatting(
-            text,
-            this_edit_mes_chname,
-            chat[messageId].is_system,
-            chat[messageId].is_user,
-            messageId,
-            {},
-            false,
-        ));
-    appendMediaToMessage(chat[messageId], thisMesDiv);
-    addCopyToCodeBlocks(thisMesDiv);
 
     const reasoningEditDone = thisMesBlock.find('.mes_reasoning_edit_cancel:visible');
     if (reasoningEditDone.length > 0) {
         reasoningEditDone.trigger('click');
     }
+
+    updateMessageBlock(messageId, chat[messageId]);
 
     await eventSource.emit(event_types.MESSAGE_UPDATED, messageId);
     if (messageId == this_edit_mes_id) {
