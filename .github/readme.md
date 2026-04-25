@@ -25,6 +25,13 @@ LLM Frontend for Power Users
 
 This fork adds significant enhancements to SillyTavern while staying synced with upstream staging. Below is a comprehensive list of features unique to this fork.
 
+<img width="500" alt="stable diffusion script info" src="./1.jpg">
+<img width="500" alt="sd txt2img tool call" src="./2.jpg">
+<img width="500" alt="ask user tool call" src="./3.jpg">
+<img width="500" alt="power shell tool call" src="./4.jpg">
+<img width="500" alt="browser search and click tool call" src="./5.jpg">
+<img width="500" alt="tool calling settings" src="./6.jpg">
+
 ### Native Tool Calling System
 
 A complete tool calling infrastructure that enables LLMs to interact with your system directly:
