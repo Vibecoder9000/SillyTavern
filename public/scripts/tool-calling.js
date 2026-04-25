@@ -2962,81 +2962,169 @@ export class ToolManager {
             return null;
         }
 
+        const toolCloseTagIndex = text.indexOf('</tool>', toolTagIndex + '<tool>'.length);
+        const fallbackToolBlockEndIndex = toolCloseTagIndex !== -1 ? toolCloseTagIndex + '</tool>'.length : text.length;
+        const textBeforeTool = text.substring(0, toolTagIndex);
+        const rawToolBlock = text.slice(toolTagIndex, fallbackToolBlockEndIndex).trim();
+        const looksLikeToolCallAttempt = rawToolBlock.includes('"tool"') && rawToolBlock.includes('"args"');
+
+        const buildContext = (toolBlockEndIndex = fallbackToolBlockEndIndex) => {
+            const thinkStartIndex = text.lastIndexOf('<think>', toolTagIndex);
+            const thinkCloseBeforeToolIndex = text.lastIndexOf('</think>', toolTagIndex);
+            const toolInsideThink = thinkStartIndex !== -1 && thinkStartIndex > thinkCloseBeforeToolIndex;
+            let reasoning = '';
+            let prefixText = '';
+
+            if (toolInsideThink) {
+                const thinkContentStartIndex = thinkStartIndex + '<think>'.length;
+                const thinkEndIndex = text.indexOf('</think>', toolBlockEndIndex);
+                const reasoningParts = [
+                    text.slice(thinkContentStartIndex, toolTagIndex).trim(),
+                    thinkEndIndex !== -1 ? text.slice(toolBlockEndIndex, thinkEndIndex).trim() : '',
+                ].filter(Boolean);
+
+                reasoning = reasoningParts.join('\n\n');
+                prefixText = text.slice(0, thinkStartIndex);
+            } else {
+                const thinkMatch = text.match(/<think>([\s\S]*?)<\/think>/);
+                reasoning = thinkMatch ? thinkMatch[1].trim() : '';
+                prefixText = thinkMatch
+                    ? textBeforeTool.replace(/<think>[\s\S]*?<\/think>/, '')
+                    : textBeforeTool;
+            }
+
+            return {
+                reasoning,
+                prefix_text: prefixText.trim(),
+                original_text: text,
+                continue: true,
+            };
+        };
+
+        const buildParseError = (code, message, extra = {}) => {
+            const parseError = { code, message, ...extra };
+            console.warn('[ToolManager] Failed to parse native tool call:', parseError);
+            return {
+                ...buildContext(),
+                tool_call: null,
+                parse_error: parseError,
+            };
+        };
+
         // Start searching for the JSON object after the <tool> tag.
         const jsonStartIndex = text.indexOf('{', toolTagIndex);
-        if (jsonStartIndex === -1) {
-            return null;
+        if (jsonStartIndex === -1 || (toolCloseTagIndex !== -1 && jsonStartIndex > toolCloseTagIndex)) {
+            if (!looksLikeToolCallAttempt) {
+                return null;
+            }
+            return buildParseError('missing_json', 'Found a <tool> block, but it does not contain a JSON object.', {
+                raw_tool_block: rawToolBlock,
+            });
         }
 
-        let braceCount = 1;
+        let braceCount = 0;
         let jsonEndIndex = -1;
+        let inString = false;
+        let isEscaped = false;
 
-        // Find the matching closing brace for the JSON object.
-        for (let i = jsonStartIndex + 1; i < text.length; i++) {
-            if (text[i] === '{') {
+        // Find the matching closing brace for the JSON object while respecting quoted strings.
+        for (let i = jsonStartIndex; i < text.length; i++) {
+            const char = text[i];
+
+            if (isEscaped) {
+                isEscaped = false;
+                continue;
+            }
+
+            if (char === '\\' && inString) {
+                isEscaped = true;
+                continue;
+            }
+
+            if (char === '"') {
+                inString = !inString;
+                continue;
+            }
+
+            if (inString) {
+                continue;
+            }
+
+            if (char === '{') {
                 braceCount++;
-            } else if (text[i] === '}') {
+            } else if (char === '}') {
                 braceCount--;
             }
 
-            if (braceCount === 0) {
+            if (braceCount === 0 && i > jsonStartIndex) {
                 jsonEndIndex = i;
                 break;
             }
         }
 
-        if (jsonEndIndex !== -1) {
-            const jsonString = text.substring(jsonStartIndex, jsonEndIndex + 1);
-            try {
-                const parsed = JSON.parse(jsonString);
-                if (typeof parsed.tool === 'string' && typeof parsed.args === 'object') {
-                    const textBeforeTool = text.substring(0, toolTagIndex);
-                    const toolCloseTagIndex = text.indexOf('</tool>', jsonEndIndex + 1);
-                    const toolBlockEndIndex = toolCloseTagIndex !== -1 ? toolCloseTagIndex + '</tool>'.length : jsonEndIndex + 1;
-                    const thinkStartIndex = text.lastIndexOf('<think>', toolTagIndex);
-                    const thinkCloseBeforeToolIndex = text.lastIndexOf('</think>', toolTagIndex);
-                    const toolInsideThink = thinkStartIndex !== -1 && thinkStartIndex > thinkCloseBeforeToolIndex;
-                    let reasoning = '';
-                    let prefixText = '';
-
-                    if (toolInsideThink) {
-                        const thinkContentStartIndex = thinkStartIndex + '<think>'.length;
-                        const thinkEndIndex = text.indexOf('</think>', toolBlockEndIndex);
-                        const reasoningParts = [
-                            text.slice(thinkContentStartIndex, toolTagIndex).trim(),
-                            thinkEndIndex !== -1 ? text.slice(toolBlockEndIndex, thinkEndIndex).trim() : '',
-                        ].filter(Boolean);
-
-                        reasoning = reasoningParts.join('\n\n');
-                        prefixText = text.slice(0, thinkStartIndex);
-                    } else {
-                        const thinkMatch = text.match(/<think>([\s\S]*?)<\/think>/);
-                        reasoning = thinkMatch ? thinkMatch[1].trim() : '';
-                        prefixText = thinkMatch
-                            ? textBeforeTool.replace(/<think>[\s\S]*?<\/think>/, '')
-                            : textBeforeTool;
-                    }
-
-                    prefixText = prefixText.trim();
-
-                    // Extract the continue flag (default true for backward compatibility)
-                    const shouldContinue = parsed.continue !== undefined ? !!parsed.continue : true;
-                    console.log(`[ToolManager] Parsed tool call: ${parsed.tool}, continue flag: ${parsed.continue}, resolved: ${shouldContinue}`);
-                    // Success!
-                    return {
-                        tool_call: parsed,
-                        reasoning: reasoning,
-                        prefix_text: prefixText,
-                        original_text: text,
-                        'continue': shouldContinue,
-                    };
-                }
-            } catch (e) {
-                console.error('Failed to parse JSON from tool block:', e);
+        if (jsonEndIndex === -1) {
+            if (!looksLikeToolCallAttempt) {
                 return null;
             }
+            return buildParseError('unbalanced_json', 'The JSON inside the <tool> block is incomplete or has unmatched braces.', {
+                raw_tool_block: rawToolBlock,
+                raw_json: text.slice(jsonStartIndex, fallbackToolBlockEndIndex).trim(),
+            });
         }
-        return null;
+
+        const jsonString = text.substring(jsonStartIndex, jsonEndIndex + 1);
+        const toolBlockEndIndex = toolCloseTagIndex !== -1 ? toolCloseTagIndex + '</tool>'.length : jsonEndIndex + 1;
+        const detectedToolBlock = text.slice(toolTagIndex, toolBlockEndIndex).trim();
+
+        try {
+            const parsed = JSON.parse(jsonString);
+
+            if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+                if (!looksLikeToolCallAttempt) {
+                    return null;
+                }
+                return buildParseError('invalid_shape', 'Tool JSON must be an object.', {
+                    raw_tool_block: detectedToolBlock,
+                    raw_json: jsonString,
+                });
+            }
+
+            if (typeof parsed.tool !== 'string' || !parsed.tool.trim()) {
+                if (!looksLikeToolCallAttempt) {
+                    return null;
+                }
+                return buildParseError('missing_tool_name', 'Tool JSON must contain a non-empty string "tool" field.', {
+                    raw_tool_block: detectedToolBlock,
+                    raw_json: jsonString,
+                });
+            }
+
+            if (!parsed.args || typeof parsed.args !== 'object' || Array.isArray(parsed.args)) {
+                if (!looksLikeToolCallAttempt) {
+                    return null;
+                }
+                return buildParseError('invalid_args', 'Tool JSON must contain an "args" object.', {
+                    raw_tool_block: detectedToolBlock,
+                    raw_json: jsonString,
+                });
+            }
+
+            const shouldContinue = parsed.continue !== undefined ? !!parsed.continue : true;
+            console.log(`[ToolManager] Parsed tool call: ${parsed.tool}, continue flag: ${parsed.continue}, resolved: ${shouldContinue}`);
+            return {
+                ...buildContext(toolBlockEndIndex),
+                tool_call: parsed,
+                continue: shouldContinue,
+            };
+        } catch (error) {
+            if (!looksLikeToolCallAttempt) {
+                return null;
+            }
+            return buildParseError('invalid_json', `Failed to parse tool JSON: ${error instanceof Error ? error.message : String(error)}`, {
+                raw_tool_block: detectedToolBlock,
+                raw_json: jsonString,
+            });
+        }
     }
 
     /**
@@ -3538,6 +3626,41 @@ Here are the available tools:
         toastr.error('An error occurred while invoking function tools. Click here for more details.', 'Tool Calling', {
             onclick: () => Popup.show.text('Tool Calling Errors', DOMPurify.sanitize(errors.map(e => `${e.cause}: ${e.message}`).join('<br>'))),
             timeOut: 5000,
+        });
+    }
+
+    /**
+     * Shows a user-facing error for malformed native/XML tool calls.
+     * @param {{ message?: string, raw_tool_block?: string, raw_json?: string } | null | undefined} parseError Parse error info
+     * @returns {void}
+     */
+    static showNativeToolCallParseError(parseError) {
+        if (!parseError?.message) {
+            return;
+        }
+
+        const rawToolBlock = String(parseError.raw_tool_block ?? '').trim();
+        const rawJson = String(parseError.raw_json ?? '').trim();
+        const details = [
+            '<div style="text-align: left;">',
+            `<p style="margin: 0 0 10px 0; line-height: 1.5;">${DOMPurify.sanitize(parseError.message)}</p>`,
+            rawToolBlock
+                ? `<p style="margin: 6px 0 8px 0;"><strong>Raw tool block</strong></p><pre style="margin: 0 0 14px 0; padding: 12px 14px; border: 1px solid rgba(255, 255, 255, 0.12); border-radius: 6px; background: rgba(0, 0, 0, 0.28); overflow: auto; white-space: pre-wrap; word-break: break-word; text-align: left;"><code style="display: block; padding: 0; background: transparent; color: inherit; font-family: var(--mainFontFamilyMono, Consolas, Monaco, monospace); font-size: 0.95em; line-height: 1.45; text-decoration: none;">${DOMPurify.sanitize(rawToolBlock)}</code></pre>`
+                : '',
+            rawJson
+                ? `<p style="margin: 6px 0 8px 0;"><strong>Detected JSON</strong></p><pre style="margin: 0 0 14px 0; padding: 12px 14px; border: 1px solid rgba(255, 255, 255, 0.12); border-radius: 6px; background: rgba(0, 0, 0, 0.28); overflow: auto; white-space: pre-wrap; word-break: break-word; text-align: left;"><code style="display: block; padding: 0; background: transparent; color: inherit; font-family: var(--mainFontFamilyMono, Consolas, Monaco, monospace); font-size: 0.95em; line-height: 1.45; text-decoration: none;">${DOMPurify.sanitize(rawJson)}</code></pre>`
+                : '',
+            '</div>',
+        ].filter(Boolean).join('');
+
+        toastr.error('The model produced an invalid tool call. Click here for details.', 'Tool Calling', {
+            onclick: () => Popup.show.text('Invalid Tool Call', details, {
+                leftAlign: true,
+                wider: true,
+                allowVerticalScrolling: true,
+            }),
+            timeOut: 7000,
+            preventDuplicates: true,
         });
     }
 
