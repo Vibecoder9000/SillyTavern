@@ -131,6 +131,7 @@ export const power_user = {
     },
     markdown_escape_strings: '',
     chat_truncation: 100,
+    chat_inline_image_messages: 0,
     streaming_fps: 30,
     smooth_streaming: false,
     smooth_streaming_no_think: false,
@@ -1752,6 +1753,8 @@ export async function loadPowerUserSettings(settings, data) {
 
     $('#chat_truncation').val(power_user.chat_truncation);
     $('#chat_truncation_counter').val(power_user.chat_truncation);
+    $('#chat_inline_image_messages').val(power_user.chat_inline_image_messages);
+    $('#chat_inline_image_messages_counter').val(power_user.chat_inline_image_messages);
 
     $('#streaming_fps').val(power_user.streaming_fps);
     $('#streaming_fps_counter').val(power_user.streaming_fps);
@@ -3407,6 +3410,12 @@ jQuery(() => {
     $('#chat_truncation').on('input', function () {
         power_user.chat_truncation = Number($('#chat_truncation').val());
         $('#chat_truncation_counter').val(power_user.chat_truncation);
+        saveSettingsDebounced();
+    });
+
+    $('#chat_inline_image_messages').on('input', function () {
+        power_user.chat_inline_image_messages = Number($('#chat_inline_image_messages').val());
+        $('#chat_inline_image_messages_counter').val(power_user.chat_inline_image_messages);
         saveSettingsDebounced();
     });
 

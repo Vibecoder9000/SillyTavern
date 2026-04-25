@@ -643,6 +643,55 @@ function setOpenAIMessages(chat) {
 }
 
 /**
+ * Gets the media attachments from a prompt that would be inlined for the current display mode.
+ * @param {{ media?: any[], mediaDisplay?: string, mediaIndex?: number }} prompt
+ * @returns {any[]}
+ */
+function getInlineMediaAttachments(prompt) {
+    if (!Array.isArray(prompt?.media) || prompt.media.length === 0) {
+        return [];
+    }
+
+    if (prompt.mediaDisplay === MEDIA_DISPLAY.GALLERY) {
+        const media = prompt.media[prompt.mediaIndex];
+        return media ? [media] : [];
+    }
+
+    return prompt.media;
+}
+
+/**
+ * Gets the set of prompts whose image attachments should be inlined.
+ * Most recent image-bearing messages are prioritized when a limit is set.
+ * @param {object[]} prompts
+ * @returns {Set<object>}
+ */
+function getRecentImageInlinePromptSet(prompts) {
+    const imageMessageLimit = Number(power_user.chat_inline_image_messages) || 0;
+
+    if (imageMessageLimit <= 0) {
+        return new Set(prompts.filter(prompt => getInlineMediaAttachments(prompt).some(media => (media?.type || MEDIA_TYPE.IMAGE) === MEDIA_TYPE.IMAGE)));
+    }
+
+    const recentImagePrompts = new Set();
+    let remaining = imageMessageLimit;
+
+    for (let index = prompts.length - 1; index >= 0 && remaining > 0; index--) {
+        const prompt = prompts[index];
+        const hasInlineImage = getInlineMediaAttachments(prompt).some(media => (media?.type || MEDIA_TYPE.IMAGE) === MEDIA_TYPE.IMAGE);
+
+        if (!hasInlineImage) {
+            continue;
+        }
+
+        recentImagePrompts.add(prompt);
+        remaining--;
+    }
+
+    return recentImagePrompts;
+}
+
+/**
  * Formats chat examples into chat completion messages.
  * @param {string[]} mesExamplesArray - Array containing all examples.
  * @returns {object[]} - Array containing all examples formatted for chat completion.
@@ -937,6 +986,7 @@ async function populateChatHistory(messages, prompts, chatCompletion, type = nul
         : tool_reasoning_modes.DISABLED;
     const includeToolReasoning = toolReasoningMode !== tool_reasoning_modes.DISABLED;
     const lastUserIdx = messages.findLastIndex(x => x.role === 'user');
+    const recentImageInlinePromptSet = getRecentImageInlinePromptSet(messages);
 
     // Insert chat messages as long as there is budget available
     const chatPool = [...messages].reverse();
@@ -976,13 +1026,13 @@ async function populateChatHistory(messages, prompts, chatCompletion, type = nul
         }
 
         if (Array.isArray(chatPrompt.media) && chatPrompt.media.length) {
-            if (chatPrompt.mediaDisplay === MEDIA_DISPLAY.LIST) {
-                for (const media of chatPrompt.media) {
-                    await inlineMediaAttachment(media);
+            const canInlineImagesForPrompt = recentImageInlinePromptSet.has(chatPrompt);
+
+            for (const media of getInlineMediaAttachments(chatPrompt)) {
+                if ((media?.type || MEDIA_TYPE.IMAGE) === MEDIA_TYPE.IMAGE && !canInlineImagesForPrompt) {
+                    continue;
                 }
-            }
-            if (chatPrompt.mediaDisplay === MEDIA_DISPLAY.GALLERY) {
-                const media = chatPrompt.media[chatPrompt.mediaIndex];
+
                 await inlineMediaAttachment(media);
             }
         }

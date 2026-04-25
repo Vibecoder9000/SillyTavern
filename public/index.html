@@ -5382,6 +5382,18 @@
                                         <input class="neo-range-input" type="number" min="5" max="100" step="5" data-for="streaming_fps" id="streaming_fps_counter">
                                     </div>
                                 </div>
+                                <div class="alignitemscenter flex-container flexFlowColumn gap0">
+                                    <small>
+                                        <span data-i18n="Images to Send">Images to Send</span>
+                                        <div
+                                            class="fa-solid fa-circle-info opacity50p"
+                                            data-i18n="[title]The number of most recent image-bearing messages to inline in API requests. Older messages keep their text, but their images are omitted. (0 = All)"
+                                            title="The number of most recent image-bearing messages to inline in API requests. Older messages keep their text, but their images are omitted. (0 = All)"></div>
+                                    </small>
+                                    <input class="neo-range-slider" type="range" id="chat_inline_image_messages" name="chat_inline_image_messages" min="0" max="100" step="1">
+                                    <input class="neo-range-input" type="number" min="0" max="100" step="1" data-for="chat_inline_image_messages" id="chat_inline_image_messages_counter">
+                                    <small data-i18n="(0 = All)">(0 = All)</small>
+                                </div>
                                 <div id="examples-behavior-block">
                                     <label for="example_messages_behavior">
                                         <small data-i18n="Example Messages Behavior">
