@@ -3119,8 +3119,21 @@ async function performBrowserOpen(userHandle, body) {
     const requestedSessionId = String(body.session_id ?? '').trim();
     const newTab = body.new_tab === true || body.new_tab === 'true';
     const directAsset = isDirectAssetUrl(url);
+    const state = getBrowserState(userHandle);
     const existingSession = requestedSessionId
-        ? getExistingBrowserSession(userHandle, requestedSessionId)
+        ? (() => {
+            const session = state.sessions.get(requestedSessionId);
+            if (!session) {
+                return null;
+            }
+
+            if (session.page.isClosed()) {
+                state.sessions.delete(session.id);
+                return null;
+            }
+
+            return session;
+        })()
         : getMostRecentBrowserSession(userHandle);
     const session = existingSession ?? await createBrowserSession(userHandle, workspace, character);
     const reusedSession = Boolean(existingSession);
