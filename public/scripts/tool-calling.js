@@ -2966,7 +2966,8 @@ export class ToolManager {
         const fallbackToolBlockEndIndex = toolCloseTagIndex !== -1 ? toolCloseTagIndex + '</tool>'.length : text.length;
         const textBeforeTool = text.substring(0, toolTagIndex);
         const rawToolBlock = text.slice(toolTagIndex, fallbackToolBlockEndIndex).trim();
-        const looksLikeToolCallAttempt = rawToolBlock.includes('"tool"') && rawToolBlock.includes('"args"');
+        const rawToolContent = text.slice(toolTagIndex + '<tool>'.length, toolCloseTagIndex !== -1 ? toolCloseTagIndex : text.length).trim();
+        const looksLikeToolCallAttempt = rawToolBlock.includes('"tool"') || rawToolContent.startsWith('{');
 
         const buildContext = (toolBlockEndIndex = fallbackToolBlockEndIndex) => {
             const thinkStartIndex = text.lastIndexOf('<think>', toolTagIndex);
