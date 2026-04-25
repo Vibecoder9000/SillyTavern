@@ -42,19 +42,24 @@ const activeProcesses = {
 };
 
 const COMMAND_DENYLIST = new Set([
-    'rm',
     'mv',
     'shred',
     'dd',
     'truncate',
     'chmod',
     'chown',
-    'del',
-    'erase',
     'move',
     'rename',
     'ren',
     'icacls',
+]);
+const DESTRUCTIVE_DELETE_COMMANDS = new Set([
+    'rm',
+    'del',
+    'erase',
+    'remove-item',
+    'rmdir',
+    'rd',
 ]);
 const POWERSHELL_COMMAND = process.platform === 'win32' ? 'powershell.exe' : 'powershell';
 const POWERSHELL_UTF8_PREAMBLE = [
@@ -2361,6 +2366,63 @@ function getPowerShellCommandCandidate(command) {
 }
 
 /**
+ * Extracts the first non-switch argument from a delete command.
+ * This is used to reject filesystem-root wipeouts while still allowing
+ * normal file deletion.
+ * @param {string} command
+ * @returns {string}
+ */
+function getDeleteTargetCandidate(command) {
+    const trimmedCommand = String(command ?? '').trim();
+    if (!trimmedCommand) {
+        return '';
+    }
+
+    const tokens = trimmedCommand
+        .replace(/^&\s*/, '')
+        .match(/(?:"[^"]*"|'[^']*'|`[^`]*`|[^\s]+)/g) || [];
+
+    if (tokens.length < 2) {
+        return '';
+    }
+
+    for (const token of tokens.slice(1)) {
+        const lowerToken = token.toLowerCase();
+        if (lowerToken.startsWith('-')) {
+            continue;
+        }
+
+        if (/^\/[a-z]$/i.test(lowerToken)) {
+            continue;
+        }
+
+        return token.replace(/^['"`]|['"`]$/g, '');
+    }
+
+    return '';
+}
+
+/**
+ * Detects obvious "wipe the whole disk" delete commands like `rm -rf /*`.
+ * Normal file deletes are allowed.
+ * @param {string} command
+ * @returns {boolean}
+ */
+function isDestructiveDeleteCommand(command) {
+    const candidate = getPowerShellCommandCandidate(command);
+    if (!DESTRUCTIVE_DELETE_COMMANDS.has(candidate)) {
+        return false;
+    }
+
+    const target = getDeleteTargetCandidate(command).trim();
+    if (!target) {
+        return false;
+    }
+
+    return /^(?:\/\*|\/|\.|\.{2}|\*|\.\/\*|\.\\\*|\.\.\/\*|\.\.\\\*|[a-z]:[\\/]\*?|[a-z]:[\\/])$/i.test(target);
+}
+
+/**
  * Builds PowerShell arguments that force UTF-8 I/O before running the user command.
  * @param {string} command
  * @returns {string[]}
@@ -2549,6 +2611,12 @@ router.post('/executeshell', async (req, res) => {
 
     if (typeof explanation !== 'string' || !explanation.trim()) {
         return res.status(400).json({ error: 'explanation is required and must describe what the command does.' });
+    }
+
+    if (isDestructiveDeleteCommand(command)) {
+        const errorMessage = 'Error: Deleting the filesystem root or using wildcard wipe commands is forbidden for security reasons.';
+        console.warn(`Blocked destructive delete command: ${command}`);
+        return res.status(403).json({ error: errorMessage });
     }
 
     const normalizedCandidate = getPowerShellCommandCandidate(command);
