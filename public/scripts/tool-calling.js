@@ -2957,22 +2957,9 @@ export class ToolManager {
      * @returns {object|null} The parsed tool call and reasoning, or null if not found.
      */
     static findAndParseNativeToolCall(text) {
-        const thinkMatch = text.match(/<think>([\s\S]*?)<\/think>/);
-        const reasoning = thinkMatch ? thinkMatch[1] : '';
-
         const toolTagIndex = text.indexOf('<tool>');
         if (toolTagIndex === -1) {
             return null;
-        }
-
-        // Calculate prefix text: everything before <tool> that isn't part of <think> block
-        let prefixText = '';
-        const textBeforeTool = text.substring(0, toolTagIndex);
-        if (thinkMatch) {
-            // Remove the <think>...</think> block from the text before <tool>
-            prefixText = textBeforeTool.replace(/<think>[\s\S]*?<\/think>/, '');
-        } else {
-            prefixText = textBeforeTool;
         }
 
         // Start searching for the JSON object after the <tool> tag.
@@ -3003,6 +2990,35 @@ export class ToolManager {
             try {
                 const parsed = JSON.parse(jsonString);
                 if (typeof parsed.tool === 'string' && typeof parsed.args === 'object') {
+                    const textBeforeTool = text.substring(0, toolTagIndex);
+                    const toolCloseTagIndex = text.indexOf('</tool>', jsonEndIndex + 1);
+                    const toolBlockEndIndex = toolCloseTagIndex !== -1 ? toolCloseTagIndex + '</tool>'.length : jsonEndIndex + 1;
+                    const thinkStartIndex = text.lastIndexOf('<think>', toolTagIndex);
+                    const thinkCloseBeforeToolIndex = text.lastIndexOf('</think>', toolTagIndex);
+                    const toolInsideThink = thinkStartIndex !== -1 && thinkStartIndex > thinkCloseBeforeToolIndex;
+                    let reasoning = '';
+                    let prefixText = '';
+
+                    if (toolInsideThink) {
+                        const thinkContentStartIndex = thinkStartIndex + '<think>'.length;
+                        const thinkEndIndex = text.indexOf('</think>', toolBlockEndIndex);
+                        const reasoningParts = [
+                            text.slice(thinkContentStartIndex, toolTagIndex).trim(),
+                            thinkEndIndex !== -1 ? text.slice(toolBlockEndIndex, thinkEndIndex).trim() : '',
+                        ].filter(Boolean);
+
+                        reasoning = reasoningParts.join('\n\n');
+                        prefixText = text.slice(0, thinkStartIndex);
+                    } else {
+                        const thinkMatch = text.match(/<think>([\s\S]*?)<\/think>/);
+                        reasoning = thinkMatch ? thinkMatch[1].trim() : '';
+                        prefixText = thinkMatch
+                            ? textBeforeTool.replace(/<think>[\s\S]*?<\/think>/, '')
+                            : textBeforeTool;
+                    }
+
+                    prefixText = prefixText.trim();
+
                     // Extract the continue flag (default true for backward compatibility)
                     const shouldContinue = parsed.continue !== undefined ? !!parsed.continue : true;
                     console.log(`[ToolManager] Parsed tool call: ${parsed.tool}, continue flag: ${parsed.continue}, resolved: ${shouldContinue}`);

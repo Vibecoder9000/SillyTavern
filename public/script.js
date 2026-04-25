@@ -2357,6 +2357,19 @@ function getMessageEditText(message) {
 }
 
 /**
+ * Removes native tool-call markup from reasoning text.
+ * @param {string} reasoning Reasoning text
+ * @returns {string} Clean reasoning text
+ */
+function stripToolCallFromReasoning(reasoning) {
+    return trimSpaces(
+        String(reasoning ?? '')
+            .replace(/<\/?think>\s*/gi, '')
+            .replace(/\s*<tool>[\s\S]*?(?:<\/tool>|$)/gi, ''),
+    );
+}
+
+/**
  * Normalizes a parsed native tool call against the current message state.
  * This keeps streamed reasoning separate from any leftover raw `</think>` or duplicated reasoning text
  * that may still be present in the final accumulated output.
@@ -2365,8 +2378,8 @@ function getMessageEditText(message) {
  * @returns {object} Normalized parsed tool call payload
  */
 function normalizeNativeToolCallParse(parsedTool, message = null) {
-    const existingReasoning = trimSpaces(String(message?.extra?.reasoning ?? ''));
-    const reasoning = trimSpaces(String(parsedTool?.reasoning ?? '')) || existingReasoning;
+    const existingReasoning = stripToolCallFromReasoning(message?.extra?.reasoning);
+    const reasoning = stripToolCallFromReasoning(parsedTool?.reasoning) || existingReasoning;
     let prefixText = String(parsedTool?.prefix_text ?? '');
 
     // Strip dangling closing tags that can be left behind when reasoning was already streamed separately.
