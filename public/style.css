@@ -510,42 +510,6 @@ input[type='checkbox']:focus-visible {
     margin-right: var(--mes-right-spacing);
 }
 
-/* Allow message content to visually extend beyond mes_block into the avatar area */
-.mes .mes_block {
-    overflow: visible;
-}
-
-.mes .mes_text,
-.mes .mes_media_wrapper,
-.mes .mes_file_wrapper {
-    overflow-x: hidden;
-}
-
-.mes .mes_text {
-    margin-left: calc(-1 * (var(--avatar-base-width) + 10px));
-    width: calc(100% + var(--avatar-base-width) + 10px);
-    max-width: none;
-    padding-left: 10px;
-    padding-right: 10px;
-}
-
-/* For non-reasoning messages, add top padding so text clears the avatar */
-.mes:not(.reasoning) .mes_text {
-    padding-top: calc(var(--avatar-base-height) - 20px);
-}
-
-.mes.reasoning .mes_reasoning_details[open] {
-    margin-right: 0;
-}
-
-.mes.reasoning .mes_reasoning_details[open] > .mes_reasoning {
-    margin-left: calc(-1 * (var(--avatar-base-width) + 10px));
-    width: calc(100% + var(--avatar-base-width) + 10px);
-    max-width: none;
-    padding-left: 10px;
-    padding-right: 10px;
-}
-
 .mes_reasoning_details .mes_reasoning_summary {
     list-style: none;
     margin-right: calc(var(--mes-right-spacing) * -1);
@@ -1585,11 +1549,17 @@ textarea.ask_user_free_input {
 
 .swipe_right,
 .swipe_left {
-    opacity: 0 !important;
-    width: 1px !important;
-    height: 1px !important;
-    overflow: hidden !important;
-    pointer-events: none !important;
+    width: 25px;
+    height: 25px;
+    opacity: 0.3;
+    align-items: center;
+    justify-content: center;
+    z-index: 9999;
+    grid-row-start: 2;
+    font-size: 20px;
+    cursor: pointer;
+    align-self: center;
+    pointer-events: auto;
 }
 
 .swipe_left {
@@ -1603,18 +1573,22 @@ textarea.ask_user_free_input {
     right: 0;
     bottom: 0;
     pointer-events: none;
-    opacity: 0 !important;
-    width: 1px !important;
-    height: 1px !important;
-    overflow: hidden !important;
 }
 
 .swipes-counter {
-    opacity: 0 !important;
-    width: 1px !important;
-    height: 1px !important;
-    overflow: hidden !important;
-    pointer-events: none !important;
+    opacity: 0.3;
+    color: var(--SmartThemeBodyColor);
+    font-size: 12px;
+    padding: 0 5px;
+    font-family: var(--mainFontFamily);
+    font-weight: 400;
+    align-self: center;
+    min-width: 40px;
+    display: flex;
+    justify-content: center;
+    margin-bottom: var(--swipeCounterMargin);
+    height: var(--swipeCounterHeight);
+    pointer-events: auto;
 }
 
 .swipes-counter.swipe-picker-enabled {

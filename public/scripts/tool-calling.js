@@ -3926,10 +3926,16 @@ Here are the available tools:
 }
 
 let sandboxWorkspaceSelectorInitialized = false;
+let sandboxWorkspaceManageButtonInitialized = false;
 
 function getSandboxWorkspaceSelectElement() {
     const element = document.getElementById('sandbox_workspace_select');
     return element instanceof HTMLSelectElement ? element : null;
+}
+
+function getSandboxWorkspaceManageButtonElement() {
+    const element = document.getElementById('sandbox_workspace_manage_button');
+    return element instanceof HTMLButtonElement ? element : null;
 }
 
 async function fetchSandboxWorkspaces() {
@@ -3974,6 +3980,638 @@ async function createSandboxWorkspace(workspace) {
     }
 }
 
+/**
+ * @param {unknown} workspace
+ * @returns {string}
+ */
+function setSandboxWorkspaceForCurrentChat(workspace) {
+    const normalizedWorkspace = String(workspace || '').trim() || SANDBOX_ROOT_WORKSPACE;
+    chat_metadata.sandbox_workspace = normalizedWorkspace;
+    return normalizedWorkspace;
+}
+
+/**
+ * @param {unknown} workspace
+ * @returns {Promise<string>}
+ */
+async function persistSandboxWorkspaceForCurrentChat(workspace) {
+    const normalizedWorkspace = setSandboxWorkspaceForCurrentChat(workspace);
+    await saveChatConditional();
+    return normalizedWorkspace;
+}
+
+/**
+ * @param {string} dirPath
+ * @param {string} workspace
+ * @param {string} character
+ * @returns {Promise<{directories: string[], files: string[]}>}
+ */
+async function listSandboxDirectory(dirPath, workspace, character) {
+    const response = await fetch('/api/extensions/tools/listdir', {
+        method: 'POST',
+        headers: getRequestHeaders(),
+        body: JSON.stringify({ path: dirPath, workspace, character }),
+    });
+
+    const result = await response.json().catch(() => ({ error: 'Failed to list directory.' }));
+    if (!response.ok) {
+        throw new Error(result.error || 'Failed to list directory.');
+    }
+
+    return {
+        directories: Array.isArray(result.directories) ? result.directories : [],
+        files: Array.isArray(result.files) ? result.files : [],
+    };
+}
+
+/**
+ * @param {string} workspace
+ * @returns {string}
+ */
+function formatSandboxWorkspaceLabel(workspace) {
+    return workspace === SANDBOX_ROOT_WORKSPACE ? 'root' : workspace;
+}
+
+/**
+ * @param {string} filepath
+ * @param {string} filename
+ * @param {string} workspace
+ */
+function downloadSandboxFile(filepath, filename, workspace) {
+    const params = new URLSearchParams({
+        file: filepath,
+        workspace: workspace || getCurrentSandboxWorkspace() || SANDBOX_ROOT_WORKSPACE,
+        character: getCurrentSandboxCharacterName() || '',
+        download: 'true',
+    });
+    const url = `/api/extensions/tools/download?${params.toString()}`;
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+}
+
+/**
+ * @param {string} filepath
+ * @returns {boolean}
+ */
+function isSandboxImageFile(filepath) {
+    const imageExts = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg'];
+    const ext = filepath.split('.').pop()?.toLowerCase() || '';
+    return imageExts.includes(ext);
+}
+
+/**
+ * @param {string} pathValue
+ * @returns {string}
+ */
+function normalizeSandboxRelativePath(pathValue) {
+    const raw = String(pathValue || '').trim().replace(/\\/g, '/');
+    if (!raw || raw === '.' || raw === '/') {
+        return '.';
+    }
+
+    const segments = [];
+    for (const segment of raw.split('/')) {
+        const part = segment.trim();
+        if (!part || part === '.') {
+            continue;
+        }
+        if (part === '..') {
+            segments.pop();
+            continue;
+        }
+        segments.push(part);
+    }
+
+    return segments.length > 0 ? segments.join('/') : '.';
+}
+
+/**
+ * @param {string} basePath
+ * @param {string} childPath
+ * @returns {string}
+ */
+function joinSandboxRelativePath(basePath, childPath) {
+    const normalizedBase = normalizeSandboxRelativePath(basePath);
+    const normalizedChild = normalizeSandboxRelativePath(childPath);
+    if (normalizedChild === '.') {
+        return normalizedBase;
+    }
+
+    if (normalizedBase === '.') {
+        return normalizedChild;
+    }
+
+    return normalizeSandboxRelativePath(`${normalizedBase}/${normalizedChild}`);
+}
+
+/**
+ * @param {string} pathValue
+ * @returns {string}
+ */
+function getSandboxRelativeParentPath(pathValue) {
+    const normalized = normalizeSandboxRelativePath(pathValue);
+    if (normalized === '.') {
+        return '.';
+    }
+
+    const parts = normalized.split('/');
+    parts.pop();
+    return parts.length > 0 ? parts.join('/') : '.';
+}
+
+/**
+ * @param {string} pathValue
+ * @returns {string[]}
+ */
+function getSandboxRelativePathSegments(pathValue) {
+    const normalized = normalizeSandboxRelativePath(pathValue);
+    return normalized === '.' ? [] : normalized.split('/');
+}
+
+/**
+ * @param {string} pathValue
+ * @returns {string}
+ */
+function formatSandboxPathLabel(pathValue) {
+    const normalized = normalizeSandboxRelativePath(pathValue);
+    return normalized === '.' ? 'root' : normalized;
+}
+
+/**
+ * @param {string} iconClass
+ * @param {string} label
+ * @param {string} title
+ * @param {string} [extraClass='']
+ * @returns {HTMLButtonElement}
+ */
+function createSandboxManagerButton(iconClass, label, title, extraClass = '') {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = `menu_button ${extraClass}`.trim();
+
+    if (title) {
+        button.title = title;
+    }
+
+    if (iconClass) {
+        const icon = document.createElement('i');
+        icon.className = `fa-solid ${iconClass}`;
+        button.append(icon);
+    }
+
+    if (label) {
+        const labelSpan = document.createElement('span');
+        labelSpan.textContent = label;
+        button.append(labelSpan);
+    }
+
+    return button;
+}
+
+/**
+ * @param {'folder'|'file'} kind
+ * @param {string} name
+ * @param {string} pathValue
+ * @param {string} subtitle
+ * @param {string} iconClass
+ * @param {string} actionLabel
+ * @param {string} actionIconClass
+ * @param {() => void} onAction
+ * @returns {HTMLElement}
+ */
+function createSandboxManagerItem(kind, name, pathValue, subtitle, iconClass, actionLabel, actionIconClass, onAction) {
+    const item = document.createElement('div');
+    item.className = `sandbox-manager-item sandbox-manager-item--${kind}`;
+    item.dataset.path = pathValue;
+    item.dataset.kind = kind;
+
+    if (kind === 'folder') {
+        item.setAttribute('role', 'button');
+        item.tabIndex = 0;
+        item.addEventListener('click', onAction);
+        item.addEventListener('keydown', (event) => {
+            if (event.key === 'Enter' || event.key === ' ') {
+                event.preventDefault();
+                onAction();
+            }
+        });
+    }
+
+    const iconWrap = document.createElement('span');
+    iconWrap.className = 'sandbox-manager-item-icon';
+    const icon = document.createElement('i');
+    icon.className = `fa-solid ${iconClass}`;
+    iconWrap.append(icon);
+
+    const body = document.createElement('span');
+    body.className = 'sandbox-manager-item-body';
+
+    const title = document.createElement('span');
+    title.className = 'sandbox-manager-item-title';
+    title.textContent = name;
+
+    const meta = document.createElement('span');
+    meta.className = 'sandbox-manager-item-meta';
+    meta.textContent = subtitle;
+
+    body.append(title, meta);
+
+    const actions = document.createElement('span');
+    actions.className = 'sandbox-manager-item-actions';
+
+    const actionButton = createSandboxManagerButton(actionIconClass, actionLabel, `${actionLabel} ${name}`, 'menu_button_icon sandbox-manager-item-action');
+    actionButton.addEventListener('click', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        onAction();
+    });
+    actions.append(actionButton);
+
+    item.append(iconWrap, body, actions);
+    return item;
+}
+
+/**
+ * @returns {string}
+ */
+function getSandboxManagerPopupContent() {
+    return `
+        <div class="sandbox-manager-popup">
+            <section class="sandbox-manager-panel sandbox-manager-controls">
+                <div class="sandbox-manager-toolbar">
+                    <div class="sandbox-manager-field sandbox-manager-field--workspace">
+                        <label class="sandbox-manager-label" for="sandbox-manager-workspace-select">Workspace</label>
+                        <select id="sandbox-manager-workspace-select" class="text_pole sandbox-manager-workspace-select"></select>
+                    </div>
+                    <div class="sandbox-manager-toolbar-actions">
+                        <button type="button" class="menu_button menu_button_icon sandbox-manager-refresh" title="Refresh workspace list">
+                            <i class="fa-solid fa-rotate"></i>
+                        </button>
+                        <button type="button" class="menu_button menu_button_icon sandbox-manager-new" title="Create new workspace">
+                            <i class="fa-solid fa-folder-plus"></i>
+                        </button>
+                    </div>
+                </div>
+                <div class="sandbox-manager-nav">
+                    <div class="sandbox-manager-field">
+                        <label class="sandbox-manager-label">Location</label>
+                        <div class="sandbox-manager-breadcrumbs" aria-label="Current folder breadcrumbs"></div>
+                    </div>
+                    <div class="sandbox-manager-pathbar">
+                        <input class="text_pole sandbox-manager-path" type="text" value="." placeholder="root or subfolder, like prompts/docs">
+                        <button type="button" class="menu_button menu_button_icon sandbox-manager-up" title="Go to parent folder">
+                            <i class="fa-solid fa-arrow-up"></i>
+                        </button>
+                        <button type="button" class="menu_button menu_button_icon sandbox-manager-browse" title="Open the typed path">
+                            <i class="fa-solid fa-folder-tree"></i>
+                        </button>
+                    </div>
+                    <div class="sandbox-manager-searchbar">
+                        <input class="text_pole sandbox-manager-search" type="search" placeholder="Filter folders and files by name...">
+                        <button type="button" class="menu_button menu_button_icon sandbox-manager-clear-search" title="Clear search">
+                            <i class="fa-solid fa-xmark"></i>
+                        </button>
+                    </div>
+                </div>
+            </section>
+            <section class="sandbox-manager-panel sandbox-manager-browser">
+                <div class="sandbox-manager-section-header">
+                    <div>
+                        <span>Folders</span>
+                        <small class="sandbox-manager-section-count sandbox-manager-folder-count"></small>
+                    </div>
+                </div>
+                <div class="sandbox-manager-list sandbox-manager-folder-list" aria-label="Folder list"></div>
+                <div class="sandbox-manager-section-header">
+                    <div>
+                        <span>Files</span>
+                        <small class="sandbox-manager-section-count sandbox-manager-file-count"></small>
+                    </div>
+                </div>
+                <div class="sandbox-manager-list sandbox-manager-file-list" aria-label="File list"></div>
+                <div class="sandbox-manager-empty-state sandbox-manager-empty" hidden></div>
+            </section>
+            <footer class="sandbox-manager-footer">
+                <small class="sandbox-manager-status" aria-live="polite"></small>
+                <small class="sandbox-manager-summary"></small>
+            </footer>
+        </div>
+    `;
+}
+
+async function openSandboxManagerPopup() {
+    const assistantRootContext = getDefaultSandboxWorkspace() === SANDBOX_ROOT_WORKSPACE;
+    let selectedWorkspace = assistantRootContext
+        ? SANDBOX_ROOT_WORKSPACE
+        : (getCurrentSandboxWorkspace() || SANDBOX_ROOT_WORKSPACE);
+    let currentPath = '.';
+
+    const popupOptions = {
+        wider: true,
+        leftAlign: true,
+        allowVerticalScrolling: true,
+        okButton: false,
+        cancelButton: 'Close',
+        onOpen: async (popup) => {
+            const workspaceSelect = popup.dlg.querySelector('.sandbox-manager-workspace-select');
+            const refreshButton = popup.dlg.querySelector('.sandbox-manager-refresh');
+            const newButton = popup.dlg.querySelector('.sandbox-manager-new');
+            const pathInput = popup.dlg.querySelector('.sandbox-manager-path');
+            const browseButton = popup.dlg.querySelector('.sandbox-manager-browse');
+            const upButton = popup.dlg.querySelector('.sandbox-manager-up');
+            const clearSearchButton = popup.dlg.querySelector('.sandbox-manager-clear-search');
+            const searchInput = popup.dlg.querySelector('.sandbox-manager-search');
+            const breadcrumbs = popup.dlg.querySelector('.sandbox-manager-breadcrumbs');
+            const statusElement = popup.dlg.querySelector('.sandbox-manager-status');
+            const summaryElement = popup.dlg.querySelector('.sandbox-manager-summary');
+            const folderCountElement = popup.dlg.querySelector('.sandbox-manager-folder-count');
+            const fileCountElement = popup.dlg.querySelector('.sandbox-manager-file-count');
+            const emptyStateElement = popup.dlg.querySelector('.sandbox-manager-empty');
+            const folderList = popup.dlg.querySelector('.sandbox-manager-folder-list');
+            const fileList = popup.dlg.querySelector('.sandbox-manager-file-list');
+
+            if (!workspaceSelect || !refreshButton || !newButton || !pathInput || !browseButton || !upButton || !clearSearchButton || !searchInput || !breadcrumbs || !statusElement || !summaryElement || !folderCountElement || !fileCountElement || !emptyStateElement || !folderList || !fileList) {
+                return;
+            }
+
+            let currentListing = { directories: [], files: [] };
+
+            const setStatus = (text, state = 'info') => {
+                statusElement.textContent = text;
+                statusElement.dataset.state = state;
+            };
+
+            const clearStatus = () => {
+                setStatus('', 'info');
+            };
+
+            const setButtonBusy = (button, isBusy) => {
+                button.disabled = isBusy;
+                button.classList.toggle('disabled', isBusy);
+            };
+
+            const updateHeader = () => {
+                upButton.disabled = normalizeSandboxRelativePath(currentPath) === '.';
+                clearSearchButton.disabled = !String(searchInput.value || '').trim();
+            };
+
+            const renderBreadcrumbs = () => {
+                breadcrumbs.replaceChildren();
+                const normalizedPath = normalizeSandboxRelativePath(currentPath);
+                const segments = getSandboxRelativePathSegments(normalizedPath);
+
+                const rootButton = createSandboxManagerButton('fa-house', 'root', 'Go to root folder', 'sandbox-manager-breadcrumb-button');
+                rootButton.dataset.path = '.';
+                rootButton.addEventListener('click', async () => {
+                    pathInput.value = '.';
+                    await browseDirectory('.');
+                });
+                breadcrumbs.append(rootButton);
+
+                let accumulated = [];
+                for (const segment of segments) {
+                    const separator = document.createElement('span');
+                    separator.className = 'sandbox-manager-breadcrumb-separator';
+                    separator.textContent = '/';
+                    breadcrumbs.append(separator);
+
+                    accumulated = [...accumulated, segment];
+                    const pathValue = accumulated.join('/');
+                    const crumb = createSandboxManagerButton('', segment, `Go to ${pathValue}`, 'sandbox-manager-breadcrumb-button sandbox-manager-breadcrumb-chip');
+                    crumb.dataset.path = pathValue;
+                    crumb.addEventListener('click', async () => {
+                        pathInput.value = pathValue;
+                        await browseDirectory(pathValue);
+                    });
+                    breadcrumbs.append(crumb);
+                }
+            };
+
+            const renderList = () => {
+                const searchTerm = String(searchInput.value || '').toLowerCase().trim();
+                const directories = [...currentListing.directories].sort((a, b) => a.localeCompare(b));
+                const files = [...currentListing.files].sort((a, b) => a.localeCompare(b));
+                const filteredDirectories = searchTerm ? directories.filter(entry => entry.toLowerCase().includes(searchTerm)) : directories;
+                const filteredFiles = searchTerm ? files.filter(entry => entry.toLowerCase().includes(searchTerm)) : files;
+                const totalItems = directories.length + files.length;
+                const visibleItems = filteredDirectories.length + filteredFiles.length;
+
+                folderList.replaceChildren();
+                fileList.replaceChildren();
+
+                folderCountElement.textContent = `${filteredDirectories.length} item${filteredDirectories.length === 1 ? '' : 's'}`;
+                fileCountElement.textContent = `${filteredFiles.length} item${filteredFiles.length === 1 ? '' : 's'}`;
+
+                if (searchTerm && visibleItems === 0 && totalItems > 0) {
+                    emptyStateElement.hidden = false;
+                    emptyStateElement.textContent = `No matches found for "${searchInput.value.trim()}".`;
+                    summaryElement.textContent = `${totalItems} total items in this folder`;
+                    return;
+                }
+
+                if (visibleItems === 0) {
+                    emptyStateElement.hidden = false;
+                    emptyStateElement.textContent = 'This folder is empty.';
+                    summaryElement.textContent = '0 items';
+                    return;
+                }
+
+                emptyStateElement.hidden = true;
+                summaryElement.textContent = searchTerm
+                    ? `Showing ${visibleItems} of ${totalItems} items`
+                    : `${totalItems} item${totalItems === 1 ? '' : 's'} total`;
+
+                for (const directory of filteredDirectories) {
+                    const directoryPath = joinSandboxRelativePath(currentPath, directory);
+                    const item = createSandboxManagerItem(
+                        'folder',
+                        directory,
+                        directoryPath,
+                        `Folder in ${formatSandboxPathLabel(currentPath)}`,
+                        'fa-folder',
+                        'Open',
+                        'fa-arrow-right',
+                        () => {
+                            pathInput.value = directoryPath;
+                            void browseDirectory(directoryPath);
+                        },
+                    );
+                    folderList.append(item);
+                }
+
+                for (const file of filteredFiles) {
+                    const filePath = joinSandboxRelativePath(currentPath, file);
+                    const isImage = isSandboxImageFile(file);
+                    const item = createSandboxManagerItem(
+                        'file',
+                        file,
+                        filePath,
+                        isImage ? 'Image file' : 'File',
+                        isImage ? 'fa-image' : 'fa-file',
+                        'Download',
+                        'fa-download',
+                        () => {
+                            downloadSandboxFile(filePath, file, selectedWorkspace);
+                            setStatus(`Downloaded "${file}".`, 'success');
+                        },
+                    );
+                    fileList.append(item);
+                }
+            };
+
+            const syncDirectoryUi = () => {
+                pathInput.value = currentPath;
+                renderBreadcrumbs();
+                updateHeader();
+                renderList();
+            };
+
+            const refreshWorkspaces = async () => {
+                setButtonBusy(refreshButton, true);
+                try {
+                    const workspaceNames = await fetchSandboxWorkspaces();
+                    const uniqueWorkspaces = [...new Set(workspaceNames.map(x => String(x || '').trim()).filter(Boolean))]
+                        .sort((a, b) => a.localeCompare(b));
+
+                    if (!assistantRootContext && selectedWorkspace !== SANDBOX_ROOT_WORKSPACE && !uniqueWorkspaces.includes(selectedWorkspace)) {
+                        uniqueWorkspaces.unshift(selectedWorkspace);
+                    }
+
+                    workspaceSelect.innerHTML = '';
+                    const rootOption = document.createElement('option');
+                    rootOption.value = SANDBOX_ROOT_WORKSPACE;
+                    rootOption.textContent = 'root';
+                    workspaceSelect.append(rootOption);
+
+                    if (!assistantRootContext) {
+                        for (const workspace of uniqueWorkspaces) {
+                            if (workspace === SANDBOX_ROOT_WORKSPACE) continue;
+                            const option = document.createElement('option');
+                            option.value = workspace;
+                            option.textContent = workspace;
+                            workspaceSelect.append(option);
+                        }
+                    }
+
+                    workspaceSelect.value = selectedWorkspace;
+                    workspaceSelect.disabled = assistantRootContext;
+                    newButton.disabled = assistantRootContext;
+                    updateHeader();
+                } finally {
+                    setButtonBusy(refreshButton, false);
+                }
+            };
+
+            const persistWorkspace = async () => {
+                selectedWorkspace = await persistSandboxWorkspaceForCurrentChat(selectedWorkspace);
+                await refreshSandboxWorkspaceSelector();
+            };
+
+            const browseDirectory = async (targetPath = currentPath) => {
+                currentPath = normalizeSandboxRelativePath(targetPath);
+                pathInput.value = currentPath;
+                updateHeader();
+                clearStatus();
+                setButtonBusy(browseButton, true);
+
+                try {
+                    const listing = await listSandboxDirectory(currentPath, selectedWorkspace, getCurrentSandboxCharacterName());
+                    currentListing = listing;
+                    syncDirectoryUi();
+                } catch (error) {
+                    currentListing = { directories: [], files: [] };
+                    folderList.replaceChildren();
+                    fileList.replaceChildren();
+                    emptyStateElement.hidden = false;
+                    emptyStateElement.textContent = `Unable to open "${formatSandboxPathLabel(currentPath)}".`;
+                    summaryElement.textContent = '0 items';
+                    setStatus(String(error?.message || error), 'error');
+                } finally {
+                    setButtonBusy(browseButton, false);
+                    updateHeader();
+                }
+            };
+
+            workspaceSelect.addEventListener('change', async () => {
+                selectedWorkspace = String(workspaceSelect.value || '').trim() || SANDBOX_ROOT_WORKSPACE;
+                await persistWorkspace();
+                currentPath = '.';
+                await browseDirectory('.');
+            });
+
+            refreshButton.addEventListener('click', async () => {
+                await refreshWorkspaces();
+                setStatus('Workspace list refreshed.', 'success');
+            });
+
+            newButton.addEventListener('click', async () => {
+                const input = await Popup.show.input('New Workspace', 'Enter workspace name:');
+                if (!input) {
+                    return;
+                }
+
+                const sanitized = await getSanitizedFilename(String(input));
+                const workspace = String(sanitized || '').trim();
+                if (!workspace) {
+                    toastr.warning('Workspace name cannot be empty.');
+                    return;
+                }
+
+                const created = await createSandboxWorkspace(workspace);
+                if (!created) {
+                    return;
+                }
+
+                selectedWorkspace = workspace;
+                await persistWorkspace();
+                await refreshWorkspaces();
+                currentPath = '.';
+                await browseDirectory('.');
+                setStatus(`Created workspace "${workspace}".`, 'success');
+            });
+
+            browseButton.addEventListener('click', async () => {
+                await browseDirectory(pathInput.value || '.');
+            });
+
+            upButton.addEventListener('click', async () => {
+                await browseDirectory(getSandboxRelativeParentPath(currentPath));
+            });
+
+            clearSearchButton.addEventListener('click', () => {
+                searchInput.value = '';
+                renderList();
+                updateHeader();
+                searchInput.focus();
+            });
+
+            pathInput.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter') {
+                    e.preventDefault();
+                    void browseDirectory(pathInput.value || '.');
+                }
+            });
+
+            searchInput.addEventListener('input', () => {
+                renderList();
+                updateHeader();
+            });
+
+            await refreshWorkspaces();
+            if (assistantRootContext) {
+                clearStatus();
+            }
+            await browseDirectory('.');
+        },
+    };
+
+    await Popup.show.text('Sandbox Manager', getSandboxManagerPopupContent(), popupOptions);
+}
+
 function getMetadataWorkspace() {
     return typeof chat_metadata?.sandbox_workspace === 'string'
         ? chat_metadata.sandbox_workspace.trim()
@@ -3995,7 +4633,7 @@ async function refreshSandboxWorkspaceSelector({ persistDefault = false } = {}) 
     const needsPersist = !metadataWorkspace || (assistantRootContext && metadataWorkspace !== SANDBOX_ROOT_WORKSPACE);
 
     if (needsPersist) {
-        chat_metadata.sandbox_workspace = selectedWorkspace;
+        setSandboxWorkspaceForCurrentChat(selectedWorkspace);
         if (persistDefault) {
             await saveChatConditional();
         }
@@ -4082,8 +4720,7 @@ async function onSandboxWorkspaceChange(event) {
             return;
         }
 
-        chat_metadata.sandbox_workspace = workspace;
-        await saveChatConditional();
+        await persistSandboxWorkspaceForCurrentChat(workspace);
         await refreshSandboxWorkspaceSelector();
         return;
     }
@@ -4092,13 +4729,24 @@ async function onSandboxWorkspaceChange(event) {
         return;
     }
 
-    chat_metadata.sandbox_workspace = selectedValue;
+    await persistSandboxWorkspaceForCurrentChat(selectedValue);
     select.dataset.previousWorkspace = selectedValue;
-    await saveChatConditional();
 }
 
 async function initSandboxWorkspaceSelector() {
     const select = getSandboxWorkspaceSelectElement();
+    const manageButton = getSandboxWorkspaceManageButtonElement();
+    if (!select && !manageButton) {
+        return;
+    }
+
+    if (manageButton && !sandboxWorkspaceManageButtonInitialized) {
+        manageButton.addEventListener('click', () => {
+            void openSandboxManagerPopup();
+        });
+        sandboxWorkspaceManageButtonInitialized = true;
+    }
+
     if (!select) {
         return;
     }
