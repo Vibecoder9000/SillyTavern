@@ -459,7 +459,7 @@ async function sendMakerSuiteRequest(request, response) {
     const includeReasoning = Boolean(request.body.include_reasoning);
     const aspectRatio = String(request.body.request_image_aspect_ratio);
     const imageSize = String(request.body.request_image_resolution);
-    const isGemma = model.includes('gemma');
+    const isGemma3 = /gemma-3/.test(model);
     const isLearnLM = model.includes('learnlm');
 
     const responseMimeType = request.body.responseMimeType ?? (request.body.json_schema ? 'application/json' : undefined);
@@ -519,13 +519,13 @@ async function sendMakerSuiteRequest(request, response) {
             }
         }
 
-        const useSystemPrompt = !enableImageModality && !isGemma && request.body.use_sysprompt;
+        const useSystemPrompt = !enableImageModality && !isGemma3 && request.body.use_sysprompt;
 
         const tools = [];
         const prompt = convertGooglePrompt(request.body.messages, model, useSystemPrompt, getPromptNames(request));
         const safetySettings = [...GEMINI_SAFETY, ...(useVertexAi ? VERTEX_SAFETY : [])];
 
-        if (Array.isArray(request.body.tools) && request.body.tools.length > 0 && !enableImageModality && !isGemma) {
+        if (Array.isArray(request.body.tools) && request.body.tools.length > 0 && !enableImageModality && !isGemma3) {
             const functionDeclarations = [];
             const customTools = [];
             for (const tool of request.body.tools) {
@@ -550,7 +550,7 @@ async function sendMakerSuiteRequest(request, response) {
             }
         }
 
-        if (enableWebSearch && !enableImageModality && !isGemma && !isLearnLM && !noSearchModels.includes(model)) {
+        if (enableWebSearch && !enableImageModality && !isGemma3 && !isLearnLM && !noSearchModels.includes(model)) {
             // Tool use with function calling is unsupported
             if (!tools.some(t => t.function_declarations)) {
                 tools.push({ google_search: {} });
@@ -1832,6 +1832,7 @@ router.post('/status', async function (request, statusResponse) {
                     const models = data.models
                         ?.filter(model => model.supportedGenerationMethods?.includes('generateContent'))
                         ?.map(model => ({
+                            ...model,
                             id: model.name.replace('models/', ''),
                         })) || [];
 
@@ -2318,6 +2319,16 @@ router.post('/generate', async function (request, response) {
             mergeObjectWithYaml(bodyParams, request.body.custom_include_body);
             mergeObjectWithYaml(headers, request.body.custom_include_headers);
             embedOpenRouterMedia(request.body.messages, { audio: true, video: false });
+            if (request.body.json_schema) {
+                bodyParams['response_format'] = {
+                    type: 'json_schema',
+                    json_schema: {
+                        name: request.body.json_schema.name,
+                        strict: request.body.json_schema.strict ?? true,
+                        schema: request.body.json_schema.value,
+                    },
+                };
+            }
         } else if (request.body.chat_completion_source === CHAT_COMPLETION_SOURCES.PERPLEXITY) {
             apiUrl = API_PERPLEXITY;
             apiKey = readSecret(request.user.directories, SECRET_KEYS.PERPLEXITY, request.body.secret_id);
@@ -2371,6 +2382,13 @@ router.post('/generate', async function (request, response) {
             apiKey = readSecret(request.user.directories, SECRET_KEYS.NANOGPT, request.body.secret_id);
             headers = {};
             bodyParams = {};
+            if (request.body.nanogpt_provider) {
+                headers['X-Provider'] = request.body.nanogpt_provider;
+            }
+            if (request.body.nanogpt_payg_override) {
+                headers['X-Billing-Mode'] = 'paygo';
+                bodyParams['billing_mode'] = 'paygo';
+            }
             if (request.body.enable_web_search && !/:online$/.test(request.body.model)) {
                 request.body.model = `${request.body.model}:online`;
             }
@@ -2483,6 +2501,9 @@ router.post('/generate', async function (request, response) {
         if (request.body.reasoning_effort && [CHAT_COMPLETION_SOURCES.CUSTOM, CHAT_COMPLETION_SOURCES.OPENAI].includes(request.body.chat_completion_source)) {
             if (OPENAI_REASONING_EFFORT_MODELS.includes(request.body.model)) {
                 bodyParams['reasoning_effort'] = OPENAI_FIXED_REASONING_EFFORT[request.body.model] ?? OPENAI_REASONING_EFFORT_MAP[request.body.reasoning_effort] ?? request.body.reasoning_effort;
+            }
+            if (request.body.chat_completion_source === CHAT_COMPLETION_SOURCES.CUSTOM && /^koboldcpp\/(.+)$/.test(request.body.model)) {
+                bodyParams['reasoning_effort'] = request.body.reasoning_effort;
             }
         }
 

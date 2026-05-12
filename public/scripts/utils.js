@@ -692,13 +692,12 @@ export function isElementInViewport(el) {
  * @param {{ (name: string): boolean; }} exists Function to check if name exists.
  * @param {Object} [options] The options.
  * @param {((baseName: string, i: number) => string)|null} [options.nameBuilder=null] Function to build the name.
- *        Starts with the index provided by `startIndex` (default is 1). If not provided, uses "${baseName} (${i})".
+ *        Starts with the index provided by `startIndex` (default is 0). If not provided, uses `baseName` for index 0 and "${baseName} (${i})" for higher indices.
  * @param {number} [options.maxTries=1000] The maximum number of tries to find a unique name. Default is 1000.
- * @param {number} [options.startIndex=1] The index to start with when building the name. Default is 1.
- *        When set to 0, the intention is to also check if the basename (without applied index) is free.
+ * @param {number} [options.startIndex=0] The index to start with when building the name. Default is 0.
  * @returns {string|null} A unique name. Null if no unique name could be found in `maxTries`.
  */
-export function getUniqueName(baseName, exists, { nameBuilder = null, maxTries = 1000, startIndex = 1 } = {}) {
+export function getUniqueName(baseName, exists, { nameBuilder = null, maxTries = 1000, startIndex = 0 } = {}) {
     nameBuilder ??= (baseName, i) => i === 0 ? baseName : `${baseName} (${i})`;
     let i = startIndex;
     let name;
@@ -2487,13 +2486,13 @@ export async function checkOverwriteExistingData(type, existingNames, name, { in
         return true;
     }
 
-    const overwrite = interactive && await Popup.show.confirm(`${type} ${actionName}`, `<p>A ${type.toLowerCase()} with the same name already exists:<br />${existing}</p>Do you want to overwrite it?`);
+    const overwrite = interactive && await Popup.show.confirm(`${type} ${actionName}`, `<p>A ${type.toLowerCase()} with the same name already exists:<br />${escapeHtml(existing)}</p>Do you want to overwrite it?`);
     if (!overwrite) {
-        toastr.warning(`${type} ${actionName.toLowerCase()} cancelled. A ${type.toLowerCase()} with the same name already exists:<br />${existing}`, `${type} ${actionName}`, { escapeHtml: false });
+        toastr.warning(`${type} ${actionName.toLowerCase()} cancelled. A ${type.toLowerCase()} with the same name already exists:<br />${escapeHtml(existing)}`, `${type} ${actionName}`, { escapeHtml: false });
         return false;
     }
 
-    toastr.info(`Overwriting Existing ${type}:<br />${existing}`, `${type} ${actionName}`, { escapeHtml: false });
+    toastr.info(`Overwriting Existing ${type}:<br />${escapeHtml(existing)}`, `${type} ${actionName}`, { escapeHtml: false });
 
     // If there is an action to delete the existing data, do it, as the name might be slightly different so file name would not be the same
     if (deleteAction) {

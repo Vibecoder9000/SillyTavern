@@ -2970,9 +2970,9 @@ export function initDefaultSlashCommands() {
     }));
     SlashCommandParser.addCommandObject(SlashCommand.fromProps({
         name: 'tokens',
-        callback: (_, text) => {
+        callback: async (_, text) => {
             if (text instanceof SlashCommandClosure || Array.isArray(text)) throw new Error(t`Unnamed argument cannot be a closure for command /tokens`);
-            return getTokenCountAsync(text).then(count => String(count));
+            return String(await getTokenCountAsync(text));
         },
         returns: t`number of tokens`,
         unnamedArgumentList: [

@@ -12,7 +12,6 @@ import { Tokenizer } from '@agnai/web-tokenizers';
 import { SentencePieceProcessor } from '@agnai/sentencepiece-js';
 import tiktoken from 'tiktoken';
 
-import { convertClaudePrompt } from '../prompt-converters.js';
 import { TEXTGEN_TYPES } from '../constants.js';
 import { setAdditionalHeaders } from '../additional-headers.js';
 import { getConfigValue, isValidUrl } from '../util.js';
@@ -545,15 +544,14 @@ export function getTiktokenTokenizer(model) {
  * @returns {number} Number of tokens
  */
 export function countWebTokenizerTokens(tokenizer, messages) {
-    // Should be fine if we use the old conversion method instead of the messages API one i think?
-    const convertedPrompt = convertClaudePrompt(messages, false, '', false, false, '', false);
+    const jsonBody = messages.flatMap(x => Object.values(x)).join('\n\n');
 
     // Fallback to strlen estimation
     if (!tokenizer) {
-        return guesstimate(convertedPrompt);
+        return guesstimate(jsonBody);
     }
 
-    const count = tokenizer.encode(convertedPrompt).length;
+    const count = tokenizer.encode(jsonBody).length;
     return count;
 }
 
@@ -1093,7 +1091,7 @@ router.post('/remote/textgenerationwebui/encode', async function (request, respo
         switch (request.body.api_type) {
             case TEXTGEN_TYPES.TABBY:
                 url += '/v1/token/encode';
-                args.body = JSON.stringify({ 'text': text, 'add_bos_token': false });
+                args.body = JSON.stringify({ 'text': text, 'add_bos_token': false, 'encode_special_tokens': false });
                 break;
             case TEXTGEN_TYPES.KOBOLDCPP:
                 url += '/api/extra/tokencount';
