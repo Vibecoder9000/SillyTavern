@@ -4123,11 +4123,12 @@ async function renameWorldInfo(name, data) {
     }
 
     const entryPreviouslySelected = selected_world_info.findIndex((e) => e === oldName);
+    const retargetPersonaLore = power_user.persona_description_lorebook === oldName;
 
     await saveWorldInfo(newName, data, true);
     await deleteWorldInfo(oldName);
 
-    await updateWorldInfoLinks(oldName, newName);
+    await updateWorldInfoLinks(oldName, newName, { retargetPersonaLore });
 
     if (entryPreviouslySelected !== -1) {
         const wiElement = getWIElement(newName);
@@ -4145,9 +4146,10 @@ async function renameWorldInfo(name, data) {
  * Retargets all character lore links from an old world info name to a new one, with an optional confirmation for primary lorebook links
  * @param {string} oldName Previous WI file name
  * @param {string} newName New WI file name
+ * @param {{ retargetPersonaLore?: boolean }} [options] Additional relink options
  * @returns {Promise<void>}
  */
-async function updateWorldInfoLinks(oldName, newName) {
+async function updateWorldInfoLinks(oldName, newName, { retargetPersonaLore } = {}) {
     const existingCharLores = world_info.charLore?.filter((e) => e.extraBooks.includes(oldName));
     if (existingCharLores && existingCharLores.length > 0) {
         existingCharLores.forEach((charLore) => {
@@ -4157,6 +4159,30 @@ async function updateWorldInfoLinks(oldName, newName) {
         });
         saveSettingsDebounced();
     }
+
+    // Update link for active persona
+    if (retargetPersonaLore) {
+        power_user.persona_description_lorebook = newName;
+        const object = getOrCreatePersonaDescriptor();
+        object.lorebook = newName;
+        setPersonaDescription();
+        saveSettingsDebounced();
+    }
+
+    // Update links for other personas
+    Object.keys(power_user.personas).forEach((persona) => {
+        if (user_avatar === persona) {
+            return;
+        }
+        const descriptor = power_user.persona_descriptions[persona];
+        if (!descriptor) {
+            return;
+        }
+        if (descriptor.lorebook === oldName) {
+            descriptor.lorebook = newName;
+            saveSettingsDebounced();
+        }
+    });
 
     // update the world info key to the new name if it's still set to the old one
     if (chat_metadata[METADATA_KEY] === oldName) {
