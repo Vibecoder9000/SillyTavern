@@ -22,7 +22,7 @@ import {
     user_avatar,
 } from '../script.js';
 import { chat_completion_sources, custom_prompt_post_processing_types, getChatCompletionModel, model_list, oai_settings } from './openai.js';
-import { Popup } from './popup.js';
+import { POPUP_TYPE, Popup } from './popup.js';
 import { autoFitSendTextAreaDebounced } from './RossAscends-mods.js';
 import { SlashCommand } from './slash-commands/SlashCommand.js';
 import { ARGUMENT_TYPE, SlashCommandArgument, SlashCommandNamedArgument } from './slash-commands/SlashCommandArgument.js';
@@ -161,6 +161,13 @@ function escapeXmlText(value) {
         .replace(/>/g, '&gt;');
 }
 
+function unescapeXmlText(value) {
+    return String(value ?? '')
+        .replace(/&lt;/g, '<')
+        .replace(/&gt;/g, '>')
+        .replace(/&amp;/g, '&');
+}
+
 function normalizeSchemaType(schema) {
     const schemaType = schema?.type;
     if (Array.isArray(schemaType)) {
@@ -170,28 +177,64 @@ function normalizeSchemaType(schema) {
     return typeof schemaType === 'string' ? schemaType : null;
 }
 
-function tryParseJsonString(value) {
-    try {
-        return JSON.parse(value);
-    } catch {
-        return null;
-    }
-}
-
 function serializeNativeToolValue(value) {
-    if (Array.isArray(value)) {
-        return value.map(item => serializeNativeToolValue(item)).join('\n');
-    }
-
-    if (value && typeof value === 'object') {
-        return JSON.stringify(value, null, 2);
-    }
-
     if (typeof value === 'boolean') {
         return value ? 'true' : 'false';
     }
 
     return String(value ?? '');
+}
+
+function getNativeToolOrderedEntries(value, schema) {
+    const objectValue = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+    const schemaProperties = schema?.properties && typeof schema.properties === 'object'
+        ? Object.keys(schema.properties)
+        : [];
+    const seen = new Set();
+    const entries = [];
+
+    for (const key of schemaProperties) {
+        if (Object.hasOwn(objectValue, key)) {
+            entries.push([key, objectValue[key]]);
+            seen.add(key);
+        }
+    }
+
+    for (const [key, entryValue] of Object.entries(objectValue)) {
+        if (!seen.has(key)) {
+            entries.push([key, entryValue]);
+        }
+    }
+
+    return entries;
+}
+
+function formatNativeToolValueXml(tagName, value, schema, indentLevel = 0) {
+    const indent = '  '.repeat(indentLevel);
+    const schemaType = normalizeSchemaType(schema);
+
+    if (Array.isArray(value)) {
+        const itemSchema = schemaType === 'array' ? schema?.items : null;
+        return value
+            .map(item => formatNativeToolValueXml(tagName, item, itemSchema, indentLevel))
+            .filter(Boolean)
+            .join('\n');
+    }
+
+    if (schemaType === 'object' || (value && typeof value === 'object' && !Array.isArray(value))) {
+        const childLines = getNativeToolOrderedEntries(value, schema)
+            .map(([childName, childValue]) => formatNativeToolValueXml(childName, childValue, schema?.properties?.[childName], indentLevel + 1))
+            .filter(Boolean);
+
+        if (childLines.length === 0) {
+            return `${indent}<${tagName}></${tagName}>`;
+        }
+
+        return `${indent}<${tagName}>\n${childLines.join('\n')}\n${indent}</${tagName}>`;
+    }
+
+    const serialized = escapeXmlText(serializeNativeToolValue(value));
+    return `${indent}<${tagName}>${serialized}</${tagName}>`;
 }
 
 function formatNativeToolResultContent(content) {
@@ -207,58 +250,174 @@ function formatNativeToolCallXml(toolCall) {
     const lines = [`<${toolName}>`];
 
     for (const [argName, value] of Object.entries(args)) {
-        lines.push(`<${argName}>${escapeXmlText(serializeNativeToolValue(value))}</${argName}>`);
+        lines.push(formatNativeToolValueXml(argName, value, null, 1));
     }
 
-    lines.push(`<continue>${continueValue ? 'true' : 'false'}</continue>`);
+    lines.push(`  <continue>${continueValue ? 'true' : 'false'}</continue>`);
     lines.push(`</${toolName}>`);
     return lines.join('\n');
 }
 
+function matchNativeXmlOpenTagAt(source, index, allowedTagNames = null) {
+    if (source[index] !== '<' || source[index + 1] === '/') {
+        return null;
+    }
+
+    const rawMatch = /^<([A-Za-z_][A-Za-z0-9_.:-]*)>/.exec(source.slice(index));
+    if (!rawMatch) {
+        return null;
+    }
+
+    const name = rawMatch[1];
+    if (Array.isArray(allowedTagNames) && allowedTagNames.length > 0 && !allowedTagNames.includes(name)) {
+        return null;
+    }
+
+    return {
+        name,
+        openTag: rawMatch[0],
+        openStart: index,
+        openEnd: index + rawMatch[0].length,
+    };
+}
+
+function findNextNativeXmlSiblingStart(source, startIndex, allowedTagNames = null) {
+    for (let index = startIndex; index < source.length; index++) {
+        if (source[index] !== '<') {
+            continue;
+        }
+
+        if (index > 0 && !/\s/.test(source[index - 1])) {
+            continue;
+        }
+
+        const match = matchNativeXmlOpenTagAt(source, index, allowedTagNames);
+        if (match) {
+            return match.openStart;
+        }
+    }
+
+    return -1;
+}
+
+function extractNativeXmlChildBlocks(content, allowedTagNames = null) {
+    const source = String(content ?? '').replace(/\r\n/g, '\n');
+    const blocks = [];
+    let index = 0;
+
+    while (index < source.length) {
+        while (index < source.length && /\s/.test(source[index])) {
+            index++;
+        }
+
+        if (index >= source.length) {
+            break;
+        }
+
+        const openMatch = matchNativeXmlOpenTagAt(source, index, allowedTagNames);
+        if (!openMatch) {
+            return blocks.length > 0 ? blocks : null;
+        }
+
+        const closeTag = `</${openMatch.name}>`;
+        const closeIndex = source.indexOf(closeTag, openMatch.openEnd);
+        const siblingIndex = closeIndex === -1
+            ? findNextNativeXmlSiblingStart(source, openMatch.openEnd, allowedTagNames)
+            : -1;
+        const valueEnd = closeIndex !== -1
+            ? closeIndex
+            : siblingIndex !== -1
+                ? siblingIndex
+                : source.length;
+
+        blocks.push({
+            name: openMatch.name,
+            value: source.slice(openMatch.openEnd, valueEnd),
+            hasExplicitClose: closeIndex !== -1,
+        });
+
+        index = closeIndex !== -1 ? closeIndex + closeTag.length : valueEnd;
+    }
+
+    return blocks;
+}
+
+function parseNativeXmlBlocksToObject(childBlocks, schemaProperties = {}) {
+    const groupedBlocks = new Map();
+    for (const child of childBlocks) {
+        if (!groupedBlocks.has(child.name)) {
+            groupedBlocks.set(child.name, []);
+        }
+        groupedBlocks.get(child.name).push(child);
+    }
+
+    const result = {};
+    for (const [name, blocks] of groupedBlocks.entries()) {
+        const childSchema = schemaProperties?.[name];
+        if (normalizeSchemaType(childSchema) === 'array') {
+            result[name] = blocks.map(block => parseNativeToolArgumentValue(block.value, childSchema?.items));
+            continue;
+        }
+
+        if (blocks.length === 1) {
+            result[name] = parseNativeToolArgumentValue(blocks[0].value, childSchema);
+            continue;
+        }
+
+        result[name] = blocks.map(block => parseNativeToolArgumentValue(block.value, childSchema));
+    }
+
+    return result;
+}
+
 function parseNativeToolArgumentValue(rawValue, schema) {
-    const value = String(rawValue ?? '').replace(/\r\n/g, '\n').trim();
+    const value = String(rawValue ?? '').replace(/\r\n/g, '\n');
+    const trimmedValue = value.trim();
     const schemaType = normalizeSchemaType(schema);
 
     if (schemaType === 'boolean') {
-        if (/^true$/i.test(value)) {
+        if (/^true$/i.test(trimmedValue)) {
             return true;
         }
-        if (/^false$/i.test(value)) {
+        if (/^false$/i.test(trimmedValue)) {
             return false;
         }
-        return value;
+        return unescapeXmlText(trimmedValue);
     }
 
     if (schemaType === 'integer') {
-        const parsed = Number.parseInt(value, 10);
-        return Number.isNaN(parsed) ? value : parsed;
+        const parsed = Number.parseInt(trimmedValue, 10);
+        return Number.isNaN(parsed) ? unescapeXmlText(trimmedValue) : parsed;
     }
 
     if (schemaType === 'number') {
-        const parsed = Number(value);
-        return Number.isFinite(parsed) ? parsed : value;
+        const parsed = Number(trimmedValue);
+        return Number.isFinite(parsed) ? parsed : unescapeXmlText(trimmedValue);
     }
 
     if (schemaType === 'array') {
-        const itemSchema = schema?.items;
-        const parsedJson = value.startsWith('[') ? tryParseJsonString(value) : null;
-        if (Array.isArray(parsedJson)) {
-            return parsedJson;
+        if (!trimmedValue) {
+            return [];
         }
 
-        const items = value
-            .split(/\n+/)
-            .map(item => item.trim())
-            .filter(Boolean);
-        return items.map(item => parseNativeToolArgumentValue(item, itemSchema));
+        return [parseNativeToolArgumentValue(value, schema?.items)];
     }
 
     if (schemaType === 'object') {
-        const parsedJson = tryParseJsonString(value);
-        return parsedJson && typeof parsedJson === 'object' ? parsedJson : value;
+        const schemaProperties = schema?.properties && typeof schema.properties === 'object'
+            ? schema.properties
+            : {};
+        const propertyNames = Object.keys(schemaProperties);
+        const childBlocks = extractNativeXmlChildBlocks(value, propertyNames.length > 0 ? propertyNames : null);
+
+        if (childBlocks && childBlocks.length > 0) {
+            return parseNativeXmlBlocksToObject(childBlocks, schemaProperties);
+        }
+
+        return trimmedValue ? unescapeXmlText(trimmedValue) : {};
     }
 
-    return value;
+    return unescapeXmlText(trimmedValue);
 }
 
 function formatNativeToolParameterDescription(parameter, isRequired) {
@@ -273,9 +432,15 @@ function formatNativeToolParameterDescription(parameter, isRequired) {
     if (Array.isArray(parameter?.enum) && parameter.enum.length > 0) {
         parts.push(`Choices: ${parameter.enum.map(value => String(value)).join(' | ')}`);
     } else if (schemaType === 'array') {
-        parts.push('One or more values, one per line');
+        const itemType = normalizeSchemaType(parameter?.items);
+        const childNames = Object.keys(parameter?.items?.properties ?? {});
+        parts.push('Repeat this tag once per value');
+        if (itemType === 'object') {
+            parts.push(childNames.length > 0 ? `Inside each tag, use child tags: ${childNames.join(', ')}` : 'Inside each tag, use nested child tags');
+        }
     } else if (schemaType === 'object') {
-        parts.push('JSON object');
+        const childNames = Object.keys(parameter?.properties ?? {});
+        parts.push(childNames.length > 0 ? `Use nested child tags: ${childNames.join(', ')}` : 'Use nested child tags');
     }
 
     if (!isRequired) {
@@ -305,40 +470,6 @@ function formatNativeToolDescription(name, description, displayName) {
     }
 
     return 'Runs this tool.';
-}
-
-function extractLooseNativeToolChildBlocks(content, allowedTagNames) {
-    const source = String(content ?? '');
-    const names = Array.from(new Set(allowedTagNames.filter(name => typeof name === 'string' && name.trim())));
-    if (names.length === 0) {
-        return [];
-    }
-
-    const pattern = new RegExp(`(^|\\n)\\s*<(${names.map(escapeRegExp).join('|')})>`, 'g');
-    const matches = [];
-    let match = null;
-
-    while ((match = pattern.exec(source)) !== null) {
-        const openStart = match.index + match[1].length;
-        const openTag = `<${match[2]}>`;
-        matches.push({
-            name: match[2],
-            openStart,
-            openEnd: openStart + openTag.length,
-        });
-    }
-
-    return matches.map((entry, index) => {
-        const closeTag = `</${entry.name}>`;
-        const closeIndex = source.indexOf(closeTag, entry.openEnd);
-        const nextOpenIndex = index + 1 < matches.length ? matches[index + 1].openStart : source.length;
-        const valueEnd = closeIndex !== -1 ? closeIndex : nextOpenIndex;
-        return {
-            name: entry.name,
-            value: source.slice(entry.openEnd, valueEnd),
-            hasExplicitClose: closeIndex !== -1,
-        };
-    });
 }
 
 const LIST_DIRECTORY_CONTEXT_TIMEOUT_MS = 3000;
@@ -3274,28 +3405,17 @@ export class ToolManager {
                 ...Object.keys(schema?.properties ?? {}),
                 'continue',
             ];
-            const childBlocks = extractLooseNativeToolChildBlocks(rawToolContent, allowedTagNames);
-            const args = {};
-            let shouldContinue = true;
-
-            for (const child of childBlocks) {
-                const childName = child.name;
-                const childValue = child.value ?? '';
-
-                if (childName === 'continue') {
-                    shouldContinue = !/^false$/i.test(String(childValue).trim());
-                    continue;
-                }
-
-                const parsedValue = parseNativeToolArgumentValue(childValue, schema?.properties?.[childName]);
-                if (Object.hasOwn(args, childName)) {
-                    args[childName] = Array.isArray(args[childName])
-                        ? [...args[childName], parsedValue]
-                        : [args[childName], parsedValue];
-                } else {
-                    args[childName] = parsedValue;
-                }
+            const childBlocks = extractNativeXmlChildBlocks(rawToolContent, allowedTagNames);
+            if (!childBlocks) {
+                throw new Error('Expected XML child tags for tool arguments.');
             }
+
+            const continueBlocks = childBlocks.filter(child => child.name === 'continue');
+            const argumentBlocks = childBlocks.filter(child => child.name !== 'continue');
+            const args = parseNativeXmlBlocksToObject(argumentBlocks, schema?.properties ?? {});
+            const shouldContinue = continueBlocks.length === 0
+                ? true
+                : !/^false$/i.test(String(continueBlocks[continueBlocks.length - 1].value ?? '').trim());
 
             const parsed = {
                 tool: toolName,
@@ -3415,11 +3535,37 @@ export class ToolManager {
         finalPromptParts.push(`Always put your tool call in your main response. Only one tool call at the end of your message is supported.
 
 Call a tool by using the tool name as the XML tag. Put each argument in its own direct child tag. Use ${getCurrentPlatformSyntaxLabel()} syntax always.
+Use real XML for every argument.
+- Simple values can be inline: <cwd>.</cwd>
+- Multiline values can stay multiline inside one tag:
+  <code>line 1
+line 2
+line 3</code>
+- For arrays, repeat the same tag once per value.
+- For objects, put nested child tags inside the parent tag.
+- Never put JSON inside XML tags.
 Use <continue>true</continue> when you need the result before replying.
 Use <continue>false</continue> when you already gave your full reply and the tool is only a side effect.
 Tool results will be returned inside <result> tags.
 To provide a non-media file for the user to download, use the syntax \`![](filename.ext)\`
 To provide media to the user to download or view, use display_image.
+
+Examples:
+<read_file>
+<filepaths>docs/a.txt</filepaths>
+<filepaths>docs/b.txt</filepaths>
+<continue>true</continue>
+</read_file>
+
+<ask_user>
+<questions>
+<prompt>Character direction</prompt>
+<context>Choose one direction.</context>
+<options>Keep the real VTuber persona</options>
+<options>Fictionalize heavily</options>
+</questions>
+<continue>true</continue>
+</ask_user>
 
 Here are the available tools:
 `);
