@@ -1,5 +1,6 @@
 import { DOMPurify } from '../lib.js';
 import { power_user } from './power-user.js';
+import { accountStorage } from './util/AccountStorage.js';
 
 import {
     addOneMessage,
@@ -149,11 +150,203 @@ function stringify(obj) {
     return typeof obj === 'string' ? obj : JSON.stringify(obj);
 }
 
+function escapeRegExp(str) {
+    return String(str ?? '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function escapeXmlText(value) {
+    return String(value ?? '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;');
+}
+
+function normalizeSchemaType(schema) {
+    const schemaType = schema?.type;
+    if (Array.isArray(schemaType)) {
+        return schemaType.find(type => type !== 'null') || schemaType[0] || null;
+    }
+
+    return typeof schemaType === 'string' ? schemaType : null;
+}
+
+function tryParseJsonString(value) {
+    try {
+        return JSON.parse(value);
+    } catch {
+        return null;
+    }
+}
+
+function serializeNativeToolValue(value) {
+    if (Array.isArray(value)) {
+        return value.map(item => serializeNativeToolValue(item)).join('\n');
+    }
+
+    if (value && typeof value === 'object') {
+        return JSON.stringify(value, null, 2);
+    }
+
+    if (typeof value === 'boolean') {
+        return value ? 'true' : 'false';
+    }
+
+    return String(value ?? '');
+}
+
+function formatNativeToolResultContent(content) {
+    return `<result>\n${String(content ?? '')}\n</result>`;
+}
+
+function formatNativeToolCallXml(toolCall) {
+    const toolName = String(toolCall?.tool ?? '').trim();
+    const args = toolCall?.args && typeof toolCall.args === 'object' && !Array.isArray(toolCall.args)
+        ? toolCall.args
+        : {};
+    const continueValue = toolCall?.continue !== false;
+    const lines = [`<${toolName}>`];
+
+    for (const [argName, value] of Object.entries(args)) {
+        lines.push(`<${argName}>${escapeXmlText(serializeNativeToolValue(value))}</${argName}>`);
+    }
+
+    lines.push(`<continue>${continueValue ? 'true' : 'false'}</continue>`);
+    lines.push(`</${toolName}>`);
+    return lines.join('\n');
+}
+
+function parseNativeToolArgumentValue(rawValue, schema) {
+    const value = String(rawValue ?? '').replace(/\r\n/g, '\n').trim();
+    const schemaType = normalizeSchemaType(schema);
+
+    if (schemaType === 'boolean') {
+        if (/^true$/i.test(value)) {
+            return true;
+        }
+        if (/^false$/i.test(value)) {
+            return false;
+        }
+        return value;
+    }
+
+    if (schemaType === 'integer') {
+        const parsed = Number.parseInt(value, 10);
+        return Number.isNaN(parsed) ? value : parsed;
+    }
+
+    if (schemaType === 'number') {
+        const parsed = Number(value);
+        return Number.isFinite(parsed) ? parsed : value;
+    }
+
+    if (schemaType === 'array') {
+        const itemSchema = schema?.items;
+        const parsedJson = value.startsWith('[') ? tryParseJsonString(value) : null;
+        if (Array.isArray(parsedJson)) {
+            return parsedJson;
+        }
+
+        const items = value
+            .split(/\n+/)
+            .map(item => item.trim())
+            .filter(Boolean);
+        return items.map(item => parseNativeToolArgumentValue(item, itemSchema));
+    }
+
+    if (schemaType === 'object') {
+        const parsedJson = tryParseJsonString(value);
+        return parsedJson && typeof parsedJson === 'object' ? parsedJson : value;
+    }
+
+    return value;
+}
+
+function formatNativeToolParameterDescription(parameter, isRequired) {
+    const schemaType = normalizeSchemaType(parameter);
+    const description = String(parameter?.description ?? '').trim().replace(/\.$/, '');
+    const parts = [];
+
+    if (description) {
+        parts.push(description);
+    }
+
+    if (Array.isArray(parameter?.enum) && parameter.enum.length > 0) {
+        parts.push(`Choices: ${parameter.enum.map(value => String(value)).join(' | ')}`);
+    } else if (schemaType === 'array') {
+        parts.push('One or more values, one per line');
+    } else if (schemaType === 'object') {
+        parts.push('JSON object');
+    }
+
+    if (!isRequired) {
+        parts.push('Optional');
+    }
+
+    return parts.join('. ').trim() + '.';
+}
+
+function formatNativeToolDescription(name, description, displayName) {
+    const trimmed = String(description ?? '').trim();
+
+    if (name === 'execute_shell') {
+        return 'Runs PowerShell.';
+    }
+
+    if (name === 'execute_python') {
+        return 'Runs Python.';
+    }
+
+    if (trimmed) {
+        return trimmed.endsWith('.') ? trimmed : `${trimmed}.`;
+    }
+
+    if (displayName) {
+        return `Uses ${displayName}.`;
+    }
+
+    return 'Runs this tool.';
+}
+
+function extractLooseNativeToolChildBlocks(content, allowedTagNames) {
+    const source = String(content ?? '');
+    const names = Array.from(new Set(allowedTagNames.filter(name => typeof name === 'string' && name.trim())));
+    if (names.length === 0) {
+        return [];
+    }
+
+    const pattern = new RegExp(`(^|\\n)\\s*<(${names.map(escapeRegExp).join('|')})>`, 'g');
+    const matches = [];
+    let match = null;
+
+    while ((match = pattern.exec(source)) !== null) {
+        const openStart = match.index + match[1].length;
+        const openTag = `<${match[2]}>`;
+        matches.push({
+            name: match[2],
+            openStart,
+            openEnd: openStart + openTag.length,
+        });
+    }
+
+    return matches.map((entry, index) => {
+        const closeTag = `</${entry.name}>`;
+        const closeIndex = source.indexOf(closeTag, entry.openEnd);
+        const nextOpenIndex = index + 1 < matches.length ? matches[index + 1].openStart : source.length;
+        const valueEnd = closeIndex !== -1 ? closeIndex : nextOpenIndex;
+        return {
+            name: entry.name,
+            value: source.slice(entry.openEnd, valueEnd),
+            hasExplicitClose: closeIndex !== -1,
+        };
+    });
+}
+
 const LIST_DIRECTORY_CONTEXT_TIMEOUT_MS = 3000;
 const LIST_DIRECTORY_CONTEXT_TIMEOUT_RESULT = '__list_directory_context_timeout__';
 const LIST_DIRECTORY_CONTEXT_MAX_CHARS = 4000;
 const NEW_WORKSPACE_OPTION = '__new_workspace__';
 const WORKSPACE_SEPARATOR_OPTION = '__workspace_separator__';
+const NATIVE_TOOL_CALLING_MIGRATION_NOTICE_KEY = 'native_tool_calling_xml_notice_dismissed';
 const activeShellRuns = new Map();
 const activePythonRuns = new Map();
 const pendingShellRenders = new Set();
@@ -286,7 +479,7 @@ function syncToolResultMessageContent(message) {
         ? message.extra.tool_result_content
         : String(message.extra.tool_result_content ?? '');
     message.extra.tool_result_content = content;
-    message.mes = `<tool_result>\n${content}\n</tool_result>`;
+    message.mes = formatNativeToolResultContent(content);
 }
 
 /**
@@ -2582,6 +2775,42 @@ export class ToolManager {
     static RECURSE_LIMIT = 50;
     static #lastListDirectoryContext = '';
 
+    static #getNativeToolDefinition(name) {
+        return this.#tools.get(name) || null;
+    }
+
+    static #getNativeToolTagNames(additionalNames = []) {
+        const tagNames = new Set(this.tools.map(tool => tool.toFunctionOpenAI().function.name));
+        for (const name of additionalNames) {
+            if (typeof name === 'string' && name.trim()) {
+                tagNames.add(name.trim());
+            }
+        }
+        return Array.from(tagNames);
+    }
+
+    static #findNativeToolTag(text, additionalNames = []) {
+        const source = String(text ?? '');
+        const tagNames = this.#getNativeToolTagNames(additionalNames);
+        if (tagNames.length === 0) {
+            return null;
+        }
+
+        const pattern = new RegExp(`<(${tagNames.map(escapeRegExp).join('|')})\\s*>`, 'g');
+        let match = null;
+        let lastMatch = null;
+
+        while ((match = pattern.exec(source)) !== null) {
+            lastMatch = {
+                toolName: match[1],
+                startIndex: match.index,
+                openTag: match[0],
+            };
+        }
+
+        return lastMatch;
+    }
+
     /**
      * Returns an Array of all tools that have been registered.
      * @type {ToolDefinition[]}
@@ -2952,22 +3181,45 @@ export class ToolManager {
     }
 
     /**
-     * Finds and parses a <tool> block from the LLM response.
+     * Finds and parses a native XML tool call from the LLM response.
      * @param {string} text The text content from the LLM.
+     * @param {{ preferredToolName?: string | null }} [options={}] Parse options.
      * @returns {object|null} The parsed tool call and reasoning, or null if not found.
      */
-    static findAndParseNativeToolCall(text) {
-        const toolTagIndex = text.indexOf('<tool>');
-        if (toolTagIndex === -1) {
+    static containsNativeToolCall(text, additionalNames = []) {
+        return !!this.#findNativeToolTag(text, additionalNames);
+    }
+
+    static stripNativeToolCallFromText(text, additionalNames = []) {
+        const source = String(text ?? '');
+        const tagMatch = this.#findNativeToolTag(source, additionalNames);
+        if (!tagMatch) {
+            return source;
+        }
+
+        const closeTag = `</${tagMatch.toolName}>`;
+        const closeTagIndex = source.indexOf(closeTag, tagMatch.startIndex + tagMatch.openTag.length);
+        const endIndex = closeTagIndex === -1 ? source.length : closeTagIndex + closeTag.length;
+        return `${source.slice(0, tagMatch.startIndex)}${source.slice(endIndex)}`;
+    }
+
+    static getNativeToolStopStrings() {
+        return this.tools.map(tool => `</${tool.toFunctionOpenAI().function.name}>`);
+    }
+
+    static findAndParseNativeToolCall(text, { preferredToolName = null } = {}) {
+        const tagMatch = this.#findNativeToolTag(text, preferredToolName ? [preferredToolName] : []);
+        if (!tagMatch) {
             return null;
         }
 
-        const toolCloseTagIndex = text.indexOf('</tool>', toolTagIndex + '<tool>'.length);
-        const fallbackToolBlockEndIndex = toolCloseTagIndex !== -1 ? toolCloseTagIndex + '</tool>'.length : text.length;
+        const { toolName, startIndex: toolTagIndex, openTag } = tagMatch;
+        const closeTag = `</${toolName}>`;
+        const toolCloseTagIndex = text.indexOf(closeTag, toolTagIndex + openTag.length);
+        const fallbackToolBlockEndIndex = toolCloseTagIndex !== -1 ? toolCloseTagIndex + closeTag.length : text.length;
         const textBeforeTool = text.substring(0, toolTagIndex);
         const rawToolBlock = text.slice(toolTagIndex, fallbackToolBlockEndIndex).trim();
-        const rawToolContent = text.slice(toolTagIndex + '<tool>'.length, toolCloseTagIndex !== -1 ? toolCloseTagIndex : text.length).trim();
-        const looksLikeToolCallAttempt = rawToolBlock.includes('"tool"') || rawToolContent.startsWith('{');
+        const looksLikeToolCallAttempt = rawToolBlock.startsWith(`<${toolName}>`);
 
         const buildContext = (toolBlockEndIndex = fallbackToolBlockEndIndex) => {
             const thinkStartIndex = text.lastIndexOf('<think>', toolTagIndex);
@@ -3012,106 +3264,46 @@ export class ToolManager {
             };
         };
 
-        // Start searching for the JSON object after the <tool> tag.
-        const jsonStartIndex = text.indexOf('{', toolTagIndex);
-        if (jsonStartIndex === -1 || (toolCloseTagIndex !== -1 && jsonStartIndex > toolCloseTagIndex)) {
-            if (!looksLikeToolCallAttempt) {
-                return null;
-            }
-            return buildParseError('missing_json', 'Found a <tool> block, but it does not contain a JSON object.', {
-                raw_tool_block: rawToolBlock,
-            });
-        }
-
-        let braceCount = 0;
-        let jsonEndIndex = -1;
-        let inString = false;
-        let isEscaped = false;
-
-        // Find the matching closing brace for the JSON object while respecting quoted strings.
-        for (let i = jsonStartIndex; i < text.length; i++) {
-            const char = text[i];
-
-            if (isEscaped) {
-                isEscaped = false;
-                continue;
-            }
-
-            if (char === '\\' && inString) {
-                isEscaped = true;
-                continue;
-            }
-
-            if (char === '"') {
-                inString = !inString;
-                continue;
-            }
-
-            if (inString) {
-                continue;
-            }
-
-            if (char === '{') {
-                braceCount++;
-            } else if (char === '}') {
-                braceCount--;
-            }
-
-            if (braceCount === 0 && i > jsonStartIndex) {
-                jsonEndIndex = i;
-                break;
-            }
-        }
-
-        if (jsonEndIndex === -1) {
-            if (!looksLikeToolCallAttempt) {
-                return null;
-            }
-            return buildParseError('unbalanced_json', 'The JSON inside the <tool> block is incomplete or has unmatched braces.', {
-                raw_tool_block: rawToolBlock,
-                raw_json: text.slice(jsonStartIndex, fallbackToolBlockEndIndex).trim(),
-            });
-        }
-
-        const jsonString = text.substring(jsonStartIndex, jsonEndIndex + 1);
-        const toolBlockEndIndex = toolCloseTagIndex !== -1 ? toolCloseTagIndex + '</tool>'.length : jsonEndIndex + 1;
+        const toolBlockEndIndex = toolCloseTagIndex !== -1 ? toolCloseTagIndex + closeTag.length : fallbackToolBlockEndIndex;
         const detectedToolBlock = text.slice(toolTagIndex, toolBlockEndIndex).trim();
+        const rawToolContent = text.slice(toolTagIndex + openTag.length, toolCloseTagIndex !== -1 ? toolCloseTagIndex : text.length);
 
         try {
-            const parsed = JSON.parse(jsonString);
+            const schema = this.#getNativeToolDefinition(toolName)?.toFunctionOpenAI().function.parameters;
+            const allowedTagNames = [
+                ...Object.keys(schema?.properties ?? {}),
+                'continue',
+            ];
+            const childBlocks = extractLooseNativeToolChildBlocks(rawToolContent, allowedTagNames);
+            const args = {};
+            let shouldContinue = true;
 
-            if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-                if (!looksLikeToolCallAttempt) {
-                    return null;
+            for (const child of childBlocks) {
+                const childName = child.name;
+                const childValue = child.value ?? '';
+
+                if (childName === 'continue') {
+                    shouldContinue = !/^false$/i.test(String(childValue).trim());
+                    continue;
                 }
-                return buildParseError('invalid_shape', 'Tool JSON must be an object.', {
-                    raw_tool_block: detectedToolBlock,
-                    raw_json: jsonString,
-                });
+
+                const parsedValue = parseNativeToolArgumentValue(childValue, schema?.properties?.[childName]);
+                if (Object.hasOwn(args, childName)) {
+                    args[childName] = Array.isArray(args[childName])
+                        ? [...args[childName], parsedValue]
+                        : [args[childName], parsedValue];
+                } else {
+                    args[childName] = parsedValue;
+                }
             }
 
-            if (typeof parsed.tool !== 'string' || !parsed.tool.trim()) {
-                if (!looksLikeToolCallAttempt) {
-                    return null;
-                }
-                return buildParseError('missing_tool_name', 'Tool JSON must contain a non-empty string "tool" field.', {
-                    raw_tool_block: detectedToolBlock,
-                    raw_json: jsonString,
-                });
-            }
+            const parsed = {
+                tool: toolName,
+                args,
+                continue: shouldContinue,
+            };
 
-            if (!parsed.args || typeof parsed.args !== 'object' || Array.isArray(parsed.args)) {
-                if (!looksLikeToolCallAttempt) {
-                    return null;
-                }
-                return buildParseError('invalid_args', 'Tool JSON must contain an "args" object.', {
-                    raw_tool_block: detectedToolBlock,
-                    raw_json: jsonString,
-                });
-            }
-
-            const shouldContinue = parsed.continue !== undefined ? !!parsed.continue : true;
-            console.log(`[ToolManager] Parsed tool call: ${parsed.tool}, continue flag: ${parsed.continue}, resolved: ${shouldContinue}`);
+            console.log(`[ToolManager] Parsed tool call: ${parsed.tool}, continue flag: ${parsed.continue}`);
             return {
                 ...buildContext(toolBlockEndIndex),
                 tool_call: parsed,
@@ -3121,9 +3313,10 @@ export class ToolManager {
             if (!looksLikeToolCallAttempt) {
                 return null;
             }
-            return buildParseError('invalid_json', `Failed to parse tool JSON: ${error instanceof Error ? error.message : String(error)}`, {
+
+            return buildParseError('invalid_tool_call', `Failed to parse tool call: ${error instanceof Error ? error.message : String(error)}`, {
                 raw_tool_block: detectedToolBlock,
-                raw_json: jsonString,
+                raw_xml: detectedToolBlock,
             });
         }
     }
@@ -3149,8 +3342,7 @@ export class ToolManager {
             result += `<think>${reasoning}</think>\n`;
         }
 
-        const toolJsonString = JSON.stringify(tool_call, null, 2);
-        result += `<tool>\n${toolJsonString}\n</tool>`;
+        result += formatNativeToolCallXml(tool_call);
 
         return result;
     }
@@ -3222,37 +3414,31 @@ export class ToolManager {
         const finalPromptParts = [];
         finalPromptParts.push(`Always put your tool call in your main response. Only one tool call at the end of your message is supported.
 
-Call the tool with the required arguments inside a <tool> block. Use ${getCurrentPlatformSyntaxLabel()} syntax always.
+Call a tool by using the tool name as the XML tag. Put each argument in its own direct child tag. Use ${getCurrentPlatformSyntaxLabel()} syntax always.
+Use <continue>true</continue> when you need the result before replying.
+Use <continue>false</continue> when you already gave your full reply and the tool is only a side effect.
+Tool results will be returned inside <result> tags.
 To provide a non-media file for the user to download, use the syntax \`![](filename.ext)\`
 To provide media to the user to download or view, use display_image.
-
-The "continue" field controls whether you get a follow-up turn after the tool executes:
-- "continue": true — The tool result will be shown to you and you will generate another response. Use this when you need to see the result before responding, or when you have no text response yet.
-- "continue": false — The tool runs silently and no follow-up generation occurs. Use this when you have ALREADY written your full response to the user in the same message and the tool call is just a side-effect (e.g. saving data, logging). This prevents a redundant empty reply.
-
-Format example:
-
-<tool>
-{
-  "tool": "tool_name",
-  "args": {
-    "arg_name": "arg_value"
-  },
-  "continue": true
-}
-</tool>
 
 Here are the available tools:
 `);
 
         const toolsString = this.tools.map(tool => {
             const openAITool = tool.toFunctionOpenAI();
-            return JSON.stringify({
-                name: openAITool.function.name,
-                description: openAITool.function.description,
-                arguments: openAITool.function.parameters,
+            const schema = openAITool.function.parameters;
+            const required = new Set(Array.isArray(schema?.required) ? schema.required : []);
+            const argumentLines = Object.entries(schema?.properties ?? {}).map(([argName, parameter]) => {
+                return `${argName}: ${formatNativeToolParameterDescription(parameter, required.has(argName))}`;
             });
-        }).join('\n');
+            argumentLines.push('continue: true | false.');
+
+            return [
+                openAITool.function.name,
+                formatNativeToolDescription(openAITool.function.name, openAITool.function.description, tool.displayName),
+                ...argumentLines,
+            ].join('\n');
+        }).join('\n\n');
         finalPromptParts.push(toolsString);
 
         const listDirectoryPromptContext = await this.#getListDirectoryPromptContext();
@@ -3632,7 +3818,7 @@ Here are the available tools:
 
     /**
      * Shows a user-facing error for malformed native/XML tool calls.
-     * @param {{ message?: string, raw_tool_block?: string, raw_json?: string } | null | undefined} parseError Parse error info
+     * @param {{ message?: string, raw_tool_block?: string, raw_xml?: string } | null | undefined} parseError Parse error info
      * @returns {void}
      */
     static showNativeToolCallParseError(parseError) {
@@ -3641,15 +3827,15 @@ Here are the available tools:
         }
 
         const rawToolBlock = String(parseError.raw_tool_block ?? '').trim();
-        const rawJson = String(parseError.raw_json ?? '').trim();
+        const rawXml = String(parseError.raw_xml ?? '').trim();
         const details = [
             '<div style="text-align: left;">',
             `<p style="margin: 0 0 10px 0; line-height: 1.5;">${DOMPurify.sanitize(parseError.message)}</p>`,
             rawToolBlock
                 ? `<p style="margin: 6px 0 8px 0;"><strong>Raw tool block</strong></p><pre style="margin: 0 0 14px 0; padding: 12px 14px; border: 1px solid rgba(255, 255, 255, 0.12); border-radius: 6px; background: rgba(0, 0, 0, 0.28); overflow: auto; white-space: pre-wrap; word-break: break-word; text-align: left;"><code style="display: block; padding: 0; background: transparent; color: inherit; font-family: var(--mainFontFamilyMono, Consolas, Monaco, monospace); font-size: 0.95em; line-height: 1.45; text-decoration: none;">${DOMPurify.sanitize(rawToolBlock)}</code></pre>`
                 : '',
-            rawJson
-                ? `<p style="margin: 6px 0 8px 0;"><strong>Detected JSON</strong></p><pre style="margin: 0 0 14px 0; padding: 12px 14px; border: 1px solid rgba(255, 255, 255, 0.12); border-radius: 6px; background: rgba(0, 0, 0, 0.28); overflow: auto; white-space: pre-wrap; word-break: break-word; text-align: left;"><code style="display: block; padding: 0; background: transparent; color: inherit; font-family: var(--mainFontFamilyMono, Consolas, Monaco, monospace); font-size: 0.95em; line-height: 1.45; text-decoration: none;">${DOMPurify.sanitize(rawJson)}</code></pre>`
+            rawXml
+                ? `<p style="margin: 6px 0 8px 0;"><strong>Detected XML</strong></p><pre style="margin: 0 0 14px 0; padding: 12px 14px; border: 1px solid rgba(255, 255, 255, 0.12); border-radius: 6px; background: rgba(0, 0, 0, 0.28); overflow: auto; white-space: pre-wrap; word-break: break-word; text-align: left;"><code style="display: block; padding: 0; background: transparent; color: inherit; font-family: var(--mainFontFamilyMono, Consolas, Monaco, monospace); font-size: 0.95em; line-height: 1.45; text-decoration: none;">${DOMPurify.sanitize(rawXml)}</code></pre>`
                 : '',
             '</div>',
         ].filter(Boolean).join('');
@@ -4759,6 +4945,27 @@ async function initSandboxWorkspaceSelector() {
     await refreshSandboxWorkspaceSelector();
 }
 
+function showNativeToolCallingMigrationToast() {
+    if (accountStorage.getItem(NATIVE_TOOL_CALLING_MIGRATION_NOTICE_KEY) === 'true') {
+        return;
+    }
+
+    const toast = toastr.info(
+        'Tool calls now use XML. Existing chats with tool calls may need a reminder to the model that the tools changed. New chats include the new format automatically. Click to dismiss.',
+        'Tool Calling',
+        {
+            timeOut: 0,
+            extendedTimeOut: 0,
+            preventDuplicates: true,
+            tapToDismiss: true,
+            onclick: () => {
+                accountStorage.setItem(NATIVE_TOOL_CALLING_MIGRATION_NOTICE_KEY, 'true');
+                toastr.clear(toast);
+            },
+        },
+    );
+}
+
 export function initToolCalling() {
     eventSource.on(event_types.DANGEROUS_TOOLS_TOGGLED, () => {
         // Only refresh the native tool commands if the feature is currently active.
@@ -4782,6 +4989,7 @@ export function initToolCalling() {
     // Refresh tool registration after all settings (including power_user) have been loaded.
     eventSource.on(event_types.SETTINGS_LOADED_AFTER, async () => {
         await initSandboxWorkspaceSelector();
+        showNativeToolCallingMigrationToast();
         if (oai_settings.native_tool_calling) {
             ToolManager.registerNativeToolCommand();
         }

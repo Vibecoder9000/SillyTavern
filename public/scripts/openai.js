@@ -2846,8 +2846,11 @@ export async function createGenerationParameters(settings, model, type, messages
         if (!Array.isArray(generate_data.stop)) {
             generate_data.stop = [];
         }
-        if (!generate_data.stop.includes('</tool>')) {
-            generate_data.stop.push('</tool>');
+
+        for (const stopString of ToolManager.getNativeToolStopStrings()) {
+            if (!generate_data.stop.includes(stopString)) {
+                generate_data.stop.push(stopString);
+            }
         }
     }
 

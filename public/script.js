@@ -2147,6 +2147,40 @@ function parseToolCallArguments(args) {
     return {};
 }
 
+function formatToolArgumentValue(value) {
+    if (Array.isArray(value)) {
+        return value.map(item => formatToolArgumentValue(item)).join('\n');
+    }
+
+    if (value && typeof value === 'object') {
+        return JSON.stringify(value, null, 2);
+    }
+
+    if (typeof value === 'boolean') {
+        return value ? 'true' : 'false';
+    }
+
+    return String(value ?? '');
+}
+
+function formatToolArgumentsForDisplay(args, continueValue) {
+    const lines = [];
+
+    for (const [name, value] of Object.entries(args ?? {})) {
+        lines.push(`${name}: ${formatToolArgumentValue(value)}`);
+    }
+
+    if (continueValue !== undefined) {
+        lines.push(`continue: ${continueValue ? 'true' : 'false'}`);
+    }
+
+    return lines.join('\n');
+}
+
+function formatNativeToolResultText(content) {
+    return `<result>\n${String(content ?? '')}\n</result>`;
+}
+
 /**
  * Checks if the provided tool call targets the PowerShell executor.
  * @param {any} toolInfo
@@ -2255,7 +2289,6 @@ function getToolCallMessageHtml(message, messageId, { includeExecuteButton = tru
     }
 
     const toolName = DOMPurify.sanitize(hasValidToolInfo ? (toolInfo.tool ?? '') : 'invalid_tool_call');
-    const isAgnosticToolCall = typeof message?.mes === 'string' && message.mes.includes('<tool>');
     const toolArgsObject = hasValidToolInfo ? parseToolCallArguments(toolInfo.args) : null;
     const hasAdjacentToolResult = !!chat[messageId + 1]?.extra?.is_tool_result;
     const canExecuteTool = includeExecuteButton && hasValidToolInfo && power_user.tool_execution_mode === 'manual' && !hasAdjacentToolResult;
@@ -2283,17 +2316,7 @@ function getToolCallMessageHtml(message, messageId, { includeExecuteButton = tru
     let toolArgs = rawToolBlock || '{}';
 
     if (hasValidToolInfo) {
-        try {
-            toolArgs = JSON.stringify(toolArgsObject, null, 2);
-            if (isAgnosticToolCall) {
-                // In native/agnostic tool calls, show escaped newlines as actual line breaks for readability.
-                toolArgs = toolArgs
-                    .replace(/(^|[^\\])\\r\\n/g, '$1\n')
-                    .replace(/(^|[^\\])\\n/g, '$1\n');
-            }
-        } catch {
-            toolArgs = '{}';
-        }
+        toolArgs = formatToolArgumentsForDisplay(toolArgsObject, toolInfo?.continue !== false);
     }
 
     html += '<div class="tool-call-box">';
@@ -2321,7 +2344,7 @@ function getToolCallMessageHtml(message, messageId, { includeExecuteButton = tru
 function getToolResultDisplayText(message, fallbackText = '') {
     const result = message?.extra?.tool_result_content ?? fallbackText;
     const resultText = typeof result === 'string' ? result : String(result ?? '');
-    const isAgnosticToolResult = typeof message?.mes === 'string' && message.mes.includes('<tool_result>');
+    const isAgnosticToolResult = typeof message?.mes === 'string' && message.mes.includes('<result>');
 
     if (!isAgnosticToolResult) {
         return resultText;
@@ -2352,13 +2375,11 @@ function getMessageEditText(message) {
 
         let toolBlock = '';
         if (message.extra?.tool_call_info) {
-            let toolJson = '{}';
-            try {
-                toolJson = JSON.stringify(message.extra.tool_call_info, null, 2);
-            } catch {
-                toolJson = '{}';
-            }
-            toolBlock = `<tool>\n${toolJson}\n</tool>`;
+            toolBlock = ToolManager.formatNativeToolCallForDisplay({
+                tool_call: message.extra.tool_call_info,
+                reasoning: '',
+                prefix_text: '',
+            }).trim();
         } else if (message.extra?.tool_call_parse_error?.raw_tool_block) {
             toolBlock = String(message.extra.tool_call_parse_error.raw_tool_block).trim();
         }
@@ -2380,9 +2401,8 @@ function getMessageEditText(message) {
  */
 function stripToolCallFromReasoning(reasoning) {
     return trimSpaces(
-        String(reasoning ?? '')
-            .replace(/<\/?think>\s*/gi, '')
-            .replace(/\s*<tool>[\s\S]*?(?:<\/tool>|$)/gi, ''),
+        ToolManager.stripNativeToolCallFromText(String(reasoning ?? ''))
+            .replace(/<\/?think>\s*/gi, ''),
     );
 }
 
@@ -2683,7 +2703,7 @@ async function createSpecialToolResultMessage(toolResult) {
             name: systemUserName,
             is_user: false,
             is_system: true,
-            mes: `<tool_result>\n${cappedToolResult}\n</tool_result>`,
+            mes: formatNativeToolResultText(cappedToolResult),
             extra: {
                 is_tool_result: true,
                 tool_result_content: cappedToolResult,
@@ -2712,7 +2732,7 @@ function createShellToolResultMessage(toolInfo) {
         name: systemUserName,
         is_user: false,
         is_system: true,
-        mes: '<tool_result>\n\n</tool_result>',
+        mes: formatNativeToolResultText(''),
         extra: {
             is_tool_result: true,
             tool_result_content: '',
@@ -2741,7 +2761,7 @@ function createPythonToolResultMessage(toolInfo) {
         name: systemUserName,
         is_user: false,
         is_system: true,
-        mes: '<tool_result>\n\n</tool_result>',
+        mes: formatNativeToolResultText(''),
         extra: {
             is_tool_result: true,
             tool_result_content: '',
@@ -2765,7 +2785,7 @@ async function createTextToolResultMessage(toolResult) {
         name: systemUserName,
         is_user: false,
         is_system: true,
-        mes: `<tool_result>\n${cappedToolResult}\n</tool_result>`,
+        mes: formatNativeToolResultText(cappedToolResult),
         extra: { is_tool_result: true, tool_result_content: cappedToolResult },
     };
 }
@@ -6406,7 +6426,7 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
             }
         }
 
-        // Native tool calling: detect <tool> blocks in the non-streamed response text
+        // Native tool calling: detect XML tool tags in the non-streamed response text
         if (oai_settings.native_tool_calling && depth < ToolManager.RECURSE_LIMIT) {
             const parsedTool = ToolManager.findAndParseNativeToolCall(getMessage);
             const parseOutcome = applyNativeToolCallParseToMessage(chat[chat.length - 1], parsedTool, { formatForDisplay: true });
@@ -9103,9 +9123,12 @@ function updateMessage(div, { preserveToolCallOnParseError = false } = {}) {
         text = removeMacros(text);
     }
     mes.mes = text;
-    const shouldTryParseToolCall = mes.extra?.is_tool_call || text.includes('<tool>');
+    const preferredToolName = typeof mes.extra?.tool_call_info?.tool === 'string'
+        ? mes.extra.tool_call_info.tool
+        : null;
+    const shouldTryParseToolCall = mes.extra?.is_tool_call || ToolManager.containsNativeToolCall(text, preferredToolName ? [preferredToolName] : []);
     if (shouldTryParseToolCall) {
-        const parsedTool = ToolManager.findAndParseNativeToolCall(text);
+        const parsedTool = ToolManager.findAndParseNativeToolCall(text, { preferredToolName });
         const hasInlineReasoning = /<think>[\s\S]*?<\/think>/.test(text);
         const existingReasoning = String(mes.extra.reasoning ?? '').trim();
 
@@ -9140,6 +9163,7 @@ function updateMessage(div, { preserveToolCallOnParseError = false } = {}) {
     // Keep tool_result_content in sync with mes text for tool result messages
     if (mes.extra?.is_tool_result && mes.extra.tool_result_content !== undefined) {
         mes.extra.tool_result_content = text;
+        mes.mes = formatNativeToolResultText(text);
     }
     if (mes.swipe_id !== undefined) {
         ensureSwipes(mes);
