@@ -3840,6 +3840,10 @@ export function getStoppingStrings(isImpersonate, isContinue, api = main_api) {
     result.push(...getInstructStoppingSequences());
     result.push(...getCustomStoppingStrings());
 
+    if (oai_settings.native_tool_calling) {
+        result.push(...ToolManager.getNativeToolStopStrings());
+    }
+
     if (power_user.single_line) {
         result.unshift('\n');
     }
@@ -5547,6 +5551,10 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
     // Add persona description to prompt
     addPersonaDescriptionExtensionPrompt();
 
+    const nativeToolPrompt = main_api !== 'openai' && oai_settings.native_tool_calling
+        ? await ToolManager.getNativeToolPrompt()
+        : null;
+
     // Prepare the system prompt for Text Completion APIs
     if (main_api !== 'openai') {
         if (power_user.sysprompt.enabled) {
@@ -5557,6 +5565,10 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
         } else {
             // Nullify if it's not enabled
             system = '';
+        }
+
+        if (nativeToolPrompt) {
+            system = [system, nativeToolPrompt].filter(Boolean).join('\n\n');
         }
     }
 
@@ -5585,6 +5597,13 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
     // Render the story string and combine with injections
     const storyString = renderStoryString(storyStringParams);
     let combinedStoryString = isInstruct ? formatInstructModeStoryString(storyString) : storyString;
+
+    if (nativeToolPrompt && !combinedStoryString.includes(nativeToolPrompt)) {
+        const formattedNativeToolPrompt = isInstruct
+            ? formatInstructModeSystemPrompt(nativeToolPrompt)
+            : nativeToolPrompt;
+        combinedStoryString = `${formattedNativeToolPrompt}\n\n${combinedStoryString}`;
+    }
 
     // Inject the story string as in-chat prompt (if needed)
     const applyStoryStringInject = main_api !== 'openai' && power_user.context.story_string_position === extension_prompt_types.IN_CHAT;
