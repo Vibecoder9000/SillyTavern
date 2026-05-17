@@ -2290,8 +2290,12 @@ function getToolCallMessageHtml(message, messageId, { includeExecuteButton = tru
 
     const toolName = DOMPurify.sanitize(hasValidToolInfo ? (toolInfo.tool ?? '') : 'invalid_tool_call');
     const toolArgsObject = hasValidToolInfo ? parseToolCallArguments(toolInfo.args) : null;
-    const hasAdjacentToolResult = !!chat[messageId + 1]?.extra?.is_tool_result;
-    const canExecuteTool = includeExecuteButton && hasValidToolInfo && power_user.tool_execution_mode === 'manual' && !hasAdjacentToolResult;
+    const canExecuteTool = includeExecuteButton && hasValidToolInfo;
+
+    const executeButtonHtml = (toolName, messageId, isExecuting) => isExecuting
+        ? `<button class="tool-execute-button executing" data-tool-name="${toolName}" data-message-id="${messageId}" disabled><i class="fa-solid fa-spinner fa-spin"></i> Executing...</button>`
+        : `<button class="tool-execute-button" data-tool-name="${toolName}" data-message-id="${messageId}"><i class="fa-solid fa-play"></i> Execute Tool</button>`;
+    const isExecutingTool = !!message?.extra?.tool_call_started;
 
     if (hasValidToolInfo && isShellToolCall(toolInfo)) {
         const explanation = String(toolArgsObject.explanation ?? '').trim() || 'Runs a PowerShell command.';
@@ -2305,7 +2309,7 @@ function getToolCallMessageHtml(message, messageId, { includeExecuteButton = tru
         html += '</div>';
 
         if (canExecuteTool) {
-            html += `<button class="tool-execute-button" data-tool-name="${toolName}" data-message-id="${messageId}"><i class="fa-solid fa-play"></i> Execute Tool</button>`;
+            html += executeButtonHtml(toolName, messageId, isExecutingTool);
         }
 
         return html;
@@ -2329,7 +2333,7 @@ function getToolCallMessageHtml(message, messageId, { includeExecuteButton = tru
     html += '</div>';
 
     if (canExecuteTool) {
-        html += `<button class="tool-execute-button" data-tool-name="${toolName}" data-message-id="${messageId}"><i class="fa-solid fa-play"></i> Execute Tool</button>`;
+        html += executeButtonHtml(toolName, messageId, isExecutingTool);
     }
 
     return html;
@@ -4613,14 +4617,16 @@ class StreamingProcessor {
                 updateMessageBlock(messageId, chat[messageId]);
 
                 // Check for manual execution mode
-                if (power_user.tool_execution_mode === 'manual') {
+                if (power_user.tool_execution_mode === 'manual' || ToolManager.requiresManualApproval(normalizedTool.tool_call.tool)) {
                     await saveChatConditional();
                     unblockGeneration();
                     return { suppressAutoContinue: true };
                 }
 
                 // Auto mode: execute tool immediately
-                const liveCommandToolKind = getLiveCommandToolKind(parsedTool.tool_call);
+                chat[messageId].extra.tool_call_started = true;
+                updateMessageBlock(messageId, chat[messageId]);
+                const liveCommandToolKind = getLiveCommandToolKind(normalizedTool.tool_call);
                 let liveCommandMessageId = null;
                 if (liveCommandToolKind) {
                     const liveShellMessage = liveCommandToolKind === 'shell'
@@ -4629,6 +4635,8 @@ class StreamingProcessor {
                     chat.push(liveShellMessage);
                     liveCommandMessageId = chat.length - 1;
                     addOneMessage(liveShellMessage);
+                    chat[messageId].extra.tool_call_started = false;
+                    updateMessageBlock(messageId, chat[messageId]);
                 }
 
                 const toolResult = await ToolManager.invokeFunctionTool(normalizedTool.tool_call.tool, normalizedTool.tool_call.args, {
@@ -4648,6 +4656,8 @@ class StreamingProcessor {
                     const resultMessage = await createCompletedToolResultMessage(toolResult);
                     chat.push(resultMessage);
                     addOneMessage(resultMessage);
+                    chat[messageId].extra.tool_call_started = false;
+                    updateMessageBlock(messageId, chat[messageId]);
                 }
 
                 if (!stopGeneration) {
@@ -6321,8 +6331,11 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
             }
 
             if (isStreamFinished) {
-                const finishResult = await streamingProcessor.onFinishStreaming(streamingProcessor.messageId, getMessage);
-                streamingProcessor = null;
+                const completedStreamingProcessor = streamingProcessor;
+                const finishResult = await completedStreamingProcessor.onFinishStreaming(completedStreamingProcessor.messageId, getMessage);
+                if (streamingProcessor === completedStreamingProcessor) {
+                    streamingProcessor = null;
+                }
                 if (!finishResult?.suppressAutoContinue) {
                     triggerAutoContinue(messageChunk, isImpersonate);
                 }
@@ -6459,7 +6472,7 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
                 updateMessageBlock(chat.length - 1, chat[chat.length - 1]);
 
                 // Check for manual execution mode
-                if (power_user.tool_execution_mode === 'manual') {
+                if (power_user.tool_execution_mode === 'manual' || ToolManager.requiresManualApproval(normalizedTool.tool_call.tool)) {
                     // Save chat and stop here - user will click the button to continue
                     await saveChatConditional();
                     unblockGeneration(type);
@@ -6468,18 +6481,22 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
                 }
 
                 // Auto mode: execute tool immediately
-                const liveCommandToolKind = getLiveCommandToolKind(parsedTool.tool_call);
+                chat[chat.length - 1].extra.tool_call_started = true;
+                updateMessageBlock(chat.length - 1, chat[chat.length - 1]);
+                const liveCommandToolKind = getLiveCommandToolKind(normalizedTool.tool_call);
                 let liveCommandMessageId = null;
                 if (liveCommandToolKind) {
                     const liveShellMessage = liveCommandToolKind === 'shell'
-                        ? createShellToolResultMessage(parsedTool.tool_call)
-                        : createPythonToolResultMessage(parsedTool.tool_call);
+                        ? createShellToolResultMessage(normalizedTool.tool_call)
+                        : createPythonToolResultMessage(normalizedTool.tool_call);
                     chat.push(liveShellMessage);
                     liveCommandMessageId = chat.length - 1;
                     addOneMessage(liveShellMessage);
+                    chat[chat.length - 2].extra.tool_call_started = false;
+                    updateMessageBlock(chat.length - 2, chat[chat.length - 2]);
                 }
 
-                const toolResult = await ToolManager.invokeFunctionTool(parsedTool.tool_call.tool, parsedTool.tool_call.args, {
+                const toolResult = await ToolManager.invokeFunctionTool(normalizedTool.tool_call.tool, normalizedTool.tool_call.args, {
                     signal,
                     liveMessageId: liveCommandMessageId,
                 });
@@ -6496,6 +6513,8 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
                     const resultMessage = await createCompletedToolResultMessage(toolResult);
                     chat.push(resultMessage);
                     addOneMessage(resultMessage);
+                    chat[chat.length - 2].extra.tool_call_started = false;
+                    updateMessageBlock(chat.length - 2, chat[chat.length - 2]);
                 }
 
                 await saveChatConditional();
@@ -13615,9 +13634,6 @@ jQuery(async function () {
             return;
         }
 
-        button.addClass('executing');
-        button.html('<i class="fa-solid fa-spinner fa-spin"></i> Executing...');
-
         try {
             const toolInfo = message.extra.tool_call_info;
             const liveCommandToolKind = getLiveCommandToolKind(toolInfo);
@@ -13632,10 +13648,9 @@ jQuery(async function () {
                 chat.push(liveShellMessage);
                 liveCommandMessageId = chat.length - 1;
                 addOneMessage(liveShellMessage);
+                message.extra.tool_call_started = false;
+                updateMessageBlock(messageId, message);
             }
-
-            message.extra.tool_call_started = false;
-            updateMessageBlock(messageId, message);
 
             const toolResult = await ToolManager.invokeFunctionTool(toolInfo.tool, toolInfo.args, {
                 liveMessageId: liveCommandMessageId,
@@ -13653,10 +13668,9 @@ jQuery(async function () {
                 const resultMessage = await createCompletedToolResultMessage(toolResult);
                 chat.push(resultMessage);
                 addOneMessage(resultMessage);
+                message.extra.tool_call_started = false;
+                updateMessageBlock(messageId, message);
             }
-
-            // Remove the execute button from the UI
-            button.remove();
 
             await saveChatConditional();
 
@@ -13671,8 +13685,6 @@ jQuery(async function () {
             message.extra.tool_call_started = false;
             updateMessageBlock(messageId, message);
             toastr.error('Failed to execute tool: ' + String(error));
-            button.removeClass('executing');
-            button.html('<i class="fa-solid fa-play"></i> Execute Tool');
         }
     });
 

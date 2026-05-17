@@ -1,5 +1,5 @@
 import { DOMPurify } from '../lib.js';
-import { power_user } from './power-user.js';
+import { normalizeToolExecutionMode, power_user } from './power-user.js';
 import { accountStorage } from './util/AccountStorage.js';
 
 import {
@@ -152,6 +152,14 @@ function stringify(obj) {
 
 function escapeRegExp(str) {
     return String(str ?? '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function isAbsoluteOrRootedPath(value) {
+    const filepath = String(value ?? '').trim();
+    return /^[A-Za-z]:[\\/]/.test(filepath)
+        || filepath.startsWith('\\\\')
+        || filepath.startsWith('/')
+        || filepath.startsWith('\\');
 }
 
 function escapeXmlText(value) {
@@ -484,6 +492,18 @@ const pendingShellRenders = new Set();
 const sdToolModelsCache = {
     modelNames: [],
 };
+const MCP_TOOL_CONTEXT_CHAR_LIMIT = 10_000;
+const MCP_TOOL_CONTENT_PREVIEW_LIMIT = 4_000;
+const MCP_RESOURCE_PREVIEW_LIMIT = 6_000;
+const MCP_CONTEXT_UPDATED_EVENT = 'st-mcp-context-updated';
+const DANGEROUS_TOOLS = ['write_file', 'execute_shell', 'execute_python'];
+const mcpDiscoveredTools = new Map();
+const builtinNativeToolDefinitions = new Map();
+const mcpServerStatus = new Map();
+let mcpActiveWorkspaceKey = '';
+let mcpUiInitialized = false;
+let mcpManageButtonInitialized = false;
+let mcpRefreshButtonInitialized = false;
 
 function resolveToolRegistrationValue(value) {
     return typeof value === 'function' ? value() : value;
@@ -878,11 +898,1192 @@ class ToolDefinition {
     }
 }
 
-function getSandboxRequestContext() {
+/**
+ * Creates a ToolDefinition from a registration payload.
+ * @param {ToolRegistration} registration Tool registration payload
+ * @returns {ToolDefinition} Materialized tool definition
+ */
+function createToolDefinition(registration) {
+    const {
+        name,
+        displayName,
+        description,
+        parameters,
+        action,
+        formatMessage,
+        shouldRegister,
+        stealth,
+    } = registration;
+
+    return new ToolDefinition(
+        name,
+        displayName,
+        description,
+        parameters,
+        action,
+        formatMessage,
+        shouldRegister,
+        stealth,
+    );
+}
+
+function getSandboxRequestContext(workspace = getCurrentSandboxWorkspace(), character = getCurrentSandboxCharacterName()) {
     return {
-        workspace: getCurrentSandboxWorkspace(),
-        character: getCurrentSandboxCharacterName(),
+        workspace: String(workspace || SANDBOX_ROOT_WORKSPACE).trim() || SANDBOX_ROOT_WORKSPACE,
+        character: String(character || getCurrentSandboxCharacterName()).trim() || getCurrentSandboxCharacterName(),
     };
+}
+
+function ensureMcpSettingsShape() {
+    if (!power_user.mcp || typeof power_user.mcp !== 'object') {
+        power_user.mcp = { servers: [], workspaces: {} };
+    }
+
+    if (!Array.isArray(power_user.mcp.servers)) {
+        power_user.mcp.servers = [];
+    }
+
+    if (!power_user.mcp.workspaces || typeof power_user.mcp.workspaces !== 'object' || Array.isArray(power_user.mcp.workspaces)) {
+        power_user.mcp.workspaces = {};
+    }
+
+    return power_user.mcp;
+}
+
+function getCurrentMcpWorkspaceKey(workspace = getCurrentSandboxWorkspace()) {
+    return String(workspace || SANDBOX_ROOT_WORKSPACE).trim() || SANDBOX_ROOT_WORKSPACE;
+}
+
+function getMcpWorkspaceLabel(workspace = getCurrentSandboxWorkspace()) {
+    const key = getCurrentMcpWorkspaceKey(workspace);
+    return key === SANDBOX_ROOT_WORKSPACE ? 'root' : key;
+}
+
+function getMcpWorkspaceState(workspace = getCurrentSandboxWorkspace()) {
+    const settings = ensureMcpSettingsShape();
+    const key = getCurrentMcpWorkspaceKey(workspace);
+    if (!settings.workspaces[key] || typeof settings.workspaces[key] !== 'object') {
+        settings.workspaces[key] = {
+            enabledServerIds: [],
+            selectedResources: [],
+            selectedPrompts: [],
+        };
+    }
+
+    if (!Array.isArray(settings.workspaces[key].enabledServerIds)) {
+        settings.workspaces[key].enabledServerIds = [];
+    }
+
+    if (!Array.isArray(settings.workspaces[key].selectedResources)) {
+        settings.workspaces[key].selectedResources = [];
+    }
+
+    if (!Array.isArray(settings.workspaces[key].selectedPrompts)) {
+        settings.workspaces[key].selectedPrompts = [];
+    }
+
+    return settings.workspaces[key];
+}
+
+function getChatMcpState() {
+    return getMcpWorkspaceState();
+}
+
+function getAllMcpServers() {
+    return ensureMcpSettingsShape().servers.map(normalizeMcpServerConfig);
+}
+
+function setAllMcpServers(servers) {
+    const normalized = Array.isArray(servers) ? servers.map(normalizeMcpServerConfig) : [];
+    const validIds = new Set(normalized.map(server => server.id));
+    const settings = ensureMcpSettingsShape();
+
+    settings.servers = normalized;
+
+    for (const state of Object.values(settings.workspaces)) {
+        if (!state || typeof state !== 'object') {
+            continue;
+        }
+
+        if (Array.isArray(state.enabledServerIds)) {
+            state.enabledServerIds = state.enabledServerIds.filter(serverId => validIds.has(serverId));
+        }
+
+        if (Array.isArray(state.selectedResources)) {
+            state.selectedResources = state.selectedResources.filter(item => validIds.has(item.serverId));
+        }
+
+        if (Array.isArray(state.selectedPrompts)) {
+            state.selectedPrompts = state.selectedPrompts.filter(item => validIds.has(item.serverId));
+        }
+    }
+
+    saveSettingsDebounced();
+}
+
+function getEnabledServerIdsForWorkspace(workspace = getCurrentSandboxWorkspace()) {
+    return [...new Set(getMcpWorkspaceState(workspace).enabledServerIds.map(id => String(id || '').trim()).filter(Boolean))];
+}
+
+function setEnabledServerIdsForWorkspace(workspace, serverIds) {
+    getMcpWorkspaceState(workspace).enabledServerIds = [...new Set((Array.isArray(serverIds) ? serverIds : []).map(id => String(id || '').trim()).filter(Boolean))];
+    saveSettingsDebounced();
+}
+
+function isMcpServerEnabledForWorkspace(serverId, workspace = getCurrentSandboxWorkspace()) {
+    return getEnabledServerIdsForWorkspace(workspace).includes(String(serverId || '').trim());
+}
+
+function setMcpServerEnabledForWorkspace(serverId, enabled, workspace = getCurrentSandboxWorkspace()) {
+    const normalizedId = String(serverId || '').trim();
+    if (!normalizedId) {
+        return;
+    }
+
+    const nextIds = new Set(getEnabledServerIdsForWorkspace(workspace));
+    if (enabled) {
+        nextIds.add(normalizedId);
+    } else {
+        nextIds.delete(normalizedId);
+    }
+
+    setEnabledServerIdsForWorkspace(workspace, [...nextIds]);
+}
+
+function createClientUuid() {
+    return typeof crypto?.randomUUID === 'function'
+        ? crypto.randomUUID()
+        : `mcp_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+const MCP_DISCOVERY_SOURCES = {
+    officialRegistry: {
+        name: 'Official MCP Registry',
+        browseUrl: 'https://modelcontextprotocol.io/registry/about',
+        description: 'The vendor-neutral public registry for published MCP servers.',
+    },
+    glama: {
+        name: 'Glama',
+        browseUrl: 'https://glama.ai/',
+        description: 'A large community directory with install snippets, tool search, and hosted connectors.',
+    },
+    mcpDirectory: {
+        name: 'MCP.Directory',
+        browseUrl: 'https://mcp.directory/',
+        description: 'A community catalog focused on discovery and one-click install snippets.',
+    },
+    claude: {
+        name: 'Claude Directory',
+        browseUrl: 'https://claude.ai/directory',
+        description: 'Anthropic\'s curated directory. Good for discovery, but not a general SillyTavern import feed.',
+    },
+    chatgptApps: {
+        name: 'ChatGPT Apps',
+        browseUrl: 'https://help.openai.com/en/articles/11487775/',
+        description: 'OpenAI\'s apps directory and setup docs. Useful for learning what exists, but not a drop-in MCP registry for SillyTavern.',
+    },
+};
+
+function normalizeMcpServerConfig(server = {}) {
+    const rawTransportType = String(server.transportType ?? 'stdio').trim().toLowerCase();
+    const transportType = rawTransportType === 'http' || rawTransportType === 'streamable-http'
+        ? 'http'
+        : rawTransportType === 'sse'
+            ? 'sse'
+            : 'stdio';
+    const oauth = server.oauth && typeof server.oauth === 'object' ? server.oauth : {};
+    return {
+        id: String(server.id || createClientUuid()).trim(),
+        name: String(server.name || '').trim(),
+        description: String(server.description || '').trim(),
+        iconUrl: String(server.iconUrl || server.icon || server.logoUrl || '').trim(),
+        version: String(server.version || '').trim(),
+        status: String(server.status || '').trim(),
+        websiteUrl: String(server.websiteUrl || server.website || '').trim(),
+        repositoryUrl: String(server.repositoryUrl || server.sourceUrl || server.source || '').trim(),
+        docsUrl: String(server.docsUrl || server.documentationUrl || '').trim(),
+        enabled: server.enabled !== false,
+        transportType,
+        authType: String(server.authType || server.auth?.type || 'none').trim().toLowerCase() === 'oauth' ? 'oauth' : 'none',
+        authRequired: server.authRequired === true,
+        command: String(server.command || '').trim(),
+        argsText: Array.isArray(server.args)
+            ? server.args.map(arg => String(arg ?? '').trim()).filter(Boolean).join('\n')
+            : String(server.argsText || '').trim(),
+        cwd: String(server.cwd || '').trim(),
+        envText: typeof server.env === 'object' && server.env !== null
+            ? Object.entries(server.env).map(([key, value]) => `${key}=${value}`).join('\n')
+            : String(server.envText || '').trim(),
+        url: String(server.url || '').trim(),
+        headersText: typeof server.headers === 'object' && server.headers !== null
+            ? Object.entries(server.headers).map(([key, value]) => `${key}: ${value}`).join('\n')
+            : String(server.headersText || '').trim(),
+        oauth: {
+            redirectUrl: String(oauth.redirectUrl || server.oauthRedirectUrl || '').trim(),
+            clientId: String(oauth.clientId || server.oauthClientId || '').trim(),
+            clientSecret: String(oauth.clientSecret || server.oauthClientSecret || '').trim(),
+            scope: String(oauth.scope || server.oauthScope || '').trim(),
+        },
+        timeoutMs: Number.isFinite(Number(server.timeoutMs)) ? Number(server.timeoutMs) : 30000,
+        unsafeStdioConfirmed: server.unsafeStdioConfirmed === true,
+    };
+}
+
+function openExternalLink(url) {
+    const safeUrl = String(url || '').trim();
+    if (!safeUrl) {
+        return;
+    }
+
+    window.open(safeUrl, '_blank', 'noopener,noreferrer');
+}
+
+function deriveMcpNameFromIdentifier(identifier, fallback = 'MCP Server') {
+    const normalized = String(identifier || '')
+        .trim()
+        .split(/[\\/]/)
+        .pop()
+        ?.replace(/^@/, '')
+        ?.replace(/[:@].*$/, '')
+        ?.replace(/\.(mcpb|exe|cmd|bat|sh)$/i, '')
+        ?.replace(/[-_]+/g, ' ')
+        ?.trim();
+    return normalized || fallback;
+}
+
+function createMcpHeaderTemplate(headers = []) {
+    return headers
+        .map(header => String(header?.name || '').trim())
+        .filter(Boolean)
+        .map(name => `${name}: `)
+        .join('\n');
+}
+
+function buildMcpDraftFromRegistryRemote(entry, remote, index = 0) {
+    const transportType = String(remote?.type || '').toLowerCase() === 'sse' ? 'sse' : 'http';
+    const suffix = index > 0 ? ` ${index + 1}` : '';
+    return normalizeMcpServerConfig({
+        name: `${entry.title || entry.name || 'MCP Server'}${suffix}`,
+        description: String(entry.description || '').trim(),
+        iconUrl: String(entry.iconUrl || entry.icon || entry.logoUrl || '').trim(),
+        version: String(entry.version || '').trim(),
+        status: String(entry.status || '').trim(),
+        websiteUrl: String(entry.websiteUrl || '').trim(),
+        repositoryUrl: String(entry.repositoryUrl || '').trim(),
+        docsUrl: String(entry.links?.docsUrl || '').trim(),
+        transportType,
+        enabled: true,
+        url: String(remote?.url || '').trim(),
+        headersText: createMcpHeaderTemplate(Array.isArray(remote?.headers) ? remote.headers : []),
+        authRequired: Array.isArray(remote?.headers) && remote.headers.some(header => header?.isRequired || header?.isSecret),
+    });
+}
+
+function buildMcpDraftFromRegistryPackage(entry, pkg, index = 0) {
+    const registryType = String(pkg?.registryType || '').trim().toLowerCase();
+    const identifier = String(pkg?.identifier || '').trim();
+    const version = String(pkg?.version || '').trim();
+    const suffix = index > 0 ? ` ${index + 1}` : '';
+    const base = {
+        name: `${entry.title || entry.name || deriveMcpNameFromIdentifier(identifier)}${suffix}`,
+        transportType: 'stdio',
+        enabled: true,
+    };
+
+    if (!identifier) {
+        return null;
+    }
+
+    if (registryType === 'npm') {
+        return normalizeMcpServerConfig({
+            ...base,
+            description: String(entry.description || '').trim(),
+            iconUrl: String(entry.iconUrl || entry.icon || entry.logoUrl || '').trim(),
+            version: String(entry.version || '').trim(),
+            status: String(entry.status || '').trim(),
+            websiteUrl: String(entry.websiteUrl || '').trim(),
+            repositoryUrl: String(entry.repositoryUrl || '').trim(),
+            docsUrl: String(entry.links?.docsUrl || '').trim(),
+            command: 'npx',
+            args: ['-y', version ? `${identifier}@${version}` : identifier],
+        });
+    }
+
+    if (registryType === 'pypi') {
+        return normalizeMcpServerConfig({
+            ...base,
+            description: String(entry.description || '').trim(),
+            iconUrl: String(entry.iconUrl || entry.icon || entry.logoUrl || '').trim(),
+            version: String(entry.version || '').trim(),
+            status: String(entry.status || '').trim(),
+            websiteUrl: String(entry.websiteUrl || '').trim(),
+            repositoryUrl: String(entry.repositoryUrl || '').trim(),
+            docsUrl: String(entry.links?.docsUrl || '').trim(),
+            command: 'uvx',
+            args: [version ? `${identifier}==${version}` : identifier],
+        });
+    }
+
+    if (registryType === 'oci') {
+        return normalizeMcpServerConfig({
+            ...base,
+            description: String(entry.description || '').trim(),
+            iconUrl: String(entry.iconUrl || entry.icon || entry.logoUrl || '').trim(),
+            version: String(entry.version || '').trim(),
+            status: String(entry.status || '').trim(),
+            websiteUrl: String(entry.websiteUrl || '').trim(),
+            repositoryUrl: String(entry.repositoryUrl || '').trim(),
+            docsUrl: String(entry.links?.docsUrl || '').trim(),
+            command: 'docker',
+            args: ['run', '-i', '--rm', identifier],
+        });
+    }
+
+    return null;
+}
+
+function getMcpRegistryInstallOptions(entry) {
+    const remotes = Array.isArray(entry?.remotes) ? entry.remotes : [];
+    const packages = Array.isArray(entry?.packages) ? entry.packages : [];
+    const options = [];
+
+    remotes.forEach((remote, index) => {
+        const headers = Array.isArray(remote?.headers) ? remote.headers : [];
+        const requiredHeaders = headers.filter(header => header?.isRequired);
+        options.push({
+            key: `remote:${index}`,
+            kind: 'remote',
+            title: `${String(remote?.type || '').toLowerCase() === 'sse' ? 'SSE' : 'HTTP'} endpoint`,
+            description: String(remote?.url || '').trim(),
+            detail: requiredHeaders.length > 0
+                ? `This endpoint needs ${requiredHeaders.length} header${requiredHeaders.length === 1 ? '' : 's'}. SillyTavern will prefill the header names so you can add your values before saving.`
+                : 'SillyTavern will add the endpoint so you can review it before saving.',
+            draft: buildMcpDraftFromRegistryRemote(entry, remote, index),
+            remote,
+        });
+    });
+
+    packages.forEach((pkg, index) => {
+        const registryType = String(pkg?.registryType || '').trim().toLowerCase();
+        const supportedDraft = buildMcpDraftFromRegistryPackage(entry, pkg, index);
+        const prettyType = registryType ? registryType.toUpperCase() : 'Package';
+        options.push({
+            key: `package:${index}`,
+            kind: 'package',
+            title: `${prettyType} package`,
+            description: String(pkg?.identifier || '').trim(),
+            detail: supportedDraft
+                ? `This will run the server locally over stdio using ${supportedDraft.command}. Review the command before saving.`
+                : `This package type is published in the registry, but SillyTavern does not know the safest default launch command for it yet.`,
+            draft: supportedDraft,
+            pkg,
+        });
+    });
+
+    return options;
+}
+
+function getMcpServersForWorkspace(workspace = getCurrentSandboxWorkspace()) {
+    const enabledIds = new Set(getEnabledServerIdsForWorkspace(workspace));
+    return getAllMcpServers().map(server => normalizeMcpServerConfig({
+        ...server,
+        enabled: enabledIds.has(server.id),
+    }));
+}
+
+function getMcpServers() {
+    return getMcpServersForWorkspace();
+}
+
+function setMcpServersForWorkspace(workspace, servers) {
+    const normalized = Array.isArray(servers) ? servers.map(normalizeMcpServerConfig) : [];
+    setAllMcpServers(normalized);
+    setEnabledServerIdsForWorkspace(workspace, normalized.filter(server => server.enabled).map(server => server.id));
+}
+
+function setMcpServers(servers) {
+    setMcpServersForWorkspace(getCurrentMcpWorkspaceKey(), servers);
+}
+
+function getMcpServerById(serverId) {
+    return getMcpServers().find(server => server.id === serverId) || null;
+}
+
+function getMcpStatusSummaryElement() {
+    const element = document.getElementById('mcp_status_summary');
+    return element instanceof HTMLElement ? element : null;
+}
+
+function getMcpContextSummaryElement() {
+    const element = document.getElementById('mcp_context_summary');
+    return element instanceof HTMLElement ? element : null;
+}
+
+function getMcpManageButtonElement() {
+    const element = document.getElementById('mcp_manage_button');
+    return element instanceof HTMLButtonElement ? element : null;
+}
+
+function getMcpRefreshButtonElement() {
+    const element = document.getElementById('mcp_refresh_button');
+    return element instanceof HTMLButtonElement ? element : null;
+}
+
+function purgeMcpSelectionsForServer(serverId, workspace = getCurrentSandboxWorkspace()) {
+    const normalizedId = String(serverId || '').trim();
+    const settings = ensureMcpSettingsShape();
+    const workspaceKeys = workspace === null
+        ? Object.keys(settings.workspaces)
+        : [getCurrentMcpWorkspaceKey(workspace)];
+
+    for (const key of workspaceKeys) {
+        const state = getMcpWorkspaceState(key);
+        state.selectedResources = state.selectedResources.filter(item => item.serverId !== normalizedId);
+        state.selectedPrompts = state.selectedPrompts.filter(item => item.serverId !== normalizedId);
+        state.enabledServerIds = state.enabledServerIds.filter(id => id !== normalizedId);
+    }
+
+    saveSettingsDebounced();
+}
+
+function isMcpServerInstalled(serverDraft) {
+    return getAllMcpServers().some(server => {
+        if (server.transportType !== serverDraft.transportType) {
+            return false;
+        }
+
+        if (server.transportType === 'stdio') {
+            return server.command === serverDraft.command && server.argsText === serverDraft.argsText;
+        }
+
+        return server.url === serverDraft.url;
+    });
+}
+
+function getMcpServerStatusTone(server, status) {
+    if (status?.testing) {
+        return { label: 'Testing...', tone: 'muted' };
+    }
+
+    if (status?.lastError) {
+        return { label: 'Error', tone: 'error' };
+    }
+
+    if (!server.enabled) {
+        return { label: 'Disabled', tone: 'muted' };
+    }
+
+    if (status?.connected) {
+        return { label: 'Connected', tone: 'success' };
+    }
+
+    return { label: 'Not connected', tone: 'muted' };
+}
+
+function createMcpBadge(label, tone = 'default') {
+    const badge = document.createElement('span');
+    badge.className = `mcp-badge mcp-badge--${tone}`;
+    badge.textContent = label;
+    return badge;
+}
+
+function createMcpLink(href, label) {
+    const link = document.createElement('a');
+    link.className = 'mcp-link';
+    link.href = href;
+    link.target = '_blank';
+    link.rel = 'noopener noreferrer';
+    link.textContent = label;
+    return link;
+}
+
+function createMcpActionLink(href, label) {
+    const link = document.createElement('a');
+    link.className = 'menu_button mcp-link-button';
+    link.href = href;
+    link.target = '_blank';
+    link.rel = 'noopener noreferrer';
+    link.textContent = label;
+    return link;
+}
+
+function createMcpIcon(iconUrl, fallbackText) {
+    const icon = document.createElement('div');
+    icon.className = 'mcp-server-icon';
+
+    if (iconUrl) {
+        const image = document.createElement('img');
+        image.src = iconUrl;
+        image.alt = fallbackText;
+        image.loading = 'lazy';
+        image.addEventListener('error', () => {
+            image.remove();
+            icon.textContent = String(fallbackText || '?').slice(0, 2).toUpperCase();
+        }, { once: true });
+        icon.append(image);
+        return icon;
+    }
+
+    icon.textContent = String(fallbackText || '?').slice(0, 2).toUpperCase();
+    return icon;
+}
+
+async function disconnectWorkspaceMcpServers(workspace) {
+    const servers = getMcpServersForWorkspace(workspace);
+    for (const server of servers) {
+        if (!mcpServerStatus.get(server.id)?.connected) {
+            clearMcpToolsForServer(server.id);
+            removeMcpStatus(server.id);
+            continue;
+        }
+
+        try {
+            await disconnectMcpServer(server, { workspace });
+        } catch {
+            clearMcpToolsForServer(server.id);
+            removeMcpStatus(server.id);
+        }
+    }
+}
+
+async function syncActiveMcpWorkspace({ forceRefresh = false, notify = false } = {}) {
+    const workspace = getCurrentMcpWorkspaceKey();
+    const workspaceChanged = mcpActiveWorkspaceKey !== workspace;
+
+    if (workspaceChanged && mcpActiveWorkspaceKey) {
+        await disconnectWorkspaceMcpServers(mcpActiveWorkspaceKey);
+    }
+
+    mcpActiveWorkspaceKey = workspace;
+
+    if (workspaceChanged || forceRefresh) {
+        await refreshAllMcpServers({ notify });
+    } else {
+        refreshMcpSummaryUi();
+    }
+}
+
+async function callMcpApi(endpoint, payload, { signal } = {}) {
+    const response = await fetch(endpoint, {
+        method: 'POST',
+        headers: getRequestHeaders(),
+        body: JSON.stringify(payload),
+        signal,
+    });
+    const data = await response.json().catch(() => ({ error: `Request failed: ${response.status}` }));
+    if (!response.ok) {
+        const error = new Error(String(data?.error || response.statusText || 'Request failed.'));
+        error.requiresAuth = data?.requiresAuth === true;
+        error.authUrl = String(data?.authUrl || '').trim();
+        throw error;
+    }
+    return data;
+}
+
+function sanitizeMcpIdentifierPart(value, fallback = 'tool') {
+    const normalized = String(value ?? '')
+        .trim()
+        .toLowerCase()
+        .replace(/[^a-z0-9_]+/g, '_')
+        .replace(/^_+|_+$/g, '');
+    const safe = normalized || fallback;
+    return /^[a-z_]/.test(safe) ? safe : `_${safe}`;
+}
+
+function hashMcpString(value) {
+    let hash = 0;
+    const input = String(value ?? '');
+    for (let i = 0; i < input.length; i++) {
+        hash = ((hash << 5) - hash) + input.charCodeAt(i);
+        hash |= 0;
+    }
+    return Math.abs(hash).toString(36);
+}
+
+function buildUniqueMcpAlias(baseAlias, existingAliases, entropySource) {
+    if (!existingAliases.has(baseAlias)) {
+        return baseAlias;
+    }
+
+    const suffix = hashMcpString(entropySource).slice(0, 6);
+    let candidate = `${baseAlias}_${suffix}`;
+    let counter = 2;
+    while (existingAliases.has(candidate)) {
+        candidate = `${baseAlias}_${suffix}_${counter}`;
+        counter++;
+    }
+
+    return candidate;
+}
+
+function mapMcpInputSchema(tool) {
+    const schema = tool?.inputSchema && typeof tool.inputSchema === 'object'
+        ? structuredClone(tool.inputSchema)
+        : { type: 'object', properties: {} };
+    const rawProperties = schema?.properties && typeof schema.properties === 'object' ? schema.properties : {};
+    const required = new Set(Array.isArray(schema?.required) ? schema.required.map(name => String(name)) : []);
+    const existingAliases = new Set();
+    const aliasToOriginal = {};
+    const propertyAliases = {};
+    const mappedProperties = {};
+
+    for (const [originalName, originalSchema] of Object.entries(rawProperties)) {
+        const aliasBase = sanitizeMcpIdentifierPart(originalName, 'arg');
+        const alias = buildUniqueMcpAlias(aliasBase, existingAliases, `${tool?.name}:${originalName}`);
+        existingAliases.add(alias);
+        aliasToOriginal[alias] = originalName;
+        propertyAliases[originalName] = alias;
+        mappedProperties[alias] = {
+            ...(originalSchema && typeof originalSchema === 'object' ? structuredClone(originalSchema) : {}),
+            description: alias === originalName
+                ? String(originalSchema?.description || '').trim()
+                : [String(originalSchema?.description || '').trim(), `Original MCP field: ${originalName}.`].filter(Boolean).join(' '),
+        };
+    }
+
+    schema.type = 'object';
+    schema.properties = mappedProperties;
+    schema.required = Array.from(required)
+        .map(name => propertyAliases[name])
+        .filter(Boolean);
+
+    return {
+        schema,
+        aliasToOriginal,
+    };
+}
+
+function isMcpToolRisky(tool) {
+    const annotations = tool?.annotations && typeof tool.annotations === 'object' ? tool.annotations : {};
+    if (annotations.readOnlyHint === true) {
+        return false;
+    }
+
+    return annotations.destructiveHint === true
+        || annotations.openWorldHint === true
+        || Object.keys(annotations).length === 0;
+}
+
+function formatMcpToolDescription(server, tool) {
+    const description = String(tool?.description || tool?.title || '').trim();
+    const prefix = `MCP tool from ${server.name || server.id}.`;
+    const risk = isMcpToolRisky(tool) ? 'Ask before using if the action seems risky.' : '';
+    return [prefix, description, risk].filter(Boolean).join(' ');
+}
+
+function formatMcpContentItem(item) {
+    if (!item || typeof item !== 'object') {
+        return '';
+    }
+
+    if (item.type === 'text') {
+        return String(item.text || '').trim();
+    }
+
+    if (item.type === 'resource_link') {
+        return `Resource link: ${item.name || item.uri || 'resource'}${item.uri ? ` (${item.uri})` : ''}`;
+    }
+
+    if (item.type === 'resource') {
+        return `Embedded resource: ${item.resource?.uri || item.uri || item.name || 'resource'}`;
+    }
+
+    if (item.type === 'image') {
+        return `Image output${item.mimeType ? ` (${item.mimeType})` : ''}.`;
+    }
+
+    if (item.type === 'audio') {
+        return `Audio output${item.mimeType ? ` (${item.mimeType})` : ''}.`;
+    }
+
+    return JSON.stringify(item, null, 2);
+}
+
+function formatMcpToolResultPayload(payload) {
+    const result = payload?.result && typeof payload.result === 'object' ? payload.result : payload;
+    const parts = [];
+
+    if (result?.isError) {
+        parts.push('The MCP server reported an error.');
+    }
+
+    if (Array.isArray(result?.content)) {
+        const contentText = result.content
+            .map(formatMcpContentItem)
+            .filter(Boolean)
+            .join('\n\n')
+            .trim();
+        if (contentText) {
+            parts.push(contentText);
+        }
+    }
+
+    if (typeof result?.structuredContent !== 'undefined') {
+        parts.push(`Structured content:\n${JSON.stringify(result.structuredContent, null, 2)}`);
+    }
+
+    if (!parts.length) {
+        parts.push(JSON.stringify(result, null, 2));
+    }
+
+    return parts.join('\n\n').trim();
+}
+
+function mapMcpInvocationArguments(args, aliasToOriginal) {
+    const mapped = {};
+    for (const [alias, value] of Object.entries(args || {})) {
+        mapped[aliasToOriginal[alias] || alias] = value;
+    }
+    return mapped;
+}
+
+async function confirmMcpToolInvocation(server, tool) {
+    const executionMode = normalizeToolExecutionMode(power_user.tool_execution_mode);
+
+    if (executionMode === 'manual' || executionMode === 'automatic') {
+        return true;
+    }
+
+    if (!isMcpToolRisky(tool)) {
+        return true;
+    }
+
+    const confirmed = await Popup.show.confirm(
+        'Run MCP Tool',
+        [
+            `<p><strong>${DOMPurify.sanitize(tool.title || tool.name || 'Tool')}</strong> comes from MCP server <strong>${DOMPurify.sanitize(server.name || server.id)}</strong>.</p>`,
+            '<p>This tool is not marked read-only, so it may modify data, access external systems, or have other side effects.</p>',
+            '<p>Do you want to continue?</p>',
+        ].join(''),
+        {
+            leftAlign: true,
+        },
+    );
+
+    return confirmed === 1;
+}
+
+function upsertMcpStatus(serverId, status) {
+    mcpServerStatus.set(serverId, {
+        ...(mcpServerStatus.get(serverId) ?? {}),
+        ...status,
+    });
+}
+
+function clearMcpToolsForServer(serverId) {
+    for (const [alias, entry] of mcpDiscoveredTools.entries()) {
+        if (entry.serverId === serverId) {
+            mcpDiscoveredTools.delete(alias);
+        }
+    }
+}
+
+function rebuildMcpToolCacheForServer(server, tools) {
+    clearMcpToolsForServer(server.id);
+    const existingAliases = new Set(mcpDiscoveredTools.keys());
+
+    for (const tool of Array.isArray(tools) ? tools : []) {
+        if (!tool?.name) {
+            continue;
+        }
+
+        const baseAlias = `mcp_${sanitizeMcpIdentifierPart(server.name || server.id, 'server')}_${sanitizeMcpIdentifierPart(tool.name, 'tool')}`;
+        const alias = buildUniqueMcpAlias(baseAlias, existingAliases, `${server.id}:${tool.name}`);
+        existingAliases.add(alias);
+
+        const mappedSchema = mapMcpInputSchema(tool);
+        const displayName = `${server.name || server.id}: ${tool.title || tool.name}`;
+
+        mcpDiscoveredTools.set(alias, {
+            alias,
+            serverId: server.id,
+            toolName: tool.name,
+            tool,
+            registration: {
+                name: alias,
+                displayName,
+                description: formatMcpToolDescription(server, tool),
+                parameters: mappedSchema.schema,
+                action: async (args, signal) => {
+                    const currentServer = getMcpServerById(server.id);
+                    if (!currentServer) {
+                        return new Error(`MCP server "${server.name || server.id}" is no longer configured.`);
+                    }
+
+                    if (!currentServer.enabled) {
+                        return new Error(`MCP server "${currentServer.name || currentServer.id}" is disabled.`);
+                    }
+
+                    const confirmed = await confirmMcpToolInvocation(currentServer, tool);
+                    if (!confirmed) {
+                        return 'Tool execution was cancelled by the user.';
+                    }
+
+                    const response = await callMcpApi('/api/extensions/tools/mcp/tools/call', {
+                        serverId: currentServer.id,
+                        toolName: tool.name,
+                        arguments: mapMcpInvocationArguments(args, mappedSchema.aliasToOriginal),
+                        ...getSandboxRequestContext(),
+                    }, { signal });
+
+                    upsertMcpStatus(currentServer.id, {
+                        connected: true,
+                        lastError: '',
+                    });
+                    refreshMcpSummaryUi();
+                    return formatMcpToolResultPayload(response);
+                },
+                formatMessage: async () => `Invoking MCP tool: ${displayName}`,
+            },
+        });
+    }
+}
+
+function registerMcpToolsFromCache() {
+    for (const entry of mcpDiscoveredTools.values()) {
+        ToolManager.registerFunctionTool(entry.registration);
+    }
+}
+
+function syncToolRegistryAfterMcpChange() {
+    if (oai_settings.native_tool_calling) {
+        ToolManager.registerNativeToolCommand();
+    }
+}
+
+async function completeMcpOAuth(server, authError, retryEndpoint) {
+    const authUrl = String(authError?.authUrl || '').trim();
+    if (!authUrl) {
+        throw authError;
+    }
+
+    const opened = window.open(authUrl, '_blank', 'noopener,noreferrer');
+    if (!opened) {
+        toastr.info(authUrl, 'Open this MCP authorization URL');
+    }
+
+    const code = await Popup.show.input(
+        'Authorize MCP Server',
+        [
+            `<p>Complete authorization for <strong>${DOMPurify.sanitize(server.name || server.id)}</strong>, then paste the returned code here.</p>`,
+            `<p><a href="${DOMPurify.sanitize(authUrl)}" target="_blank" rel="noopener noreferrer">Open authorization page</a></p>`,
+        ].join(''),
+        '',
+        {
+            rows: 3,
+            leftAlign: true,
+            okButton: 'Authorize',
+            cancelButton: 'Cancel',
+        },
+    );
+
+    if (code === null) {
+        throw authError;
+    }
+
+    const result = await callMcpApi('/api/extensions/tools/mcp/auth/finish', {
+        server,
+        code,
+        ...getSandboxRequestContext(),
+    });
+
+    if (retryEndpoint && !result?.snapshot) {
+        return await callMcpApi(retryEndpoint, {
+            server,
+            ...getSandboxRequestContext(),
+        });
+    }
+
+    return result;
+}
+
+async function refreshMcpServer(server, { reconnect = false, workspace = getCurrentSandboxWorkspace(), character = getCurrentSandboxCharacterName() } = {}) {
+    const endpoint = reconnect ? '/api/extensions/tools/mcp/connect' : '/api/extensions/tools/mcp/refresh';
+    let result;
+    try {
+        result = await callMcpApi(endpoint, {
+            server,
+            ...getSandboxRequestContext(workspace, character),
+        });
+    } catch (error) {
+        if (!error?.requiresAuth) {
+            throw error;
+        }
+
+        result = await completeMcpOAuth(server, error, endpoint);
+    }
+
+    let snapshot = result?.snapshot ?? {};
+    const shouldRetryStdioRefresh = reconnect && server.transportType === 'stdio';
+
+    if (shouldRetryStdioRefresh) {
+        const followUp = await callMcpApi('/api/extensions/tools/mcp/refresh', {
+            server,
+            ...getSandboxRequestContext(workspace, character),
+        });
+        result = followUp;
+        snapshot = followUp?.snapshot ?? {};
+    }
+
+    rebuildMcpToolCacheForServer(server, snapshot.tools || []);
+    upsertMcpStatus(server.id, {
+        connected: snapshot.connected === true,
+        lastError: '',
+        toolCount: Array.isArray(snapshot.tools) ? snapshot.tools.length : 0,
+        resourceCount: (Array.isArray(snapshot.resources) ? snapshot.resources.length : 0) + (Array.isArray(snapshot.resourceTemplates) ? snapshot.resourceTemplates.length : 0),
+        promptCount: Array.isArray(snapshot.prompts) ? snapshot.prompts.length : 0,
+        instructions: String(snapshot.instructions || '').trim(),
+        stderr: String(snapshot.stderr || '').trim(),
+    });
+
+    return result;
+}
+
+async function probeMcpServer(server, { reconnect = true, workspace = getCurrentSandboxWorkspace(), character = getCurrentSandboxCharacterName() } = {}) {
+    const endpoint = reconnect ? '/api/extensions/tools/mcp/connect' : '/api/extensions/tools/mcp/refresh';
+    let result;
+    try {
+        result = await callMcpApi(endpoint, {
+            server,
+            ...getSandboxRequestContext(workspace, character),
+        });
+    } catch (error) {
+        if (!error?.requiresAuth) {
+            throw error;
+        }
+
+        result = await completeMcpOAuth(server, error, endpoint);
+    }
+
+    let snapshot = result?.snapshot ?? {};
+    const shouldRetryStdioRefresh = reconnect && server.transportType === 'stdio';
+
+    if (shouldRetryStdioRefresh) {
+        const followUp = await callMcpApi('/api/extensions/tools/mcp/refresh', {
+            server,
+            ...getSandboxRequestContext(workspace, character),
+        });
+        result = followUp;
+        snapshot = followUp?.snapshot ?? {};
+    }
+
+    return { result, snapshot };
+}
+
+async function refreshAllMcpServers({ notify = false } = {}) {
+    mcpDiscoveredTools.clear();
+
+    const enabledServers = getMcpServers().filter(server => server.enabled);
+    for (const server of enabledServers) {
+        try {
+            await refreshMcpServer(server);
+        } catch (error) {
+            clearMcpToolsForServer(server.id);
+            upsertMcpStatus(server.id, {
+                connected: false,
+                lastError: String(error?.message || error),
+                toolCount: 0,
+                resourceCount: 0,
+                promptCount: 0,
+            });
+        }
+    }
+
+    syncToolRegistryAfterMcpChange();
+    refreshMcpSummaryUi();
+
+    if (notify) {
+        toastr.success(`Refreshed ${enabledServers.length} MCP server${enabledServers.length === 1 ? '' : 's'}.`, 'MCP');
+    }
+}
+
+function removeMcpStatus(serverId) {
+    mcpServerStatus.delete(serverId);
+}
+
+function summarizeSelectedMcpContext() {
+    const enabledCount = getMcpServers().filter(server => server.enabled).length;
+    if (enabledCount === 0) {
+        return 'No servers enabled for this workspace.';
+    }
+
+    return `${enabledCount} server${enabledCount === 1 ? '' : 's'} enabled for this workspace.`;
+}
+
+function refreshMcpSummaryUi() {
+    const statusElement = getMcpStatusSummaryElement();
+    const contextElement = getMcpContextSummaryElement();
+    const servers = getMcpServers();
+    const enabledCount = servers.filter(server => server.enabled).length;
+    const connectedCount = servers.filter(server => mcpServerStatus.get(server.id)?.connected).length;
+    const toolCount = Array.from(mcpDiscoveredTools.values()).length;
+    const workspaceLabel = getMcpWorkspaceLabel();
+
+    if (statusElement) {
+        statusElement.textContent = servers.length === 0
+            ? `Workspace: ${workspaceLabel} • no servers added.`
+            : `Workspace: ${workspaceLabel} • ${enabledCount}/${servers.length} enabled • ${connectedCount} connected • ${toolCount} tool${toolCount === 1 ? '' : 's'} ready.`;
+    }
+
+    if (contextElement) {
+        contextElement.textContent = summarizeSelectedMcpContext();
+    }
+}
+
+function formatMcpResourceContents(readResult) {
+    const contents = Array.isArray(readResult?.result?.contents) ? readResult.result.contents : [];
+    const parts = [];
+
+    for (const entry of contents) {
+        if (typeof entry?.text === 'string' && entry.text.trim()) {
+            parts.push(entry.text.trim());
+            continue;
+        }
+
+        const uri = String(entry?.uri || '').trim();
+        const mimeType = String(entry?.mimeType || '').trim();
+        if (uri || mimeType) {
+            parts.push(`Binary resource${mimeType ? ` (${mimeType})` : ''}${uri ? ` from ${uri}` : ''}.`);
+        }
+    }
+
+    const text = parts.join('\n\n').trim();
+    if (!text) {
+        return 'Resource did not return text content.';
+    }
+
+    return text.length > MCP_RESOURCE_PREVIEW_LIMIT
+        ? `${text.slice(0, MCP_RESOURCE_PREVIEW_LIMIT)}\n... (truncated)`
+        : text;
+}
+
+function formatMcpPromptMessages(promptResult) {
+    const messages = Array.isArray(promptResult?.result?.messages) ? promptResult.result.messages : [];
+    const rendered = messages.map(message => {
+        const role = String(message?.role || 'message').trim();
+        const content = message?.content;
+        if (content?.type === 'text') {
+            return `${role}: ${String(content.text || '').trim()}`;
+        }
+
+        return `${role}: [${String(content?.type || 'content')}]`;
+    }).filter(Boolean).join('\n\n').trim();
+
+    if (!rendered) {
+        return 'Prompt did not return text messages.';
+    }
+
+    return rendered.length > MCP_RESOURCE_PREVIEW_LIMIT
+        ? `${rendered.slice(0, MCP_RESOURCE_PREVIEW_LIMIT)}\n... (truncated)`
+        : rendered;
+}
+
+async function saveChatMcpState() {
+    saveSettingsDebounced();
+    refreshMcpSummaryUi();
+    document.dispatchEvent(new CustomEvent(MCP_CONTEXT_UPDATED_EVENT));
+}
+
+async function addSelectedMcpResource(server, resource) {
+    const readResult = await callMcpApi('/api/extensions/tools/mcp/resources/read', {
+        serverId: server.id,
+        uri: resource.uri,
+        ...getSandboxRequestContext(),
+    });
+
+    const state = getChatMcpState();
+    state.selectedResources = state.selectedResources.filter(item => !(item.serverId === server.id && item.uri === resource.uri));
+    state.selectedResources.push({
+        serverId: server.id,
+        serverName: server.name || server.id,
+        uri: resource.uri,
+        title: resource.title || resource.name || resource.uri,
+        mimeType: resource.mimeType || '',
+        content: formatMcpResourceContents(readResult),
+    });
+    await saveChatMcpState();
+}
+
+async function addSelectedMcpPrompt(server, prompt, promptArguments = {}) {
+    const promptResult = await callMcpApi('/api/extensions/tools/mcp/prompts/get', {
+        serverId: server.id,
+        name: prompt.name,
+        arguments: promptArguments,
+        ...getSandboxRequestContext(),
+    });
+
+    const state = getChatMcpState();
+    const key = JSON.stringify({ serverId: server.id, name: prompt.name, promptArguments });
+    state.selectedPrompts = state.selectedPrompts.filter(item => JSON.stringify({
+        serverId: item.serverId,
+        name: item.name,
+        promptArguments: item.arguments,
+    }) !== key);
+    state.selectedPrompts.push({
+        serverId: server.id,
+        serverName: server.name || server.id,
+        name: prompt.name,
+        title: prompt.title || prompt.name,
+        arguments: promptArguments,
+        content: formatMcpPromptMessages(promptResult),
+    });
+    await saveChatMcpState();
+}
+
+async function promptForMcpPromptArguments(prompt) {
+    const argumentDefs = Array.isArray(prompt?.arguments) ? prompt.arguments : [];
+    if (argumentDefs.length === 0) {
+        return {};
+    }
+
+    const form = document.createElement('div');
+    form.className = 'flex-container flexFlowColumn gap10';
+    form.innerHTML = '<p>Fill in the prompt arguments. Leave optional fields empty.</p>';
+
+    for (const argument of argumentDefs) {
+        const wrapper = document.createElement('label');
+        wrapper.className = 'flex-container flexFlowColumn gap5';
+        const label = document.createElement('small');
+        label.textContent = `${argument.name}${argument.required ? ' *' : ''}`;
+        const input = document.createElement('input');
+        input.type = 'text';
+        input.className = 'text_pole';
+        input.dataset.argumentName = argument.name;
+        input.placeholder = argument.description || '';
+        wrapper.append(label, input);
+        form.append(wrapper);
+    }
+
+    let values = {};
+    const popup = new Popup(form, POPUP_TYPE.TEXT, '', {
+        wider: true,
+        leftAlign: true,
+        okButton: 'Use Prompt',
+        cancelButton: 'Cancel',
+        onClosing: (instance) => {
+            if (instance.result !== 1) {
+                return true;
+            }
+
+            values = {};
+            for (const argument of argumentDefs) {
+                const input = instance.dlg.querySelector(`[data-argument-name="${CSS.escape(argument.name)}"]`);
+                const value = input instanceof HTMLInputElement ? input.value.trim() : '';
+                if (!value && argument.required) {
+                    toastr.warning(`Argument "${argument.name}" is required.`);
+                    return false;
+                }
+                if (value) {
+                    values[argument.name] = value;
+                }
+            }
+
+            return true;
+        },
+    });
+
+    const result = await popup.show();
+    return result === 1 ? values : null;
 }
 
 function isMissingBrowserArg(value) {
@@ -1708,13 +2909,13 @@ function registerBuiltinTools() {
         },
         {
             name: 'display_image',
-            description: 'Displays media to the user',
+            description: 'Displays sandbox media to the user',
             parameters: {
                 'type': 'object',
                 'properties': {
                     'filepath': {
                         'type': 'string',
-                        'description': 'Media path'
+                        'description': 'Sandbox-relative media path',
                     },
                 },
                 'required': ['filepath'],
@@ -1723,18 +2924,27 @@ function registerBuiltinTools() {
                 const imageExtensions = ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.svg'];
                 const videoExtensions = ['.mp4', '.webm', '.ogg', '.mov'];
                 const sandbox = getSandboxRequestContext();
+                const trimmedFilepath = String(filepath ?? '').trim();
 
-                const extension = filepath.slice(filepath.lastIndexOf('.')).toLowerCase();
+                if (!trimmedFilepath) {
+                    return 'Error: filepath is required.';
+                }
+
+                if (isAbsoluteOrRootedPath(trimmedFilepath)) {
+                    return `Error: "${trimmedFilepath}" must be a sandbox-relative path, not an absolute path.`;
+                }
+
+                const extension = trimmedFilepath.slice(trimmedFilepath.lastIndexOf('.')).toLowerCase();
 
                 if (imageExtensions.includes(extension)) {
-                    return JSON.stringify({ type: 'image_display', filepath: filepath, ...sandbox });
+                    return JSON.stringify({ type: 'image_display', filepath: trimmedFilepath, ...sandbox });
                 }
 
                 if (videoExtensions.includes(extension)) {
-                    return JSON.stringify({ type: 'video_display', filepath: filepath, ...sandbox });
+                    return JSON.stringify({ type: 'video_display', filepath: trimmedFilepath, ...sandbox });
                 }
 
-                return `Error: The file "${filepath}" is not a supported image or video type.`;
+                return `Error: The file "${trimmedFilepath}" is not a supported image or video type.`;
             },
         },
         {
@@ -1745,7 +2955,7 @@ function registerBuiltinTools() {
                 'properties': {
                     'filepath': {
                         'type': 'string',
-                        'description': 'Image path',
+                        'description': 'Sandbox-relative image path',
                     },
                 },
                 'required': ['filepath'],
@@ -2864,13 +4074,16 @@ function registerBuiltinTools() {
             },
         },
     ];
-    const dangerousTools = ['write_file', 'execute_shell', 'execute_python'];
     const imageGenTools = ['sd_txt2img'];
     const browserTools = ['browser_open', 'browser_search', 'browser_tabs', 'browser_close', 'browser_go_back', 'browser_click', 'browser_pixel_click', 'browser_hover', 'browser_type', 'browser_key', 'browser_wait', 'dom_fetch', 'execute_js', 'browser_screenshot', 'browser_download'];
 
     builtinTools.forEach(tool => {
+        if (DANGEROUS_TOOLS.includes(tool.name)) {
+            builtinNativeToolDefinitions.set(tool.name, createToolDefinition(tool));
+        }
+
         // Security gate for dangerous tools.
-        if (dangerousTools.includes(tool.name) && !power_user.enable_dangerous_tools) {
+        if (DANGEROUS_TOOLS.includes(tool.name) && !power_user.enable_dangerous_tools) {
             return;
         }
         // Gate for image generation tools.
@@ -2906,12 +4119,28 @@ export class ToolManager {
     static RECURSE_LIMIT = 50;
     static #lastListDirectoryContext = '';
 
+    static #getNativeToolDefinitions() {
+        const definitions = new Map();
+
+        for (const tool of this.tools) {
+            definitions.set(tool.toFunctionOpenAI().function.name, tool);
+        }
+
+        for (const [name, tool] of builtinNativeToolDefinitions.entries()) {
+            if (!definitions.has(name)) {
+                definitions.set(name, tool);
+            }
+        }
+
+        return Array.from(definitions.values());
+    }
+
     static #getNativeToolDefinition(name) {
-        return this.#tools.get(name) || null;
+        return this.#tools.get(name) || builtinNativeToolDefinitions.get(name) || null;
     }
 
     static #getNativeToolTagNames(additionalNames = []) {
-        const tagNames = new Set(this.tools.map(tool => tool.toFunctionOpenAI().function.name));
+        const tagNames = new Set(this.#getNativeToolDefinitions().map(tool => tool.toFunctionOpenAI().function.name));
         for (const name of additionalNames) {
             if (typeof name === 'string' && name.trim()) {
                 tagNames.add(name.trim());
@@ -2936,7 +4165,40 @@ export class ToolManager {
                 toolName: match[1],
                 startIndex: match.index,
                 openTag: match[0],
+                closeTag: `</${match[1]}>`,
             };
+        }
+
+        const allowedNames = new Set(tagNames);
+        const genericPattern = /<tool>\s*([\s\S]*?)<\/tool>/g;
+        /** @type {{ toolName: string, wrappedToolName: string, startIndex: number, openTag: string, closeTag: string } | null} */
+        let genericMatch = null;
+
+        while ((match = genericPattern.exec(source)) !== null) {
+            const rawContent = String(match[1] ?? '').trim();
+            const toolNameMatch = /"tool"\s*:\s*"([^"]+)"/.exec(rawContent);
+            const nestedTagMatch = new RegExp(`<(${tagNames.map(escapeRegExp).join('|')})\\s*>`).exec(rawContent);
+            const wrappedToolName = String(toolNameMatch?.[1] ?? nestedTagMatch?.[1] ?? '').trim();
+
+            if (!wrappedToolName || !allowedNames.has(wrappedToolName)) {
+                continue;
+            }
+
+            genericMatch = {
+                toolName: 'tool',
+                wrappedToolName,
+                startIndex: match.index,
+                openTag: '<tool>',
+                closeTag: '</tool>',
+            };
+        }
+
+        if (!genericMatch) {
+            return lastMatch;
+        }
+
+        if (!lastMatch || genericMatch.startIndex >= lastMatch.startIndex) {
+            return genericMatch;
         }
 
         return lastMatch;
@@ -2948,6 +4210,10 @@ export class ToolManager {
      */
     static get tools() {
         return Array.from(this.#tools.values());
+    }
+
+    static requiresManualApproval(name) {
+        return DANGEROUS_TOOLS.includes(String(name ?? '').trim()) && !power_user.enable_dangerous_tools;
     }
 
     /**
@@ -2964,7 +4230,7 @@ export class ToolManager {
             console.warn(`[ToolManager] A tool with the name "${name}" has already been registered. The definition will be overwritten.`);
         }
 
-        const definition = new ToolDefinition(
+        const definition = createToolDefinition({
             name,
             displayName,
             description,
@@ -2973,7 +4239,7 @@ export class ToolManager {
             formatMessage,
             shouldRegister,
             stealth,
-        );
+        });
         this.#tools.set(name, definition);
         console.log('[ToolManager] Registered function tool:', definition);
     }
@@ -3013,12 +4279,12 @@ export class ToolManager {
      */
     static async invokeFunctionTool(name, parameters, signalOrOptions) {
         try {
-            if (!this.#tools.has(name)) {
+            const tool = this.#tools.get(name) || builtinNativeToolDefinitions.get(name);
+            if (!tool) {
                 throw new Error(`No tool with the name "${name}" has been registered.`);
             }
 
             const invokeParameters = this.#parseParameters(parameters);
-            const tool = this.#tools.get(name);
             const invocationOptions = signalOrOptions instanceof AbortSignal
                 ? { signal: signalOrOptions }
                 : (signalOrOptions && typeof signalOrOptions === 'object' ? signalOrOptions : {});
@@ -3071,11 +4337,10 @@ export class ToolManager {
      * @returns {boolean} Whether the tool is a stealth tool.
      */
     static isStealthTool(name) {
-        if (!this.#tools.has(name)) {
+        const tool = this.#tools.get(name) || builtinNativeToolDefinitions.get(name);
+        if (!tool) {
             return false;
         }
-
-        const tool = this.#tools.get(name);
         return !!tool.stealth;
     }
 
@@ -3086,12 +4351,12 @@ export class ToolManager {
      * @returns {Promise<string>} The formatted message for the tool call.
      */
     static async formatToolCallMessage(name, parameters) {
-        if (!this.#tools.has(name)) {
+        const tool = this.#tools.get(name) || builtinNativeToolDefinitions.get(name);
+        if (!tool) {
             return `Invoked unknown tool: ${name}`;
         }
 
         try {
-            const tool = this.#tools.get(name);
             const formatParameters = this.#parseParameters(parameters);
             return await tool.formatMessage(formatParameters);
         } catch (error) {
@@ -3106,11 +4371,10 @@ export class ToolManager {
      * @returns {string} The display name of the tool.
      */
     static getDisplayName(name) {
-        if (!this.#tools.has(name)) {
+        const tool = this.#tools.get(name) || builtinNativeToolDefinitions.get(name);
+        if (!tool) {
             return name;
         }
-
-        const tool = this.#tools.get(name);
         return tool.displayName || name;
     }
 
@@ -3335,7 +4599,10 @@ export class ToolManager {
     }
 
     static getNativeToolStopStrings() {
-        return this.tools.map(tool => `</${tool.toFunctionOpenAI().function.name}>`);
+        return [...new Set([
+            ...this.#getNativeToolTagNames().map(toolName => `</${toolName}>`),
+            '</tool>',
+        ])];
     }
 
     static findAndParseNativeToolCall(text, { preferredToolName = null } = {}) {
@@ -3345,7 +4612,8 @@ export class ToolManager {
         }
 
         const { toolName, startIndex: toolTagIndex, openTag } = tagMatch;
-        const closeTag = `</${toolName}>`;
+        const effectiveToolName = String(tagMatch.wrappedToolName || toolName).trim();
+        const closeTag = String(tagMatch.closeTag || `</${toolName}>`);
         const toolCloseTagIndex = text.indexOf(closeTag, toolTagIndex + openTag.length);
         const fallbackToolBlockEndIndex = toolCloseTagIndex !== -1 ? toolCloseTagIndex + closeTag.length : text.length;
         const textBeforeTool = text.substring(0, toolTagIndex);
@@ -3400,7 +4668,46 @@ export class ToolManager {
         const rawToolContent = text.slice(toolTagIndex + openTag.length, toolCloseTagIndex !== -1 ? toolCloseTagIndex : text.length);
 
         try {
-            const schema = this.#getNativeToolDefinition(toolName)?.toFunctionOpenAI().function.parameters;
+            if (toolName === 'tool' && effectiveToolName) {
+                const trimmedContent = String(rawToolContent ?? '').trim();
+
+                try {
+                    const parsedJson = JSON.parse(trimmedContent);
+                    const args = parsedJson?.args && typeof parsedJson.args === 'object' && !Array.isArray(parsedJson.args)
+                        ? parsedJson.args
+                        : {};
+                    const shouldContinue = parsedJson?.continue !== false;
+                    const parsed = {
+                        tool: effectiveToolName,
+                        args,
+                        continue: shouldContinue,
+                    };
+
+                    console.log(`[ToolManager] Parsed wrapped tool call: ${parsed.tool}, continue flag: ${parsed.continue}`);
+                    return {
+                        ...buildContext(toolBlockEndIndex),
+                        tool_call: parsed,
+                        continue: shouldContinue,
+                    };
+                } catch {
+                    const nestedParsed = this.findAndParseNativeToolCall(trimmedContent, { preferredToolName: effectiveToolName });
+                    if (nestedParsed?.tool_call) {
+                        const context = buildContext(toolBlockEndIndex);
+                        const combinedReasoning = [context.reasoning, nestedParsed.reasoning].filter(Boolean).join('\n\n');
+                        return {
+                            ...context,
+                            tool_call: nestedParsed.tool_call,
+                            continue: nestedParsed.continue,
+                            reasoning: combinedReasoning,
+                            prefix_text: context.prefix_text,
+                        };
+                    }
+
+                    throw new Error('Failed to parse wrapped tool call contents.');
+                }
+            }
+
+            const schema = this.#getNativeToolDefinition(effectiveToolName)?.toFunctionOpenAI().function.parameters;
             const allowedTagNames = [
                 ...Object.keys(schema?.properties ?? {}),
                 'continue',
@@ -3418,7 +4725,7 @@ export class ToolManager {
                 : !/^false$/i.test(String(continueBlocks[continueBlocks.length - 1].value ?? '').trim());
 
             const parsed = {
-                tool: toolName,
+                tool: effectiveToolName,
                 args,
                 continue: shouldContinue,
             };
@@ -3513,16 +4820,49 @@ export class ToolManager {
         return `Current sandbox workspace listing (workspace "${workspaceLabel}", auto-fetched using list_directory with path "."):\n${trimmedListResult}`;
     }
 
+    static async #getMcpPromptContext() {
+        const state = getChatMcpState();
+        const parts = [];
+
+        if (state.selectedResources.length > 0) {
+            const resources = state.selectedResources.map(resource => {
+                const header = `${resource.title || resource.uri} [${resource.serverName}]`;
+                return `${header}\n${String(resource.content || '').trim()}`;
+            }).join('\n\n');
+            parts.push(`Selected MCP resources for this workspace:\n${resources}`);
+        }
+
+        if (state.selectedPrompts.length > 0) {
+            const prompts = state.selectedPrompts.map(prompt => {
+                const argumentText = prompt.arguments && Object.keys(prompt.arguments).length > 0
+                    ? `\nArguments: ${JSON.stringify(prompt.arguments)}`
+                    : '';
+                return `${prompt.title || prompt.name} [${prompt.serverName}]${argumentText}\n${String(prompt.content || '').trim()}`;
+            }).join('\n\n');
+            parts.push(`Selected MCP prompts for this workspace:\n${prompts}`);
+        }
+
+        const combined = parts.filter(Boolean).join('\n\n').trim();
+        if (!combined) {
+            return null;
+        }
+
+        return combined.length > MCP_TOOL_CONTEXT_CHAR_LIMIT
+            ? `${combined.slice(0, MCP_TOOL_CONTEXT_CHAR_LIMIT)}\n... (truncated)`
+            : combined;
+    }
+
     /**
      * Constructs the system prompt instructions for native tool calling.
      * @returns {Promise<string|null>} The instruction string or null if no tools are available.
      */
     static async getNativeToolPrompt() {
-        if (this.tools.length === 0) {
+        const nativeTools = this.#getNativeToolDefinitions();
+        if (nativeTools.length === 0) {
             return null;
         }
 
-        const needsSdModelContext = this.tools.some(tool => {
+        const needsSdModelContext = nativeTools.some(tool => {
             const name = tool.toFunctionOpenAI().function.name;
             return name === 'sd_txt2img';
         });
@@ -3570,7 +4910,7 @@ Examples:
 Here are the available tools:
 `);
 
-        const toolsString = this.tools.map(tool => {
+        const toolsString = nativeTools.map(tool => {
             const openAITool = tool.toFunctionOpenAI();
             const schema = openAITool.function.parameters;
             const required = new Set(Array.isArray(schema?.required) ? schema.required : []);
@@ -3590,6 +4930,11 @@ Here are the available tools:
         const listDirectoryPromptContext = await this.#getListDirectoryPromptContext();
         if (listDirectoryPromptContext) {
             finalPromptParts.push(listDirectoryPromptContext);
+        }
+
+        const mcpPromptContext = await this.#getMcpPromptContext();
+        if (mcpPromptContext) {
+            finalPromptParts.push(mcpPromptContext);
         }
 
         return finalPromptParts.join('\n\n');
@@ -4015,6 +5360,7 @@ Here are the available tools:
 
         // Now, register the built-in tools based on current settings
         registerBuiltinTools();
+        registerMcpToolsFromCache();
 
         const toolsEnumProvider = () => ToolManager.tools.map(tool => {
             const toolOpenAI = tool.toFunctionOpenAI();
@@ -4357,14 +5703,6 @@ async function listSandboxDirectory(dirPath, workspace, character) {
 }
 
 /**
- * @param {string} workspace
- * @returns {string}
- */
-function formatSandboxWorkspaceLabel(workspace) {
-    return workspace === SANDBOX_ROOT_WORKSPACE ? 'root' : workspace;
-}
-
-/**
  * @param {string} filepath
  * @param {string} filename
  * @param {string} workspace
@@ -4502,6 +5840,58 @@ function createSandboxManagerButton(iconClass, label, title, extraClass = '') {
     }
 
     return button;
+}
+
+function createMcpPopupSubheader(title, subtitle = '') {
+    const header = document.createElement('div');
+    header.className = 'mcp-popup-subheader';
+
+    const main = document.createElement('div');
+    main.className = 'mcp-popup-subheader-main';
+
+    const strong = document.createElement('strong');
+    strong.textContent = title;
+    main.append(strong);
+    header.append(main);
+
+    if (subtitle) {
+        const small = document.createElement('small');
+        small.className = 'mcp-card-subtitle';
+        small.textContent = subtitle;
+        header.append(small);
+    }
+    return header;
+}
+
+function createMcpPopupHeaderActions(actions = []) {
+    const wrap = document.createElement('div');
+    wrap.className = 'mcp-popup-header-actions';
+    for (const action of actions) {
+        if (action instanceof HTMLElement) {
+            wrap.append(action);
+        }
+    }
+    return wrap;
+}
+
+function addMcpPopupCloseButton(popup, header) {
+    if (!(header instanceof HTMLElement) || header.querySelector('.mcp-popup-close')) {
+        return;
+    }
+
+    const target = header.querySelector('.mcp-popup-subheader-main, .mcp-manager-actions, .mcp-config-popup-links') instanceof HTMLElement
+        ? header.querySelector('.mcp-popup-subheader-main, .mcp-manager-actions, .mcp-config-popup-links')
+        : header;
+
+    const closeButton = document.createElement('button');
+    closeButton.type = 'button';
+    closeButton.className = 'menu_button menu_button_icon mcp-popup-close';
+    closeButton.title = 'Close';
+    closeButton.innerHTML = '<i class="fa-solid fa-xmark"></i>';
+    closeButton.addEventListener('click', () => {
+        void popup.completeCancelled();
+    });
+    target.append(closeButton);
 }
 
 /**
@@ -4944,6 +6334,1744 @@ async function openSandboxManagerPopup() {
     await Popup.show.text('Sandbox Manager', getSandboxManagerPopupContent(), popupOptions);
 }
 
+function getMcpManagerPopupContent() {
+    return `
+        <div class="mcp-manager-popup">
+            <section class="mcp-manager-header">
+                <div class="mcp-manager-header-main">
+                    <div class="mcp-manager-brand" aria-hidden="true">
+                        <i class="fa-solid fa-database"></i>
+                    </div>
+                    <div class="mcp-manager-heading">
+                        <strong>MCP Manager</strong>
+                        <small class="mcp-manager-status"></small>
+                    </div>
+                </div>
+                <div class="mcp-manager-actions">
+                    <button type="button" class="menu_button mcp-manager-add">Add Server</button>
+                    <button type="button" class="menu_button menu_button_icon mcp-manager-refresh-all" title="Refresh enabled MCP servers">
+                        <i class="fa-solid fa-rotate"></i>
+                    </button>
+                </div>
+            </section>
+            <section class="mcp-manager-servers">
+                <div class="mcp-manager-searchbar">
+                    <input class="text_pole mcp-manager-search" type="search" placeholder="Search servers...">
+                </div>
+                <div class="mcp-manager-section-header">
+                    <strong>All Servers</strong>
+                </div>
+                <div class="mcp-manager-server-list"></div>
+            </section>
+            <section class="mcp-manager-selection">
+                <div class="mcp-manager-selection-header">
+                    <strong class="mcp-manager-selection-title">Enabled in Workspace</strong>
+                    <small class="mcp-manager-context-status"></small>
+                </div>
+                <div class="mcp-manager-context-list"></div>
+            </section>
+        </div>
+    `;
+}
+
+function renderMcpSelectedContext(container, onChanged = null) {
+    const enabledServers = getMcpServers().filter(server => server.enabled);
+    container.replaceChildren();
+
+    if (enabledServers.length === 0) {
+        const empty = document.createElement('small');
+        empty.className = 'mcp-empty-state';
+        empty.textContent = 'No servers enabled for this workspace.';
+        container.append(empty);
+        return;
+    }
+
+    const chips = document.createElement('div');
+    chips.className = 'mcp-context-chip-list';
+
+    for (const server of enabledServers) {
+        const chip = document.createElement('div');
+        chip.className = 'mcp-context-chip';
+        chip.title = server.name || server.id;
+
+        const label = document.createElement('span');
+        label.className = 'mcp-context-chip-label';
+        label.textContent = server.name || server.id;
+
+        const removeButton = document.createElement('button');
+        removeButton.type = 'button';
+        removeButton.className = 'menu_button menu_button_icon mcp-context-chip-remove';
+        removeButton.title = 'Disable for this workspace';
+        removeButton.innerHTML = '<i class="fa-solid fa-xmark"></i>';
+        removeButton.addEventListener('click', async () => {
+            setMcpServerEnabledForWorkspace(server.id, false);
+            if (mcpServerStatus.get(server.id)?.connected) {
+                await disconnectMcpServer(server);
+            } else {
+                clearMcpToolsForServer(server.id);
+                removeMcpStatus(server.id);
+                syncToolRegistryAfterMcpChange();
+                refreshMcpSummaryUi();
+            }
+            if (typeof onChanged === 'function') {
+                onChanged();
+            } else {
+                renderMcpSelectedContext(container);
+            }
+        });
+        chip.append(label, removeButton);
+        chips.append(chip);
+    }
+
+    container.append(chips);
+}
+
+async function openMcpResourcePicker(server) {
+    const listing = await callMcpApi('/api/extensions/tools/mcp/resources/list', {
+        serverId: server.id,
+        ...getSandboxRequestContext(),
+    });
+    const resources = [
+        ...(Array.isArray(listing.resources) ? listing.resources : []),
+        ...(Array.isArray(listing.resourceTemplates) ? listing.resourceTemplates : []),
+    ];
+
+    const content = document.createElement('div');
+    content.className = 'flex-container flexFlowColumn';
+    content.style.gap = '10px';
+    content.append(createMcpPopupSubheader('Select Resources'));
+
+    const list = document.createElement('div');
+    list.className = 'flex-container flexFlowColumn';
+    list.style.gap = '8px';
+    content.append(list);
+
+    const render = () => {
+        const state = getChatMcpState();
+        list.replaceChildren();
+
+        if (resources.length === 0) {
+            const empty = document.createElement('small');
+            empty.className = 'mcp-empty-state';
+            empty.textContent = 'This server did not report any resources.';
+            list.append(empty);
+            return;
+        }
+
+        for (const resource of resources) {
+            const selected = state.selectedResources.some(item => item.serverId === server.id && item.uri === resource.uri);
+            const row = document.createElement('div');
+            row.className = 'flex-container alignitemscenter justifySpaceBetween';
+            row.style.gap = '8px';
+            row.style.padding = '10px';
+            row.style.border = '1px solid rgba(255, 255, 255, 0.12)';
+            row.style.borderRadius = '6px';
+
+            const textWrap = document.createElement('div');
+            textWrap.className = 'flex-container flexFlowColumn';
+            textWrap.style.gap = '2px';
+
+            const title = document.createElement('strong');
+            title.textContent = resource.title || resource.name || resource.uri;
+            const subtitle = document.createElement('small');
+            subtitle.className = 'opacity70p';
+            subtitle.textContent = resource.uri;
+            textWrap.append(title, subtitle);
+
+            const action = createSandboxManagerButton(selected ? 'fa-check' : 'fa-plus', selected ? 'Selected' : 'Select', selected ? 'Already selected' : 'Select resource', 'menu_button_icon');
+            action.disabled = selected;
+            action.addEventListener('click', async () => {
+                await addSelectedMcpResource(server, resource);
+                render();
+            });
+
+            row.append(textWrap, action);
+            list.append(row);
+        }
+    };
+
+    render();
+    const popup = applyMcpPopupClasses(new Popup(content, POPUP_TYPE.TEXT, '', {
+        wider: true,
+        leftAlign: true,
+        allowVerticalScrolling: true,
+        okButton: false,
+        cancelButton: false,
+    }), 'mcp-popup--selection-list');
+    await popup.show();
+}
+
+async function openMcpPromptPicker(server) {
+    const listing = await callMcpApi('/api/extensions/tools/mcp/prompts/list', {
+        serverId: server.id,
+        ...getSandboxRequestContext(),
+    });
+    const prompts = Array.isArray(listing.prompts) ? listing.prompts : [];
+
+    const content = document.createElement('div');
+    content.className = 'flex-container flexFlowColumn';
+    content.style.gap = '10px';
+    content.append(createMcpPopupSubheader('Select Prompts'));
+
+    const list = document.createElement('div');
+    list.className = 'flex-container flexFlowColumn';
+    list.style.gap = '8px';
+    content.append(list);
+
+    const render = () => {
+        list.replaceChildren();
+
+        if (prompts.length === 0) {
+            const empty = document.createElement('small');
+            empty.className = 'mcp-empty-state';
+            empty.textContent = 'This server did not report any prompts.';
+            list.append(empty);
+            return;
+        }
+
+        for (const prompt of prompts) {
+            const row = document.createElement('div');
+            row.className = 'flex-container alignitemscenter justifySpaceBetween';
+            row.style.gap = '8px';
+            row.style.padding = '10px';
+            row.style.border = '1px solid rgba(255, 255, 255, 0.12)';
+            row.style.borderRadius = '6px';
+
+            const textWrap = document.createElement('div');
+            textWrap.className = 'flex-container flexFlowColumn';
+            textWrap.style.gap = '2px';
+
+            const title = document.createElement('strong');
+            title.textContent = prompt.title || prompt.name;
+            const subtitle = document.createElement('small');
+            subtitle.className = 'opacity70p';
+            subtitle.textContent = prompt.description || prompt.name;
+            textWrap.append(title, subtitle);
+
+            const action = createSandboxManagerButton('fa-plus', 'Select', 'Select prompt output', 'menu_button_icon');
+            action.addEventListener('click', async () => {
+                const promptArguments = await promptForMcpPromptArguments(prompt);
+                if (promptArguments === null) {
+                    return;
+                }
+
+                await addSelectedMcpPrompt(server, prompt, promptArguments);
+            });
+
+            row.append(textWrap, action);
+            list.append(row);
+        }
+    };
+
+    render();
+    const popup = applyMcpPopupClasses(new Popup(content, POPUP_TYPE.TEXT, '', {
+        wider: true,
+        leftAlign: true,
+        allowVerticalScrolling: true,
+        okButton: false,
+        cancelButton: false,
+    }), 'mcp-popup--selection-list');
+    await popup.show();
+}
+
+function applyMcpPopupClasses(popup, ...classes) {
+    popup.dlg.classList.add('mcp-popup', ...classes.filter(Boolean));
+    const header = popup.dlg.querySelector('.mcp-manager-header, .mcp-config-popup-header, .mcp-registry-details-header, .mcp-popup-subheader');
+    addMcpPopupCloseButton(popup, header);
+    return popup;
+}
+
+async function testMcpServerConnection(server) {
+    const testServer = normalizeMcpServerConfig({
+        ...server,
+        id: `${server.id || createClientUuid()}__test`,
+    });
+
+    try {
+        const { snapshot } = await probeMcpServer(testServer, { reconnect: true });
+        return {
+            connected: snapshot.connected === true,
+            toolCount: Array.isArray(snapshot.tools) ? snapshot.tools.length : 0,
+            resourceCount: (Array.isArray(snapshot.resources) ? snapshot.resources.length : 0) + (Array.isArray(snapshot.resourceTemplates) ? snapshot.resourceTemplates.length : 0),
+            promptCount: Array.isArray(snapshot.prompts) ? snapshot.prompts.length : 0,
+            stderr: String(snapshot.stderr || '').trim(),
+        };
+    } finally {
+        try {
+            await callMcpApi('/api/extensions/tools/mcp/disconnect', {
+                serverId: testServer.id,
+                ...getSandboxRequestContext(),
+            });
+        } catch {
+            // Ignore cleanup errors for temporary test connections.
+        }
+    }
+}
+
+async function editMcpServerConfig(existingServer = null, forcedTransportType = null) {
+    const draft = normalizeMcpServerConfig(existingServer ?? {
+        transportType: forcedTransportType || 'http',
+    });
+
+    const transportBadgeLabel = draft.transportType === 'stdio'
+        ? 'stdio'
+        : draft.transportType === 'sse'
+            ? 'SSE'
+            : 'Streamable HTTP';
+
+    const form = document.createElement('div');
+    form.className = 'mcp-config-popup';
+    form.innerHTML = `
+        <div class="mcp-config-popup-header">
+            <div class="mcp-config-popup-identity">
+                ${createMcpIcon(draft.iconUrl, draft.name || 'MCP').outerHTML}
+                <div class="mcp-config-popup-copy">
+                    <strong>${DOMPurify.sanitize(draft.name || 'MCP Server')}</strong>
+                    ${draft.description ? `<small class="mcp-card-subtitle">${DOMPurify.sanitize(draft.description)}</small>` : ''}
+                    <div class="mcp-card-badges mcp-config-popup-meta">
+                        ${createMcpBadge(draft.transportType === 'stdio' ? 'Local' : 'Remote').outerHTML}
+                        ${createMcpBadge(transportBadgeLabel).outerHTML}
+                        ${draft.version ? createMcpBadge(`v${draft.version}`).outerHTML : ''}
+                        ${(draft.authRequired || draft.authType === 'oauth' || /^\s*authorization:/i.test(draft.headersText)) ? createMcpBadge('Needs auth', 'warning').outerHTML : ''}
+                    </div>
+                </div>
+            </div>
+            <div class="mcp-config-popup-links">
+                ${draft.websiteUrl ? createMcpActionLink(draft.websiteUrl, 'Website').outerHTML : ''}
+                ${draft.repositoryUrl ? createMcpActionLink(draft.repositoryUrl, 'Source').outerHTML : ''}
+                ${draft.docsUrl ? createMcpActionLink(draft.docsUrl, 'Docs').outerHTML : ''}
+            </div>
+        </div>
+        <div class="mcp-config-shell">
+            <aside class="mcp-config-sidebar">
+                <button type="button" class="menu_button mcp-config-nav-button is-active" data-target="configuration">Configuration</button>
+                <button type="button" class="menu_button mcp-config-nav-button" data-target="authentication">Authentication</button>
+                <button type="button" class="menu_button mcp-config-nav-button" data-target="server-info">Server Info</button>
+            </aside>
+            <div class="mcp-config-main">
+                <section class="mcp-config-panel mcp-config-section-card" data-section="configuration">
+                    <div class="mcp-config-panel-heading">
+                        <div class="mcp-config-section-title">Configuration</div>
+                        <small class="mcp-card-subtitle">Configure how SillyTavern connects to this MCP server.</small>
+                    </div>
+                    <div class="mcp-config-form-grid mcp-config-form-grid--compact">
+                        <label class="mcp-form-field">
+                            <small>Name</small>
+                            <input class="text_pole mcp-form-name" type="text" value="${DOMPurify.sanitize(draft.name)}" placeholder="Filesystem, Docs, Browser">
+                        </label>
+                        <label class="mcp-form-field">
+                            <small>Transport</small>
+                            <select class="text_pole mcp-form-transport">
+                                <option value="http">Streamable HTTP</option>
+                                <option value="sse">SSE</option>
+                                <option value="stdio">Stdio</option>
+                            </select>
+                        </label>
+                    </div>
+                    <div class="mcp-form-http mcp-form-section">
+                        <div class="mcp-config-section">
+                            <div class="mcp-config-section-title">Remote endpoint</div>
+                            <div class="mcp-config-form-grid">
+                                <label class="mcp-form-field mcp-form-field--full">
+                                    <small>URL</small>
+                                    <input class="text_pole mcp-form-url" type="text" value="${DOMPurify.sanitize(draft.url)}" placeholder="https://example.com/mcp">
+                                </label>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="mcp-form-stdio mcp-form-section">
+                        <div class="mcp-config-section">
+                            <div class="mcp-config-section-title">Local command</div>
+                            <div class="mcp-config-form-grid">
+                                <label class="mcp-form-field mcp-form-field--full">
+                                    <small>Command</small>
+                                    <input class="text_pole mcp-form-command" type="text" value="${DOMPurify.sanitize(draft.command)}" placeholder="npx">
+                                </label>
+                                <label class="mcp-form-field mcp-form-field--full">
+                                    <small>Arguments</small>
+                                    <textarea class="text_pole mcp-form-args" rows="3" placeholder="-y&#10;@modelcontextprotocol/server-filesystem&#10;.">${DOMPurify.sanitize(draft.argsText)}</textarea>
+                                </label>
+                                <label class="mcp-form-field">
+                                    <small>Working directory</small>
+                                    <input class="text_pole mcp-form-cwd" type="text" value="${DOMPurify.sanitize(draft.cwd)}" placeholder="Optional">
+                                </label>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="mcp-config-section">
+                        <div class="mcp-config-section-title">Options</div>
+                        <div class="mcp-config-form-grid mcp-config-form-grid--compact">
+                            <label class="mcp-form-field">
+                                <small>Timeout (ms)</small>
+                                <input class="text_pole mcp-form-timeout" type="number" min="1000" max="180000" step="1000" value="${draft.timeoutMs}">
+                            </label>
+                            <label class="checkbox_label mcp-form-toggle">
+                                <input class="mcp-form-enabled" type="checkbox" ${draft.enabled ? 'checked' : ''}>
+                                <small>Enabled</small>
+                            </label>
+                        </div>
+                    </div>
+                </section>
+                <section class="mcp-config-panel mcp-config-section-card" data-section="authentication">
+                    <div class="mcp-config-panel-heading">
+                        <div class="mcp-config-section-title">Authentication</div>
+                        <small class="mcp-card-subtitle">Add auth details, custom headers, or local environment values.</small>
+                    </div>
+                    <div class="mcp-form-remote-auth mcp-form-section">
+                        <div class="mcp-config-section">
+                            <div class="mcp-config-form-grid">
+                                <label class="mcp-form-field">
+                                    <small>Auth</small>
+                                    <select class="text_pole mcp-form-auth">
+                                        <option value="none">None or custom headers</option>
+                                        <option value="oauth">OAuth 2.1</option>
+                                    </select>
+                                </label>
+                                <label class="mcp-form-field mcp-form-field--full">
+                                    <small>Headers</small>
+                                    <textarea class="text_pole mcp-form-headers" rows="3" placeholder="Authorization: Bearer ...">${DOMPurify.sanitize(draft.headersText)}</textarea>
+                                </label>
+                            </div>
+                        </div>
+                        <div class="mcp-form-oauth mcp-config-section">
+                            <div class="mcp-config-section-title">OAuth</div>
+                            <div class="mcp-config-form-grid">
+                                <label class="mcp-form-field mcp-form-field--full">
+                                    <small>Redirect URL</small>
+                                    <input class="text_pole mcp-form-oauth-redirect" type="text" value="${DOMPurify.sanitize(draft.oauth.redirectUrl)}" placeholder="http://localhost:8000/callback">
+                                </label>
+                                <label class="mcp-form-field">
+                                    <small>Client ID</small>
+                                    <input class="text_pole mcp-form-oauth-client-id" type="text" value="${DOMPurify.sanitize(draft.oauth.clientId)}" placeholder="Optional">
+                                </label>
+                                <label class="mcp-form-field">
+                                    <small>Client Secret</small>
+                                    <input class="text_pole mcp-form-oauth-client-secret" type="password" value="${DOMPurify.sanitize(draft.oauth.clientSecret)}" placeholder="Optional">
+                                </label>
+                                <label class="mcp-form-field mcp-form-field--full">
+                                    <small>Scopes</small>
+                                    <input class="text_pole mcp-form-oauth-scope" type="text" value="${DOMPurify.sanitize(draft.oauth.scope)}" placeholder="Optional space-separated scopes">
+                                </label>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="mcp-form-env-section mcp-form-section">
+                        <div class="mcp-config-section">
+                            <div class="mcp-config-section-title">Environment</div>
+                            <div class="mcp-config-form-grid">
+                                <label class="mcp-form-field mcp-form-field--full">
+                                    <small>Environment</small>
+                                    <textarea class="text_pole mcp-form-env" rows="4" placeholder="API_KEY=...">${DOMPurify.sanitize(draft.envText)}</textarea>
+                                </label>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+                <section class="mcp-config-panel mcp-config-section-card" data-section="server-info">
+                    <div class="mcp-config-panel-heading">
+                        <div class="mcp-config-section-title">Server Info</div>
+                        <small class="mcp-card-subtitle">Reference details from the registry entry or imported configuration.</small>
+                    </div>
+                    <div class="mcp-config-info-grid">
+                        <div class="mcp-config-info-card">
+                            <small>Type</small>
+                            <strong>${draft.transportType === 'stdio' ? 'Local' : 'Remote'}</strong>
+                        </div>
+                        <div class="mcp-config-info-card">
+                            <small>Transport</small>
+                            <strong>${DOMPurify.sanitize(transportBadgeLabel)}</strong>
+                        </div>
+                        <div class="mcp-config-info-card">
+                            <small>Version</small>
+                            <strong>${DOMPurify.sanitize(draft.version || 'Unknown')}</strong>
+                        </div>
+                    </div>
+                    ${draft.description ? `<div class="mcp-config-info-block"><small>Description</small><div>${DOMPurify.sanitize(draft.description)}</div></div>` : ''}
+                    ${(draft.websiteUrl || draft.repositoryUrl || draft.docsUrl) ? `
+                        <div class="mcp-config-info-block">
+                            <small>Links</small>
+                            <div class="mcp-config-popup-links">
+                                ${draft.websiteUrl ? createMcpActionLink(draft.websiteUrl, 'Website').outerHTML : ''}
+                                ${draft.repositoryUrl ? createMcpActionLink(draft.repositoryUrl, 'Source').outerHTML : ''}
+                                ${draft.docsUrl ? createMcpActionLink(draft.docsUrl, 'Docs').outerHTML : ''}
+                            </div>
+                        </div>
+                    ` : ''}
+                </section>
+            </div>
+        </div>
+        <div class="mcp-config-test-feedback" hidden></div>
+    `;
+
+    let values = null;
+    let popup = null;
+    let setTestFeedback = () => {};
+
+    const buildDraft = (instance) => {
+        const transportSelect = instance.dlg.querySelector('.mcp-form-transport');
+        const authSelect = instance.dlg.querySelector('.mcp-form-auth');
+        const nameInput = instance.dlg.querySelector('.mcp-form-name');
+        const enabledInput = instance.dlg.querySelector('.mcp-form-enabled');
+        const urlInput = instance.dlg.querySelector('.mcp-form-url');
+        const headersInput = instance.dlg.querySelector('.mcp-form-headers');
+        const oauthRedirectInput = instance.dlg.querySelector('.mcp-form-oauth-redirect');
+        const oauthClientIdInput = instance.dlg.querySelector('.mcp-form-oauth-client-id');
+        const oauthClientSecretInput = instance.dlg.querySelector('.mcp-form-oauth-client-secret');
+        const oauthScopeInput = instance.dlg.querySelector('.mcp-form-oauth-scope');
+        const commandInput = instance.dlg.querySelector('.mcp-form-command');
+        const argsInput = instance.dlg.querySelector('.mcp-form-args');
+        const cwdInput = instance.dlg.querySelector('.mcp-form-cwd');
+        const envInput = instance.dlg.querySelector('.mcp-form-env');
+        const timeoutInput = instance.dlg.querySelector('.mcp-form-timeout');
+
+        return normalizeMcpServerConfig({
+            ...draft,
+            id: draft.id,
+            name: nameInput instanceof HTMLInputElement ? nameInput.value : '',
+            enabled: enabledInput instanceof HTMLInputElement ? enabledInput.checked : true,
+            transportType: transportSelect instanceof HTMLSelectElement ? transportSelect.value : 'http',
+            authType: authSelect instanceof HTMLSelectElement ? authSelect.value : 'none',
+            url: urlInput instanceof HTMLInputElement ? urlInput.value : '',
+            headersText: headersInput instanceof HTMLTextAreaElement ? headersInput.value : '',
+            oauth: {
+                redirectUrl: oauthRedirectInput instanceof HTMLInputElement ? oauthRedirectInput.value : '',
+                clientId: oauthClientIdInput instanceof HTMLInputElement ? oauthClientIdInput.value : '',
+                clientSecret: oauthClientSecretInput instanceof HTMLInputElement ? oauthClientSecretInput.value : '',
+                scope: oauthScopeInput instanceof HTMLInputElement ? oauthScopeInput.value : '',
+            },
+            command: commandInput instanceof HTMLInputElement ? commandInput.value : '',
+            argsText: argsInput instanceof HTMLTextAreaElement ? argsInput.value : '',
+            cwd: cwdInput instanceof HTMLInputElement ? cwdInput.value : '',
+            envText: envInput instanceof HTMLTextAreaElement ? envInput.value : '',
+            timeoutMs: timeoutInput instanceof HTMLInputElement ? timeoutInput.value : draft.timeoutMs,
+            unsafeStdioConfirmed: draft.unsafeStdioConfirmed,
+        });
+    };
+
+    const validateDraft = async (serverDraft) => {
+        if (!serverDraft.name) {
+            toastr.warning('MCP server name is required.');
+            return false;
+        }
+
+        if ((serverDraft.transportType === 'http' || serverDraft.transportType === 'sse') && !serverDraft.url) {
+            toastr.warning('Remote MCP servers need a URL.');
+            return false;
+        }
+
+        if ((serverDraft.transportType === 'http' || serverDraft.transportType === 'sse') && serverDraft.authType === 'oauth' && !serverDraft.oauth.redirectUrl) {
+            toastr.warning('OAuth MCP servers need a redirect URL.');
+            return false;
+        }
+
+        if (serverDraft.transportType === 'stdio' && !serverDraft.command) {
+            toastr.warning('Stdio MCP servers need a command.');
+            return false;
+        }
+
+        if (serverDraft.transportType === 'stdio' && serverDraft.unsafeStdioConfirmed !== true) {
+            const confirmed = await Popup.show.confirm(
+                'Allow Local MCP Command',
+                '<p>This MCP server will start a local command on the SillyTavern host.</p><p>Only continue if you trust the command and its arguments.</p>',
+                { leftAlign: true },
+            );
+            if (!confirmed) {
+                return false;
+            }
+            serverDraft.unsafeStdioConfirmed = true;
+            draft.unsafeStdioConfirmed = true;
+        }
+
+        return true;
+    };
+
+    popup = applyMcpPopupClasses(new Popup(form, POPUP_TYPE.TEXT, '', {
+        wider: true,
+        leftAlign: true,
+        okButton: 'Save',
+        cancelButton: false,
+        customButtons: [{
+            text: 'Test Connection',
+            icon: 'fa-plug',
+            classes: ['mcp-popup-button-secondary'],
+            action: async () => {
+                if (!popup) {
+                    return;
+                }
+
+                try {
+                    setTestFeedback('Testing connection...', 'pending');
+                    const testDraft = buildDraft(popup);
+                    const valid = await validateDraft(testDraft);
+                    if (!valid) {
+                        setTestFeedback('', '');
+                        return;
+                    }
+
+                    const result = await testMcpServerConnection(testDraft);
+                    const details = [];
+                    if (typeof result.toolCount === 'number') details.push(`${result.toolCount} tools`);
+                    if (typeof result.resourceCount === 'number') details.push(`${result.resourceCount} resources`);
+                    if (typeof result.promptCount === 'number') details.push(`${result.promptCount} prompts`);
+                    if (result.stderr) details.push(result.stderr);
+                    const summary = details.length > 0 ? `Connected. ${details.join(', ')}.` : 'Connected.';
+                    setTestFeedback(summary, 'success');
+                } catch (error) {
+                    setTestFeedback(String(error?.message || error), 'error');
+                    toastr.error(String(error?.message || error), 'MCP');
+                }
+            },
+        }],
+        onOpen: (instance) => {
+            const testFeedback = instance.dlg.querySelector('.mcp-config-test-feedback');
+            const navButtons = Array.from(instance.dlg.querySelectorAll('.mcp-config-nav-button'));
+            const sectionNodes = Array.from(instance.dlg.querySelectorAll('.mcp-config-section-card'));
+            const transportSelect = instance.dlg.querySelector('.mcp-form-transport');
+            const authSelect = instance.dlg.querySelector('.mcp-form-auth');
+            const httpSection = instance.dlg.querySelector('.mcp-form-http');
+            const stdioSection = instance.dlg.querySelector('.mcp-form-stdio');
+            const remoteAuthSection = instance.dlg.querySelector('.mcp-form-remote-auth');
+            const oauthSection = instance.dlg.querySelector('.mcp-form-oauth');
+            const envSection = instance.dlg.querySelector('.mcp-form-env-section');
+
+            setTestFeedback = (message, state) => {
+                if (!(testFeedback instanceof HTMLElement)) {
+                    return;
+                }
+
+                const value = String(message || '').trim();
+                testFeedback.hidden = !value;
+                testFeedback.textContent = value;
+                testFeedback.dataset.state = String(state || '');
+            };
+
+            const setActiveSection = (target) => {
+                for (const button of navButtons) {
+                    button.classList.toggle('is-active', button.dataset.target === target);
+                }
+                for (const section of sectionNodes) {
+                    section.hidden = section.dataset.section !== target;
+                }
+            };
+
+            for (const button of navButtons) {
+                button.addEventListener('click', () => {
+                    const target = button.dataset.target;
+                    const section = sectionNodes.find(node => node.dataset.section === target);
+                    if (!(section instanceof HTMLElement)) {
+                        return;
+                    }
+                    setActiveSection(target);
+                });
+            }
+
+            const syncTransportUi = () => {
+                const isRemote = transportSelect instanceof HTMLSelectElement ? transportSelect.value !== 'stdio' : true;
+                if (httpSection instanceof HTMLElement) {
+                    httpSection.hidden = !isRemote;
+                }
+                if (stdioSection instanceof HTMLElement) {
+                    stdioSection.hidden = isRemote;
+                }
+                if (remoteAuthSection instanceof HTMLElement) {
+                    remoteAuthSection.hidden = !isRemote;
+                }
+                if (envSection instanceof HTMLElement) {
+                    envSection.hidden = isRemote;
+                }
+                syncAuthUi();
+            };
+
+            const syncAuthUi = () => {
+                const isRemote = transportSelect instanceof HTMLSelectElement ? transportSelect.value !== 'stdio' : true;
+                const isOAuth = authSelect instanceof HTMLSelectElement ? authSelect.value === 'oauth' : false;
+                if (oauthSection instanceof HTMLElement) {
+                    oauthSection.hidden = !isRemote || !isOAuth;
+                }
+            };
+
+            if (transportSelect instanceof HTMLSelectElement) {
+                transportSelect.value = draft.transportType;
+                transportSelect.addEventListener('change', syncTransportUi);
+            }
+            if (authSelect instanceof HTMLSelectElement) {
+                authSelect.value = draft.authType;
+                authSelect.addEventListener('change', syncAuthUi);
+            }
+
+            setActiveSection('configuration');
+            syncTransportUi();
+        },
+        onClosing: async (instance) => {
+            if (instance.result !== 1) {
+                return true;
+            }
+
+            values = buildDraft(instance);
+            return await validateDraft(values);
+        },
+    }), 'mcp-popup--config');
+
+    popup.dlg.querySelector('.popup-button-ok')?.classList.add('menu_button_default');
+
+    const result = await popup.show();
+    return result === 1 ? values : null;
+}
+
+async function disconnectMcpServer(server, { workspace = getCurrentSandboxWorkspace(), character = getCurrentSandboxCharacterName() } = {}) {
+    await callMcpApi('/api/extensions/tools/mcp/disconnect', {
+        serverId: server.id,
+        ...getSandboxRequestContext(workspace, character),
+    });
+    clearMcpToolsForServer(server.id);
+    upsertMcpStatus(server.id, {
+        connected: false,
+        toolCount: 0,
+        resourceCount: 0,
+        promptCount: 0,
+    });
+    syncToolRegistryAfterMcpChange();
+    refreshMcpSummaryUi();
+}
+
+async function addConfiguredMcpServer(server) {
+    const existing = getMcpServers();
+    setMcpServers([...existing, server]);
+    if (server.enabled) {
+        try {
+            await refreshMcpServer(server, { reconnect: true });
+        } catch (error) {
+            upsertMcpStatus(server.id, { connected: false, lastError: String(error?.message || error) });
+        }
+    }
+    syncToolRegistryAfterMcpChange();
+    refreshMcpSummaryUi();
+}
+
+async function configureAndAddMcpServer(draft, forcedTransportType = null) {
+    const server = await editMcpServerConfig(draft, forcedTransportType);
+    if (!server) {
+        return null;
+    }
+
+    await addConfiguredMcpServer(server);
+    return server;
+}
+
+function normalizeImportedMcpServer(name, config) {
+    const rawTransport = String(config?.transport || config?.transportType || '').toLowerCase();
+    const hasCommand = Boolean(config?.command);
+    const transportType = rawTransport.includes('sse')
+        ? 'sse'
+        : rawTransport.includes('http') || config?.url
+            ? 'http'
+            : hasCommand
+                ? 'stdio'
+                : 'http';
+    const args = Array.isArray(config?.args) ? config.args : [];
+    const headers = config?.headers && typeof config.headers === 'object' ? config.headers : {};
+    const oauth = config?.oauth && typeof config.oauth === 'object' ? config.oauth : {};
+
+    return normalizeMcpServerConfig({
+        name,
+        description: config?.description || '',
+        version: config?.version || '',
+        status: config?.status || '',
+        websiteUrl: config?.websiteUrl || config?.website || '',
+        repositoryUrl: config?.repositoryUrl || config?.source || '',
+        docsUrl: config?.docsUrl || config?.documentationUrl || '',
+        transportType,
+        enabled: config?.enabled !== false && config?.disabled !== true,
+        command: config?.command || '',
+        args,
+        cwd: config?.cwd || '',
+        env: config?.env && typeof config.env === 'object' ? config.env : {},
+        url: config?.url || config?.endpoint || '',
+        headers,
+        authType: config?.authType || config?.auth?.type || (Object.keys(oauth).length > 0 ? 'oauth' : 'none'),
+        authRequired: config?.authRequired === true,
+        oauth,
+        timeoutMs: config?.timeoutMs || config?.timeout || 30000,
+        unsafeStdioConfirmed: transportType !== 'stdio' || config?.unsafeStdioConfirmed === true,
+    });
+}
+
+function tokenizeMcpCommandSnippet(rawText) {
+    const input = String(rawText || '').trim();
+    const tokens = [];
+    let current = '';
+    let quote = '';
+    let escaping = false;
+
+    for (const char of input) {
+        if (escaping) {
+            current += char;
+            escaping = false;
+            continue;
+        }
+
+        if (char === '\\') {
+            escaping = true;
+            continue;
+        }
+
+        if (quote) {
+            if (char === quote) {
+                quote = '';
+            } else {
+                current += char;
+            }
+            continue;
+        }
+
+        if (char === '"' || char === '\'') {
+            quote = char;
+            continue;
+        }
+
+        if (/\s/.test(char)) {
+            if (current) {
+                tokens.push(current);
+                current = '';
+            }
+            continue;
+        }
+
+        current += char;
+    }
+
+    if (current) {
+        tokens.push(current);
+    }
+
+    return tokens;
+}
+
+function deriveMcpNameFromCommand(command, args = []) {
+    const normalizedCommand = String(command || '').trim().toLowerCase();
+    const normalizedArgs = Array.isArray(args) ? args.map(arg => String(arg || '').trim()).filter(Boolean) : [];
+
+    if (normalizedCommand === 'docker') {
+        const image = normalizedArgs.find((arg, index) => index > 0 && !arg.startsWith('-') && normalizedArgs[index - 1] !== 'run') || normalizedArgs.find(arg => !arg.startsWith('-') && arg !== 'run');
+        return deriveMcpNameFromIdentifier(image, 'Docker MCP Server');
+    }
+
+    const packageArg = normalizedArgs.find(arg => !arg.startsWith('-'));
+    return deriveMcpNameFromIdentifier(packageArg || command, 'MCP Server');
+}
+
+function normalizeImportedRegistryPayload(payload) {
+    const server = payload?.server && typeof payload.server === 'object' ? payload.server : payload;
+    const entry = {
+        name: String(server?.name || '').trim(),
+        title: String(server?.title || server?.name || 'MCP Server').trim(),
+        remotes: Array.isArray(server?.remotes) ? server.remotes : [],
+        packages: Array.isArray(server?.packages) ? server.packages : [],
+    };
+    const options = getMcpRegistryInstallOptions(entry);
+    const preferredOption = options.find(option => option.kind === 'remote' && option.draft)
+        || options.find(option => option.draft);
+
+    return preferredOption?.draft ? [preferredOption.draft] : [];
+}
+
+function extractImportedRegistryServers(parsed) {
+    if (!parsed || typeof parsed !== 'object') {
+        return [];
+    }
+
+    if (Array.isArray(parsed?.servers)) {
+        return parsed.servers.flatMap(entry => normalizeImportedRegistryPayload(entry));
+    }
+
+    if (Array.isArray(parsed)) {
+        return parsed.flatMap(entry => normalizeImportedRegistryPayload(entry));
+    }
+
+    if (parsed?.server || Array.isArray(parsed?.remotes) || Array.isArray(parsed?.packages)) {
+        return normalizeImportedRegistryPayload(parsed);
+    }
+
+    return [];
+}
+
+function parseMcpServerImport(rawText) {
+    const raw = String(rawText || '').trim();
+    if (!raw) {
+        throw new Error('Import text is empty.');
+    }
+
+    if (!/^[{\[]/.test(raw)) {
+        const tokens = tokenizeMcpCommandSnippet(raw);
+        if (tokens.length === 0) {
+            throw new Error('Could not parse the command snippet.');
+        }
+
+        const [command, ...args] = tokens;
+        return [normalizeMcpServerConfig({
+            name: deriveMcpNameFromCommand(command, args),
+            transportType: 'stdio',
+            enabled: true,
+            command,
+            args,
+        })];
+    }
+
+    const parsed = JSON.parse(raw);
+    const importedRegistryServers = extractImportedRegistryServers(parsed);
+    if (importedRegistryServers.length > 0) {
+        return importedRegistryServers;
+    }
+
+    if (parsed?.command || parsed?.url || parsed?.endpoint) {
+        return [normalizeImportedMcpServer(parsed.name || 'MCP Server', parsed)];
+    }
+
+    const source = parsed?.mcpServers && typeof parsed.mcpServers === 'object'
+        ? parsed.mcpServers
+        : Array.isArray(parsed)
+            ? Object.fromEntries(parsed.map((server, index) => [server?.name || `server_${index + 1}`, server]))
+            : parsed?.servers && typeof parsed.servers === 'object'
+                ? parsed.servers
+                : parsed;
+
+    if (!source || typeof source !== 'object' || Array.isArray(source)) {
+        throw new Error('Import must be a JSON object with mcpServers, servers, or server entries.');
+    }
+
+    return Object.entries(source)
+        .map(([name, config]) => normalizeImportedMcpServer(name, config))
+        .filter(server => server.name && (server.url || server.command));
+}
+
+async function importMcpServersFromJson({
+    title = 'Import MCP JSON',
+    description = '<p>Paste a Claude-style <code>mcpServers</code> JSON object, an official MCP Registry <code>server.json</code>, a raw server object, or a single command such as <code>npx -y @modelcontextprotocol/server-filesystem .</code>.</p>',
+} = {}) {
+    const raw = await Popup.show.input(
+        title,
+        description,
+        '{\n  "mcpServers": {\n    "filesystem": {\n      "command": "npx",\n      "args": ["-y", "@modelcontextprotocol/server-filesystem", "."]\n    }\n  }\n}',
+        {
+            rows: 12,
+            leftAlign: true,
+            okButton: 'Import',
+            cancelButton: 'Cancel',
+        },
+    );
+
+    if (raw === null) {
+        return [];
+    }
+
+    return parseMcpServerImport(raw);
+}
+
+async function importAndAddMcpServers(options = {}) {
+    const importedServers = await importMcpServersFromJson(options);
+    if (importedServers.length === 0) {
+        return [];
+    }
+
+    if (importedServers.some(server => server.transportType === 'stdio' && server.unsafeStdioConfirmed !== true)) {
+        const confirmed = await Popup.show.confirm(
+            'Allow Imported Local MCP Commands',
+            '<p>One or more imported stdio MCP servers will start local commands on the SillyTavern host.</p><p>Only continue if you trust the imported config or command.</p>',
+            { leftAlign: true },
+        );
+        if (!confirmed) {
+            return [];
+        }
+        for (const server of importedServers) {
+            if (server.transportType === 'stdio') {
+                server.unsafeStdioConfirmed = true;
+            }
+        }
+    }
+
+    for (const server of importedServers) {
+        await addConfiguredMcpServer(server);
+    }
+
+    return importedServers;
+}
+
+function createMcpSourceCard({ title, description, detailLines = [], buttons = [], iconClass = '', extraClass = '' }) {
+    const card = document.createElement('section');
+    card.className = `mcp-source-card ${extraClass}`.trim();
+
+    if (iconClass) {
+        const icon = document.createElement('div');
+        icon.className = 'mcp-source-card-icon';
+        icon.innerHTML = `<i class="fa-solid ${iconClass}"></i>`;
+        card.append(icon);
+    }
+
+    const copy = document.createElement('div');
+    copy.className = 'mcp-source-card-copy';
+
+    const heading = document.createElement('strong');
+    heading.textContent = title;
+    const body = document.createElement('small');
+    body.className = 'mcp-card-subtitle';
+    body.textContent = description;
+    copy.append(heading, body);
+
+    for (const line of detailLines) {
+        const detail = document.createElement('small');
+        detail.className = 'mcp-card-subtitle';
+        detail.textContent = line;
+        copy.append(detail);
+    }
+
+    card.append(copy);
+
+    if (buttons.length > 0) {
+        const actions = document.createElement('div');
+        actions.className = 'mcp-source-card-actions';
+
+        for (const buttonConfig of buttons) {
+            const button = document.createElement('button');
+            button.type = 'button';
+            button.className = `menu_button ${buttonConfig.classes || ''}`.trim();
+            button.textContent = buttonConfig.label;
+            button.title = buttonConfig.title || buttonConfig.label;
+            button.disabled = buttonConfig.disabled === true;
+            button.addEventListener('click', () => buttonConfig.onClick?.());
+            actions.append(button);
+        }
+
+        card.append(actions);
+    }
+
+    return card;
+}
+
+async function openMcpSelectionPopup(server) {
+    const content = document.createElement('div');
+    content.className = 'mcp-selection-popup';
+    content.append(
+        createMcpPopupSubheader('Select'),
+        createMcpSourceCard({
+            title: 'Resources',
+            description: 'Select resources from this server.',
+            buttons: [{
+                label: 'Select',
+                onClick: async () => {
+                    await popup.completeCancelled();
+                    await openMcpResourcePicker(server);
+                },
+            }],
+        }),
+        createMcpSourceCard({
+            title: 'Prompts',
+            description: 'Select prompts from this server.',
+            buttons: [{
+                label: 'Select',
+                onClick: async () => {
+                    await popup.completeCancelled();
+                    await openMcpPromptPicker(server);
+                },
+            }],
+        }),
+    );
+
+    const popup = applyMcpPopupClasses(new Popup(content, POPUP_TYPE.TEXT, '', {
+        wider: true,
+        leftAlign: true,
+        allowVerticalScrolling: true,
+        okButton: false,
+        cancelButton: false,
+    }), 'mcp-popup--selection');
+
+    await popup.show();
+}
+
+async function openMcpRegistryInstallPopup(entry, onChanged = null) {
+    const options = getMcpRegistryInstallOptions(entry);
+    const hasRemote = options.some(option => option.kind === 'remote');
+    const hasPackage = options.some(option => option.kind === 'package');
+    const firstRemote = options.find(option => option.kind === 'remote');
+    const firstPackage = options.find(option => option.kind === 'package');
+    const authRequired = options.some(option => option.kind === 'remote'
+        && Array.isArray(option.remote?.headers)
+        && option.remote.headers.some(header => header?.isRequired));
+    const content = document.createElement('div');
+    content.className = 'mcp-registry-details';
+    content.innerHTML = `
+        <div class="mcp-registry-details-header">
+            <div class="mcp-config-popup-identity">
+                ${createMcpIcon(entry.iconUrl || entry.icon || entry.logoUrl, entry.title || entry.name || 'MCP').outerHTML}
+                <div class="mcp-config-popup-copy">
+                    <strong>${DOMPurify.sanitize(entry.title || entry.name || 'Registry entry')}</strong>
+                    <small class="mcp-card-subtitle">${DOMPurify.sanitize(entry.description || '')}</small>
+                    <div class="mcp-card-badges mcp-config-popup-meta"></div>
+                </div>
+            </div>
+            <div class="mcp-config-popup-links">
+                ${entry.websiteUrl ? createMcpActionLink(entry.websiteUrl, 'Website').outerHTML : ''}
+                ${entry.repositoryUrl ? createMcpActionLink(entry.repositoryUrl, 'Source').outerHTML : ''}
+                ${entry.links?.docsUrl ? createMcpActionLink(entry.links.docsUrl, 'Docs').outerHTML : ''}
+            </div>
+        </div>
+        <div class="mcp-registry-options"></div>
+    `;
+
+    const meta = content.querySelector('.mcp-config-popup-meta');
+    const optionsContainer = content.querySelector('.mcp-registry-options');
+    if (meta instanceof HTMLElement) {
+        if (hasPackage && !hasRemote) {
+            meta.append(createMcpBadge('Local'));
+            meta.append(createMcpBadge(String(firstPackage?.pkg?.transportType || 'stdio').toLowerCase() === 'stdio' ? 'stdio' : String(firstPackage?.pkg?.transportType || 'stdio').toUpperCase()));
+        } else if (hasRemote && !hasPackage) {
+            meta.append(createMcpBadge('Remote'));
+            meta.append(createMcpBadge(String(firstRemote?.remote?.type || '').toLowerCase() === 'sse' ? 'SSE' : 'HTTP'));
+        } else {
+            if (hasRemote) meta.append(createMcpBadge('Remote'));
+            if (hasPackage) meta.append(createMcpBadge('Local'));
+        }
+        if (entry.version) meta.append(createMcpBadge(`v${entry.version}`));
+        if (entry.status && entry.status !== 'active') meta.append(createMcpBadge(entry.status, entry.status === 'deprecated' ? 'warning' : 'default'));
+        if (authRequired) meta.append(createMcpBadge('Needs auth', 'warning'));
+    }
+
+    if (options.length === 0) {
+        const empty = document.createElement('small');
+        empty.className = 'mcp-empty-state';
+        empty.textContent = 'This registry entry did not include a remote endpoint or a supported local package install.';
+        optionsContainer?.append(empty);
+    } else if (optionsContainer instanceof HTMLElement) {
+        for (const option of options) {
+            const installed = option.draft ? isMcpServerInstalled(option.draft) : false;
+            const card = document.createElement('article');
+            card.className = 'mcp-registry-option';
+
+            const main = document.createElement('div');
+            main.className = 'mcp-registry-option-main';
+
+            const icon = document.createElement('div');
+            icon.className = 'mcp-registry-option-icon';
+            icon.innerHTML = option.kind === 'package'
+                ? '<i class="fa-solid fa-terminal"></i>'
+                : '<i class="fa-solid fa-globe"></i>';
+
+            const copy = document.createElement('div');
+            copy.className = 'mcp-registry-row-copy';
+            const title = document.createElement('strong');
+            title.textContent = option.title;
+            const detail = document.createElement('div');
+            detail.className = 'mcp-registry-option-detail';
+            detail.textContent = option.detail;
+            const subtitle = document.createElement('small');
+            subtitle.className = 'mcp-card-subtitle';
+            subtitle.textContent = option.description;
+            copy.append(title, detail, subtitle);
+            main.append(icon, copy);
+
+            const action = document.createElement('button');
+            action.type = 'button';
+            action.className = 'menu_button';
+            action.textContent = installed ? 'Installed' : 'Select';
+            action.disabled = installed || !option.draft;
+            action.addEventListener('click', async () => {
+                const created = await configureAndAddMcpServer(option.draft, option.draft.transportType);
+                if (created) {
+                    onChanged?.();
+                    await popup.completeCancelled();
+                }
+            });
+
+            card.append(main, action);
+            optionsContainer.append(card);
+        }
+    }
+
+    if (entry.links?.docsUrl) {
+        const docsLink = createMcpLink(entry.links.docsUrl, 'Registry entry docs');
+        docsLink.classList.add('mcp-docs-link');
+        content.append(docsLink);
+    }
+
+    const popup = applyMcpPopupClasses(new Popup(content, POPUP_TYPE.TEXT, '', {
+        wider: true,
+        leftAlign: true,
+        allowVerticalScrolling: true,
+        okButton: false,
+        cancelButton: false,
+    }), 'mcp-popup--registry-details');
+
+    await popup.show();
+}
+
+async function openOfficialMcpRegistryBrowser(onChanged = null) {
+    const content = document.createElement('div');
+    content.className = 'mcp-registry-browser';
+    const heading = createMcpPopupSubheader('Browse Official Registry');
+
+    const search = document.createElement('input');
+    search.type = 'search';
+    search.className = 'text_pole mcp-registry-search';
+    search.placeholder = 'Search registry...';
+
+    const openButton = createMcpActionLink('https://registry.modelcontextprotocol.io/', 'Open Registry');
+    openButton.addEventListener('click', event => {
+        event.preventDefault();
+        openExternalLink('https://registry.modelcontextprotocol.io/');
+    });
+
+    heading.querySelector('.mcp-popup-subheader-main')?.append(createMcpPopupHeaderActions([openButton]));
+    heading.append(search);
+
+    const list = document.createElement('div');
+    list.className = 'mcp-registry-list';
+
+    content.append(heading, list);
+
+    const state = {
+        query: '',
+        loading: false,
+        entries: [],
+        nextCursor: '',
+        exhausted: false,
+        totalCount: null,
+        hasLoaded: false,
+    };
+
+    let searchTimer = null;
+
+    const render = () => {
+        list.replaceChildren();
+
+        if (state.hasLoaded && !state.loading && state.entries.length === 0) {
+            const empty = document.createElement('small');
+            empty.className = 'mcp-empty-state';
+            empty.textContent = 'No results.';
+            list.append(empty);
+            return;
+        }
+
+        for (const entry of state.entries) {
+            const installOptions = getMcpRegistryInstallOptions(entry);
+            const installed = installOptions.some(option => option.draft && isMcpServerInstalled(option.draft));
+            const row = document.createElement('div');
+            row.className = 'mcp-registry-row';
+
+            const identity = document.createElement('div');
+            identity.className = 'mcp-registry-row-main';
+            identity.append(createMcpIcon(entry.iconUrl || entry.icon || entry.logoUrl, entry.title || entry.name || 'MCP'));
+
+            const copy = document.createElement('div');
+            copy.className = 'mcp-registry-row-copy';
+            const title = document.createElement('strong');
+            title.textContent = entry.title || entry.name || 'Registry entry';
+            const description = document.createElement('small');
+            description.className = 'mcp-card-subtitle';
+            description.textContent = entry.description || entry.name || '';
+            const badges = document.createElement('div');
+            badges.className = 'mcp-card-badges';
+            if (installOptions.some(option => option.kind === 'remote')) badges.append(createMcpBadge('Remote'));
+            if (installOptions.some(option => option.kind === 'package')) badges.append(createMcpBadge('Local'));
+            if (installOptions.length > 0) {
+                const first = installOptions[0];
+                badges.append(createMcpBadge(first.kind === 'remote' ? first.title.replace(' endpoint', '') : 'stdio'));
+            }
+            if (entry.version) badges.append(createMcpBadge(`v${entry.version}`));
+            if (entry.status) badges.append(createMcpBadge(entry.status));
+            copy.append(title, description, badges);
+            identity.append(copy);
+
+            const links = document.createElement('div');
+            links.className = 'mcp-registry-row-links';
+            for (const link of [
+                entry.links?.docsUrl ? { label: 'Docs', url: entry.links.docsUrl } : null,
+                entry.websiteUrl ? { label: 'Website', url: entry.websiteUrl } : null,
+                entry.repositoryUrl ? { label: 'Source', url: entry.repositoryUrl } : null,
+            ].filter(Boolean)) {
+                links.append(createMcpActionLink(link.url, link.label));
+            }
+
+            const action = document.createElement('button');
+            action.type = 'button';
+            action.className = 'menu_button';
+            action.textContent = installed ? 'Installed' : 'Select';
+            action.disabled = installed;
+            action.addEventListener('click', () => openMcpRegistryInstallPopup(entry, onChanged));
+
+            row.append(identity, links, action);
+            list.append(row);
+        }
+    };
+
+    const load = async ({ append = false } = {}) => {
+        if (state.loading || (append && (state.exhausted || !state.nextCursor))) {
+            return;
+        }
+
+        state.loading = true;
+
+        try {
+            const result = await callMcpApi('/api/extensions/tools/mcp/registry/list', {
+                query: state.query,
+                cursor: append ? state.nextCursor : '',
+                limit: 40,
+            });
+            const entries = Array.isArray(result?.entries) ? result.entries : [];
+            state.entries = append
+                ? [...state.entries, ...entries]
+                : entries;
+            state.nextCursor = String(result?.nextCursor || '').trim();
+            state.exhausted = result?.exhausted === true || !state.nextCursor;
+            state.totalCount = Number.isFinite(result?.totalCount) ? result.totalCount : null;
+            state.hasLoaded = true;
+        } catch (error) {
+            state.hasLoaded = true;
+            toastr.error(String(error?.message || error), 'Official MCP Registry');
+        } finally {
+            state.loading = false;
+            render();
+        }
+    };
+
+    search.addEventListener('input', () => {
+        window.clearTimeout(searchTimer);
+        searchTimer = window.setTimeout(() => {
+            state.query = search.value.trim();
+            state.entries = [];
+            state.nextCursor = '';
+            state.exhausted = false;
+            state.totalCount = null;
+            void load();
+        }, 250);
+    });
+
+    search.addEventListener('keydown', event => {
+        if (event.key === 'Enter') {
+            event.preventDefault();
+            window.clearTimeout(searchTimer);
+            state.query = search.value.trim();
+            state.entries = [];
+            state.nextCursor = '';
+            state.exhausted = false;
+            state.totalCount = null;
+            void load();
+        }
+    });
+
+    render();
+
+    const popup = applyMcpPopupClasses(new Popup(content, POPUP_TYPE.TEXT, '', {
+        wider: true,
+        leftAlign: true,
+        allowVerticalScrolling: true,
+        okButton: false,
+        cancelButton: false,
+        onOpen: (instance) => {
+            const popupContent = instance.dlg.querySelector('.popup-content');
+            if (!(popupContent instanceof HTMLElement)) {
+                return;
+            }
+
+            const handleScroll = () => {
+                if (state.loading || state.exhausted) {
+                    return;
+                }
+
+                const remaining = popupContent.scrollHeight - popupContent.scrollTop - popupContent.clientHeight;
+                if (remaining < 160) {
+                    void load({ append: true });
+                }
+            };
+
+            popupContent.addEventListener('scroll', handleScroll);
+        },
+    }), 'mcp-popup--registry-browser');
+
+    popup.show().catch(error => console.error('Failed to show official MCP registry browser:', error));
+    await load();
+}
+
+async function openMcpAddSourcePopup(onChanged = null) {
+    const content = document.createElement('div');
+    content.className = 'mcp-add-popup';
+    const header = createMcpPopupSubheader('Add Server');
+    const docsLink = createMcpActionLink('https://modelcontextprotocol.io/docs', 'MCP Server Docs');
+    docsLink.addEventListener('click', event => {
+        event.preventDefault();
+        openExternalLink('https://modelcontextprotocol.io/docs');
+    });
+    header.querySelector('.mcp-popup-subheader-main')?.append(createMcpPopupHeaderActions([docsLink]));
+    content.append(header);
+
+    let addPopup = null;
+    const cards = [
+        createMcpSourceCard({
+            title: 'Browse Official Registry',
+            description: 'Search the official registry inside SillyTavern.',
+            iconClass: 'fa-magnifying-glass',
+            buttons: [{
+                label: 'Select',
+                onClick: async () => {
+                    await addPopup?.completeCancelled();
+                    await openOfficialMcpRegistryBrowser(onChanged);
+                },
+            }],
+        }),
+        createMcpSourceCard({
+            title: 'Import JSON',
+            description: 'Paste a server JSON or config object.',
+            iconClass: 'fa-file-code',
+            buttons: [{
+                label: 'Select',
+                onClick: async () => {
+                    const imported = await importAndAddMcpServers({
+                        title: 'Import MCP JSON',
+                        description: '<p>Paste a server JSON, registry entry JSON, or an <code>mcpServers</code> object.</p>',
+                    });
+                    if (imported.length > 0) {
+                        await addPopup?.completeCancelled();
+                        onChanged?.();
+                    }
+                },
+            }],
+        }),
+        createMcpSourceCard({
+            title: 'Import Snippet',
+            description: 'Paste a command or install snippet.',
+            iconClass: 'fa-code',
+            buttons: [{
+                label: 'Select',
+                onClick: async () => {
+                    const imported = await importAndAddMcpServers({
+                        title: 'Import MCP Snippet',
+                        description: '<p>Paste a command, config snippet, or install line.</p>',
+                    });
+                    if (imported.length > 0) {
+                        await addPopup?.completeCancelled();
+                        onChanged?.();
+                    }
+                },
+            }],
+        }),
+        createMcpSourceCard({
+            title: 'Add Manually',
+            description: 'Enter the transport and connection details yourself.',
+            iconClass: 'fa-terminal',
+            buttons: [{
+                label: 'Select',
+                onClick: async () => {
+                    await addPopup?.completeCancelled();
+                    const created = await configureAndAddMcpServer(null, 'http');
+                    if (created) {
+                        onChanged?.();
+                    }
+                },
+            }],
+        }),
+    ];
+
+    cards.forEach(card => content.append(card));
+
+    addPopup = applyMcpPopupClasses(new Popup(content, POPUP_TYPE.TEXT, '', {
+        wider: true,
+        leftAlign: true,
+        allowVerticalScrolling: true,
+        okButton: false,
+        cancelButton: false,
+    }), 'mcp-popup--add');
+
+    await addPopup.show();
+}
+
+async function openMcpManagerPopup() {
+    const popup = applyMcpPopupClasses(new Popup(getMcpManagerPopupContent(), POPUP_TYPE.TEXT, '', {
+        wider: true,
+        leftAlign: true,
+        allowVerticalScrolling: true,
+        okButton: false,
+        cancelButton: false,
+        onOpen: async (popup) => {
+            const statusElement = popup.dlg.querySelector('.mcp-manager-status');
+            const contextStatusElement = popup.dlg.querySelector('.mcp-manager-context-status');
+            const selectionTitleElement = popup.dlg.querySelector('.mcp-manager-selection-title');
+            const serverList = popup.dlg.querySelector('.mcp-manager-server-list');
+            const contextList = popup.dlg.querySelector('.mcp-manager-context-list');
+            const addButton = popup.dlg.querySelector('.mcp-manager-add');
+            const refreshAllButton = popup.dlg.querySelector('.mcp-manager-refresh-all');
+            const searchInput = popup.dlg.querySelector('.mcp-manager-search');
+
+            if (!(statusElement instanceof HTMLElement) || !(contextStatusElement instanceof HTMLElement) || !(selectionTitleElement instanceof HTMLElement) || !(serverList instanceof HTMLElement) || !(contextList instanceof HTMLElement) || !(addButton instanceof HTMLButtonElement) || !(refreshAllButton instanceof HTMLButtonElement) || !(searchInput instanceof HTMLInputElement)) {
+                return;
+            }
+
+            let searchTerm = '';
+
+            const render = () => {
+                const allServers = getMcpServers();
+                const enabledServers = allServers.filter(server => server.enabled);
+                const normalizedSearch = searchTerm.trim().toLowerCase();
+                const servers = normalizedSearch
+                    ? allServers.filter(server => [server.name, server.description, server.id]
+                        .map(value => String(value || '').toLowerCase())
+                        .some(value => value.includes(normalizedSearch)))
+                    : allServers;
+                serverList.replaceChildren();
+                selectionTitleElement.textContent = `Enabled in ${getMcpWorkspaceLabel()}`;
+                statusElement.textContent = allServers.length === 0
+                    ? 'No servers added yet.'
+                    : `${allServers.length} server${allServers.length === 1 ? '' : 's'}`;
+
+                contextStatusElement.textContent = enabledServers.length > 0
+                    ? `${enabledServers.length} enabled`
+                    : '';
+                renderMcpSelectedContext(contextList, render);
+
+                if (servers.length === 0) {
+                    const empty = document.createElement('small');
+                    empty.className = 'mcp-empty-state';
+                    empty.textContent = normalizedSearch ? 'No matching servers.' : 'No servers added yet.';
+                    serverList.append(empty);
+                    return;
+                }
+
+                for (const server of servers) {
+                    const status = mcpServerStatus.get(server.id) ?? {};
+                    const tone = getMcpServerStatusTone(server, status);
+                    const card = document.createElement('article');
+                    card.className = 'mcp-server-card';
+
+                    const info = document.createElement('div');
+                    info.className = 'mcp-server-card-main';
+                    info.append(createMcpIcon(server.iconUrl, server.name || server.id || 'MCP'));
+
+                    const copy = document.createElement('div');
+                    copy.className = 'mcp-server-card-copy';
+                    const heading = document.createElement('div');
+                    heading.className = 'mcp-server-card-heading';
+                    const titleRow = document.createElement('div');
+                    titleRow.className = 'mcp-server-card-title-row';
+                    const title = document.createElement('strong');
+                    title.textContent = server.name || server.id;
+                    const meta = document.createElement('div');
+                    meta.className = 'mcp-card-badges mcp-server-card-meta';
+                    meta.append(createMcpBadge(server.transportType === 'stdio' ? 'stdio' : server.transportType === 'sse' ? 'SSE' : 'HTTP'));
+                    if (server.version) meta.append(createMcpBadge(`v${server.version}`));
+                    if (server.authRequired || server.authType === 'oauth' || /^\s*authorization:/i.test(server.headersText)) meta.append(createMcpBadge('Needs auth', 'warning'));
+                    titleRow.append(title, meta);
+
+                    const stateBadge = createMcpBadge(tone.label, tone.tone);
+                    stateBadge.classList.add('mcp-server-card-status');
+                    heading.append(titleRow, stateBadge);
+
+                    const description = document.createElement('small');
+                    description.className = 'mcp-card-subtitle';
+                    description.textContent = server.description || 'No description.';
+                    copy.append(heading, description);
+                    info.append(copy);
+
+                    const enableButton = document.createElement('button');
+                    enableButton.type = 'button';
+                    enableButton.className = 'menu_button';
+                    enableButton.textContent = server.enabled ? 'Disable' : 'Enable';
+                    enableButton.addEventListener('click', async () => {
+                        const nextEnabled = !server.enabled;
+                        const updated = normalizeMcpServerConfig({ ...server, enabled: nextEnabled });
+                        setMcpServerEnabledForWorkspace(updated.id, nextEnabled);
+                        try {
+                            if (updated.enabled) {
+                                await refreshMcpServer(updated, { reconnect: true });
+                            } else if (status.connected) {
+                                await disconnectMcpServer(updated);
+                            } else {
+                                clearMcpToolsForServer(updated.id);
+                                removeMcpStatus(updated.id);
+                            }
+                        } catch (error) {
+                            upsertMcpStatus(updated.id, { connected: false, lastError: String(error?.message || error) });
+                            toastr.error(String(error?.message || error), `MCP: ${server.name || server.id}`);
+                        }
+                        render();
+                    });
+
+                    const footer = document.createElement('div');
+                    footer.className = 'mcp-server-card-footer';
+                    const controls = document.createElement('div');
+                    controls.className = 'mcp-server-card-controls';
+
+                    const links = document.createElement('div');
+                    links.className = 'mcp-server-links';
+                    for (const link of [
+                        server.websiteUrl ? { label: 'Website', url: server.websiteUrl } : null,
+                        server.repositoryUrl ? { label: 'Source', url: server.repositoryUrl } : null,
+                        server.docsUrl ? { label: 'Docs', url: server.docsUrl } : null,
+                    ].filter(Boolean)) {
+                        links.append(createMcpActionLink(link.url, link.label));
+                    }
+
+                    const editButton = document.createElement('button');
+                    editButton.type = 'button';
+                    editButton.className = 'menu_button';
+                    editButton.textContent = 'Configure';
+                    editButton.addEventListener('click', async () => {
+                        const updated = await editMcpServerConfig(server);
+                        if (!updated) {
+                            return;
+                        }
+
+                        const servers = getAllMcpServers().map(item => item.id === server.id ? updated : item);
+                        setAllMcpServers(servers);
+                        setMcpServerEnabledForWorkspace(updated.id, updated.enabled);
+                        removeMcpStatus(server.id);
+                        if (updated.enabled) {
+                            try {
+                                await refreshMcpServer(updated, { reconnect: true });
+                            } catch (error) {
+                                upsertMcpStatus(updated.id, { connected: false, lastError: String(error?.message || error) });
+                            }
+                        } else if (status.connected) {
+                            await disconnectMcpServer(updated);
+                        } else {
+                            clearMcpToolsForServer(updated.id);
+                            removeMcpStatus(updated.id);
+                        }
+                        syncToolRegistryAfterMcpChange();
+                        refreshMcpSummaryUi();
+                        render();
+                    });
+
+                    const testButton = document.createElement('button');
+                    testButton.type = 'button';
+                    testButton.className = 'menu_button';
+                    testButton.textContent = 'Test';
+                    testButton.disabled = !server.enabled;
+                    testButton.addEventListener('click', async () => {
+                        upsertMcpStatus(server.id, { testing: true });
+                        render();
+                        try {
+                            await testMcpServerConnection(server);
+                            upsertMcpStatus(server.id, { testing: false });
+                            render();
+                        } catch (error) {
+                            upsertMcpStatus(server.id, { testing: false });
+                            render();
+                            toastr.error(String(error?.message || error), `MCP: ${server.name || server.id}`);
+                        }
+                    });
+
+                    const deleteButton = document.createElement('button');
+                    deleteButton.type = 'button';
+                    deleteButton.className = 'menu_button menu_button_icon';
+                    deleteButton.innerHTML = '<i class="fa-solid fa-trash"></i>';
+                    deleteButton.title = 'Remove';
+                    deleteButton.addEventListener('click', async () => {
+                        const confirmed = await Popup.show.confirm(
+                            'Delete MCP Server',
+                            `<p>Remove <strong>${DOMPurify.sanitize(server.name || server.id)}</strong> from settings?</p>`,
+                            { leftAlign: true },
+                        );
+                        if (!confirmed) {
+                            return;
+                        }
+
+                        setAllMcpServers(getAllMcpServers().filter(item => item.id !== server.id));
+                        purgeMcpSelectionsForServer(server.id, null);
+                        removeMcpStatus(server.id);
+                        if (status.connected) {
+                            await disconnectMcpServer(server);
+                        } else {
+                            clearMcpToolsForServer(server.id);
+                            syncToolRegistryAfterMcpChange();
+                            refreshMcpSummaryUi();
+                        }
+                        render();
+                    });
+
+                    controls.append(enableButton);
+                    if (links.childElementCount > 0) {
+                        controls.append(links);
+                    }
+                    controls.append(editButton, testButton, deleteButton);
+                    footer.append(controls);
+
+                    card.append(info);
+
+                    if (status.lastError) {
+                        const error = document.createElement('small');
+                        error.className = 'mcp-card-error';
+                        error.textContent = status.lastError;
+                        card.append(error);
+                    } else if (status.stderr) {
+                        const stderr = document.createElement('small');
+                        stderr.className = 'mcp-card-subtitle';
+                        stderr.textContent = status.stderr;
+                        card.append(stderr);
+                    }
+
+                    card.append(footer);
+
+                    serverList.append(card);
+                }
+            };
+
+            const handleContextUpdate = () => render();
+            document.addEventListener(MCP_CONTEXT_UPDATED_EVENT, handleContextUpdate);
+            popup.onClose = async () => {
+                document.removeEventListener(MCP_CONTEXT_UPDATED_EVENT, handleContextUpdate);
+            };
+
+            addButton.addEventListener('click', async () => {
+                await openMcpAddSourcePopup(render);
+                render();
+            });
+
+            refreshAllButton.addEventListener('click', async () => {
+                try {
+                    await refreshAllMcpServers({ notify: true });
+                    render();
+                } catch (error) {
+                    toastr.error(String(error?.message || error), 'MCP');
+                }
+            });
+
+            searchInput.addEventListener('input', () => {
+                searchTerm = searchInput.value;
+                render();
+            });
+
+            render();
+        },
+    }), 'mcp-popup--manager');
+
+    await popup.show();
+}
+
+async function initMcpUi() {
+    const manageButton = getMcpManageButtonElement();
+    const refreshButton = getMcpRefreshButtonElement();
+
+    if (manageButton && !mcpManageButtonInitialized) {
+        manageButton.addEventListener('click', () => {
+            void openMcpManagerPopup();
+        });
+        mcpManageButtonInitialized = true;
+    }
+
+    if (refreshButton && !mcpRefreshButtonInitialized) {
+        refreshButton.addEventListener('click', () => {
+            void syncActiveMcpWorkspace({ forceRefresh: true, notify: true }).catch(error => {
+                toastr.error(String(error?.message || error), 'MCP');
+            });
+        });
+        mcpRefreshButtonInitialized = true;
+    }
+
+    if (!mcpUiInitialized) {
+        ensureMcpSettingsShape();
+        mcpUiInitialized = true;
+    }
+
+    refreshMcpSummaryUi();
+}
+
 function getMetadataWorkspace() {
     return typeof chat_metadata?.sandbox_workspace === 'string'
         ? chat_metadata.sandbox_workspace.trim()
@@ -5054,6 +8182,7 @@ async function onSandboxWorkspaceChange(event) {
 
         await persistSandboxWorkspaceForCurrentChat(workspace);
         await refreshSandboxWorkspaceSelector();
+        await syncActiveMcpWorkspace({ forceRefresh: true });
         return;
     }
 
@@ -5063,6 +8192,7 @@ async function onSandboxWorkspaceChange(event) {
 
     await persistSandboxWorkspaceForCurrentChat(selectedValue);
     select.dataset.previousWorkspace = selectedValue;
+    await syncActiveMcpWorkspace({ forceRefresh: true });
 }
 
 async function initSandboxWorkspaceSelector() {
@@ -5135,13 +8265,15 @@ export function initToolCalling() {
     // Refresh tool registration after all settings (including power_user) have been loaded.
     eventSource.on(event_types.SETTINGS_LOADED_AFTER, async () => {
         await initSandboxWorkspaceSelector();
+        await initMcpUi();
         showNativeToolCallingMigrationToast();
-        if (oai_settings.native_tool_calling) {
-            ToolManager.registerNativeToolCommand();
-        }
+        await syncActiveMcpWorkspace({ forceRefresh: true });
+        refreshMcpSummaryUi();
     });
 
     eventSource.on(event_types.CHAT_CHANGED, async () => {
         await refreshSandboxWorkspaceSelector({ persistDefault: true });
+        await syncActiveMcpWorkspace();
+        refreshMcpSummaryUi();
     });
 }

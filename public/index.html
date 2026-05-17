@@ -5173,11 +5173,12 @@
                                         <input id="enable_browser_tools" type="checkbox" />
                                         <small data-i18n="Enable browser tools">Enable browser tools</small>
                                     </label>
-                                    <div class="flex-container alignitemscenter" title="Controls how tool calls are executed. Full Auto executes tools automatically, Manual requires clicking a button to execute." data-i18n="[title]Controls how tool calls are executed. Full Auto executes tools automatically, Manual requires clicking a button to execute.">
+                                    <div class="flex-container alignitemscenter" title="Controls how tool calls are executed. Manual requires clicking each tool, Default runs tools automatically but warns before non-read-only MCP tools, Automatic runs tools automatically with no warnings." data-i18n="[title]Controls how tool calls are executed. Manual requires clicking each tool, Default runs tools automatically but warns before non-read-only MCP tools, Automatic runs tools automatically with no warnings.">
                                         <label for="tool_execution_mode"><small data-i18n="Execution Mode:">Execution Mode:</small></label>
                                         <select id="tool_execution_mode" class="widthNatural flex1 margin0 text_pole">
-                                            <option value="auto" data-i18n="Full Auto">Full Auto</option>
                                             <option value="manual" data-i18n="Manual">Manual</option>
+                                            <option value="default" data-i18n="Default">Default</option>
+                                            <option value="automatic" data-i18n="Automatic">Automatic</option>
                                         </select>
                                     </div>
                                     <div id="sandbox_workspace_setting" class="flex-container alignitemscenter" title="Select the sandbox workspace used for tool file operations in this chat." data-i18n="[title]Select the sandbox workspace used for tool file operations in this chat.">
@@ -5189,6 +5190,17 @@
                                             <i class="fa-solid fa-folder-open"></i>
                                         </button>
                                     </div>
+                                    <div id="mcp_setting" class="flex-container alignitemscenter" title="Manage MCP servers for this workspace.">
+                                        <label for="mcp_manage_button"><small>MCP:</small></label>
+                                        <small id="mcp_status_summary" class="flex1 opacity70p">No MCP servers configured.</small>
+                                        <button id="mcp_refresh_button" type="button" class="menu_button menu_button_icon" title="Refresh enabled MCP servers.">
+                                            <i class="fa-solid fa-rotate"></i>
+                                        </button>
+                                        <button id="mcp_manage_button" type="button" class="menu_button menu_button_icon" title="Manage MCP servers.">
+                                            <i class="fa-solid fa-plug-circle-bolt"></i>
+                                        </button>
+                                    </div>
+                                    <small id="mcp_context_summary" class="opacity70p"></small>
                                 </div>
                                 <div class="alignitemscenter flex-container flexFlowColumn wide100p gap0" style="margin-top: 10px;">
                                     <small>

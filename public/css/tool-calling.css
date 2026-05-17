@@ -417,6 +417,800 @@
     color: var(--warning);
 }
 
+.popup.mcp-popup {
+    box-sizing: border-box;
+    width: min(var(--sheldWidth), calc(100dvw - 2em));
+    max-width: min(var(--sheldWidth), calc(100dvw - 2em));
+    max-height: calc(100dvh - 2em);
+    overflow: hidden;
+}
+
+.popup.mcp-popup.mcp-popup--config {
+    width: min(var(--sheldWidth), 1100px, calc(100dvw - 2em));
+    max-width: min(var(--sheldWidth), 1100px, calc(100dvw - 2em));
+}
+
+.mcp-popup .popup-body {
+    display: flex;
+    flex-direction: column;
+    max-height: inherit;
+    min-height: 0;
+    overflow: hidden;
+}
+
+.mcp-popup .popup-content {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    overflow-y: auto;
+    overflow-x: hidden;
+    padding: 0 4px 4px;
+}
+
+.mcp-manager-popup,
+.mcp-selection-popup,
+.mcp-registry-browser,
+.mcp-registry-details,
+.mcp-config-popup {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.mcp-manager-header,
+.mcp-manager-selection-header,
+.mcp-config-popup-header,
+.mcp-registry-details-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 6px;
+    flex-wrap: wrap;
+}
+
+.mcp-popup-subheader {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.mcp-popup-subheader-main {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+    width: 100%;
+}
+
+.mcp-manager-header,
+.mcp-config-popup-header,
+.mcp-registry-details-header,
+.mcp-popup-subheader {
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    margin: 0 -4px 0;
+    padding: 0 4px 4px;
+    background: var(--SmartThemeBlurTintColor);
+}
+
+.mcp-popup-close {
+    flex: 0 0 auto;
+    width: 2.4em;
+    min-width: 2.4em;
+    aspect-ratio: 1 / 1;
+    padding: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.mcp-manager-header-main {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    gap: 12px;
+    align-items: start;
+    min-width: 0;
+}
+
+.mcp-manager-heading,
+.mcp-config-popup-copy,
+.mcp-registry-row-copy,
+.mcp-context-card-text {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    min-width: 0;
+}
+
+.mcp-popup-subheader > strong {
+    line-height: 1.1;
+}
+
+.mcp-popup-subheader-main > strong {
+    line-height: 1.1;
+}
+
+.mcp-popup-subheader > .mcp-card-subtitle {
+    margin-top: 0;
+}
+
+.mcp-manager-actions,
+.mcp-popup-header-actions,
+.mcp-config-popup-links,
+.mcp-source-card-actions,
+.mcp-registry-meta,
+.mcp-card-badges,
+.mcp-server-links,
+.mcp-server-card-controls,
+.mcp-registry-row-links {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    align-items: center;
+}
+
+.mcp-manager-actions,
+.mcp-config-popup-links {
+    margin-left: auto;
+    justify-content: flex-end;
+    flex-wrap: nowrap;
+}
+
+.mcp-manager-actions .menu_button,
+.mcp-config-popup-links .menu_button,
+.mcp-config-popup-links .mcp-link-button {
+    margin: 0;
+    white-space: nowrap;
+}
+
+.mcp-manager-actions .menu_button_icon {
+    min-width: 2.4em;
+    justify-content: center;
+}
+
+.mcp-popup-subheader-main > .mcp-popup-header-actions {
+    margin-left: auto;
+    justify-content: flex-end;
+    flex-wrap: nowrap;
+}
+
+.mcp-manager-status,
+.mcp-manager-context-status,
+.mcp-card-subtitle {
+    color: var(--SmartThemeEmColor);
+    opacity: 0.9;
+}
+
+.mcp-config-popup-header {
+    padding-bottom: 4px;
+}
+
+.mcp-manager-server-list,
+.mcp-manager-context-list,
+.mcp-registry-list {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.mcp-manager-brand {
+    width: 52px;
+    height: 52px;
+    border-radius: 12px;
+    border: 1px solid var(--SmartThemeBorderColor);
+    background: rgba(255, 255, 255, 0.04);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.4em;
+}
+
+.mcp-manager-servers {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.mcp-manager-searchbar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.mcp-manager-section-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+}
+
+.mcp-manager-selection {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding-top: 8px;
+}
+
+.mcp-source-card,
+.mcp-context-card,
+.mcp-server-card,
+.mcp-registry-row {
+    border: 1px solid var(--SmartThemeBorderColor);
+    border-radius: 10px;
+    background: color-mix(in srgb, var(--SmartThemeBlurTintColor) 82%, var(--white20a) 18%);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+}
+
+.mcp-source-card,
+.mcp-context-card,
+.mcp-server-card {
+    padding: 8px;
+}
+
+.mcp-source-card {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+}
+
+.mcp-source-card-copy {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    min-width: 0;
+}
+
+.mcp-source-card-icon,
+.mcp-registry-option-icon {
+    width: 40px;
+    height: 40px;
+    border-radius: 10px;
+    border: 1px solid var(--SmartThemeBorderColor);
+    background: rgba(255, 255, 255, 0.04);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1em;
+}
+
+.mcp-add-popup {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.mcp-add-popup > .mcp-popup-subheader {
+    width: 100%;
+}
+
+.mcp-add-popup .mcp-source-card {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 8px;
+    min-height: 0;
+}
+
+.mcp-add-popup .mcp-source-card-actions {
+    justify-content: flex-end;
+    align-self: center;
+    margin-left: auto;
+}
+
+.mcp-add-popup .mcp-source-card-actions .menu_button {
+    margin: 0;
+}
+
+.mcp-add-popup .mcp-source-card .mcp-card-subtitle {
+    line-height: 1.25;
+}
+
+.mcp-context-card-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 10px;
+}
+
+.mcp-context-preview {
+    margin: 0;
+    padding: 10px;
+    border-radius: 8px;
+    background: rgba(0, 0, 0, 0.18);
+    white-space: pre-wrap;
+    word-break: break-word;
+    max-height: 180px;
+    overflow: auto;
+}
+
+.mcp-context-chip-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.mcp-context-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+    padding: 6px 8px 6px 10px;
+    border-radius: 10px;
+    border: 1px solid var(--SmartThemeBorderColor);
+    background: rgba(255, 255, 255, 0.04);
+}
+
+.mcp-context-chip-label {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.mcp-context-chip-remove {
+    padding: 4px 6px;
+    min-width: auto;
+}
+
+.mcp-server-card {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.mcp-server-card-main,
+.mcp-registry-row-main,
+.mcp-config-popup-identity {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    gap: 10px;
+    align-items: start;
+    min-width: 0;
+}
+
+.mcp-server-card-copy {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    min-width: 0;
+}
+
+.mcp-server-card-heading,
+.mcp-server-card-title-row,
+.mcp-server-card-footer {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+}
+
+.mcp-server-card-heading {
+    justify-content: space-between;
+    align-items: flex-start;
+}
+
+.mcp-server-card-title-row {
+    flex: 1 1 auto;
+    flex-wrap: wrap;
+}
+
+.mcp-server-card-title-row > strong {
+    flex: 0 1 auto;
+}
+
+.mcp-server-card-meta {
+    flex-wrap: wrap;
+}
+
+.mcp-config-popup-copy strong {
+    font-size: 1.15em;
+}
+
+.mcp-config-popup-meta {
+    margin-top: 2px;
+}
+
+.mcp-server-card-status {
+    margin-left: auto;
+}
+
+.mcp-server-card-footer {
+    border-top: 1px solid var(--SmartThemeBorderColor);
+    padding-top: 8px;
+}
+
+.mcp-server-card-controls {
+    justify-content: flex-start;
+    align-self: stretch;
+    width: 100%;
+    flex-wrap: wrap;
+}
+
+.mcp-server-icon {
+    width: 52px;
+    height: 52px;
+    border-radius: 12px;
+    border: 1px solid var(--SmartThemeBorderColor);
+    background: rgba(255, 255, 255, 0.06);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+    font-weight: 700;
+}
+
+.mcp-server-icon img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+
+.mcp-badge {
+    display: inline-flex;
+    align-items: center;
+    min-height: 24px;
+    padding: 0 10px;
+    border-radius: 999px;
+    border: 1px solid var(--SmartThemeBorderColor);
+    background: rgba(255, 255, 255, 0.05);
+    font-size: 0.82em;
+}
+
+.mcp-badge--success {
+    color: var(--ok);
+}
+
+.mcp-badge--warning {
+    color: var(--SmartThemeQuoteColor);
+}
+
+.mcp-badge--error {
+    color: var(--warning);
+}
+
+.mcp-badge--muted {
+    color: var(--SmartThemeEmColor);
+}
+
+.mcp-link {
+    color: var(--SmartThemeBodyColor);
+    text-decoration: none;
+    opacity: 0.92;
+}
+
+.mcp-link:hover,
+.mcp-link:focus-visible {
+    text-decoration: underline;
+}
+
+.mcp-link-button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    text-decoration: none;
+    min-height: 0;
+    padding: 3px 5px;
+    border-radius: 5px;
+    white-space: nowrap;
+}
+
+.mcp-link-button:hover,
+.mcp-link-button:focus-visible {
+    text-decoration: none;
+}
+
+.mcp-card-error {
+    color: var(--warning);
+    display: block;
+}
+
+.mcp-registry-toolbar {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 4px;
+    align-items: center;
+}
+
+.mcp-registry-browser {
+    gap: 6px;
+}
+
+.mcp-popup-subheader > .mcp-registry-search {
+    width: 100%;
+    margin-top: 2px;
+}
+
+.mcp-registry-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto auto;
+    gap: 10px;
+    padding: 10px;
+    align-items: center;
+}
+
+.mcp-registry-details .mcp-source-card,
+.mcp-selection-popup .mcp-source-card {
+    margin: 0;
+}
+
+.mcp-registry-details {
+    gap: 10px;
+}
+
+.mcp-registry-row-links .mcp-link-button,
+.mcp-server-links .mcp-link-button,
+.mcp-config-popup-links .mcp-link-button,
+.mcp-registry-toolbar .mcp-link-button {
+    margin: 0;
+}
+
+.mcp-server-links .mcp-link-button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 0;
+    padding: 3px 5px;
+    border: 1px solid var(--SmartThemeBorderColor);
+    border-radius: 5px;
+    background: rgba(255, 255, 255, 0.04);
+    color: var(--SmartThemeBodyColor);
+    text-decoration: none;
+    white-space: nowrap;
+}
+
+.mcp-server-links .mcp-link-button:hover,
+.mcp-server-links .mcp-link-button:focus-visible {
+    text-decoration: none;
+}
+
+.mcp-registry-options {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.mcp-registry-option {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 10px;
+    align-items: center;
+    padding: 10px;
+    border: 1px solid var(--SmartThemeBorderColor);
+    border-radius: 10px;
+    background: color-mix(in srgb, var(--SmartThemeBlurTintColor) 82%, var(--white20a) 18%);
+}
+
+.mcp-registry-option-main {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    gap: 10px;
+    align-items: center;
+    min-width: 0;
+}
+
+.mcp-registry-option-detail {
+    font-family: var(--monoFontFamily);
+    font-size: 0.95em;
+    line-height: 1.4;
+    word-break: break-word;
+}
+
+.mcp-config-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 8px;
+    border: 1px solid var(--SmartThemeBorderColor);
+    border-radius: 10px;
+    background: color-mix(in srgb, var(--SmartThemeBlurTintColor) 82%, var(--white20a) 18%);
+}
+
+.mcp-config-shell {
+    display: grid;
+    grid-template-columns: 148px minmax(0, 1fr);
+    gap: 10px;
+    align-items: start;
+}
+
+.mcp-config-sidebar {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    position: sticky;
+    top: 0;
+    width: 148px;
+}
+
+.mcp-config-nav-button {
+    width: 100%;
+    justify-content: flex-start;
+    min-height: 0;
+    border-radius: 5px;
+    padding: 2px 6px;
+    margin: 0;
+    text-align: left;
+    white-space: nowrap;
+}
+
+.mcp-config-nav-button.is-active {
+    background: color-mix(in srgb, var(--SmartThemeQuoteColor) 18%, transparent);
+    border-color: var(--SmartThemeQuoteColor);
+}
+
+.mcp-config-main {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    min-width: 0;
+}
+
+.mcp-config-section-card {
+    scroll-margin-top: 16px;
+}
+
+.mcp-config-section-card[hidden] {
+    display: none;
+}
+
+.mcp-config-panel-heading {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.mcp-form-section {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.mcp-config-section {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.mcp-config-section + .mcp-config-section {
+    padding-top: 8px;
+    border-top: 1px solid var(--SmartThemeBorderColor);
+}
+
+.mcp-config-section-title {
+    font-weight: 600;
+}
+
+.mcp-config-form-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(240px, 100%), 1fr));
+    gap: 8px;
+    align-items: start;
+}
+
+.mcp-config-form-grid--compact {
+    grid-template-columns: repeat(auto-fit, minmax(min(180px, 100%), 1fr));
+}
+
+.mcp-form-field {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    min-width: 0;
+}
+
+.mcp-form-field > small {
+    color: var(--SmartThemeEmColor);
+}
+
+.mcp-form-field--full {
+    grid-column: 1 / -1;
+}
+
+.mcp-form-toggle {
+    align-self: center;
+    min-height: auto;
+    margin: 22px 0 0;
+}
+
+.mcp-config-info-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(180px, 100%), 1fr));
+    gap: 10px;
+}
+
+.mcp-config-info-card,
+.mcp-config-info-block {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    min-width: 0;
+    padding: 10px;
+    border-radius: 10px;
+    border: 1px solid var(--SmartThemeBorderColor);
+    background: rgba(255, 255, 255, 0.03);
+}
+
+.mcp-config-info-card small,
+.mcp-config-info-block small {
+    color: var(--SmartThemeEmColor);
+}
+
+.mcp-config-test-feedback {
+    margin-top: 8px;
+    padding: 6px 8px;
+    border-radius: 10px;
+    border: 1px solid var(--SmartThemeBorderColor);
+    background: rgba(255, 255, 255, 0.03);
+}
+
+.mcp-config-test-feedback[data-state='success'] {
+    color: var(--ok);
+}
+
+.mcp-config-test-feedback[data-state='error'] {
+    color: var(--warning);
+}
+
+.mcp-config-test-feedback[data-state='pending'] {
+    color: var(--SmartThemeEmColor);
+}
+
+.mcp-empty-state {
+    padding: 12px;
+    border-radius: 10px;
+    border: 1px dashed var(--SmartThemeBorderColor);
+    color: var(--SmartThemeEmColor);
+    background: rgba(0, 0, 0, 0.12);
+}
+
+@media (max-width: 900px) {
+    .mcp-server-card,
+    .mcp-registry-row,
+    .mcp-registry-toolbar,
+    .mcp-registry-option {
+        grid-template-columns: 1fr;
+    }
+
+    .mcp-config-popup-header {
+        flex-direction: column;
+    }
+
+    .mcp-config-popup-header > .mcp-config-popup-links,
+    .mcp-registry-details-header > .mcp-config-popup-links,
+    .mcp-popup-subheader-main > .mcp-popup-header-actions {
+        margin-left: 0;
+        justify-content: flex-start;
+    }
+
+    .mcp-manager-actions,
+    .mcp-config-popup-links {
+        margin-left: 0;
+        justify-content: flex-start;
+        flex-wrap: wrap;
+    }
+
+    .mcp-config-shell {
+        grid-template-columns: 1fr;
+    }
+
+    .mcp-config-sidebar {
+        position: static;
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(min(160px, 100%), 1fr));
+        width: auto;
+    }
+
+    .mcp-server-card-heading,
+    .mcp-server-card-controls,
+    .mcp-registry-row-links {
+        justify-content: flex-start;
+    }
+
+    .mcp-server-card-status {
+        margin-left: 0;
+    }
+}
+
 @media (max-width: 700px) {
     #sandbox_workspace_setting {
         align-items: stretch;
@@ -454,6 +1248,30 @@
     .sandbox-manager-item-actions {
         grid-column: 1 / -1;
         justify-content: flex-end;
+    }
+
+    .popup.mcp-popup {
+        width: min(100%, calc(100dvw - 1em));
+    }
+
+    .mcp-add-popup,
+    .mcp-registry-options,
+    .mcp-config-form-grid,
+    .mcp-config-form-grid--compact {
+        grid-template-columns: 1fr;
+    }
+
+    .mcp-config-panel {
+        padding: 12px;
+    }
+
+    .mcp-form-toggle {
+        margin-top: 0;
+        align-self: start;
+    }
+
+    .mcp-config-sidebar {
+        grid-template-columns: 1fr;
     }
 }
 

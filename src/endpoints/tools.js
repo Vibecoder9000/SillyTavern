@@ -4,6 +4,7 @@ import fs from 'node:fs/promises';
 import { spawn, spawnSync } from 'node:child_process';
 import crypto from 'node:crypto';
 import { getSandboxDir, getUserSandboxRootDir, isPathInside } from './sandbox.js';
+import { addMcpToolRoutes } from './tools-mcp.js';
 
 export const router = express.Router();
 
@@ -3724,3 +3725,5 @@ router.post('/browser/download', async (req, res) => {
         });
     });
 });
+
+addMcpToolRoutes(router);

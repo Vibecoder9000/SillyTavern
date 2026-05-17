@@ -511,6 +511,28 @@
         border: none;
     }
 
+    .popup.mcp-popup {
+        width: 100dvw;
+        max-width: 100dvw;
+        min-height: calc(100dvh - 50px);
+        max-height: calc(100dvh - 50px);
+        margin: 0;
+        border-radius: 0 0 20px 20px;
+        border: 1px solid var(--SmartThemeBorderColor);
+        top: var(--topBarBlockSize);
+    }
+
+    .popup.mcp-popup .popup-body,
+    .popup.mcp-popup .popup-content {
+        max-height: none;
+        height: 100%;
+    }
+
+    .popup.mcp-popup .popup-content {
+        overflow-y: auto;
+        overflow-x: hidden;
+    }
+
     #bg-header-fixed > .flex-container {
         flex-wrap: wrap;
         row-gap: 0px;

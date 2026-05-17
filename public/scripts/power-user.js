@@ -344,10 +344,27 @@ export const power_user = {
     enable_dangerous_tools: false,
     enable_image_generation: false,
     enable_browser_tools: false,
-    tool_execution_mode: 'auto',
+    tool_execution_mode: 'default',
+    mcp: {
+        servers: [],
+    },
     media_display: MEDIA_DISPLAY.LIST,
     image_overswipe: IMAGE_OVERSWIPE.GENERATE,
 };
+
+export function normalizeToolExecutionMode(value) {
+    const normalized = String(value ?? '').trim().toLowerCase();
+
+    if (normalized === 'manual' || normalized === 'default' || normalized === 'automatic') {
+        return normalized;
+    }
+
+    if (normalized === 'auto') {
+        return 'default';
+    }
+
+    return 'default';
+}
 
 let themes = [];
 let movingUIPresets = [];
@@ -1573,6 +1590,8 @@ export async function loadPowerUserSettings(settings, data) {
         Object.assign(power_user, settings.power_user);
     }
 
+    power_user.tool_execution_mode = normalizeToolExecutionMode(power_user.tool_execution_mode);
+
     if (power_user.stscript === undefined) {
         power_user.stscript = defaultStscript;
     } else {
@@ -1796,7 +1815,7 @@ export async function loadPowerUserSettings(settings, data) {
     $('#enable_dangerous_tools').prop('checked', power_user.enable_dangerous_tools);
     $('#enable_image_generation').prop('checked', power_user.enable_image_generation);
     $('#enable_browser_tools').prop('checked', power_user.enable_browser_tools);
-    $('#tool_execution_mode').val(power_user.tool_execution_mode);
+    $('#tool_execution_mode').val(normalizeToolExecutionMode(power_user.tool_execution_mode));
     $('#media_display').val(power_user.media_display);
     $('#image_overswipe').val(power_user.image_overswipe);
 
@@ -4102,7 +4121,7 @@ jQuery(() => {
     });
 
     $('#tool_execution_mode').on('change', function () {
-        power_user.tool_execution_mode = $(this).val().toString();
+        power_user.tool_execution_mode = normalizeToolExecutionMode($(this).val());
         saveSettingsDebounced();
     });
 
