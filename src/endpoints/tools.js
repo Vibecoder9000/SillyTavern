@@ -2169,7 +2169,7 @@ router.get('/workspaces', async (req, res) => {
             .map(dirent => dirent.name)
             .sort((a, b) => a.localeCompare(b));
 
-        return res.json({ workspaces });
+        return res.json({ workspaces, rootPath: userSandboxRoot });
     } catch (error) {
         console.error('Error listing workspaces:', error);
         return res.status(500).json({ error: 'An error occurred while listing workspaces.' });

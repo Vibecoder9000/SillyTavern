@@ -5133,85 +5133,6 @@
                                 </label>
                             </div>
                         </div>
-                        <div class="inline-drawer wide100p flexFlowColumn">
-                            <div class="inline-drawer-toggle inline-drawer-header userSettingsInnerExpandable" title="Settings for the Tool Calling feature." data-i18n="[title]Settings for the Tool Calling feature.">
-                                <b><span data-i18n="Tool Calling">Tool Calling</span></b>
-                                <div class="fa-solid fa-circle-chevron-down inline-drawer-icon down"></div>
-                            </div>
-                            <div class="inline-drawer-content">
-                                <label class="checkbox_label" for="openai_function_calling" data-source="openai,cohere,mistralai,custom,claude,aimlapi,openrouter,groq,deepseek,makersuite,vertexai,ai21,xai,pollinations,moonshot,fireworks" title="Allows using API-specific function tools. Can be utilized by various extensions to provide additional functionality. Not supported when Prompt Post-Processing with 'no tools' is used!" data-i18n="[title]Allows using API-specific function tools. Can be utilized by various extensions to provide additional functionality. Not supported when Prompt Post-Processing with 'no tools' is used!">
-                                    <input id="openai_function_calling" type="checkbox" />
-                                    <small data-i18n="Enable API Function Calling">Enable API Function Calling</small>
-                                    <div id="openai_function_calling_supported" data-cc-toggle="false">
-                                        <i class="icon-supported fa-solid fa-circle-check" title="Supported by the current model" data-i18n="[title]Supported by the current model"></i>
-                                        <i class="icon-unsupported fa-solid fa-circle-exclamation" title="Unsupported by the current model" data-i18n="[title]Unsupported by the current model"></i>
-                                    </div>
-                                </label>
-                                <label class="checkbox_label" for="tool_calling" title="Replace the API tool calling with inserting tools info into the system prompt and detecting <tool> tags. This is API and model agnostic." data-i18n="[title]Replace the API tool calling with inserting tools info into the system prompt and detecting <tool> tags. This is API and model agnostic.">
-                                    <input id="tool_calling" type="checkbox" />
-                                    <small data-i18n="Native Tool Calling">Native Tool Calling</small>
-                                </label>
-                                <hr>
-                                <div id="tool_calling_dependent_settings">
-                                    <label class="checkbox_label" for="hide_tool_messages" title="Hide tool call and result messages from the chat view. They will still be part of the chat history for the AI." data-i18n="[title]Hide tool call and result messages from the chat view. They will still be part of the chat history for the AI.">
-                                        <input id="hide_tool_messages" type="checkbox" />
-                                        <small data-i18n="Hide tool calls and results">Hide tool calls and results</small>
-                                    </label>
-                                    <label class="checkbox_label" for="auto_list_directory_context" title="Runs list_directory with path &quot;.&quot; in the background and adds the current uploads files and directories to native tool calling context." data-i18n="[title]Runs list_directory with path &quot;.&quot; in the background and adds the current uploads files and directories to native tool calling context.">
-                                        <input id="auto_list_directory_context" type="checkbox" />
-                                        <small data-i18n="Auto include file list context">Auto include file list context</small>
-                                    </label>
-                                    <label class="checkbox_label" for="enable_dangerous_tools" title="Enabling this allows the AI to execute code and modify files on the server." data-i18n="[title]WARNING: Enabling this allows the AI to execute code and modify files on the server. Use with extreme caution.">
-                                        <input id="enable_dangerous_tools" type="checkbox" />
-                                        <small data-i18n="Enable dangerous tools">Enable dangerous tools</small>
-                                    </label>
-                                    <label class="checkbox_label" for="enable_image_generation" title="Enables image generation tools that connect to a local Stable Diffusion WebUI instance (localhost:7860)." data-i18n="[title]Enables image generation tools that connect to a local Stable Diffusion WebUI instance (localhost:7860).">
-                                        <input id="enable_image_generation" type="checkbox" />
-                                        <small data-i18n="Enable image generation">Enable image generation</small>
-                                    </label>
-                                    <label class="checkbox_label" for="enable_browser_tools" title="Enables isolated Firefox browser tools that can browse pages, fetch DOM content, run controlled page JavaScript, take screenshots, and save downloads into the sandbox." data-i18n="[title]Enables isolated Firefox browser tools that can browse pages, fetch DOM content, run controlled page JavaScript, take screenshots, and save downloads into the sandbox.">
-                                        <input id="enable_browser_tools" type="checkbox" />
-                                        <small data-i18n="Enable browser tools">Enable browser tools</small>
-                                    </label>
-                                    <div class="flex-container alignitemscenter" title="Controls how tool calls are executed. Manual requires clicking each tool, Default runs tools automatically but warns before non-read-only MCP tools, Automatic runs tools automatically with no warnings." data-i18n="[title]Controls how tool calls are executed. Manual requires clicking each tool, Default runs tools automatically but warns before non-read-only MCP tools, Automatic runs tools automatically with no warnings.">
-                                        <label for="tool_execution_mode"><small data-i18n="Execution Mode:">Execution Mode:</small></label>
-                                        <select id="tool_execution_mode" class="widthNatural flex1 margin0 text_pole">
-                                            <option value="manual" data-i18n="Manual">Manual</option>
-                                            <option value="default" data-i18n="Default">Default</option>
-                                            <option value="automatic" data-i18n="Automatic">Automatic</option>
-                                        </select>
-                                    </div>
-                                    <div id="sandbox_workspace_setting" class="flex-container alignitemscenter" title="Select the sandbox workspace used for tool file operations in this chat." data-i18n="[title]Select the sandbox workspace used for tool file operations in this chat.">
-                                        <label for="sandbox_workspace_select"><small data-i18n="Sandbox Workspace:">Sandbox Workspace:</small></label>
-                                        <select id="sandbox_workspace_select" class="widthNatural flex1 margin0 text_pole">
-                                            <option value="__root__">root</option>
-                                        </select>
-                                        <button id="sandbox_workspace_manage_button" type="button" class="menu_button menu_button_icon" title="Open sandbox manager." data-i18n="[title]Open sandbox manager.">
-                                            <i class="fa-solid fa-folder-open"></i>
-                                        </button>
-                                    </div>
-                                    <div id="mcp_setting" class="flex-container alignitemscenter" title="Manage MCP servers for this workspace.">
-                                        <label for="mcp_manage_button"><small>MCP:</small></label>
-                                        <small id="mcp_status_summary" class="flex1 opacity70p">No MCP servers configured.</small>
-                                        <button id="mcp_refresh_button" type="button" class="menu_button menu_button_icon" title="Refresh enabled MCP servers.">
-                                            <i class="fa-solid fa-rotate"></i>
-                                        </button>
-                                        <button id="mcp_manage_button" type="button" class="menu_button menu_button_icon" title="Manage MCP servers.">
-                                            <i class="fa-solid fa-plug-circle-bolt"></i>
-                                        </button>
-                                    </div>
-                                    <small id="mcp_context_summary" class="opacity70p"></small>
-                                </div>
-                                <div class="alignitemscenter flex-container flexFlowColumn wide100p gap0" style="margin-top: 10px;">
-                                    <small>
-                                        <span data-i18n="Output Limit">Output Limit</span>
-                                        <div class="fa-solid fa-circle-info opacity50p" data-i18n="[title]Maximum number of tokens for a single tool output before it is truncated. Set to 0 to disable." title="Maximum number of tokens for a single tool output before it is truncated. Set to 0 to disable."></div>
-                                    </small>
-                                    <input class="neo-range-slider" type="range" id="tool_output_truncation_limit" name="tool_output_truncation_limit" min="0" max="65536" step="256" value="4092">
-                                    <input class="neo-range-input" type="number" min="0" max="65536" step="256" data-for="tool_output_truncation_limit" id="tool_output_truncation_limit_counter" value="4092">
-                                </div>
-                            </div>
-                        </div>
                     </div>
                     <div name="UserSettingsSecondColumn" id="UI-Customization" class="flex-container flexFlowColumn wide100p flexNoGap flex1">
                         <div name="CharacterHandlingToggles">
@@ -5706,6 +5627,131 @@
                                 </div>
                             </div>
                         </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div id="tools-button" class="drawer">
+            <div id="tools-drawer-toggle" class="drawer-toggle drawer-header" title="Tool Calling Settings" data-i18n="[title]Tool Calling Settings">
+                <div class="drawer-icon fa-solid fa-screwdriver-wrench fa-fw closedIcon"></div>
+            </div>
+            <div id="tools-drawer" class="drawer-content closedDrawer tools-drawer-layout">
+                <div id="tools-header-fixed">
+                    <div class="flex-container alignItemsBaseline wide100p">
+                        <h3 class="margin0" data-i18n="Tools">Tools</h3>
+                    </div>
+                </div>
+                <div id="tools-scrollable-content">
+                    <div class="tools-settings-grid">
+                        <section id="tool_calling_panel" class="tools-panel-card tool-calling-card">
+                            <div class="tools-panel-header">
+                                <div class="tools-panel-title">
+                                    <i class="fa-solid fa-wand-sparkles"></i>
+                                    <h4 class="margin0" data-i18n="Tool Calling">Tool Calling</h4>
+                                </div>
+                            </div>
+                            <div class="tools-panel-body">
+                                <label class="checkbox_label" for="tool_calling" title="Replace the API tool calling with inserting tools info into the system prompt and detecting <tool> tags. This is API and model agnostic." data-i18n="[title]Replace the API tool calling with inserting tools info into the system prompt and detecting <tool> tags. This is API and model agnostic.">
+                                    <input id="tool_calling" type="checkbox" />
+                                    <small data-i18n="Native Tool Calling">Native Tool Calling</small>
+                                </label>
+                                <div id="tool_calling_dependent_settings">
+                                    <label class="checkbox_label" for="hide_tool_messages" title="Hide tool call and result messages from the chat view. They will still be part of the chat history for the AI." data-i18n="[title]Hide tool call and result messages from the chat view. They will still be part of the chat history for the AI.">
+                                        <input id="hide_tool_messages" type="checkbox" />
+                                        <small data-i18n="Hide tool calls and results">Hide tool calls and results</small>
+                                    </label>
+                                    <label class="checkbox_label" for="auto_list_directory_context" title="Runs list_directory with path &quot;.&quot; in the background and adds the current uploads files and directories to native tool calling context." data-i18n="[title]Runs list_directory with path &quot;.&quot; in the background and adds the current uploads files and directories to native tool calling context.">
+                                        <input id="auto_list_directory_context" type="checkbox" />
+                                        <small data-i18n="Auto include file list context">Auto include file list context</small>
+                                    </label>
+                                    <label class="checkbox_label" for="enable_dangerous_tools" title="Enabling this allows the AI to execute code and modify files on the server." data-i18n="[title]WARNING: Enabling this allows the AI to execute code and modify files on the server. Use with extreme caution.">
+                                        <input id="enable_dangerous_tools" type="checkbox" />
+                                        <small data-i18n="Enable dangerous tools">Enable dangerous tools</small>
+                                    </label>
+                                    <label class="checkbox_label" for="enable_image_generation" title="Enables image generation tools that connect to a local Stable Diffusion WebUI instance (localhost:7860)." data-i18n="[title]Enables image generation tools that connect to a local Stable Diffusion WebUI instance (localhost:7860).">
+                                        <input id="enable_image_generation" type="checkbox" />
+                                        <small data-i18n="Enable image generation">Enable image generation</small>
+                                    </label>
+                                    <label class="checkbox_label" for="enable_browser_tools" title="Enables isolated Firefox browser tools that can browse pages, fetch DOM content, run controlled page JavaScript, take screenshots, and save downloads into the sandbox." data-i18n="[title]Enables isolated Firefox browser tools that can browse pages, fetch DOM content, run controlled page JavaScript, take screenshots, and save downloads into the sandbox.">
+                                        <input id="enable_browser_tools" type="checkbox" />
+                                        <small data-i18n="Enable browser tools">Enable browser tools</small>
+                                    </label>
+                                    <div class="tools-inline-field" title="Controls how tool calls are executed. Manual requires clicking each tool, Default runs tools automatically but warns before non-read-only MCP tools, Automatic runs tools automatically with no warnings." data-i18n="[title]Controls how tool calls are executed. Manual requires clicking each tool, Default runs tools automatically but warns before non-read-only MCP tools, Automatic runs tools automatically with no warnings.">
+                                        <label for="tool_execution_mode"><small data-i18n="Execution Mode:">Execution Mode:</small></label>
+                                        <select id="tool_execution_mode" class="widthNatural flex1 margin0 text_pole">
+                                            <option value="manual" data-i18n="Manual">Manual</option>
+                                            <option value="default" data-i18n="Default">Default</option>
+                                            <option value="automatic" data-i18n="Automatic">Automatic</option>
+                                        </select>
+                                    </div>
+                                </div>
+                                <div class="tools-output-limit">
+                                    <small class="tools-output-label">
+                                        <span data-i18n="Output Limit">Output Limit</span>
+                                        <div class="fa-solid fa-circle-info opacity50p" data-i18n="[title]Maximum number of tokens for a single tool output before it is truncated. Set to 0 to disable." title="Maximum number of tokens for a single tool output before it is truncated. Set to 0 to disable."></div>
+                                    </small>
+                                    <div class="tools-output-controls">
+                                        <input class="neo-range-slider" type="range" id="tool_output_truncation_limit" name="tool_output_truncation_limit" min="0" max="65536" step="256" value="4092">
+                                        <input class="neo-range-input" type="number" min="0" max="65536" step="256" data-for="tool_output_truncation_limit" id="tool_output_truncation_limit_counter" value="4092">
+                                    </div>
+                                </div>
+                            </div>
+                        </section>
+                        <section class="tools-panel-card sandbox-card">
+                            <div class="tools-panel-header">
+                                <div class="tools-panel-title">
+                                    <i class="fa-solid fa-folder-open"></i>
+                                    <h4 class="margin0" data-i18n="Sandbox Workspace">Sandbox Workspace</h4>
+                                </div>
+                                <button id="sandbox_workspace_manage_button" type="button" class="menu_button menu_button_icon tools-section-button" title="Open sandbox manager." data-i18n="[title]Open sandbox manager.">
+                                    <i class="fa-solid fa-gear"></i>
+                                </button>
+                            </div>
+                            <div class="tools-panel-body">
+                                <div id="sandbox_workspace_setting" class="tools-field-block" title="Select the sandbox workspace used for tool file operations in this chat." data-i18n="[title]Select the sandbox workspace used for tool file operations in this chat.">
+                                    <label for="sandbox_workspace_select"><small data-i18n="Workspace:">Workspace:</small></label>
+                                    <div class="tools-workspace-controls">
+                                        <select id="sandbox_workspace_select" class="widthNatural flex1 margin0 text_pole">
+                                            <option value="__root__">root</option>
+                                        </select>
+                                        <button id="sandbox_workspace_refresh_button" type="button" class="menu_button menu_button_icon" title="Refresh workspaces." data-i18n="[title]Refresh workspaces.">
+                                            <i class="fa-solid fa-rotate"></i>
+                                        </button>
+                                        <button id="sandbox_workspace_add_button" type="button" class="menu_button menu_button_icon" title="Create workspace." data-i18n="[title]Create workspace.">
+                                            <i class="fa-solid fa-plus"></i>
+                                        </button>
+                                    </div>
+                                </div>
+                                <div class="tools-field-block">
+                                    <small data-i18n="Location:">Location:</small>
+                                    <div class="tools-static-pill tools-static-pill--path">
+                                        <i class="fa-solid fa-house"></i>
+                                        <span id="sandbox_location_label">sandbox\\&lt;workspace&gt;</span>
+                                    </div>
+                                </div>
+                            </div>
+                        </section>
+                        <section class="tools-panel-card tools-panel-card--full mcp-card">
+                            <div class="tools-panel-header">
+                                <div class="tools-panel-title">
+                                    <i class="fa-solid fa-database"></i>
+                                    <h4 class="margin0" data-i18n="MCP Servers">MCP Servers</h4>
+                                </div>
+                                <div class="tools-panel-actions">
+                                    <button id="mcp_refresh_button" type="button" class="menu_button menu_button_icon tools-section-button" title="Refresh enabled MCP servers.">
+                                        <i class="fa-solid fa-rotate"></i>
+                                    </button>
+                                    <button id="mcp_manage_button" type="button" class="menu_button menu_button_icon tools-section-button" title="Manage MCP servers.">
+                                        <i class="fa-solid fa-gear"></i>
+                                    </button>
+                                </div>
+                            </div>
+                            <div class="tools-panel-body">
+                                <div id="mcp_status_summary" class="mcp-status-grid"></div>
+                                <div id="mcp_overview" class="mcp-overview-list"></div>
+                                <div id="mcp_context_summary" hidden></div>
+                            </div>
+                        </section>
                     </div>
                 </div>
             </div>

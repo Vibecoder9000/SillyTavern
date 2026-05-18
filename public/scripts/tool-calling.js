@@ -504,6 +504,9 @@ let mcpActiveWorkspaceKey = '';
 let mcpUiInitialized = false;
 let mcpManageButtonInitialized = false;
 let mcpRefreshButtonInitialized = false;
+let sandboxWorkspaceRefreshButtonInitialized = false;
+let sandboxWorkspaceAddButtonInitialized = false;
+let sandboxRootPath = '';
 
 function resolveToolRegistrationValue(value) {
     return typeof value === 'function' ? value() : value;
@@ -1319,6 +1322,11 @@ function getMcpContextSummaryElement() {
     return element instanceof HTMLElement ? element : null;
 }
 
+function getMcpOverviewElement() {
+    const element = document.getElementById('mcp_overview');
+    return element instanceof HTMLElement ? element : null;
+}
+
 function getMcpManageButtonElement() {
     const element = document.getElementById('mcp_manage_button');
     return element instanceof HTMLButtonElement ? element : null;
@@ -1901,6 +1909,30 @@ function removeMcpStatus(serverId) {
     mcpServerStatus.delete(serverId);
 }
 
+async function toggleMcpServerEnabled(server, enabled = !server?.enabled) {
+    const updated = normalizeMcpServerConfig({ ...server, enabled });
+    const status = mcpServerStatus.get(updated.id) ?? {};
+    setMcpServerEnabledForWorkspace(updated.id, enabled);
+
+    try {
+        if (enabled) {
+            await refreshMcpServer(updated, { reconnect: true });
+        } else if (status.connected) {
+            await disconnectMcpServer(updated);
+        } else {
+            clearMcpToolsForServer(updated.id);
+            removeMcpStatus(updated.id);
+        }
+    } catch (error) {
+        upsertMcpStatus(updated.id, { connected: false, lastError: String(error?.message || error) });
+        throw error;
+    } finally {
+        refreshMcpSummaryUi();
+    }
+
+    return updated;
+}
+
 function summarizeSelectedMcpContext() {
     const enabledCount = getMcpServers().filter(server => server.enabled).length;
     if (enabledCount === 0) {
@@ -1910,6 +1942,82 @@ function summarizeSelectedMcpContext() {
     return `${enabledCount} server${enabledCount === 1 ? '' : 's'} enabled for this workspace.`;
 }
 
+function createMcpSummaryStat(label, value) {
+    const cell = document.createElement('div');
+    cell.className = 'mcp-status-cell';
+
+    const labelElement = document.createElement('small');
+    labelElement.className = 'mcp-status-label';
+    labelElement.textContent = label;
+
+    const valueElement = document.createElement('strong');
+    valueElement.className = 'mcp-status-value';
+    valueElement.textContent = value;
+
+    cell.append(labelElement, valueElement);
+    return cell;
+}
+
+function renderMcpOverview() {
+    const overviewElement = getMcpOverviewElement();
+    if (!overviewElement) {
+        return;
+    }
+
+    overviewElement.replaceChildren();
+    const servers = getMcpServers();
+
+    if (servers.length === 0) {
+        const empty = document.createElement('small');
+        empty.className = 'mcp-empty-state';
+        empty.textContent = 'No MCP servers configured for this workspace.';
+        overviewElement.append(empty);
+        return;
+    }
+
+    for (const server of servers) {
+        const status = mcpServerStatus.get(server.id) ?? {};
+        const statusTone = getMcpServerStatusTone(server, status);
+        const row = document.createElement('div');
+        row.className = 'mcp-overview-row';
+
+        const identity = document.createElement('div');
+        identity.className = 'mcp-overview-identity';
+
+        const name = document.createElement('strong');
+        name.textContent = server.name || server.id || 'MCP Server';
+        identity.append(name);
+
+        const meta = document.createElement('div');
+        meta.className = 'mcp-card-badges';
+        const enabledToggle = document.createElement('button');
+        enabledToggle.type = 'button';
+        enabledToggle.className = `menu_button tools-mcp-state-toggle mcp-badge mcp-badge--${server.enabled ? 'success' : 'muted'}`;
+        enabledToggle.textContent = server.enabled ? 'Enabled' : 'Disabled';
+        enabledToggle.addEventListener('click', async () => {
+            enabledToggle.disabled = true;
+            try {
+                await toggleMcpServerEnabled(server, !server.enabled);
+            } catch (error) {
+                toastr.error(String(error?.message || error), `MCP: ${server.name || server.id}`);
+            }
+        });
+        meta.append(enabledToggle);
+        meta.append(createMcpBadge(server.transportType === 'stdio' ? 'stdio' : server.transportType === 'sse' ? 'SSE' : 'HTTP', 'muted'));
+        if (server.version) {
+            meta.append(createMcpBadge(`v${server.version}`, 'muted'));
+        }
+        identity.append(meta);
+
+        const summary = document.createElement('div');
+        summary.className = 'mcp-overview-summary';
+        summary.append(createMcpBadge(`${status.toolCount ?? 0} tool${(status.toolCount ?? 0) === 1 ? '' : 's'}`, 'default'));
+
+        row.append(identity, summary);
+        overviewElement.append(row);
+    }
+}
+
 function refreshMcpSummaryUi() {
     const statusElement = getMcpStatusSummaryElement();
     const contextElement = getMcpContextSummaryElement();
@@ -1917,17 +2025,28 @@ function refreshMcpSummaryUi() {
     const enabledCount = servers.filter(server => server.enabled).length;
     const connectedCount = servers.filter(server => mcpServerStatus.get(server.id)?.connected).length;
     const toolCount = Array.from(mcpDiscoveredTools.values()).length;
-    const workspaceLabel = getMcpWorkspaceLabel();
 
     if (statusElement) {
-        statusElement.textContent = servers.length === 0
-            ? `Workspace: ${workspaceLabel} • no servers added.`
-            : `Workspace: ${workspaceLabel} • ${enabledCount}/${servers.length} enabled • ${connectedCount} connected • ${toolCount} tool${toolCount === 1 ? '' : 's'} ready.`;
+        statusElement.replaceChildren();
+        if (servers.length === 0) {
+            const empty = document.createElement('small');
+            empty.className = 'opacity70p';
+            empty.textContent = 'No MCP servers configured.';
+            statusElement.append(empty);
+        } else {
+            statusElement.append(
+                createMcpSummaryStat('Enabled', `${enabledCount}/${servers.length}`),
+                createMcpSummaryStat('Connected', String(connectedCount)),
+                createMcpSummaryStat('Tools Ready', String(toolCount)),
+            );
+        }
     }
 
     if (contextElement) {
-        contextElement.textContent = summarizeSelectedMcpContext();
+        contextElement.textContent = '';
     }
+
+    renderMcpOverview();
 }
 
 function formatMcpResourceContents(readResult) {
@@ -5616,6 +5735,31 @@ function getSandboxWorkspaceManageButtonElement() {
     return element instanceof HTMLButtonElement ? element : null;
 }
 
+function getSandboxWorkspaceRefreshButtonElement() {
+    const element = document.getElementById('sandbox_workspace_refresh_button');
+    return element instanceof HTMLButtonElement ? element : null;
+}
+
+function getSandboxWorkspaceAddButtonElement() {
+    const element = document.getElementById('sandbox_workspace_add_button');
+    return element instanceof HTMLButtonElement ? element : null;
+}
+
+function getSandboxLocationLabelElement() {
+    const element = document.getElementById('sandbox_location_label');
+    return element instanceof HTMLElement ? element : null;
+}
+
+function updateSandboxLocationLabel() {
+    const locationElement = getSandboxLocationLabelElement();
+    if (!locationElement) {
+        return;
+    }
+
+    const basePath = String(sandboxRootPath || '').trim() || 'sandbox';
+    locationElement.textContent = `${basePath}\\<workspace>`;
+}
+
 async function fetchSandboxWorkspaces() {
     try {
         const response = await fetch('/api/extensions/tools/workspaces', {
@@ -5629,6 +5773,8 @@ async function fetchSandboxWorkspaces() {
         }
 
         const result = await response.json();
+        sandboxRootPath = String(result.rootPath || '').trim();
+        updateSandboxLocationLabel();
         return Array.isArray(result.workspaces) ? result.workspaces : [];
     } catch (error) {
         console.error('Failed to fetch sandbox workspaces:', error);
@@ -7873,20 +8019,9 @@ async function openMcpManagerPopup() {
                     enableButton.className = 'menu_button';
                     enableButton.textContent = server.enabled ? 'Disable' : 'Enable';
                     enableButton.addEventListener('click', async () => {
-                        const nextEnabled = !server.enabled;
-                        const updated = normalizeMcpServerConfig({ ...server, enabled: nextEnabled });
-                        setMcpServerEnabledForWorkspace(updated.id, nextEnabled);
                         try {
-                            if (updated.enabled) {
-                                await refreshMcpServer(updated, { reconnect: true });
-                            } else if (status.connected) {
-                                await disconnectMcpServer(updated);
-                            } else {
-                                clearMcpToolsForServer(updated.id);
-                                removeMcpStatus(updated.id);
-                            }
+                            await toggleMcpServerEnabled(server, !server.enabled);
                         } catch (error) {
-                            upsertMcpStatus(updated.id, { connected: false, lastError: String(error?.message || error) });
                             toastr.error(String(error?.message || error), `MCP: ${server.name || server.id}`);
                         }
                         render();
@@ -8126,23 +8261,36 @@ async function refreshSandboxWorkspaceSelector({ persistDefault = false } = {}) 
             option.textContent = workspace;
             select.append(option);
         }
-
-        const separator = document.createElement('option');
-        separator.value = WORKSPACE_SEPARATOR_OPTION;
-        separator.textContent = '──────────────';
-        separator.disabled = true;
-        select.append(separator);
-
-        const createOption = document.createElement('option');
-        createOption.value = NEW_WORKSPACE_OPTION;
-        createOption.textContent = '+ New workspace...';
-        select.append(createOption);
     }
 
     select.value = selectedWorkspace;
     select.dataset.previousWorkspace = selectedWorkspace;
     select.disabled = false;
     select.removeAttribute('data-loading');
+}
+
+async function promptCreateSandboxWorkspace() {
+    const input = await Popup.show.input('New Workspace', 'Enter a name for the new workspace:');
+    if (!input) {
+        return null;
+    }
+
+    const sanitized = await getSanitizedFilename(String(input));
+    const workspace = String(sanitized || '').trim();
+    if (!workspace) {
+        toastr.warning('Workspace name cannot be empty.');
+        return null;
+    }
+
+    const created = await createSandboxWorkspace(workspace);
+    if (!created) {
+        return null;
+    }
+
+    await persistSandboxWorkspaceForCurrentChat(workspace);
+    await refreshSandboxWorkspaceSelector();
+    await syncActiveMcpWorkspace({ forceRefresh: true });
+    return workspace;
 }
 
 async function onSandboxWorkspaceChange(event) {
@@ -8160,29 +8308,12 @@ async function onSandboxWorkspaceChange(event) {
     }
 
     if (selectedValue === NEW_WORKSPACE_OPTION) {
-        const input = await Popup.show.input('New Workspace', 'Enter a name for the new workspace:');
-        if (!input) {
-            select.value = previousWorkspace;
-            return;
-        }
-
-        const sanitized = await getSanitizedFilename(String(input));
-        const workspace = String(sanitized || '').trim();
+        const workspace = await promptCreateSandboxWorkspace();
         if (!workspace) {
-            toastr.warning('Workspace name cannot be empty.');
             select.value = previousWorkspace;
             return;
         }
 
-        const created = await createSandboxWorkspace(workspace);
-        if (!created) {
-            select.value = previousWorkspace;
-            return;
-        }
-
-        await persistSandboxWorkspaceForCurrentChat(workspace);
-        await refreshSandboxWorkspaceSelector();
-        await syncActiveMcpWorkspace({ forceRefresh: true });
         return;
     }
 
@@ -8198,7 +8329,9 @@ async function onSandboxWorkspaceChange(event) {
 async function initSandboxWorkspaceSelector() {
     const select = getSandboxWorkspaceSelectElement();
     const manageButton = getSandboxWorkspaceManageButtonElement();
-    if (!select && !manageButton) {
+    const refreshButton = getSandboxWorkspaceRefreshButtonElement();
+    const addButton = getSandboxWorkspaceAddButtonElement();
+    if (!select && !manageButton && !refreshButton && !addButton) {
         return;
     }
 
@@ -8207,6 +8340,20 @@ async function initSandboxWorkspaceSelector() {
             void openSandboxManagerPopup();
         });
         sandboxWorkspaceManageButtonInitialized = true;
+    }
+
+    if (refreshButton && !sandboxWorkspaceRefreshButtonInitialized) {
+        refreshButton.addEventListener('click', () => {
+            void refreshSandboxWorkspaceSelector();
+        });
+        sandboxWorkspaceRefreshButtonInitialized = true;
+    }
+
+    if (addButton && !sandboxWorkspaceAddButtonInitialized) {
+        addButton.addEventListener('click', async () => {
+            await promptCreateSandboxWorkspace();
+        });
+        sandboxWorkspaceAddButtonInitialized = true;
     }
 
     if (!select) {
