@@ -345,6 +345,8 @@ export const power_user = {
     enable_image_generation: false,
     enable_browser_tools: false,
     tool_execution_mode: 'default',
+    tool_output_truncation_limit: 4092,
+    tool_max_stop_sequences: 0,
     mcp: {
         servers: [],
     },
@@ -1591,6 +1593,12 @@ export async function loadPowerUserSettings(settings, data) {
     }
 
     power_user.tool_execution_mode = normalizeToolExecutionMode(power_user.tool_execution_mode);
+    power_user.tool_output_truncation_limit = Number.isFinite(Number(power_user.tool_output_truncation_limit))
+        ? Math.min(Math.max(Number(power_user.tool_output_truncation_limit), 0), 65536)
+        : 4092;
+    power_user.tool_max_stop_sequences = Number.isFinite(Number(power_user.tool_max_stop_sequences))
+        ? Math.min(Math.max(Math.trunc(Number(power_user.tool_max_stop_sequences)), 0), 64)
+        : 0;
 
     if (power_user.stscript === undefined) {
         power_user.stscript = defaultStscript;
@@ -1816,6 +1824,8 @@ export async function loadPowerUserSettings(settings, data) {
     $('#enable_image_generation').prop('checked', power_user.enable_image_generation);
     $('#enable_browser_tools').prop('checked', power_user.enable_browser_tools);
     $('#tool_execution_mode').val(normalizeToolExecutionMode(power_user.tool_execution_mode));
+    $('#tool_output_truncation_limit, #tool_output_truncation_limit_counter').val(power_user.tool_output_truncation_limit);
+    $('#tool_max_stop_sequences, #tool_max_stop_sequences_counter').val(power_user.tool_max_stop_sequences);
     $('#media_display').val(power_user.media_display);
     $('#image_overswipe').val(power_user.image_overswipe);
 
@@ -4122,6 +4132,20 @@ jQuery(() => {
 
     $('#tool_execution_mode').on('change', function () {
         power_user.tool_execution_mode = normalizeToolExecutionMode($(this).val());
+        saveSettingsDebounced();
+    });
+
+    $('#tool_output_truncation_limit').on('input', function () {
+        const value = Math.min(Math.max(Number($(this).val()) || 0, 0), 65536);
+        power_user.tool_output_truncation_limit = value;
+        $('#tool_output_truncation_limit_counter').val(value);
+        saveSettingsDebounced();
+    });
+
+    $('#tool_max_stop_sequences').on('input', function () {
+        const value = Math.min(Math.max(Math.trunc(Number($(this).val()) || 0), 0), 64);
+        power_user.tool_max_stop_sequences = value;
+        $('#tool_max_stop_sequences_counter').val(value);
         saveSettingsDebounced();
     });
 

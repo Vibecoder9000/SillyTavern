@@ -3091,6 +3091,18 @@ export async function createGenerationParameters(settings, model, type, messages
         }
     }
 
+    if (oai_settings.native_tool_calling && Array.isArray(generate_data.stop)) {
+        const maxStopSequences = Math.trunc(Number(power_user.tool_max_stop_sequences) || 0);
+        if (maxStopSequences > 0) {
+            generate_data.stop = [...new Set(generate_data.stop.filter(stop => typeof stop === 'string' && stop.length > 0))]
+                .slice(0, maxStopSequences);
+        }
+    }
+
+    if (!Array.isArray(generate_data.stop) || !generate_data.stop.length) {
+        delete generate_data.stop;
+    }
+
     if (jsonSchema) {
         generate_data.json_schema = jsonSchema;
     }

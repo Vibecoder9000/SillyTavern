@@ -5695,6 +5695,16 @@
                                         <input class="neo-range-input" type="number" min="0" max="65536" step="256" data-for="tool_output_truncation_limit" id="tool_output_truncation_limit_counter" value="4092">
                                     </div>
                                 </div>
+                                <div class="tools-output-limit">
+                                    <small class="tools-output-label">
+                                        <span data-i18n="Max Stop Sequences">Max Stop Sequences</span>
+                                        <div class="fa-solid fa-circle-info opacity50p" data-i18n="[title]Maximum number of stop sequences sent with native tool calling requests. Helps with providers that enforce low stop sequence limits. Set to 0 to disable." title="Maximum number of stop sequences sent with native tool calling requests. Helps with providers that enforce low stop sequence limits. Set to 0 to disable."></div>
+                                    </small>
+                                    <div class="tools-output-controls">
+                                        <input class="neo-range-slider" type="range" id="tool_max_stop_sequences" name="tool_max_stop_sequences" min="0" max="64" step="1" value="0">
+                                        <input class="neo-range-input" type="number" min="0" max="64" step="1" data-for="tool_max_stop_sequences" id="tool_max_stop_sequences_counter" value="0">
+                                    </div>
+                                </div>
                             </div>
                         </section>
                         <section class="tools-panel-card sandbox-card">
