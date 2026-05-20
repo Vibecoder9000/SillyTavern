@@ -344,7 +344,9 @@ export const power_user = {
     enable_dangerous_tools: false,
     enable_image_generation: false,
     enable_browser_tools: false,
-    tool_execution_mode: 'default',
+    tool_click_to_execute: true,
+    tool_bypass_mcp_mutable_warning: true,
+    tool_auto_continue: true,
     tool_output_truncation_limit: 4092,
     tool_max_stop_sequences: 0,
     mcp: {
@@ -353,20 +355,6 @@ export const power_user = {
     media_display: MEDIA_DISPLAY.LIST,
     image_overswipe: IMAGE_OVERSWIPE.GENERATE,
 };
-
-export function normalizeToolExecutionMode(value) {
-    const normalized = String(value ?? '').trim().toLowerCase();
-
-    if (normalized === 'manual' || normalized === 'default' || normalized === 'automatic') {
-        return normalized;
-    }
-
-    if (normalized === 'auto') {
-        return 'default';
-    }
-
-    return 'default';
-}
 
 let themes = [];
 let movingUIPresets = [];
@@ -1592,7 +1580,15 @@ export async function loadPowerUserSettings(settings, data) {
         Object.assign(power_user, settings.power_user);
     }
 
-    power_user.tool_execution_mode = normalizeToolExecutionMode(power_user.tool_execution_mode);
+    power_user.tool_click_to_execute = power_user.tool_click_to_execute !== undefined
+        ? !!power_user.tool_click_to_execute
+        : true;
+    power_user.tool_bypass_mcp_mutable_warning = power_user.tool_bypass_mcp_mutable_warning !== undefined
+        ? !!power_user.tool_bypass_mcp_mutable_warning
+        : true;
+    power_user.tool_auto_continue = power_user.tool_auto_continue !== undefined
+        ? !!power_user.tool_auto_continue
+        : true;
     power_user.tool_output_truncation_limit = Number.isFinite(Number(power_user.tool_output_truncation_limit))
         ? Math.min(Math.max(Number(power_user.tool_output_truncation_limit), 0), 65536)
         : 4092;
@@ -1823,7 +1819,9 @@ export async function loadPowerUserSettings(settings, data) {
     $('#enable_dangerous_tools').prop('checked', power_user.enable_dangerous_tools);
     $('#enable_image_generation').prop('checked', power_user.enable_image_generation);
     $('#enable_browser_tools').prop('checked', power_user.enable_browser_tools);
-    $('#tool_execution_mode').val(normalizeToolExecutionMode(power_user.tool_execution_mode));
+    $('#tool_click_to_execute').prop('checked', power_user.tool_click_to_execute);
+    $('#tool_bypass_mcp_mutable_warning').prop('checked', power_user.tool_bypass_mcp_mutable_warning);
+    $('#tool_auto_continue').prop('checked', power_user.tool_auto_continue);
     $('#tool_output_truncation_limit, #tool_output_truncation_limit_counter').val(power_user.tool_output_truncation_limit);
     $('#tool_max_stop_sequences, #tool_max_stop_sequences_counter').val(power_user.tool_max_stop_sequences);
     $('#media_display').val(power_user.media_display);
@@ -4130,8 +4128,18 @@ jQuery(() => {
         saveSettingsDebounced();
     });
 
-    $('#tool_execution_mode').on('change', function () {
-        power_user.tool_execution_mode = normalizeToolExecutionMode($(this).val());
+    $('#tool_click_to_execute').on('input', function () {
+        power_user.tool_click_to_execute = !!$(this).prop('checked');
+        saveSettingsDebounced();
+    });
+
+    $('#tool_bypass_mcp_mutable_warning').on('input', function () {
+        power_user.tool_bypass_mcp_mutable_warning = !!$(this).prop('checked');
+        saveSettingsDebounced();
+    });
+
+    $('#tool_auto_continue').on('input', function () {
+        power_user.tool_auto_continue = !!$(this).prop('checked');
         saveSettingsDebounced();
     });
 

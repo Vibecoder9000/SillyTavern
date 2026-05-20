@@ -5656,6 +5656,10 @@
                                     <small data-i18n="Native Tool Calling">Native Tool Calling</small>
                                 </label>
                                 <div id="tool_calling_dependent_settings">
+                                    <label class="checkbox_label" for="tool_parse_in_thinking_blocks" title="When enabled, tool tags inside thinking blocks will be parsed as tools. When disabled, thinking blocks are ignored by the tool parser." data-i18n="[title]When enabled, tool tags inside thinking blocks will be parsed as tools. When disabled, thinking blocks are ignored by the tool parser.">
+                                        <input id="tool_parse_in_thinking_blocks" type="checkbox" />
+                                        <small data-i18n="Parse tools in thinking blocks">Parse tools in thinking blocks</small>
+                                    </label>
                                     <label class="checkbox_label" for="hide_tool_messages" title="Hide tool call and result messages from the chat view. They will still be part of the chat history for the AI." data-i18n="[title]Hide tool call and result messages from the chat view. They will still be part of the chat history for the AI.">
                                         <input id="hide_tool_messages" type="checkbox" />
                                         <small data-i18n="Hide tool calls and results">Hide tool calls and results</small>
@@ -5676,14 +5680,18 @@
                                         <input id="enable_browser_tools" type="checkbox" />
                                         <small data-i18n="Enable browser tools">Enable browser tools</small>
                                     </label>
-                                    <div class="tools-inline-field" title="Controls how tool calls are executed. Manual requires clicking each tool, Default runs tools automatically but warns before non-read-only MCP tools, Automatic runs tools automatically with no warnings." data-i18n="[title]Controls how tool calls are executed. Manual requires clicking each tool, Default runs tools automatically but warns before non-read-only MCP tools, Automatic runs tools automatically with no warnings.">
-                                        <label for="tool_execution_mode"><small data-i18n="Execution Mode:">Execution Mode:</small></label>
-                                        <select id="tool_execution_mode" class="widthNatural flex1 margin0 text_pole">
-                                            <option value="manual" data-i18n="Manual">Manual</option>
-                                            <option value="default" data-i18n="Default">Default</option>
-                                            <option value="automatic" data-i18n="Automatic">Automatic</option>
-                                        </select>
-                                    </div>
+                                    <label class="checkbox_label" for="tool_click_to_execute" title="When enabled, tool calls wait for you to click Execute. When disabled, tool calls run automatically." data-i18n="[title]When enabled, tool calls wait for you to click Execute. When disabled, tool calls run automatically.">
+                                        <input id="tool_click_to_execute" type="checkbox" />
+                                        <small data-i18n="Click to execute tool calls">Click to execute tool calls</small>
+                                    </label>
+                                    <label class="checkbox_label" for="tool_bypass_mcp_mutable_warning" title="When enabled, mutable MCP tools run without an extra warning. When disabled, mutable MCP tools show a warning before execution." data-i18n="[title]When enabled, mutable MCP tools run without an extra warning. When disabled, mutable MCP tools show a warning before execution.">
+                                        <input id="tool_bypass_mcp_mutable_warning" type="checkbox" />
+                                        <small data-i18n="Bypass mutable MCP warnings">Bypass mutable MCP warnings</small>
+                                    </label>
+                                    <label class="checkbox_label" for="tool_auto_continue" title="When enabled, the chat continues automatically after all tool calls in a message are done if any executed tool used continue=true." data-i18n="[title]When enabled, the chat continues automatically after all tool calls in a message are done if any executed tool used continue=true.">
+                                        <input id="tool_auto_continue" type="checkbox" />
+                                        <small data-i18n="Auto-continue after tools">Auto-continue after tools</small>
+                                    </label>
                                 </div>
                                 <div class="tools-output-limit">
                                     <small class="tools-output-label">
@@ -5722,7 +5730,7 @@
                                     <label for="sandbox_workspace_select"><small data-i18n="Workspace:">Workspace:</small></label>
                                     <div class="tools-workspace-controls">
                                         <select id="sandbox_workspace_select" class="widthNatural flex1 margin0 text_pole">
-                                            <option value="__root__">root</option>
+                                            <option value="__root__">uploads</option>
                                         </select>
                                         <button id="sandbox_workspace_refresh_button" type="button" class="menu_button menu_button_icon" title="Refresh workspaces." data-i18n="[title]Refresh workspaces.">
                                             <i class="fa-solid fa-rotate"></i>
@@ -5736,7 +5744,7 @@
                                     <small data-i18n="Location:">Location:</small>
                                     <div class="tools-static-pill tools-static-pill--path">
                                         <i class="fa-solid fa-house"></i>
-                                        <span id="sandbox_location_label">sandbox\\&lt;workspace&gt;</span>
+                                        <span id="sandbox_location_label">uploads\\&lt;workspace&gt;</span>
                                     </div>
                                 </div>
                             </div>

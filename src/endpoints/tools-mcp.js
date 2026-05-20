@@ -9,7 +9,7 @@ import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { CallToolResultSchema, ListRootsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 
-import { getSandboxDir } from './sandbox.js';
+import { getSandboxDir, ROOT_WORKSPACE_SENTINEL } from './sandbox.js';
 
 const MCP_DEFAULT_TIMEOUT_MS = 30_000;
 const MCP_MAX_TIMEOUT_MS = 180_000;
@@ -200,7 +200,9 @@ async function buildRootContext(userHandle, requestBody = {}) {
     const sandboxDir = getSandboxDir(userHandle, workspace, character);
     await fs.mkdir(sandboxDir, { recursive: true });
 
-    const workspaceLabel = normalizeText(workspace) || 'root';
+    const workspaceLabel = workspace === ROOT_WORKSPACE_SENTINEL
+        ? 'uploads'
+        : (normalizeText(workspace) || 'uploads');
     const characterLabel = normalizeText(character);
     const rootName = characterLabel
         ? `sandbox:${workspaceLabel}/${characterLabel}`

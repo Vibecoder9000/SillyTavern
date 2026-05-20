@@ -2,7 +2,6 @@ import path from 'node:path';
 import sanitize from 'sanitize-filename';
 
 export const ROOT_WORKSPACE_SENTINEL = '__root__';
-export const ASSISTANT_CHARACTER_NAME = 'Assistant';
 
 /**
  * Returns the sandbox root directory for a given user handle.
@@ -12,16 +11,6 @@ export const ASSISTANT_CHARACTER_NAME = 'Assistant';
  */
 export function getUserSandboxRootDir(userHandle) {
     return path.resolve(path.join(globalThis.DATA_ROOT, userHandle, 'uploads'));
-}
-
-/**
- * Checks whether the given character should be treated as the global Assistant.
- * @param {unknown} character Character name sent by the client.
- * @returns {boolean}
- */
-export function isAssistantCharacter(character) {
-    return typeof character === 'string'
-        && character.trim().toLowerCase() === ASSISTANT_CHARACTER_NAME.toLowerCase();
 }
 
 /**
@@ -44,16 +33,11 @@ export function normalizeWorkspaceName(workspace) {
 }
 
 /**
- * Resolves final workspace name, applying assistant root override.
+ * Resolves final workspace name from the selected workspace value.
  * @param {unknown} workspace Workspace value from request.
- * @param {unknown} character Active character name from request.
  * @returns {string}
  */
-export function resolveWorkspaceName(workspace, character) {
-    if (isAssistantCharacter(character)) {
-        return ROOT_WORKSPACE_SENTINEL;
-    }
-
+export function resolveWorkspaceName(workspace) {
     return normalizeWorkspaceName(workspace);
 }
 
@@ -66,7 +50,7 @@ export function resolveWorkspaceName(workspace, character) {
  */
 export function getSandboxDir(userHandle, workspace, character) {
     const sandboxRoot = getUserSandboxRootDir(userHandle);
-    const resolvedWorkspace = resolveWorkspaceName(workspace, character);
+    const resolvedWorkspace = resolveWorkspaceName(workspace);
 
     if (resolvedWorkspace === ROOT_WORKSPACE_SENTINEL) {
         return sandboxRoot;

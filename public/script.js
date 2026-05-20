@@ -2257,6 +2257,133 @@ function formatShellStatusLabel(status) {
     }
 }
 
+function getNativeToolSegments(message) {
+    const storedSegments = Array.isArray(message?.extra?.native_tool_segments)
+        ? message.extra.native_tool_segments
+        : null;
+    if (storedSegments && storedSegments.length > 0) {
+        return storedSegments;
+    }
+
+    if (!message?.extra?.is_tool_call) {
+        return [];
+    }
+
+    const segments = [];
+    const prefixText = String(message.extra?.prefix_text ?? '');
+    if (prefixText) {
+        segments.push({ type: 'text', text: prefixText });
+    }
+
+    if (message.extra?.tool_call_info || message.extra?.tool_call_parse_error) {
+        segments.push({
+            type: 'tool',
+            tool_call: message.extra.tool_call_info ?? null,
+            parse_error: message.extra.tool_call_parse_error ?? null,
+            raw_tool_block: message.extra.tool_call_parse_error?.raw_tool_block ?? null,
+        });
+    }
+
+    return segments;
+}
+
+function getNativeToolExecutionState(message, segmentIndex) {
+    const nativeState = message?.extra?.native_tool_execution?.[segmentIndex];
+    if (nativeState && typeof nativeState.status === 'string') {
+        return nativeState.status;
+    }
+
+    if (!Array.isArray(message?.extra?.native_tool_segments) && message?.extra?.tool_call_started) {
+        return 'running';
+    }
+
+    return 'pending';
+}
+
+function buildToolExecuteButtonHtml(toolName, messageId, segmentIndex, status) {
+    let label = 'Execute';
+    let icon = 'fa-play';
+    let className = 'tool-execute-button menu_button menu_button_icon';
+    let disabled = '';
+
+    if (status === 'running') {
+        label = 'Executing...';
+        icon = 'fa-spinner fa-spin';
+        className += ' executing';
+        disabled = ' disabled';
+    } else if (status === 'done') {
+        label = 'Done';
+        icon = 'fa-check';
+        className += ' done';
+    } else if (status === 'failed') {
+        label = 'Failed';
+        icon = 'fa-rotate-right';
+        className += ' failed';
+    }
+
+    return `<div class="${className}" data-tool-name="${toolName}" data-message-id="${messageId}" data-segment-index="${segmentIndex}"${disabled} role="button" tabindex="0"><i class="fa-solid ${icon}"></i><span>${label}</span></div>`;
+}
+
+function renderNativeToolSegmentHtml(message, messageId, segment, segmentIndex, { includeExecuteButton = true } = {}) {
+    const toolInfo = segment?.tool_call ?? null;
+    const parseError = segment?.parse_error ?? null;
+    const hasValidToolInfo = !!toolInfo;
+    const detectedToolName = String(toolInfo?.tool ?? segment?.detected_tool_name ?? parseError?.tool_name ?? 'invalid_tool_call').trim();
+
+    if (!hasValidToolInfo && !parseError) {
+        return '';
+    }
+
+    const toolName = DOMPurify.sanitize(detectedToolName || 'invalid_tool_call');
+    const toolArgsObject = hasValidToolInfo ? parseToolCallArguments(toolInfo.args) : null;
+    const canExecuteTool = includeExecuteButton && (hasValidToolInfo || !!parseError);
+    const executionState = getNativeToolExecutionState(message, segmentIndex);
+
+    let html = '';
+    if (hasValidToolInfo && isShellToolCall(toolInfo)) {
+        const explanation = String(toolArgsObject.explanation ?? '').trim() || 'Runs a PowerShell command.';
+        const command = String(toolArgsObject.command ?? '');
+        const cwd = String(toolArgsObject.cwd ?? '.').trim() || '.';
+
+        html += '<div class="tool-call-box tool-shell-call-box">';
+        html += '<div class="tool-call-header">';
+        html += '<h4><i class="fa-solid fa-terminal"></i> Powershell</h4>';
+        if (canExecuteTool) {
+            html += `<div class="tool-call-header-actions">${buildToolExecuteButtonHtml(toolName, messageId, segmentIndex, executionState)}</div>`;
+        }
+        html += '</div>';
+        html += `<div class="tool-shell-summary"><p class="tool-shell-explanation">${DOMPurify.sanitize(explanation)}</p></div>`;
+        html += getShellCommandDetailsHtml(command, cwd);
+        html += '</div>';
+
+        return html;
+    }
+
+    const parseErrorMessage = String(parseError?.message ?? '').trim();
+    const rawToolBlock = String(segment?.raw_tool_block ?? parseError?.raw_tool_block ?? '').trim();
+    let toolArgs = rawToolBlock || '{}';
+
+    if (hasValidToolInfo) {
+        toolArgs = formatToolArgumentsForDisplay(toolArgsObject, toolInfo?.continue !== false);
+    }
+
+    html += '<div class="tool-call-box">';
+    html += '<div class="tool-call-header">';
+    html += '<h4><i class="fa-solid fa-cogs"></i> Tool Call</h4>';
+    if (canExecuteTool) {
+        html += `<div class="tool-call-header-actions">${buildToolExecuteButtonHtml(toolName, messageId, segmentIndex, executionState)}</div>`;
+    }
+    html += '</div>';
+    html += `<div class="tool-action"><p><b>Action:</b> <code>${toolName}</code></p>`;
+    if (parseErrorMessage) {
+        html += `<p><b>Error:</b> ${DOMPurify.sanitize(parseErrorMessage)}</p>`;
+    }
+    html += `<p><b>Arguments:</b></p><pre><code>${DOMPurify.sanitize(toolArgs)}</code></pre></div>`;
+    html += '</div>';
+
+    return html;
+}
+
 /**
  * Builds formatted HTML for a tool call message.
  * @param {ChatMessage} message Message object
@@ -2266,77 +2393,38 @@ function formatShellStatusLabel(status) {
  * @returns {string} Tool call HTML
  */
 function getToolCallMessageHtml(message, messageId, { includeExecuteButton = true } = {}) {
-    const toolInfo = message?.extra?.tool_call_info;
-    const parseError = message?.extra?.tool_call_parse_error;
-    const hasValidToolInfo = !!toolInfo;
-
-    let html = '';
-    if (message.extra?.prefix_text) {
-        const prefixHtml = messageFormatting(
-            message.extra.prefix_text,
-            message.name,
-            message.is_system,
-            message.is_user,
-            messageId,
-            {},
-            false,
-        );
-        html += `<div class="tool-prefix-text">${prefixHtml}</div>`;
+    const segments = getNativeToolSegments(message);
+    if (segments.length === 0) {
+        return '';
     }
 
-    if (!hasValidToolInfo && !parseError) {
-        return html;
-    }
+    const htmlParts = [];
+    segments.forEach((segment, segmentIndex) => {
+        if (segment?.type === 'text') {
+            const text = String(segment.text ?? '');
+            if (!text) {
+                return;
+            }
 
-    const toolName = DOMPurify.sanitize(hasValidToolInfo ? (toolInfo.tool ?? '') : 'invalid_tool_call');
-    const toolArgsObject = hasValidToolInfo ? parseToolCallArguments(toolInfo.args) : null;
-    const canExecuteTool = includeExecuteButton && hasValidToolInfo;
-
-    const executeButtonHtml = (toolName, messageId, isExecuting) => isExecuting
-        ? `<button class="tool-execute-button executing" data-tool-name="${toolName}" data-message-id="${messageId}" disabled><i class="fa-solid fa-spinner fa-spin"></i> Executing...</button>`
-        : `<button class="tool-execute-button" data-tool-name="${toolName}" data-message-id="${messageId}"><i class="fa-solid fa-play"></i> Execute Tool</button>`;
-    const isExecutingTool = !!message?.extra?.tool_call_started;
-
-    if (hasValidToolInfo && isShellToolCall(toolInfo)) {
-        const explanation = String(toolArgsObject.explanation ?? '').trim() || 'Runs a PowerShell command.';
-        const command = String(toolArgsObject.command ?? '');
-        const cwd = String(toolArgsObject.cwd ?? '.').trim() || '.';
-
-        html += '<div class="tool-call-box tool-shell-call-box">';
-        html += '<h4><i class="fa-solid fa-terminal"></i> Powershell</h4>';
-        html += `<div class="tool-shell-summary"><p class="tool-shell-explanation">${DOMPurify.sanitize(explanation)}</p></div>`;
-        html += getShellCommandDetailsHtml(command, cwd);
-        html += '</div>';
-
-        if (canExecuteTool) {
-            html += executeButtonHtml(toolName, messageId, isExecutingTool);
+            const textHtml = messageFormatting(
+                text,
+                message.name,
+                message.is_system,
+                message.is_user,
+                messageId,
+                {},
+                false,
+            );
+            htmlParts.push(`<div class="tool-prefix-text">${textHtml}</div>`);
+            return;
         }
 
-        return html;
-    }
+        if (segment?.type === 'tool') {
+            htmlParts.push(renderNativeToolSegmentHtml(message, messageId, segment, segmentIndex, { includeExecuteButton }));
+        }
+    });
 
-    const parseErrorMessage = String(parseError?.message ?? '').trim();
-    const rawToolBlock = String(parseError?.raw_tool_block ?? '').trim();
-    let toolArgs = rawToolBlock || '{}';
-
-    if (hasValidToolInfo) {
-        toolArgs = formatToolArgumentsForDisplay(toolArgsObject, toolInfo?.continue !== false);
-    }
-
-    html += '<div class="tool-call-box">';
-    html += '<h4><i class="fa-solid fa-cogs"></i> Tool Call</h4>';
-    html += `<div class="tool-action"><p><b>Action:</b> <code>${toolName}</code></p>`;
-    if (parseErrorMessage) {
-        html += `<p><b>Error:</b> ${DOMPurify.sanitize(parseErrorMessage)}</p>`;
-    }
-    html += `<p><b>Arguments:</b></p><pre><code>${DOMPurify.sanitize(toolArgs)}</code></pre></div>`;
-    html += '</div>';
-
-    if (canExecuteTool) {
-        html += executeButtonHtml(toolName, messageId, isExecutingTool);
-    }
-
-    return html;
+    return htmlParts.join('');
 }
 
 /**
@@ -2367,28 +2455,7 @@ function getToolResultDisplayText(message, fallbackText = '') {
  */
 function getMessageEditText(message) {
     if (message?.extra?.is_tool_call) {
-        let text = '';
-        const prefixText = String(message.extra?.prefix_text ?? '');
-
-        if (prefixText) {
-            text += prefixText;
-            if (!prefixText.endsWith('\n')) {
-                text += '\n';
-            }
-        }
-
-        let toolBlock = '';
-        if (message.extra?.tool_call_info) {
-            toolBlock = ToolManager.formatNativeToolCallForDisplay({
-                tool_call: message.extra.tool_call_info,
-                reasoning: '',
-                prefix_text: '',
-            }).trim();
-        } else if (message.extra?.tool_call_parse_error?.raw_tool_block) {
-            toolBlock = String(message.extra.tool_call_parse_error.raw_tool_block).trim();
-        }
-
-        return `${text}${toolBlock}`.trim();
+        return String(message?.mes ?? '');
     }
 
     if (message?.extra?.is_tool_result) {
@@ -2411,6 +2478,42 @@ function stripToolCallFromReasoning(reasoning) {
 }
 
 /**
+ * Parses native tool calls from message text and, optionally, the separate reasoning field.
+ * Literal <think> blocks inside the message text are handled by ToolManager itself.
+ * @param {string} text Message text to parse
+ * @param {string} [reasoning=''] Separate reasoning text to parse when enabled
+ * @returns {object} Combined native tool parse result
+ */
+export function parseNativeToolCallsForMessage(text, reasoning = '') {
+    const messageText = String(text ?? '');
+    const reasoningText = String(reasoning ?? '');
+    const textParse = ToolManager.findAndParseNativeToolCalls(messageText);
+
+    if (!oai_settings.parse_tools_in_thinking_blocks || !reasoningText.trim().length) {
+        return {
+            ...textParse,
+            original_text: messageText,
+        };
+    }
+
+    const reasoningParse = ToolManager.findAndParseNativeToolCalls(reasoningText);
+    const reasoningToolSegments = Array.isArray(reasoningParse?.segments)
+        ? reasoningParse.segments.filter(segment => segment?.type === 'tool')
+        : [];
+
+    return {
+        segments: [
+            ...reasoningToolSegments,
+            ...(Array.isArray(textParse?.segments) ? textParse.segments : []),
+        ],
+        hasToolCalls: !!(reasoningParse?.hasToolCalls || textParse?.hasToolCalls),
+        hasErrors: !!(reasoningParse?.hasErrors || textParse?.hasErrors),
+        shouldContinue: !!(reasoningParse?.shouldContinue || textParse?.shouldContinue),
+        original_text: messageText,
+    };
+}
+
+/**
  * Normalizes a parsed native tool call against the current message state.
  * This keeps streamed reasoning separate from any leftover raw `</think>` or duplicated reasoning text
  * that may still be present in the final accumulated output.
@@ -2419,34 +2522,33 @@ function stripToolCallFromReasoning(reasoning) {
  * @returns {object} Normalized parsed tool call payload
  */
 function normalizeNativeToolCallParse(parsedTool, message = null) {
-    const existingReasoning = stripToolCallFromReasoning(message?.extra?.reasoning);
-    const reasoning = stripToolCallFromReasoning(parsedTool?.reasoning) || existingReasoning;
-    let prefixText = String(parsedTool?.prefix_text ?? '');
+    const oldSegments = Array.isArray(message?.extra?.native_tool_segments) ? message.extra.native_tool_segments : [];
+    const oldExecution = message?.extra?.native_tool_execution && typeof message.extra.native_tool_execution === 'object'
+        ? message.extra.native_tool_execution
+        : {};
+    const execution = {};
+    const segments = Array.isArray(parsedTool?.segments) ? parsedTool.segments : [];
 
-    // Strip dangling closing tags that can be left behind when reasoning was already streamed separately.
-    prefixText = prefixText.replace(/^\s*<\/think>\s*/i, '');
-
-    if (reasoning) {
-        const normalizedPrefix = trimSpaces(
-            prefixText
-                .replace(/^<think>\s*/i, '')
-                .replace(/\s*<\/think>\s*$/i, ''),
-        );
-
-        if (!normalizedPrefix || normalizedPrefix === reasoning) {
-            prefixText = '';
-        } else {
-            const duplicatedReasoningPattern = new RegExp(`^\\s*${escapeRegex(reasoning)}(?:\\s*<\\/think>)?\\s*`, 's');
-            prefixText = prefixText.replace(duplicatedReasoningPattern, '');
+    segments.forEach((segment, index) => {
+        if (segment?.type !== 'tool') {
+            return;
         }
-    }
 
-    prefixText = trimSpaces(prefixText);
+        const previousSegment = oldSegments[index];
+        const previousState = oldExecution[index];
+        if (
+            previousSegment?.type === 'tool' &&
+            previousState &&
+            previousSegment.raw_tool_block === segment.raw_tool_block
+        ) {
+            execution[index] = structuredClone(previousState);
+        }
+    });
 
     return {
         ...parsedTool,
-        reasoning,
-        prefix_text: prefixText,
+        segments,
+        execution,
     };
 }
 
@@ -2458,67 +2560,34 @@ function normalizeNativeToolCallParse(parsedTool, message = null) {
  * @param {boolean} [options.formatForDisplay=false] Replace message text with canonical tool-call formatting
  * @returns {{ valid: boolean, parsedTool: object | null }}
  */
-function applyNativeToolCallParseToMessage(message, parsedTool, { formatForDisplay = false } = {}) {
+export function applyNativeToolCallParseToMessage(message, parsedTool, { formatForDisplay = false } = {}) {
     message.extra = message.extra || {};
-    const existingReasoning = String(message.extra.reasoning ?? '').trim();
 
-    if (parsedTool?.tool_call) {
-        const normalizedTool = normalizeNativeToolCallParse(parsedTool, message);
-
-        if (formatForDisplay) {
-            message.mes = ToolManager.formatNativeToolCallForDisplay(normalizedTool);
-        }
-
-        message.extra.is_tool_call = true;
-        message.extra.tool_call_info = normalizedTool.tool_call;
-        message.extra.reasoning = normalizedTool.reasoning;
-        message.extra.prefix_text = normalizedTool.prefix_text;
-        delete message.extra.tool_call_parse_error;
-
-        return { valid: true, parsedTool: normalizedTool };
-    }
-
-    if (parsedTool?.parse_error) {
+    if (parsedTool?.hasToolCalls) {
         const normalizedTool = normalizeNativeToolCallParse(parsedTool, message);
         message.extra.is_tool_call = true;
+        message.extra.native_tool_segments = normalizedTool.segments;
+        message.extra.native_tool_execution = normalizedTool.execution;
         delete message.extra.tool_call_info;
-        message.extra.tool_call_parse_error = normalizedTool.parse_error;
+        delete message.extra.tool_call_parse_error;
+        delete message.extra.prefix_text;
 
-        if (existingReasoning) {
-            message.extra.reasoning = existingReasoning;
-        } else if (normalizedTool.reasoning) {
-            message.extra.reasoning = normalizedTool.reasoning;
-        } else {
-            delete message.extra.reasoning;
+        if (formatForDisplay && typeof parsedTool.original_text === 'string') {
+            message.mes = parsedTool.original_text;
         }
 
-        if (normalizedTool.prefix_text) {
-            message.extra.prefix_text = normalizedTool.prefix_text;
-        } else {
-            delete message.extra.prefix_text;
-        }
-
-        if (formatForDisplay) {
-            const displayParts = [];
-            if (normalizedTool.prefix_text) {
-                displayParts.push(normalizedTool.prefix_text);
-            }
-            if (normalizedTool.parse_error?.raw_tool_block) {
-                displayParts.push(String(normalizedTool.parse_error.raw_tool_block).trim());
-            }
-            message.mes = displayParts.filter(Boolean).join('\n').trim();
-        } else if (typeof normalizedTool.original_text === 'string') {
-            message.mes = normalizedTool.original_text;
-        }
-
-        return { valid: false, parsedTool: normalizedTool };
+        return {
+            valid: normalizedTool.segments.some(segment => segment?.type === 'tool' && !!segment.tool_call),
+            parsedTool: normalizedTool,
+        };
     }
 
     delete message.extra.is_tool_call;
     delete message.extra.tool_call_info;
-    delete message.extra.reasoning;
-    delete message.extra.prefix_text;
     delete message.extra.tool_call_parse_error;
+    delete message.extra.native_tool_segments;
+    delete message.extra.native_tool_execution;
+    delete message.extra.prefix_text;
 
     return { valid: false, parsedTool: null };
 }
@@ -2802,6 +2871,185 @@ async function createTextToolResultMessage(toolResult) {
 async function createCompletedToolResultMessage(toolResult) {
     const specialMessage = await createSpecialToolResultMessage(toolResult);
     return specialMessage || createTextToolResultMessage(toolResult);
+}
+
+function getNativeToolSegmentEntries(message) {
+    return getNativeToolSegments(message)
+        .map((segment, segmentIndex) => ({ segment, segmentIndex }))
+        .filter(entry => entry.segment?.type === 'tool');
+}
+
+function getNativeToolParseErrors(parsedTool) {
+    const segments = Array.isArray(parsedTool?.segments) ? parsedTool.segments : [];
+    return segments
+        .filter(segment => segment?.type === 'tool' && segment.parse_error)
+        .map(segment => segment.parse_error)
+        .filter(Boolean);
+}
+
+function hasExecutableNativeToolSegments(parsedTool) {
+    const segments = Array.isArray(parsedTool?.segments) ? parsedTool.segments : [];
+    return segments.some(segment => segment?.type === 'tool' && (!!segment.tool_call || !!segment.parse_error));
+}
+
+function setNativeToolExecutionState(message, segmentIndex, status, extra = {}) {
+    message.extra ??= {};
+    if (!message.extra.native_tool_execution || typeof message.extra.native_tool_execution !== 'object') {
+        message.extra.native_tool_execution = {};
+    }
+
+    message.extra.native_tool_execution[segmentIndex] = {
+        ...(message.extra.native_tool_execution[segmentIndex] ?? {}),
+        ...extra,
+        status,
+    };
+}
+
+function shouldContinueAfterNativeTool(toolInfo) {
+    return !(toolInfo?.continue === false || String(toolInfo?.continue).trim().toLowerCase() === 'false');
+}
+
+function shouldContinueAfterNativeToolSegment(segment) {
+    if (segment?.tool_call) {
+        return shouldContinueAfterNativeTool(segment.tool_call);
+    }
+
+    return !(segment?.continue === false || String(segment?.continue).trim().toLowerCase() === 'false');
+}
+
+function nativeToolMessageRequiresManualExecution(message) {
+    if (power_user.tool_click_to_execute) {
+        return true;
+    }
+
+    return getNativeToolSegmentEntries(message)
+        .some(({ segment }) => segment?.tool_call?.tool && ToolManager.requiresManualApproval(segment.tool_call.tool));
+}
+
+function getNativeToolExecutionSummary(message) {
+    const toolSegments = getNativeToolSegmentEntries(message)
+        .filter(({ segment }) => !!segment.tool_call || !!segment.parse_error);
+    const statuses = toolSegments.map(({ segmentIndex }) => getNativeToolExecutionState(message, segmentIndex));
+    const allDone = statuses.length > 0 && statuses.every(status => status === 'done');
+    const anyContinue = toolSegments.some(({ segment }) => shouldContinueAfterNativeToolSegment(segment));
+    const hasPending = statuses.some(status => status === 'pending' || status === 'running');
+    const hasFailure = statuses.some(status => status === 'failed');
+
+    return {
+        allDone,
+        anyContinue,
+        hasPending,
+        hasFailure,
+    };
+}
+
+async function executeNativeToolSegment(messageId, segmentIndex, { signal } = {}) {
+    const message = chat[messageId];
+    const segment = getNativeToolSegments(message)[segmentIndex];
+    const toolInfo = segment?.tool_call;
+    const parseError = segment?.parse_error ?? null;
+    if (!toolInfo && !parseError) {
+        throw new Error('Tool call information not found');
+    }
+
+    if (getNativeToolExecutionState(message, segmentIndex) === 'running') {
+        return {
+            executed: false,
+            shouldContinue: shouldContinueAfterNativeToolSegment(segment),
+            stopped: false,
+            failed: false,
+        };
+    }
+
+    setNativeToolExecutionState(message, segmentIndex, 'running');
+    updateMessageBlock(messageId, message);
+
+    if (!toolInfo && parseError) {
+        const parseErrorMessage = `Error: ${String(parseError.message ?? 'Failed to parse tool call.').trim()}`;
+        const resultMessage = await createCompletedToolResultMessage(parseErrorMessage);
+        chat.push(resultMessage);
+        addOneMessage(resultMessage);
+        setNativeToolExecutionState(message, segmentIndex, 'done');
+        updateMessageBlock(messageId, message);
+
+        return {
+            executed: true,
+            shouldContinue: shouldContinueAfterNativeToolSegment(segment),
+            stopped: false,
+            failed: false,
+        };
+    }
+
+    const liveCommandToolKind = getLiveCommandToolKind(toolInfo);
+    let liveCommandMessageId = null;
+    if (liveCommandToolKind) {
+        const liveShellMessage = liveCommandToolKind === 'shell'
+            ? createShellToolResultMessage(toolInfo)
+            : createPythonToolResultMessage(toolInfo);
+        chat.push(liveShellMessage);
+        liveCommandMessageId = chat.length - 1;
+        addOneMessage(liveShellMessage);
+    }
+
+    const toolResult = await ToolManager.invokeFunctionTool(toolInfo.tool, toolInfo.args, {
+        signal,
+        liveMessageId: liveCommandMessageId,
+    });
+
+    const failed = toolResult instanceof Error;
+    const shouldContinue = shouldContinueAfterNativeTool(toolInfo);
+    let stopped = false;
+
+    if (liveCommandToolKind) {
+        const commandStatus = liveCommandMessageId !== null
+            ? chat[liveCommandMessageId]?.extra?.shell_command?.status ?? chat[liveCommandMessageId]?.extra?.python_command?.status
+            : null;
+        if (commandStatus === 'stopped') {
+            stopped = true;
+        }
+        if (failed && liveCommandMessageId === null) {
+            const errorMessage = await createCompletedToolResultMessage(toolResult.toString());
+            chat.push(errorMessage);
+            addOneMessage(errorMessage);
+        }
+    } else {
+        const resultPayload = failed ? toolResult.toString() : toolResult;
+        const resultMessage = await createCompletedToolResultMessage(resultPayload);
+        chat.push(resultMessage);
+        addOneMessage(resultMessage);
+    }
+
+    setNativeToolExecutionState(message, segmentIndex, failed ? 'failed' : 'done');
+    updateMessageBlock(messageId, message);
+
+    return {
+        executed: true,
+        shouldContinue,
+        stopped,
+        failed,
+    };
+}
+
+async function executeNativeToolSegmentsForMessage(messageId, { signal } = {}) {
+    const message = chat[messageId];
+    const toolEntries = getNativeToolSegmentEntries(message)
+        .filter(({ segment }) => !!segment.tool_call || !!segment.parse_error);
+    let anyContinue = false;
+    let stopped = false;
+    let failed = false;
+
+    for (const { segmentIndex } of toolEntries) {
+        const result = await executeNativeToolSegment(messageId, segmentIndex, { signal });
+        anyContinue = anyContinue || result.shouldContinue;
+        stopped = stopped || result.stopped;
+        failed = failed || result.failed;
+    }
+
+    return {
+        anyContinue,
+        stopped,
+        failed,
+    };
 }
 
 /**
@@ -3844,10 +4092,6 @@ export function getStoppingStrings(isImpersonate, isContinue, api = main_api) {
     result.push(...getInstructStoppingSequences());
     result.push(...getCustomStoppingStrings());
 
-    if (oai_settings.native_tool_calling) {
-        result.push(...ToolManager.getNativeToolStopStrings());
-    }
-
     if (power_user.single_line) {
         result.unshift('\n');
     }
@@ -4605,62 +4849,37 @@ class StreamingProcessor {
         await this.finalizeIntermediaryMessage(messageId, text, { unlockUI: true });
 
         if (oai_settings.native_tool_calling && this.type !== 'impersonate' && this.type !== 'regenerate') {
-            const parsedTool = ToolManager.findAndParseNativeToolCall(text);
+            const parsedTool = parseNativeToolCallsForMessage(text, chat[messageId]?.extra?.reasoning ?? '');
             const parseOutcome = applyNativeToolCallParseToMessage(chat[messageId], parsedTool, { formatForDisplay: true });
-            if (parseOutcome.valid && parseOutcome.parsedTool) {
-                const normalizedTool = parseOutcome.parsedTool;
-
-                // Check if the LLM wants to continue after the tool call (default: true)
-                const shouldContinueAfterTool = normalizedTool.continue !== false;
-
-                // Re-render the message element with the special tool call formatting.
+            if (parseOutcome.parsedTool?.hasToolCalls) {
                 updateMessageBlock(messageId, chat[messageId]);
+                const parseErrors = getNativeToolParseErrors(parseOutcome.parsedTool);
+                const hasExecutableToolCalls = hasExecutableNativeToolSegments(parseOutcome.parsedTool);
 
-                // Check for manual execution mode
-                if (power_user.tool_execution_mode === 'manual' || ToolManager.requiresManualApproval(normalizedTool.tool_call.tool)) {
+                if (parseErrors.length > 0) {
+                    if (parseErrors[0]) {
+                        ToolManager.showNativeToolCallParseError(parseErrors[0]);
+                    }
+                }
+
+                if (!hasExecutableToolCalls) {
                     await saveChatConditional();
                     unblockGeneration();
                     return { suppressAutoContinue: true };
                 }
 
-                // Auto mode: execute tool immediately
-                chat[messageId].extra.tool_call_started = true;
-                updateMessageBlock(messageId, chat[messageId]);
-                const liveCommandToolKind = getLiveCommandToolKind(normalizedTool.tool_call);
-                let liveCommandMessageId = null;
-                if (liveCommandToolKind) {
-                    const liveShellMessage = liveCommandToolKind === 'shell'
-                        ? createShellToolResultMessage(normalizedTool.tool_call)
-                        : createPythonToolResultMessage(normalizedTool.tool_call);
-                    chat.push(liveShellMessage);
-                    liveCommandMessageId = chat.length - 1;
-                    addOneMessage(liveShellMessage);
-                    chat[messageId].extra.tool_call_started = false;
-                    updateMessageBlock(messageId, chat[messageId]);
+                if (nativeToolMessageRequiresManualExecution(chat[messageId])) {
+                    await saveChatConditional();
+                    unblockGeneration();
+                    return { suppressAutoContinue: true };
                 }
 
-                const toolResult = await ToolManager.invokeFunctionTool(normalizedTool.tool_call.tool, normalizedTool.tool_call.args, {
+                const executionResult = await executeNativeToolSegmentsForMessage(messageId, {
                     signal: this.abortController.signal,
-                    liveMessageId: liveCommandMessageId,
                 });
+                await saveChatConditional();
 
-                let stopGeneration = !shouldContinueAfterTool;
-                if (liveCommandToolKind) {
-                    const commandStatus = liveCommandMessageId !== null
-                        ? chat[liveCommandMessageId]?.extra?.shell_command?.status ?? chat[liveCommandMessageId]?.extra?.python_command?.status
-                        : null;
-                    if (commandStatus === 'stopped') {
-                        stopGeneration = true;
-                    }
-                } else {
-                    const resultMessage = await createCompletedToolResultMessage(toolResult);
-                    chat.push(resultMessage);
-                    addOneMessage(resultMessage);
-                    chat[messageId].extra.tool_call_started = false;
-                    updateMessageBlock(messageId, chat[messageId]);
-                }
-
-                if (!stopGeneration) {
+                if (power_user.tool_auto_continue && executionResult.anyContinue && !executionResult.stopped && !executionResult.failed) {
                     const newOptions = { ...this.generateOptions, depth: this.generateOptions.depth + 1 };
                     await Generate('normal', newOptions, this.dryRun);
                     return { suppressAutoContinue: true };
@@ -4668,17 +4887,14 @@ class StreamingProcessor {
 
                 unblockGeneration();
                 return { suppressAutoContinue: true };
-            } else if (parsedTool?.parse_error) {
-                updateMessageBlock(messageId, chat[messageId]);
-                ToolManager.showNativeToolCallParseError(parseOutcome.parsedTool?.parse_error ?? parsedTool.parse_error);
-                await saveChatConditional();
             } else {
                 if (chat[messageId].extra?.is_tool_call) {
                     delete chat[messageId].extra.is_tool_call;
                     delete chat[messageId].extra.tool_call_info;
-                    delete chat[messageId].extra.reasoning;
                     delete chat[messageId].extra.prefix_text;
                     delete chat[messageId].extra.tool_call_parse_error;
+                    delete chat[messageId].extra.native_tool_segments;
+                    delete chat[messageId].extra.native_tool_execution;
                     const toolMsgEl = chatElement.find(`.mes[mesid="${messageId}"]`);
                     toolMsgEl.removeClass('tool-call-message');
                 }
@@ -6460,84 +6676,53 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
 
         // Native tool calling: detect XML tool tags in the non-streamed response text
         if (oai_settings.native_tool_calling && depth < ToolManager.RECURSE_LIMIT) {
-            const parsedTool = ToolManager.findAndParseNativeToolCall(getMessage);
+            const parsedTool = parseNativeToolCallsForMessage(getMessage, reasoning);
             const parseOutcome = applyNativeToolCallParseToMessage(chat[chat.length - 1], parsedTool, { formatForDisplay: true });
-            if (parseOutcome.valid && parseOutcome.parsedTool) {
-                const normalizedTool = parseOutcome.parsedTool;
+            if (parseOutcome.parsedTool?.hasToolCalls) {
+                const parseErrors = getNativeToolParseErrors(parseOutcome.parsedTool);
+                const hasExecutableToolCalls = hasExecutableNativeToolSegments(parseOutcome.parsedTool);
 
-                // Check if the LLM wants to continue after the tool call (default: true)
-                const shouldContinueAfterTool = normalizedTool.continue !== false;
-
-                // Re-render the message element with the special tool call formatting.
                 updateMessageBlock(chat.length - 1, chat[chat.length - 1]);
 
-                // Check for manual execution mode
-                if (power_user.tool_execution_mode === 'manual' || ToolManager.requiresManualApproval(normalizedTool.tool_call.tool)) {
-                    // Save chat and stop here - user will click the button to continue
+                if (parseErrors.length > 0) {
+                    if (parseErrors[0]) {
+                        ToolManager.showNativeToolCallParseError(parseErrors[0]);
+                    }
+                }
+
+                if (!hasExecutableToolCalls) {
                     await saveChatConditional();
                     unblockGeneration(type);
                     generatedPromptCache = '';
                     return;
                 }
 
-                // Auto mode: execute tool immediately
-                chat[chat.length - 1].extra.tool_call_started = true;
-                updateMessageBlock(chat.length - 1, chat[chat.length - 1]);
-                const liveCommandToolKind = getLiveCommandToolKind(normalizedTool.tool_call);
-                let liveCommandMessageId = null;
-                if (liveCommandToolKind) {
-                    const liveShellMessage = liveCommandToolKind === 'shell'
-                        ? createShellToolResultMessage(normalizedTool.tool_call)
-                        : createPythonToolResultMessage(normalizedTool.tool_call);
-                    chat.push(liveShellMessage);
-                    liveCommandMessageId = chat.length - 1;
-                    addOneMessage(liveShellMessage);
-                    chat[chat.length - 2].extra.tool_call_started = false;
-                    updateMessageBlock(chat.length - 2, chat[chat.length - 2]);
+                if (nativeToolMessageRequiresManualExecution(chat[chat.length - 1])) {
+                    await saveChatConditional();
+                    unblockGeneration(type);
+                    generatedPromptCache = '';
+                    return;
                 }
 
-                const toolResult = await ToolManager.invokeFunctionTool(normalizedTool.tool_call.tool, normalizedTool.tool_call.args, {
-                    signal,
-                    liveMessageId: liveCommandMessageId,
-                });
-
-                let stopGeneration = !shouldContinueAfterTool;
-                if (liveCommandToolKind) {
-                    const commandStatus = liveCommandMessageId !== null
-                        ? chat[liveCommandMessageId]?.extra?.shell_command?.status ?? chat[liveCommandMessageId]?.extra?.python_command?.status
-                        : null;
-                    if (commandStatus === 'stopped') {
-                        stopGeneration = true;
-                    }
-                } else {
-                    const resultMessage = await createCompletedToolResultMessage(toolResult);
-                    chat.push(resultMessage);
-                    addOneMessage(resultMessage);
-                    chat[chat.length - 2].extra.tool_call_started = false;
-                    updateMessageBlock(chat.length - 2, chat[chat.length - 2]);
-                }
-
+                const executionResult = await executeNativeToolSegmentsForMessage(chat.length - 1, { signal });
                 await saveChatConditional();
 
-                if (stopGeneration) {
+                if (!power_user.tool_auto_continue || executionResult.stopped || executionResult.failed || !executionResult.anyContinue) {
                     unblockGeneration(type);
                     return;
                 }
 
                 const newOptions = { automatic_trigger, force_name2, quiet_prompt, quietToLoud, skipWIAN, force_chid, signal, quietImage, quietName, jsonSchema, depth: depth + 1 };
                 return Generate('normal', newOptions, dryRun);
-            } else if (parsedTool?.parse_error) {
-                updateMessageBlock(chat.length - 1, chat[chat.length - 1]);
-                ToolManager.showNativeToolCallParseError(parseOutcome.parsedTool?.parse_error ?? parsedTool.parse_error);
-                await saveChatConditional();
             } else {
                 const lastMsg = chat[chat.length - 1];
                 if (lastMsg?.extra?.is_tool_call) {
                     delete lastMsg.extra.is_tool_call;
                     delete lastMsg.extra.tool_call_info;
-                    delete lastMsg.extra.reasoning;
                     delete lastMsg.extra.prefix_text;
                     delete lastMsg.extra.tool_call_parse_error;
+                    delete lastMsg.extra.native_tool_segments;
+                    delete lastMsg.extra.native_tool_execution;
                     const msgEl = $('#chat .mes').last();
                     msgEl.removeClass('tool-call-message');
                 }
@@ -9161,41 +9346,18 @@ function updateMessage(div, { preserveToolCallOnParseError = false } = {}) {
         text = removeMacros(text);
     }
     mes.mes = text;
-    const preferredToolName = typeof mes.extra?.tool_call_info?.tool === 'string'
-        ? mes.extra.tool_call_info.tool
-        : null;
-    const shouldTryParseToolCall = mes.extra?.is_tool_call || ToolManager.containsNativeToolCall(text, preferredToolName ? [preferredToolName] : []);
+    const parsedTool = parseNativeToolCallsForMessage(text, mes.extra?.reasoning ?? '');
+    const shouldTryParseToolCall = mes.extra?.is_tool_call || parsedTool.hasToolCalls;
     if (shouldTryParseToolCall) {
-        const parsedTool = ToolManager.findAndParseNativeToolCall(text, { preferredToolName });
-        const hasInlineReasoning = /<think>[\s\S]*?<\/think>/.test(text);
-        const existingReasoning = String(mes.extra.reasoning ?? '').trim();
-
-        if (parsedTool?.tool_call) {
-            mes.extra.is_tool_call = true;
-            mes.extra.tool_call_info = parsedTool.tool_call;
-            mes.extra.prefix_text = parsedTool.prefix_text;
-            if (parsedTool.reasoning || hasInlineReasoning) {
-                mes.extra.reasoning = parsedTool.reasoning;
-            }
-            delete mes.extra.tool_call_parse_error;
-        } else if (parsedTool?.parse_error) {
-            mes.extra.is_tool_call = true;
-            delete mes.extra.tool_call_info;
-            mes.extra.tool_call_parse_error = parsedTool.parse_error;
-            mes.extra.prefix_text = parsedTool.prefix_text;
-            if (existingReasoning) {
-                mes.extra.reasoning = existingReasoning;
-            } else if (parsedTool.reasoning || hasInlineReasoning) {
-                mes.extra.reasoning = parsedTool.reasoning;
-            } else {
-                delete mes.extra.reasoning;
-            }
+        if (parsedTool?.hasToolCalls) {
+            applyNativeToolCallParseToMessage(mes, parsedTool);
         } else if (!preserveToolCallOnParseError) {
             delete mes.extra.is_tool_call;
             delete mes.extra.tool_call_info;
-            delete mes.extra.reasoning;
             delete mes.extra.prefix_text;
             delete mes.extra.tool_call_parse_error;
+            delete mes.extra.native_tool_segments;
+            delete mes.extra.native_tool_execution;
         }
     }
     // Keep tool_result_content in sync with mes text for tool result messages
@@ -9291,7 +9453,7 @@ export async function messageEdit(editMessageId) {
 
     // Also edit reasoning, if it exists
     const reasoningEdit = messageBlock.find('.mes_reasoning_edit:visible');
-    if (reasoningEdit.length > 0) {
+    if (reasoningEdit.length > 0 && !editMessage?.extra?.is_tool_call) {
         reasoningEdit.trigger('click');
     }
 
@@ -13622,9 +13784,11 @@ jQuery(async function () {
         e.preventDefault();
         const button = $(this);
         const messageId = parseInt(button.data('message-id'));
+        const segmentIndexRaw = Number(button.data('segment-index'));
+        const segmentIndex = Number.isInteger(segmentIndexRaw) ? segmentIndexRaw : 0;
         const message = chat[messageId];
 
-        if (!message?.extra?.tool_call_info) {
+        if (!message?.extra?.is_tool_call) {
             toastr.error('Tool call information not found');
             return;
         }
@@ -13635,55 +13799,24 @@ jQuery(async function () {
         }
 
         try {
-            const toolInfo = message.extra.tool_call_info;
-            const liveCommandToolKind = getLiveCommandToolKind(toolInfo);
-            message.extra.tool_call_started = true;
-            updateMessageBlock(messageId, message);
-
-            let liveCommandMessageId = null;
-            if (liveCommandToolKind) {
-                const liveShellMessage = liveCommandToolKind === 'shell'
-                    ? createShellToolResultMessage(toolInfo)
-                    : createPythonToolResultMessage(toolInfo);
-                chat.push(liveShellMessage);
-                liveCommandMessageId = chat.length - 1;
-                addOneMessage(liveShellMessage);
-                message.extra.tool_call_started = false;
-                updateMessageBlock(messageId, message);
-            }
-
-            const toolResult = await ToolManager.invokeFunctionTool(toolInfo.tool, toolInfo.args, {
-                liveMessageId: liveCommandMessageId,
-            });
-            const shouldContinueAfterTool = !(toolInfo?.continue === false || String(toolInfo?.continue).trim().toLowerCase() === 'false');
-            let stopGeneration = !shouldContinueAfterTool;
-            if (liveCommandToolKind) {
-                const commandStatus = liveCommandMessageId !== null
-                    ? chat[liveCommandMessageId]?.extra?.shell_command?.status ?? chat[liveCommandMessageId]?.extra?.python_command?.status
-                    : null;
-                if (commandStatus === 'stopped') {
-                    stopGeneration = true;
-                }
-            } else {
-                const resultMessage = await createCompletedToolResultMessage(toolResult);
-                chat.push(resultMessage);
-                addOneMessage(resultMessage);
-                message.extra.tool_call_started = false;
-                updateMessageBlock(messageId, message);
-            }
-
+            const executionResult = await executeNativeToolSegment(messageId, segmentIndex, {});
             await saveChatConditional();
-
-            // Continue generation unless it's a stop-generating tool
-            if (!stopGeneration) {
-                // Get the current depth from the message or default to 0
-                const currentDepth = message.extra?.depth || 0;
+            const executionSummary = getNativeToolExecutionSummary(message);
+            if (
+                power_user.tool_auto_continue &&
+                !executionResult.stopped &&
+                !executionResult.failed &&
+                executionSummary.allDone &&
+                executionSummary.anyContinue &&
+                !executionSummary.hasFailure
+            ) {
+                const currentDepth = Number.isFinite(Number(message.extra?.depth))
+                    ? Number(message.extra.depth)
+                    : 0;
                 Generate('normal', { depth: currentDepth + 1 });
             }
         } catch (error) {
             console.error('[Manual Tool Execution] Error:', error);
-            message.extra.tool_call_started = false;
-            updateMessageBlock(messageId, message);
             toastr.error('Failed to execute tool: ' + String(error));
         }
     });

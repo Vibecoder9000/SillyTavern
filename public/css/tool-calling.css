@@ -19,10 +19,25 @@
     margin-top: 5px;
 }
 
+.tool-call-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 10px;
+}
+
+.tool-call-header-actions {
+    display: inline-flex;
+    align-items: center;
+    justify-content: flex-end;
+    flex: 0 0 auto;
+}
+
 .tool-call-box h4,
 .tool-result-box h4 {
     margin-top: 0;
-    margin-bottom: 10px;
+    margin-bottom: 0;
     font-size: 0.9em;
     color: #ccc;
     text-transform: uppercase;
@@ -1630,39 +1645,25 @@ body.hide-tool-messages .tool-result-message {
     display: inline-flex;
     align-items: center;
     gap: 6px;
-    padding: 8px 16px;
-    margin-top: 10px;
-    background: linear-gradient(135deg, var(--SmartThemeQuoteColor, #4a9) 0%, var(--SmartThemeBotMesBlurTintColor, #3a8) 100%);
-    color: var(--SmartThemeBodyColor, #fff);
-    border: none;
-    border-radius: 4px;
-    cursor: pointer;
-    font-size: 0.9em;
-    font-weight: 500;
-    transition: all 0.2s ease;
-    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+    margin: 0;
+    min-height: 30px;
+    padding: 4px 8px;
 }
 
 .tool-stop-command-button {
     background: linear-gradient(135deg, #c05a3b 0%, #aa3333 100%);
 }
 
-.tool-execute-button:hover,
-.tool-stop-command-button:hover {
-    filter: brightness(1.1);
-    box-shadow: 0 3px 6px rgba(0, 0, 0, 0.3);
-    transform: translateY(-1px);
+.tool-call-header .tool-execute-button span {
+    font-size: calc(var(--mainFontSize) * 0.9);
 }
 
-.tool-execute-button:active,
-.tool-stop-command-button:active {
-    transform: translateY(0);
-    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+.tool-call-header .tool-execute-button i {
+    font-size: 0.9em;
 }
 
-.tool-execute-button i,
-.tool-stop-command-button i {
-    font-size: 0.85em;
+.tool-call-header .tool-execute-button:hover {
+    filter: grayscale(0.1);
 }
 
 .tool-execute-button.executing,
@@ -1670,4 +1671,29 @@ body.hide-tool-messages .tool-result-message {
 .tool-stop-command-button:disabled {
     opacity: 0.7;
     pointer-events: none;
+}
+
+.tool-execute-button.done {
+    border-color: rgba(79, 143, 92, 0.7);
+    background-color: rgba(79, 143, 92, 0.16);
+}
+
+.tool-execute-button.failed {
+    border-color: rgba(178, 90, 60, 0.7);
+    background-color: rgba(178, 90, 60, 0.16);
+}
+
+.tool-call-header .tool-execute-button.executing {
+    pointer-events: none;
+}
+
+@media screen and (max-width: 600px) {
+    .tool-call-header {
+        flex-direction: column;
+        align-items: stretch;
+    }
+
+    .tool-call-header-actions {
+        justify-content: flex-start;
+    }
 }

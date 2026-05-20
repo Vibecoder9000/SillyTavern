@@ -317,6 +317,7 @@ export const settingsToUpdate = {
     openrouter_allow_fallbacks: ['#openrouter_allow_fallbacks', 'openrouter_allow_fallbacks', true, true],
     openrouter_middleout: ['#openrouter_middleout', 'openrouter_middleout', false, true],
     tool_reasoning_mode: ['#tool_reasoning_mode', 'tool_reasoning_mode', false, false],
+    parse_tools_in_thinking_blocks: ['#tool_parse_in_thinking_blocks', 'parse_tools_in_thinking_blocks', true, false],
     ai21_model: ['#model_ai21_select', 'ai21_model', false, true],
     mistralai_model: ['#model_mistralai_select', 'mistralai_model', false, true],
     cohere_model: ['#model_cohere_select', 'cohere_model', false, true],
@@ -492,6 +493,7 @@ const default_settings = {
     continue_prefill: false,
     function_calling: false,
     native_tool_calling: false,
+    parse_tools_in_thinking_blocks: false,
     tool_call_recurse_limit: 5,
     names_behavior: character_names_behavior.DEFAULT,
     continue_postfix: continue_postfix_types.SPACE,
@@ -4354,6 +4356,7 @@ function loadOpenAISettings(data, settings) {
     $('#continue_prefill').prop('checked', oai_settings.continue_prefill);
     $('#openai_function_calling').prop('checked', oai_settings.function_calling);
     $('#tool_calling').prop('checked', oai_settings.native_tool_calling);
+    $('#tool_parse_in_thinking_blocks').prop('checked', oai_settings.parse_tools_in_thinking_blocks);
     if (settings.impersonation_prompt !== undefined) oai_settings.impersonation_prompt = settings.impersonation_prompt;
 
     $('#impersonation_prompt_textarea').val(oai_settings.impersonation_prompt);
@@ -7050,6 +7053,11 @@ export function initOpenAI() {
         } else {
             ToolManager.unregisterNativeToolCommand();
         }
+        saveSettingsDebounced();
+    });
+
+    $('#tool_parse_in_thinking_blocks').on('input', function () {
+        oai_settings.parse_tools_in_thinking_blocks = !!$(this).prop('checked');
         saveSettingsDebounced();
     });
 

@@ -3,6 +3,7 @@ import path from 'node:path';
 import fs from 'node:fs/promises';
 import { spawn, spawnSync } from 'node:child_process';
 import crypto from 'node:crypto';
+import { imageSize } from 'image-size';
 import { getSandboxDir, getUserSandboxRootDir, isPathInside } from './sandbox.js';
 import { addMcpToolRoutes } from './tools-mcp.js';
 
@@ -35,6 +36,8 @@ const BROWSER_SCREENSHOT_GRID_MAJOR_STEP_PX = 600;
 const BROWSER_SCREENSHOT_GRID_PERSIST_MS = 3_000;
 const BROWSER_SCREENSHOT_CLICK_PERSIST_MS = 5_000;
 const browserStates = new Map();
+const SANDBOX_IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.svg']);
+const SANDBOX_VIDEO_EXTENSIONS = new Set(['.mp4', '.webm', '.ogg', '.mov']);
 
 // Track active processes to kill previous ones when new ones start
 const activeProcesses = {
@@ -424,7 +427,7 @@ async function resolveSandboxWritePath(userHandle, workspace, character, filepat
     }
 
     const sandboxDir = getSandboxDir(userHandle, workspace, character);
-    const fullPath = path.join(sandboxDir, relativePath);
+    const fullPath = path.resolve(sandboxDir, relativePath);
     const directory = path.dirname(fullPath);
     await fs.mkdir(directory, { recursive: true });
 
@@ -518,6 +521,110 @@ function guessMimeTypeFromFilepath(filepath) {
     if (value.endsWith('.webm')) return 'video/webm';
     if (value.endsWith('.mp4')) return 'video/mp4';
     return null;
+}
+
+/**
+ * Returns the supported sandbox media kind for a filepath extension.
+ * @param {string} filepath
+ * @returns {'image'|'video'|null}
+ */
+function getSandboxMediaKind(filepath) {
+    const extension = path.extname(String(filepath ?? '').trim()).toLowerCase();
+    if (SANDBOX_IMAGE_EXTENSIONS.has(extension)) {
+        return 'image';
+    }
+
+    if (SANDBOX_VIDEO_EXTENSIONS.has(extension)) {
+        return 'video';
+    }
+
+    return null;
+}
+
+/**
+ * Validates a sandbox media file and returns basic metadata.
+ * This is intentionally permissive: it checks that raster images decode to non-zero dimensions,
+ * while leaving model/API-specific acceptance rules to downstream consumers.
+ * @param {string} userHandle
+ * @param {unknown} workspace
+ * @param {unknown} character
+ * @param {unknown} filepath
+ * @param {{ allowVideo?: boolean }} [options]
+ * @returns {Promise<{ filepath: string, kind: 'image'|'video', size: number, width?: number, height?: number, mime_type?: string|null }>}
+ */
+async function inspectSandboxMediaFile(userHandle, workspace, character, filepath, { allowVideo = false } = {}) {
+    let normalizedFilepath = String(filepath ?? '').trim();
+    if (!normalizedFilepath) {
+        throw new Error('filepath is required.');
+    }
+
+    if (normalizedFilepath.startsWith('/')) {
+        normalizedFilepath = normalizedFilepath.substring(1);
+    }
+
+    if (!(await isPathInSandbox(normalizedFilepath, userHandle, workspace, character, { checkExists: true }))) {
+        throw new Error('Access denied: Path is outside the sandbox.');
+    }
+
+    const mediaKind = getSandboxMediaKind(normalizedFilepath);
+    if (mediaKind === 'image') {
+        // Continue below.
+    } else if (mediaKind === 'video' && allowVideo) {
+        // Continue below.
+    } else if (allowVideo) {
+        throw new Error(`The file "${normalizedFilepath}" is not a supported image or video type.`);
+    } else {
+        throw new Error(`The file "${normalizedFilepath}" is not a supported image type.`);
+    }
+
+    const sandboxDir = getSandboxDir(userHandle, workspace, character);
+    const fullPath = path.resolve(sandboxDir, normalizedFilepath);
+    const stats = await fs.stat(fullPath);
+    if (!stats.isFile()) {
+        throw new Error(`The file "${normalizedFilepath}" is not a file.`);
+    }
+
+    const info = {
+        filepath: normalizedFilepath,
+        kind: mediaKind,
+        size: stats.size,
+        mime_type: guessMimeTypeFromFilepath(normalizedFilepath),
+    };
+
+    if (mediaKind !== 'image') {
+        return info;
+    }
+
+    const buffer = await fs.readFile(fullPath);
+    if (buffer.length === 0) {
+        throw new Error(`The file "${normalizedFilepath}" is empty.`);
+    }
+
+    const extension = path.extname(normalizedFilepath).toLowerCase();
+    if (extension === '.svg') {
+        const svgText = buffer.toString('utf8').trim();
+        if (!svgText || !/<svg\b/i.test(svgText)) {
+            throw new Error(`The file "${normalizedFilepath}" is not a valid SVG image.`);
+        }
+        return info;
+    }
+
+    let dimensions;
+    try {
+        dimensions = imageSize(buffer);
+    } catch {
+        throw new Error(`The file "${normalizedFilepath}" is not a valid image.`);
+    }
+
+    if (!dimensions?.width || !dimensions?.height) {
+        throw new Error(`The file "${normalizedFilepath}" is not a valid image.`);
+    }
+
+    return {
+        ...info,
+        width: dimensions.width,
+        height: dimensions.height,
+    };
 }
 
 /**
@@ -2127,14 +2234,15 @@ async function executePageJavaScript(page, options) {
  * @param {unknown} workspace - Active workspace identifier.
  * @param {unknown} character - Active character name.
  * @param {object} [options]
- * @param {boolean} [options.checkExists=true] - If true, checks the realpath of an existing file/dir. Set to false for write operations where the path may not exist yet.
+ * @param {boolean} [options.checkExists=true] - If true, checks the realpath of an existing file/dir when it exists.
+ * Missing paths still return true when their resolved location stays inside the sandbox; callers should report ENOENT separately.
  * @returns {Promise<boolean>} - True if the path is safely within the sandbox.
  */
 async function isPathInSandbox(userPath, userHandle, workspace, character, { checkExists = true } = {}) {
-    try {
-        const sandboxDir = getSandboxDir(userHandle, workspace, character);
-        const resolvedPath = path.resolve(sandboxDir, userPath);
+    const sandboxDir = getSandboxDir(userHandle, workspace, character);
+    const resolvedPath = path.resolve(sandboxDir, String(userPath ?? ''));
 
+    try {
         if (!isPathInside(sandboxDir, resolvedPath)) {
             return false;
         }
@@ -2148,11 +2256,8 @@ async function isPathInSandbox(userPath, userHandle, workspace, character, { che
 
         return true;
     } catch (error) {
-        if (error.code === 'ENOENT' && checkExists) {
-            return false;
-        }
-        if (error.code === 'ENOENT' && !checkExists) {
-            return true;
+        if (error.code === 'ENOENT') {
+            return isPathInside(sandboxDir, resolvedPath);
         }
         console.error('isPathInSandbox unexpected error:', error);
         return false;
@@ -2197,7 +2302,7 @@ router.get('/download', async (req, res) => {
 
     try {
         const sandboxDir = getSandboxDir(req.user.profile.handle, workspace, character);
-        const fullPath = path.join(sandboxDir, filepath);
+        const fullPath = path.resolve(sandboxDir, filepath);
         const fileName = path.basename(fullPath);
         const onSendComplete = (error) => {
             if (!error) {
@@ -2227,6 +2332,34 @@ router.get('/download', async (req, res) => {
     }
 });
 
+router.post('/media-info', async (req, res) => {
+    const { filepath, workspace, character, allowVideo = false } = req.body ?? {};
+
+    try {
+        const info = await inspectSandboxMediaFile(
+            req.user.profile.handle,
+            workspace,
+            character,
+            filepath,
+            { allowVideo: allowVideo === true || allowVideo === 'true' },
+        );
+        return res.json(info);
+    } catch (error) {
+        const message = error instanceof Error ? error.message : 'An error occurred while validating the media file.';
+        if (message.startsWith('Access denied:')) {
+            return res.status(403).json({ error: message });
+        }
+        if (message === 'filepath is required.') {
+            return res.status(400).json({ error: message });
+        }
+        if (String(error?.code ?? '') === 'ENOENT') {
+            return res.status(404).json({ error: `File not found: ${String(filepath ?? '').trim()}` });
+        }
+        console.error(`Error validating media file "${String(filepath ?? '').trim()}":`, error);
+        return res.status(400).json({ error: message });
+    }
+});
+
 router.post('/readfile', async (req, res) => {
     let { filepath, workspace, character } = req.body;
 
@@ -2244,7 +2377,7 @@ router.post('/readfile', async (req, res) => {
 
     try {
         const sandboxDir = getSandboxDir(req.user.profile.handle, workspace, character);
-        const fullPath = path.join(sandboxDir, filepath);
+        const fullPath = path.resolve(sandboxDir, filepath);
         await fs.mkdir(sandboxDir, { recursive: true });
         const content = await fs.readFile(fullPath, 'utf-8');
         res.json({ content });
@@ -2281,7 +2414,7 @@ router.post('/listdir', async (req, res) => {
     }
 
     try {
-        const fullPath = path.join(sandboxDir, dirPath);
+        const fullPath = path.resolve(sandboxDir, dirPath);
         const dirents = await fs.readdir(fullPath, { withFileTypes: true });
 
         const files = [];
@@ -2307,8 +2440,9 @@ router.post('/listdir', async (req, res) => {
 });
 
 router.post('/writefile', async (req, res) => {
-    let { filepath, content, append = false, workspace, character } = req.body;
-    const shouldAppend = append === true || append === 'true';
+    let { filepath, content, overwrite, append, workspace, character } = req.body;
+    const shouldOverwrite = overwrite === true || overwrite === 'true'
+        || ((overwrite === undefined || overwrite === null || overwrite === '') && (append === false || append === 'false'));
 
     if (!filepath || typeof content !== 'string') {
         return res.status(400).json({ error: 'filepath and content are required.' });
@@ -2324,7 +2458,7 @@ router.post('/writefile', async (req, res) => {
 
     try {
         const sandboxDir = getSandboxDir(req.user.profile.handle, workspace, character);
-        const fullPath = path.join(sandboxDir, filepath);
+        const fullPath = path.resolve(sandboxDir, filepath);
         const dir = path.dirname(fullPath);
 
         await fs.mkdir(dir, { recursive: true });
@@ -2334,11 +2468,11 @@ router.post('/writefile', async (req, res) => {
             return res.status(403).json({ error: 'Access denied: Cannot write to a directory outside the sandbox.' });
         }
 
-        const flag = shouldAppend ? 'a' : 'w';
+        const flag = shouldOverwrite ? 'w' : 'a';
         await fs.writeFile(fullPath, content, { flag });
 
         const bytesWritten = Buffer.byteLength(content, 'utf8');
-        res.json({ message: `Successfully ${shouldAppend ? 'appended' : 'wrote'} ${bytesWritten} bytes to ${filepath}` });
+        res.json({ message: `Successfully ${shouldOverwrite ? 'wrote' : 'appended'} ${bytesWritten} bytes to ${filepath}` });
     } catch (error) {
         console.error(`Error writing file "${filepath}":`, error);
         res.status(500).json({ error: 'An error occurred while writing the file.' });

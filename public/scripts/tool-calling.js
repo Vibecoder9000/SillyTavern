@@ -1,5 +1,5 @@
 import { DOMPurify } from '../lib.js';
-import { normalizeToolExecutionMode, power_user } from './power-user.js';
+import { power_user } from './power-user.js';
 import { accountStorage } from './util/AccountStorage.js';
 
 import {
@@ -150,6 +150,11 @@ function stringify(obj) {
     return typeof obj === 'string' ? obj : JSON.stringify(obj);
 }
 
+function maskNativeToolThinkingBlocks(text) {
+    const source = String(text ?? '');
+    return source.replace(/<think\b[^>]*>[\s\S]*?<\/think>/gi, match => ' '.repeat(match.length));
+}
+
 function escapeRegExp(str) {
     return String(str ?? '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
@@ -266,6 +271,10 @@ function formatNativeToolCallXml(toolCall) {
     return lines.join('\n');
 }
 
+function findNativeXmlCloseTagIndex(source, tagName, fromIndex) {
+    return source.indexOf(`</${String(tagName ?? '')}>`, fromIndex);
+}
+
 function matchNativeXmlOpenTagAt(source, index, allowedTagNames = null) {
     if (source[index] !== '<' || source[index + 1] === '/') {
         return null;
@@ -327,8 +336,7 @@ function extractNativeXmlChildBlocks(content, allowedTagNames = null) {
             return blocks.length > 0 ? blocks : null;
         }
 
-        const closeTag = `</${openMatch.name}>`;
-        const closeIndex = source.indexOf(closeTag, openMatch.openEnd);
+        const closeIndex = findNativeXmlCloseTagIndex(source, openMatch.name, openMatch.openEnd);
         const siblingIndex = closeIndex === -1
             ? findNextNativeXmlSiblingStart(source, openMatch.openEnd, allowedTagNames)
             : -1;
@@ -344,6 +352,7 @@ function extractNativeXmlChildBlocks(content, allowedTagNames = null) {
             hasExplicitClose: closeIndex !== -1,
         });
 
+        const closeTag = `</${openMatch.name}>`;
         index = closeIndex !== -1 ? closeIndex + closeTag.length : valueEnd;
     }
 
@@ -362,17 +371,21 @@ function parseNativeXmlBlocksToObject(childBlocks, schemaProperties = {}) {
     const result = {};
     for (const [name, blocks] of groupedBlocks.entries()) {
         const childSchema = schemaProperties?.[name];
-        if (normalizeSchemaType(childSchema) === 'array') {
+        const childSchemaType = normalizeSchemaType(childSchema);
+
+        if (childSchemaType === 'array') {
             result[name] = blocks.map(block => parseNativeToolArgumentValue(block.value, childSchema?.items));
             continue;
+        }
+
+        if (blocks.length > 1) {
+            throw new Error(`Duplicate <${name}> tags are not allowed.`);
         }
 
         if (blocks.length === 1) {
             result[name] = parseNativeToolArgumentValue(blocks[0].value, childSchema);
             continue;
         }
-
-        result[name] = blocks.map(block => parseNativeToolArgumentValue(block.value, childSchema));
     }
 
     return result;
@@ -937,6 +950,32 @@ function getSandboxRequestContext(workspace = getCurrentSandboxWorkspace(), char
     };
 }
 
+/**
+ * Validates a sandbox media file before exposing it as an image/video tool result.
+ * @param {string} filepath Sandbox-relative path.
+ * @param {{ allowVideo?: boolean }} [options]
+ * @returns {Promise<{ kind: 'image'|'video', filepath: string, width?: number, height?: number }>}
+ */
+async function validateSandboxMediaFile(filepath, { allowVideo = false } = {}) {
+    const sandbox = getSandboxRequestContext();
+    const response = await fetch('/api/extensions/tools/media-info', {
+        method: 'POST',
+        headers: getRequestHeaders(),
+        body: JSON.stringify({
+            filepath,
+            allowVideo,
+            ...sandbox,
+        }),
+    });
+    const result = await response.json();
+
+    if (!response.ok) {
+        throw new Error(result?.error || 'An unknown media validation error occurred.');
+    }
+
+    return result;
+}
+
 function ensureMcpSettingsShape() {
     if (!power_user.mcp || typeof power_user.mcp !== 'object') {
         power_user.mcp = { servers: [], workspaces: {} };
@@ -959,7 +998,7 @@ function getCurrentMcpWorkspaceKey(workspace = getCurrentSandboxWorkspace()) {
 
 function getMcpWorkspaceLabel(workspace = getCurrentSandboxWorkspace()) {
     const key = getCurrentMcpWorkspaceKey(workspace);
-    return key === SANDBOX_ROOT_WORKSPACE ? 'root' : key;
+    return key === SANDBOX_ROOT_WORKSPACE ? 'uploads' : key;
 }
 
 function getMcpWorkspaceState(workspace = getCurrentSandboxWorkspace()) {
@@ -1646,9 +1685,7 @@ function mapMcpInvocationArguments(args, aliasToOriginal) {
 }
 
 async function confirmMcpToolInvocation(server, tool) {
-    const executionMode = normalizeToolExecutionMode(power_user.tool_execution_mode);
-
-    if (executionMode === 'manual' || executionMode === 'automatic') {
+    if (power_user.tool_bypass_mcp_mutable_warning) {
         return true;
     }
 
@@ -2550,16 +2587,13 @@ function normalizeAskUserPayload(payload) {
         throw new Error('ask_user payload must be an object.');
     }
 
+    if (!Object.hasOwn(payload, 'questions')) {
+        throw new Error('ask_user requires a "questions" field.');
+    }
+
     const rawQuestions = Array.isArray(payload.questions)
         ? payload.questions
-        : [{
-            prompt: payload.question,
-            context: payload.context,
-            options: payload.options,
-            default_answer: payload.default_answer,
-            placeholder: payload.placeholder,
-            multiline: payload.multiline,
-        }];
+        : (payload.questions && typeof payload.questions === 'object' ? [payload.questions] : []);
 
     if (!Array.isArray(rawQuestions) || rawQuestions.length === 0) {
         throw new Error('ask_user requires at least one question.');
@@ -2854,20 +2888,20 @@ function registerBuiltinTools() {
                         'type': 'string',
                         'description': 'File contents',
                     },
-                    'append': {
+                    'overwrite': {
                         'type': 'boolean',
-                        'description': 'Append instead of overwrite',
+                        'description': 'Overwrite the file contents. Omit this tag to append instead.',
                     },
                 },
                 'required': ['filepath', 'content'],
             },
-            action: async ({ filepath, content, append = false }) => {
+            action: async ({ filepath, content, overwrite, append }) => {
                 try {
                     const sandbox = getSandboxRequestContext();
                     const response = await fetch('/api/extensions/tools/writefile', {
                         method: 'POST',
                         headers: getRequestHeaders(),
-                        body: JSON.stringify({ filepath, content, append, ...sandbox }),
+                        body: JSON.stringify({ filepath, content, overwrite, append, ...sandbox }),
                     });
 
                     const result = await response.json();
@@ -3040,8 +3074,6 @@ function registerBuiltinTools() {
                 'required': ['filepath'],
             },
             action: async ({ filepath }) => {
-                const imageExtensions = ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.svg'];
-                const videoExtensions = ['.mp4', '.webm', '.ogg', '.mov'];
                 const sandbox = getSandboxRequestContext();
                 const trimmedFilepath = String(filepath ?? '').trim();
 
@@ -3053,17 +3085,13 @@ function registerBuiltinTools() {
                     return `Error: "${trimmedFilepath}" must be a sandbox-relative path, not an absolute path.`;
                 }
 
-                const extension = trimmedFilepath.slice(trimmedFilepath.lastIndexOf('.')).toLowerCase();
-
-                if (imageExtensions.includes(extension)) {
-                    return JSON.stringify({ type: 'image_display', filepath: trimmedFilepath, ...sandbox });
+                try {
+                    const mediaInfo = await validateSandboxMediaFile(trimmedFilepath, { allowVideo: true });
+                    const mediaType = mediaInfo.kind === 'video' ? 'video_display' : 'image_display';
+                    return JSON.stringify({ type: mediaType, filepath: trimmedFilepath, ...sandbox });
+                } catch (error) {
+                    return `Error: ${error.message}`;
                 }
-
-                if (videoExtensions.includes(extension)) {
-                    return JSON.stringify({ type: 'video_display', filepath: trimmedFilepath, ...sandbox });
-                }
-
-                return `Error: The file "${trimmedFilepath}" is not a supported image or video type.`;
             },
         },
         {
@@ -3080,19 +3108,27 @@ function registerBuiltinTools() {
                 'required': ['filepath'],
             },
             action: async ({ filepath }) => {
-                const imageExtensions = ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.svg'];
-                const extension = filepath.slice(filepath.lastIndexOf('.')).toLowerCase();
+                const trimmedFilepath = String(filepath ?? '').trim();
                 const sandbox = getSandboxRequestContext();
 
-                if (!imageExtensions.includes(extension)) {
-                    return `Error: The file "${filepath}" is not a supported image type.`;
+                if (!trimmedFilepath) {
+                    return 'Error: filepath is required.';
                 }
 
-                return {
-                    type: 'image_context',
-                    filepath: filepath,
-                    ...sandbox,
-                };
+                if (isAbsoluteOrRootedPath(trimmedFilepath)) {
+                    return `Error: "${trimmedFilepath}" must be a sandbox-relative path, not an absolute path.`;
+                }
+
+                try {
+                    await validateSandboxMediaFile(trimmedFilepath);
+                    return {
+                        type: 'image_context',
+                        filepath: trimmedFilepath,
+                        ...sandbox,
+                    };
+                } catch (error) {
+                    return `Error: ${error.message}`;
+                }
             },
         },
         {
@@ -4268,31 +4304,32 @@ export class ToolManager {
         return Array.from(tagNames);
     }
 
-    static #findNativeToolTag(text, additionalNames = []) {
+    static #findNextNativeToolTag(text, startIndex = 0, additionalNames = []) {
         const source = String(text ?? '');
         const tagNames = this.#getNativeToolTagNames(additionalNames);
         if (tagNames.length === 0) {
             return null;
         }
 
-        const pattern = new RegExp(`<(${tagNames.map(escapeRegExp).join('|')})\\s*>`, 'g');
-        let match = null;
-        let lastMatch = null;
+        const tagPattern = new RegExp(`<(${tagNames.map(escapeRegExp).join('|')})\\s*>`, 'g');
+        tagPattern.lastIndex = Math.max(0, startIndex);
 
-        while ((match = pattern.exec(source)) !== null) {
-            lastMatch = {
-                toolName: match[1],
-                startIndex: match.index,
-                openTag: match[0],
-                closeTag: `</${match[1]}>`,
+        let directMatch = null;
+        const matchedDirect = tagPattern.exec(source);
+        if (matchedDirect) {
+            directMatch = {
+                toolName: matchedDirect[1],
+                startIndex: matchedDirect.index,
+                openTag: matchedDirect[0],
+                closeTag: `</${matchedDirect[1]}>`,
             };
         }
 
         const allowedNames = new Set(tagNames);
         const genericPattern = /<tool>\s*([\s\S]*?)<\/tool>/g;
-        /** @type {{ toolName: string, wrappedToolName: string, startIndex: number, openTag: string, closeTag: string } | null} */
+        genericPattern.lastIndex = Math.max(0, startIndex);
         let genericMatch = null;
-
+        let match = null;
         while ((match = genericPattern.exec(source)) !== null) {
             const rawContent = String(match[1] ?? '').trim();
             const toolNameMatch = /"tool"\s*:\s*"([^"]+)"/.exec(rawContent);
@@ -4310,14 +4347,37 @@ export class ToolManager {
                 openTag: '<tool>',
                 closeTag: '</tool>',
             };
+            break;
         }
 
         if (!genericMatch) {
-            return lastMatch;
+            return directMatch;
         }
 
-        if (!lastMatch || genericMatch.startIndex >= lastMatch.startIndex) {
+        if (!directMatch || genericMatch.startIndex <= directMatch.startIndex) {
             return genericMatch;
+        }
+
+        return directMatch;
+    }
+
+    static #findNativeToolTag(text, additionalNames = []) {
+        const source = String(text ?? '');
+        let searchIndex = 0;
+        let lastMatch = null;
+
+        while (searchIndex < source.length) {
+            const nextMatch = this.#findNextNativeToolTag(source, searchIndex, additionalNames);
+            if (!nextMatch) {
+                break;
+            }
+
+            lastMatch = nextMatch;
+            const closeTag = String(nextMatch.closeTag || `</${nextMatch.toolName}>`);
+            const closeTagIndex = source.indexOf(closeTag, nextMatch.startIndex + nextMatch.openTag.length);
+            searchIndex = closeTagIndex === -1
+                ? nextMatch.startIndex + nextMatch.openTag.length
+                : closeTagIndex + closeTag.length;
         }
 
         return lastMatch;
@@ -4700,91 +4760,41 @@ export class ToolManager {
      * @param {{ preferredToolName?: string | null }} [options={}] Parse options.
      * @returns {object|null} The parsed tool call and reasoning, or null if not found.
      */
-    static containsNativeToolCall(text, additionalNames = []) {
-        return !!this.#findNativeToolTag(text, additionalNames);
-    }
-
-    static stripNativeToolCallFromText(text, additionalNames = []) {
-        const source = String(text ?? '');
-        const tagMatch = this.#findNativeToolTag(source, additionalNames);
-        if (!tagMatch) {
-            return source;
-        }
-
-        const closeTag = `</${tagMatch.toolName}>`;
-        const closeTagIndex = source.indexOf(closeTag, tagMatch.startIndex + tagMatch.openTag.length);
-        const endIndex = closeTagIndex === -1 ? source.length : closeTagIndex + closeTag.length;
-        return `${source.slice(0, tagMatch.startIndex)}${source.slice(endIndex)}`;
-    }
-
-    static getNativeToolStopStrings() {
-        return [...new Set([
-            ...this.#getNativeToolTagNames().map(toolName => `</${toolName}>`),
-            '</tool>',
-        ])];
-    }
-
-    static findAndParseNativeToolCall(text, { preferredToolName = null } = {}) {
-        const tagMatch = this.#findNativeToolTag(text, preferredToolName ? [preferredToolName] : []);
+    static #parseNativeToolTag(text, tagMatch) {
         if (!tagMatch) {
             return null;
         }
 
+        const source = String(text ?? '');
         const { toolName, startIndex: toolTagIndex, openTag } = tagMatch;
         const effectiveToolName = String(tagMatch.wrappedToolName || toolName).trim();
         const closeTag = String(tagMatch.closeTag || `</${toolName}>`);
-        const toolCloseTagIndex = text.indexOf(closeTag, toolTagIndex + openTag.length);
-        const fallbackToolBlockEndIndex = toolCloseTagIndex !== -1 ? toolCloseTagIndex + closeTag.length : text.length;
-        const textBeforeTool = text.substring(0, toolTagIndex);
-        const rawToolBlock = text.slice(toolTagIndex, fallbackToolBlockEndIndex).trim();
-        const looksLikeToolCallAttempt = rawToolBlock.startsWith(`<${toolName}>`);
-
-        const buildContext = (toolBlockEndIndex = fallbackToolBlockEndIndex) => {
-            const thinkStartIndex = text.lastIndexOf('<think>', toolTagIndex);
-            const thinkCloseBeforeToolIndex = text.lastIndexOf('</think>', toolTagIndex);
-            const toolInsideThink = thinkStartIndex !== -1 && thinkStartIndex > thinkCloseBeforeToolIndex;
-            let reasoning = '';
-            let prefixText = '';
-
-            if (toolInsideThink) {
-                const thinkContentStartIndex = thinkStartIndex + '<think>'.length;
-                const thinkEndIndex = text.indexOf('</think>', toolBlockEndIndex);
-                const reasoningParts = [
-                    text.slice(thinkContentStartIndex, toolTagIndex).trim(),
-                    thinkEndIndex !== -1 ? text.slice(toolBlockEndIndex, thinkEndIndex).trim() : '',
-                ].filter(Boolean);
-
-                reasoning = reasoningParts.join('\n\n');
-                prefixText = text.slice(0, thinkStartIndex);
-            } else {
-                const thinkMatch = text.match(/<think>([\s\S]*?)<\/think>/);
-                reasoning = thinkMatch ? thinkMatch[1].trim() : '';
-                prefixText = thinkMatch
-                    ? textBeforeTool.replace(/<think>[\s\S]*?<\/think>/, '')
-                    : textBeforeTool;
-            }
-
-            return {
-                reasoning,
-                prefix_text: prefixText.trim(),
-                original_text: text,
-                continue: true,
-            };
-        };
+        const toolCloseTagIndex = findNativeXmlCloseTagIndex(source, toolName, toolTagIndex + openTag.length);
+        const fallbackToolBlockEndIndex = toolCloseTagIndex !== -1 ? toolCloseTagIndex + closeTag.length : source.length;
+        const detectedToolBlock = source.slice(toolTagIndex, fallbackToolBlockEndIndex).trim();
+        const rawToolContent = source.slice(toolTagIndex + openTag.length, toolCloseTagIndex !== -1 ? toolCloseTagIndex : source.length);
+        const looksLikeToolCallAttempt = detectedToolBlock.startsWith(`<${String(toolName).trim()}>`);
 
         const buildParseError = (code, message, extra = {}) => {
-            const parseError = { code, message, ...extra };
+            const parseError = {
+                code,
+                message,
+                tool_name: effectiveToolName || toolName,
+                ...extra,
+            };
             console.warn('[ToolManager] Failed to parse native tool call:', parseError);
             return {
-                ...buildContext(),
+                type: 'tool',
+                startIndex: toolTagIndex,
+                endIndex: fallbackToolBlockEndIndex,
+                raw_tool_block: detectedToolBlock,
+                raw_xml: detectedToolBlock,
+                detected_tool_name: effectiveToolName || toolName,
                 tool_call: null,
+                continue: true,
                 parse_error: parseError,
             };
         };
-
-        const toolBlockEndIndex = toolCloseTagIndex !== -1 ? toolCloseTagIndex + closeTag.length : fallbackToolBlockEndIndex;
-        const detectedToolBlock = text.slice(toolTagIndex, toolBlockEndIndex).trim();
-        const rawToolContent = text.slice(toolTagIndex + openTag.length, toolCloseTagIndex !== -1 ? toolCloseTagIndex : text.length);
 
         try {
             if (toolName === 'tool' && effectiveToolName) {
@@ -4804,21 +4814,28 @@ export class ToolManager {
 
                     console.log(`[ToolManager] Parsed wrapped tool call: ${parsed.tool}, continue flag: ${parsed.continue}`);
                     return {
-                        ...buildContext(toolBlockEndIndex),
+                        type: 'tool',
+                        startIndex: toolTagIndex,
+                        endIndex: fallbackToolBlockEndIndex,
+                        raw_tool_block: detectedToolBlock,
+                        raw_xml: detectedToolBlock,
                         tool_call: parsed,
                         continue: shouldContinue,
+                        parse_error: null,
                     };
                 } catch {
-                    const nestedParsed = this.findAndParseNativeToolCall(trimmedContent, { preferredToolName: effectiveToolName });
-                    if (nestedParsed?.tool_call) {
-                        const context = buildContext(toolBlockEndIndex);
-                        const combinedReasoning = [context.reasoning, nestedParsed.reasoning].filter(Boolean).join('\n\n');
+                    const nestedMatches = this.findAndParseNativeToolCalls(trimmedContent, { preferredToolNames: [effectiveToolName] });
+                    const nestedToolSegment = nestedMatches?.segments?.find(segment => segment.type === 'tool' && segment.tool_call);
+                    if (nestedToolSegment?.tool_call) {
                         return {
-                            ...context,
-                            tool_call: nestedParsed.tool_call,
-                            continue: nestedParsed.continue,
-                            reasoning: combinedReasoning,
-                            prefix_text: context.prefix_text,
+                            type: 'tool',
+                            startIndex: toolTagIndex,
+                            endIndex: fallbackToolBlockEndIndex,
+                            raw_tool_block: detectedToolBlock,
+                            raw_xml: detectedToolBlock,
+                            tool_call: nestedToolSegment.tool_call,
+                            continue: nestedToolSegment.continue !== false,
+                            parse_error: null,
                         };
                     }
 
@@ -4851,20 +4868,130 @@ export class ToolManager {
 
             console.log(`[ToolManager] Parsed tool call: ${parsed.tool}, continue flag: ${parsed.continue}`);
             return {
-                ...buildContext(toolBlockEndIndex),
+                type: 'tool',
+                startIndex: toolTagIndex,
+                endIndex: fallbackToolBlockEndIndex,
+                raw_tool_block: detectedToolBlock,
+                raw_xml: detectedToolBlock,
                 tool_call: parsed,
                 continue: shouldContinue,
+                parse_error: null,
             };
         } catch (error) {
             if (!looksLikeToolCallAttempt) {
                 return null;
             }
 
-            return buildParseError('invalid_tool_call', `Failed to parse tool call: ${error instanceof Error ? error.message : String(error)}`, {
-                raw_tool_block: detectedToolBlock,
-                raw_xml: detectedToolBlock,
-            });
+            return buildParseError('invalid_tool_call', `Failed to parse tool call: ${error instanceof Error ? error.message : String(error)}`);
         }
+    }
+
+    static containsNativeToolCall(text, additionalNames = []) {
+        const parsed = this.findAndParseNativeToolCalls(text, { preferredToolNames: additionalNames });
+        return !!parsed?.hasToolCalls;
+    }
+
+    static stripNativeToolCallFromText(text, additionalNames = []) {
+        const source = String(text ?? '');
+        const parsed = this.findAndParseNativeToolCalls(source, { preferredToolNames: additionalNames });
+        if (!parsed?.hasToolCalls) {
+            return source;
+        }
+
+        return parsed.segments
+            .filter(segment => segment.type === 'text')
+            .map(segment => segment.text)
+            .join('');
+    }
+
+    static getNativeToolStopStrings() {
+        return [...new Set([
+            ...this.#getNativeToolTagNames().map(toolName => `</${toolName}>`),
+            '</tool>',
+        ])];
+    }
+
+    static findAndParseNativeToolCalls(text, { preferredToolNames = [] } = {}) {
+        const source = String(text ?? '');
+        const scanSource = oai_settings.parse_tools_in_thinking_blocks ? source : maskNativeToolThinkingBlocks(source);
+        const segments = [];
+        let searchIndex = 0;
+        let hasToolCalls = false;
+        let hasErrors = false;
+        let shouldContinue = false;
+
+        while (searchIndex < scanSource.length) {
+            const tagMatch = this.#findNextNativeToolTag(scanSource, searchIndex, preferredToolNames);
+            if (!tagMatch) {
+                if (searchIndex < scanSource.length || segments.length === 0) {
+                    segments.push({ type: 'text', text: source.slice(searchIndex) });
+                }
+                break;
+            }
+
+            if (tagMatch.startIndex > searchIndex) {
+                segments.push({
+                    type: 'text',
+                    text: source.slice(searchIndex, tagMatch.startIndex),
+                });
+            }
+
+            const parsedSegment = this.#parseNativeToolTag(source, tagMatch);
+            if (!parsedSegment) {
+                searchIndex = tagMatch.startIndex + tagMatch.openTag.length;
+                continue;
+            }
+
+            segments.push(parsedSegment);
+            hasToolCalls = true;
+            hasErrors = hasErrors || !!parsedSegment.parse_error;
+            if (parsedSegment.tool_call?.continue !== false) {
+                shouldContinue = true;
+            }
+            searchIndex = Math.max(parsedSegment.endIndex, tagMatch.startIndex + tagMatch.openTag.length);
+        }
+
+        if (segments.length === 0) {
+            segments.push({ type: 'text', text: source });
+        }
+
+        return {
+            segments,
+            hasToolCalls,
+            hasErrors,
+            shouldContinue,
+        };
+    }
+
+    static findAndParseNativeToolCall(text, { preferredToolName = null } = {}) {
+        const source = String(text ?? '');
+        const parsed = this.findAndParseNativeToolCalls(text, {
+            preferredToolNames: preferredToolName ? [preferredToolName] : [],
+        });
+        const toolSegment = parsed?.segments?.findLast?.(segment => segment.type === 'tool')
+            ?? [...(parsed?.segments ?? [])].reverse().find(segment => segment.type === 'tool');
+        if (!toolSegment) {
+            return null;
+        }
+        const textBeforeTool = parsed.segments
+            .slice(0, parsed.segments.indexOf(toolSegment))
+            .filter(segment => segment.type === 'text')
+            .map(segment => segment.text)
+            .join('');
+        const thinkMatch = source.match(/<think>([\s\S]*?)<\/think>/);
+        const reasoning = thinkMatch ? thinkMatch[1].trim() : '';
+        const prefixText = thinkMatch
+            ? textBeforeTool.replace(/<think>[\s\S]*?<\/think>/, '')
+            : textBeforeTool;
+
+        return {
+            tool_call: toolSegment.tool_call,
+            parse_error: toolSegment.parse_error,
+            continue: toolSegment.continue,
+            reasoning,
+            prefix_text: prefixText.trim(),
+            original_text: source,
+        };
     }
 
     /**
@@ -4935,7 +5062,7 @@ export class ToolManager {
 
         this.#lastListDirectoryContext = trimmedListResult;
         const workspace = getCurrentSandboxWorkspace();
-        const workspaceLabel = workspace === SANDBOX_ROOT_WORKSPACE ? 'root' : workspace;
+        const workspaceLabel = workspace === SANDBOX_ROOT_WORKSPACE ? 'uploads' : workspace;
         return `Current sandbox workspace listing (workspace "${workspaceLabel}", auto-fetched using list_directory with path "."):\n${trimmedListResult}`;
     }
 
@@ -4991,7 +5118,7 @@ export class ToolManager {
         }
 
         const finalPromptParts = [];
-        finalPromptParts.push(`Always put your tool call in your main response. Only one tool call at the end of your message is supported.
+        finalPromptParts.push(`Always put your tool call in your main response. You may include multiple tool calls anywhere in your message.
 
 Call a tool by using the tool name as the XML tag. Put each argument in its own direct child tag. Use ${getCurrentPlatformSyntaxLabel()} syntax always.
 Use real XML for every argument.
@@ -5954,7 +6081,7 @@ function getSandboxRelativePathSegments(pathValue) {
  */
 function formatSandboxPathLabel(pathValue) {
     const normalized = normalizeSandboxRelativePath(pathValue);
-    return normalized === '.' ? 'root' : normalized;
+    return normalized === '.' ? 'uploads' : normalized;
 }
 
 /**
@@ -6130,7 +6257,7 @@ function getSandboxManagerPopupContent() {
                         <div class="sandbox-manager-breadcrumbs" aria-label="Current folder breadcrumbs"></div>
                     </div>
                     <div class="sandbox-manager-pathbar">
-                        <input class="text_pole sandbox-manager-path" type="text" value="." placeholder="root or subfolder, like prompts/docs">
+                        <input class="text_pole sandbox-manager-path" type="text" value="." placeholder="uploads or subfolder, like prompts/docs">
                         <button type="button" class="menu_button menu_button_icon sandbox-manager-up" title="Go to parent folder">
                             <i class="fa-solid fa-arrow-up"></i>
                         </button>
@@ -6172,10 +6299,7 @@ function getSandboxManagerPopupContent() {
 }
 
 async function openSandboxManagerPopup() {
-    const assistantRootContext = getDefaultSandboxWorkspace() === SANDBOX_ROOT_WORKSPACE;
-    let selectedWorkspace = assistantRootContext
-        ? SANDBOX_ROOT_WORKSPACE
-        : (getCurrentSandboxWorkspace() || SANDBOX_ROOT_WORKSPACE);
+    let selectedWorkspace = getCurrentSandboxWorkspace() || SANDBOX_ROOT_WORKSPACE;
     let currentPath = '.';
 
     const popupOptions = {
@@ -6232,7 +6356,7 @@ async function openSandboxManagerPopup() {
                 const normalizedPath = normalizeSandboxRelativePath(currentPath);
                 const segments = getSandboxRelativePathSegments(normalizedPath);
 
-                const rootButton = createSandboxManagerButton('fa-house', 'root', 'Go to root folder', 'sandbox-manager-breadcrumb-button');
+                const rootButton = createSandboxManagerButton('fa-house', 'uploads', 'Go to uploads folder', 'sandbox-manager-breadcrumb-button');
                 rootButton.dataset.path = '.';
                 rootButton.addEventListener('click', async () => {
                     pathInput.value = '.';
@@ -6345,29 +6469,27 @@ async function openSandboxManagerPopup() {
                     const uniqueWorkspaces = [...new Set(workspaceNames.map(x => String(x || '').trim()).filter(Boolean))]
                         .sort((a, b) => a.localeCompare(b));
 
-                    if (!assistantRootContext && selectedWorkspace !== SANDBOX_ROOT_WORKSPACE && !uniqueWorkspaces.includes(selectedWorkspace)) {
+                    if (selectedWorkspace !== SANDBOX_ROOT_WORKSPACE && !uniqueWorkspaces.includes(selectedWorkspace)) {
                         uniqueWorkspaces.unshift(selectedWorkspace);
                     }
 
                     workspaceSelect.innerHTML = '';
                     const rootOption = document.createElement('option');
                     rootOption.value = SANDBOX_ROOT_WORKSPACE;
-                    rootOption.textContent = 'root';
+                    rootOption.textContent = 'uploads';
                     workspaceSelect.append(rootOption);
 
-                    if (!assistantRootContext) {
-                        for (const workspace of uniqueWorkspaces) {
-                            if (workspace === SANDBOX_ROOT_WORKSPACE) continue;
-                            const option = document.createElement('option');
-                            option.value = workspace;
-                            option.textContent = workspace;
-                            workspaceSelect.append(option);
-                        }
+                    for (const workspace of uniqueWorkspaces) {
+                        if (workspace === SANDBOX_ROOT_WORKSPACE) continue;
+                        const option = document.createElement('option');
+                        option.value = workspace;
+                        option.textContent = workspace;
+                        workspaceSelect.append(option);
                     }
 
                     workspaceSelect.value = selectedWorkspace;
-                    workspaceSelect.disabled = assistantRootContext;
-                    newButton.disabled = assistantRootContext;
+                    workspaceSelect.disabled = false;
+                    newButton.disabled = false;
                     updateHeader();
                 } finally {
                     setButtonBusy(refreshButton, false);
@@ -6470,9 +6592,7 @@ async function openSandboxManagerPopup() {
             });
 
             await refreshWorkspaces();
-            if (assistantRootContext) {
-                clearStatus();
-            }
+            clearStatus();
             await browseDirectory('.');
         },
     };
@@ -8219,13 +8339,10 @@ async function refreshSandboxWorkspaceSelector({ persistDefault = false } = {}) 
         return;
     }
 
-    const assistantRootContext = getDefaultSandboxWorkspace() === SANDBOX_ROOT_WORKSPACE;
     const metadataWorkspace = getMetadataWorkspace();
     const fallbackWorkspace = getDefaultSandboxWorkspace();
-    const selectedWorkspace = assistantRootContext
-        ? SANDBOX_ROOT_WORKSPACE
-        : (metadataWorkspace || fallbackWorkspace);
-    const needsPersist = !metadataWorkspace || (assistantRootContext && metadataWorkspace !== SANDBOX_ROOT_WORKSPACE);
+    const selectedWorkspace = metadataWorkspace || fallbackWorkspace;
+    const needsPersist = !metadataWorkspace;
 
     if (needsPersist) {
         setSandboxWorkspaceForCurrentChat(selectedWorkspace);
@@ -8238,7 +8355,7 @@ async function refreshSandboxWorkspaceSelector({ persistDefault = false } = {}) 
     const uniqueWorkspaces = [...new Set(workspaceNames.map(x => String(x || '').trim()).filter(Boolean))]
         .sort((a, b) => a.localeCompare(b));
 
-    if (!assistantRootContext && selectedWorkspace !== SANDBOX_ROOT_WORKSPACE && !uniqueWorkspaces.includes(selectedWorkspace)) {
+    if (selectedWorkspace !== SANDBOX_ROOT_WORKSPACE && !uniqueWorkspaces.includes(selectedWorkspace)) {
         uniqueWorkspaces.unshift(selectedWorkspace);
     }
 
@@ -8247,20 +8364,18 @@ async function refreshSandboxWorkspaceSelector({ persistDefault = false } = {}) 
 
     const rootOption = document.createElement('option');
     rootOption.value = SANDBOX_ROOT_WORKSPACE;
-    rootOption.textContent = 'root';
+    rootOption.textContent = 'uploads';
     select.append(rootOption);
 
-    if (!assistantRootContext) {
-        for (const workspace of uniqueWorkspaces) {
-            if (workspace === SANDBOX_ROOT_WORKSPACE) {
-                continue;
-            }
-
-            const option = document.createElement('option');
-            option.value = workspace;
-            option.textContent = workspace;
-            select.append(option);
+    for (const workspace of uniqueWorkspaces) {
+        if (workspace === SANDBOX_ROOT_WORKSPACE) {
+            continue;
         }
+
+        const option = document.createElement('option');
+        option.value = workspace;
+        option.textContent = workspace;
+        select.append(option);
     }
 
     select.value = selectedWorkspace;
