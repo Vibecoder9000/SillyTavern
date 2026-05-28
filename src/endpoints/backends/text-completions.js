@@ -493,8 +493,7 @@ ollama.post('/caption-image', async function (request, response) {
         });
 
         if (!fetchResponse.ok) {
-            const errorText = await fetchResponse.text();
-            console.error('Ollama caption error:', fetchResponse.status, fetchResponse.statusText, errorText);
+            console.error('Ollama caption error:', fetchResponse.status, fetchResponse.statusText);
             return response.status(500).send({ error: true });
         }
 

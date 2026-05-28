@@ -560,11 +560,6 @@ async function saveRegexScript(regexScript, existingScriptIndex, scriptType, sav
             await reloadCurrentChat();
         }
     }
-
-    const debuggerPopup = $('#regex_debugger_popup');
-    if (debuggerPopup.length) {
-        populateDebuggerRuleList(debuggerPopup.parent());
-    }
 }
 
 /**
@@ -1165,7 +1160,7 @@ function populateDebuggerRuleList(container) {
  * Opens the regex debugger.
  * @returns {Promise<void>}
  */
-async function onRegexDebuggerOpenClick() {
+export async function onRegexDebuggerOpenClick() {
     const templateContent = await renderExtensionTemplateAsync('regex', 'debugger');
     const debuggerHtml = $('<div>').html(templateContent);
 
@@ -1730,7 +1725,6 @@ export async function init() {
     $('#open_regex_editor').on('click', function () {
         onRegexEditorOpenClick(false, SCRIPT_TYPES.GLOBAL);
     });
-    $('#open_regex_debugger').on('click', onRegexDebuggerOpenClick);
     $('#open_scoped_editor').on('click', function () {
         if (this_chid === undefined) {
             toastr.error(t`No character selected.`);
@@ -1927,7 +1921,6 @@ export async function init() {
         },
     ];
     for (const { selector, setter, getter } of sortableDatas) {
-        // @ts-ignore
         $(selector).sortable({
             delay: getSortableDelay(),
             handle: '.drag-handle',
@@ -1991,7 +1984,6 @@ export async function init() {
     });
 
     await loadRegexScripts();
-    // @ts-ignore
     $('#saved_regex_scripts').sortable('enable');
 
     /**

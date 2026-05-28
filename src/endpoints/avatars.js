@@ -1,6 +1,7 @@
 import path from 'node:path';
 import fs from 'node:fs';
 
+import multer from 'multer';
 import express from 'express';
 import sanitize from 'sanitize-filename';
 import { Jimp } from '../jimp.js';
@@ -10,9 +11,16 @@ import { getImages, tryParse } from '../util.js';
 import { getFileNameValidationFunction } from '../middleware/validateFileName.js';
 import { applyAvatarCropResize } from './characters.js';
 import { invalidateThumbnail } from './thumbnails.js';
+
+import { UPLOADS_DIRECTORY } from '../constants.js';
 import cacheBuster from '../middleware/cacheBuster.js';
 
 export const router = express.Router();
+
+const upload = multer({
+    dest: path.join(globalThis.DATA_ROOT, UPLOADS_DIRECTORY),
+    limits: { fieldSize: 500 * 1024 * 1024 },
+});
 
 router.post('/get', function (request, response) {
     const images = getImages(request.user.directories.avatars);
@@ -38,7 +46,7 @@ router.post('/delete', getFileNameValidationFunction('avatar'), function (reques
     return response.sendStatus(404);
 });
 
-router.post('/upload', getFileNameValidationFunction('overwrite_name'), async (request, response) => {
+router.post('/upload', upload.single('avatar'), getFileNameValidationFunction('overwrite_name'), async (request, response) => {
     if (!request.file) return response.sendStatus(400);
 
     try {

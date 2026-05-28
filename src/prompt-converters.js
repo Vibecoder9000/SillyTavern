@@ -961,7 +961,9 @@ export function convertTextCompletionPrompt(messages) {
 
     const messageStrings = [];
     messages.forEach(m => {
-        if (m.role === 'system' && m.name === undefined) {
+        if (m.extra?.is_tool_result) {
+            messageStrings.push(m.content);
+        } else if (m.role === 'system' && m.name === undefined) {
             messageStrings.push('System: ' + m.content);
         } else if (m.role === 'system' && m.name !== undefined) {
             messageStrings.push(m.name + ': ' + m.content);

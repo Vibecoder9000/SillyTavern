@@ -41,6 +41,7 @@ export const POPUP_RESULT = {
  * @property {string|boolean?} [okButton=null] - Custom text for the OK button. A set text will always show the button. `true` or `false` to explicitly show or hide the button. `null` will leave the behavior and display of the button unchanged, based on the popup type.
  * @property {string|boolean?} [cancelButton=null] - Custom text for the Cancel button. A set text will always show the button. `true` or `false` to explicitly show or hide the button. `null` will leave the behavior and display of the button unchanged, based on the popup type.
  * @property {number?} [rows=1] - The number of rows for the input field
+ * @property {number?} [maxLength=null] - The maximum number of characters for the input field.
  * @property {string?} [placeholder=null] - Placeholder text for the main interactive element (input field for INPUT type). For other popup types, use tooltip for additional hints or to describe content elements.
  * @property {string?} [tooltip=null] - Tooltip text shown on hover for the main interactive element or content area
  * @property {boolean?} [wide=false] - Whether to display the popup in wide mode (wide screen, 1/1 aspect ratio)
@@ -197,6 +198,7 @@ export class Popup {
         okButton = null,
         cancelButton = null,
         rows = 1,
+        maxLength = null,
         placeholder = null,
         tooltip = null,
         wide = false,
@@ -514,6 +516,9 @@ export class Popup {
 
         this.mainInput.value = inputValue;
         this.mainInput.rows = rows ?? 1;
+        if (maxLength) {
+            this.mainInput.maxLength = maxLength;
+        }
 
         // Apply placeholder and tooltip based on popup type
         if (type === POPUP_TYPE.INPUT) {

@@ -119,6 +119,21 @@ export function setConfigValue(_key, _value) {
 }
 
 /**
+ * Calculates the total pixel area for background thumbnails based on config dimensions.
+ * @returns {number} The calculated pixel area (width * height).
+ */
+export function getThumbnailResolution() {
+    const dimensions = getConfigValue('thumbnails.dimensions.bg', [160, 90]);
+
+    if (Array.isArray(dimensions) && dimensions.length >= 2 && !isNaN(dimensions[0]) && !isNaN(dimensions[1])) {
+        return Number(dimensions[0]) * Number(dimensions[1]);
+    }
+
+    console.warn('[getThumbnailResolution] Malformed thumbnails.dimensions.bg in config. Using default 160x90.');
+    return 160 * 90;
+}
+
+/**
  * Encodes the Basic Auth header value for the given user and password.
  * @param {string} auth username:password
  * @returns {string} Basic Auth header value

@@ -11,14 +11,15 @@ import _ from 'lodash';
 import mime from 'mime-types';
 import { Jimp, JimpMime } from '../jimp.js';
 import storage from 'node-persist';
+import multer from 'multer';
 
-import { AVATAR_WIDTH, AVATAR_HEIGHT, DEFAULT_AVATAR_PATH } from '../constants.js';
+import { AVATAR_WIDTH, AVATAR_HEIGHT, DEFAULT_AVATAR_PATH, UPLOADS_DIRECTORY } from '../constants.js';
 import { default as validateAvatarUrlMiddleware, getFileNameValidationFunction, forbiddenRegExp } from '../middleware/validateFileName.js';
 import { deepMerge, humanizedDateTime, tryParse, MemoryLimitedMap, getConfigValue, mutateJsonString, clientRelativePath, getUniqueName, sanitizeSafeCharacterReplacements } from '../util.js';
 import { TavernCardValidator } from '../validator/TavernCardValidator.js';
 import { parse, read, write } from '../character-card-parser.js';
 import { readWorldInfoFile } from './worldinfo.js';
-import { invalidateThumbnail } from './thumbnails.js';
+import { invalidateThumbnail, generateThumbnail } from './thumbnails.js';
 import { importRisuSprites } from './sprites.js';
 import { getUserDirectories } from '../users.js';
 import { getChatInfo } from './chats.js';
@@ -751,6 +752,11 @@ async function importFromYaml(uploadPath, context, preservedFileName) {
         'tags': '',
     }, context.request.user.directories);
     const result = await writeCharacterData(DEFAULT_AVATAR_PATH, JSON.stringify(char), fileName, context.request);
+
+    if (result) {
+        await generateThumbnail(context.request.user.directories, 'avatar', `${fileName}.png`, true, false);
+    }
+
     return result ? fileName : '';
 }
 
@@ -797,6 +803,10 @@ async function importFromCharX(uploadPath, { request }, preservedFileName) {
     }
 
     const result = await writeCharacterData(avatar, JSON.stringify(processedCard), fileName, request);
+
+    if (result) {
+        await generateThumbnail(request.user.directories, 'avatar', `${fileName}.png`, true, false);
+    }
     return result ? fileName : '';
 }
 
@@ -899,6 +909,9 @@ async function importFromJson(uploadPath, { request }, preservedFileName) {
         const pngName = preservedFileName || getPngName(jsonData.name, request.user.directories);
         const char = JSON.stringify(jsonData);
         const result = await writeCharacterData(DEFAULT_AVATAR_PATH, char, pngName, request);
+        if (result) {
+            await generateThumbnail(request.user.directories, 'avatar', `${pngName}.png`, true, false);
+        }
         return result ? pngName : '';
     } else if (jsonData.name !== undefined) {
         console.info('Importing from v1 json');
@@ -925,6 +938,9 @@ async function importFromJson(uploadPath, { request }, preservedFileName) {
         char = convertToV2(char, request.user.directories);
         let charJSON = JSON.stringify(char);
         const result = await writeCharacterData(DEFAULT_AVATAR_PATH, charJSON, pngName, request);
+        if (result) {
+            await generateThumbnail(request.user.directories, 'avatar', `${pngName}.png`, true, false);
+        }
         return result ? pngName : '';
     } else if (jsonData.char_name !== undefined) {
         //json Pygmalion notepad
@@ -952,6 +968,9 @@ async function importFromJson(uploadPath, { request }, preservedFileName) {
         char = convertToV2(char, request.user.directories);
         const charJSON = JSON.stringify(char);
         const result = await writeCharacterData(DEFAULT_AVATAR_PATH, charJSON, pngName, request);
+        if (result) {
+            await generateThumbnail(request.user.directories, 'avatar', `${pngName}.png`, true, false);
+        }
         return result ? pngName : '';
     }
 
@@ -986,6 +1005,9 @@ async function importFromPng(uploadPath, { request }, preservedFileName) {
         const char = JSON.stringify(jsonData);
         const result = await writeCharacterData(uploadPath, char, pngName, request);
         fs.unlinkSync(uploadPath);
+        if (result) {
+            await generateThumbnail(request.user.directories, 'avatar', `${pngName}.png`, true, false);
+        }
         return result ? pngName : '';
     } else if (jsonData.name !== undefined) {
         console.info('Found a v1 character file.');
@@ -1019,9 +1041,13 @@ async function importFromPng(uploadPath, { request }, preservedFileName) {
     return '';
 }
 
+const upload = multer({
+    dest: path.join(globalThis.DATA_ROOT, UPLOADS_DIRECTORY),
+    limits: { fieldSize: 500 * 1024 * 1024 },
+});
 export const router = express.Router();
 
-router.post('/create', getFileNameValidationFunction('file_name'), async function (request, response) {
+router.post('/create', upload.single('avatar'), getFileNameValidationFunction('file_name'), async function (request, response) {
     try {
         if (!request.body) return response.sendStatus(400);
 
@@ -1036,12 +1062,14 @@ router.post('/create', getFileNameValidationFunction('file_name'), async functio
 
         if (!request.file) {
             await writeCharacterData(DEFAULT_AVATAR_PATH, char, internalName, request);
+            await generateThumbnail(request.user.directories, 'avatar', avatarName, true, false);
             return response.send(avatarName);
         } else {
             const crop = tryParse(request.query.crop);
             const uploadPath = path.join(request.file.destination, request.file.filename);
             await writeCharacterData(uploadPath, char, internalName, request, crop);
             fs.unlinkSync(uploadPath);
+            await generateThumbnail(request.user.directories, 'avatar', avatarName, true, false);
             return response.send(avatarName);
         }
     } catch (err) {
@@ -1079,6 +1107,9 @@ router.post('/rename', validateAvatarUrlMiddleware, async function (request, res
         // Write data to new location
         await writeCharacterData(oldAvatarPath, newData, newInternalName, request);
 
+        // Make new thumbnail
+        await generateThumbnail(request.user.directories, 'avatar', newAvatarName, true, false);
+
         // Rename chats folder
         if (fs.existsSync(oldChatsPath) && !fs.existsSync(newChatsPath)) {
             fs.cpSync(oldChatsPath, newChatsPath, { recursive: true });
@@ -1096,7 +1127,7 @@ router.post('/rename', validateAvatarUrlMiddleware, async function (request, res
     }
 });
 
-router.post('/edit', validateAvatarUrlMiddleware, async function (request, response) {
+router.post('/edit', upload.single('avatar'), validateAvatarUrlMiddleware, async function (request, response) {
     if (!request.body) {
         console.warn('Error: no response body detected');
         response.status(400).send('Error: no response body detected');
@@ -1125,6 +1156,7 @@ router.post('/edit', validateAvatarUrlMiddleware, async function (request, respo
             invalidateThumbnail(request.user.directories, 'avatar', request.body.avatar_url);
             await writeCharacterData(newAvatarPath, char, targetFile, request, crop);
             fs.unlinkSync(newAvatarPath);
+            await generateThumbnail(request.user.directories, 'avatar', request.body.avatar_url, true, false);
 
             // Bust cache to reload the new avatar
             cacheBuster.bust(request, response);
@@ -1555,7 +1587,7 @@ function getPreservedName(request) {
         : undefined;
 }
 
-router.post('/import', async function (request, response) {
+router.post('/import', upload.single('avatar'), async function (request, response) {
     if (!request.body || !request.file) return response.sendStatus(400);
 
     const uploadPath = path.join(request.file.destination, request.file.filename);
@@ -1593,6 +1625,40 @@ router.post('/import', async function (request, response) {
     } catch (err) {
         console.error(err);
         response.send({ error: true });
+    }
+});
+
+router.post('/import-from-path', async function (request, response) {
+    try {
+        const { filepath, preserveFileName } = request.body;
+
+        if (!filepath || !fs.existsSync(filepath)) {
+            return response.status(400).json({ error: 'Invalid or missing filepath.' });
+        }
+
+        const format = path.extname(filepath).substring(1).toLowerCase();
+        const context = { request, response };
+
+        const formatImportFunctions = {
+            'yaml': importFromYaml, 'yml': importFromYaml, 'json': importFromJson,
+            'png': importFromPng, 'charx': importFromCharX, 'byaf': importFromByaf,
+        };
+
+        const importFunction = formatImportFunctions[format];
+        if (!importFunction) {
+            throw new Error(`Unsupported format: ${format}`);
+        }
+
+        const fileName = await importFunction(filepath, context, preserveFileName);
+
+        if (!fileName) {
+            throw new Error('Failed to import character');
+        }
+
+        response.send({ file_name: fileName });
+    } catch (err) {
+        console.error(err);
+        response.status(500).send({ error: err.message || 'An unexpected error occurred during import.' });
     }
 });
 

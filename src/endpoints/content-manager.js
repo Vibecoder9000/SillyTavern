@@ -53,6 +53,7 @@ export const CONTENT_TYPES = {
     QUICK_REPLIES: 'quick_replies',
     SYSPROMPT: 'sysprompt',
     REASONING: 'reasoning',
+    BACKGROUNDS_METADATA: 'backgrounds_metadata',
     ERROR_PAGE: 'error_page',
     STYLESHEET: 'stylesheet',
 };
@@ -326,9 +327,9 @@ export function getContentOfType(type, format, scope = CONTENT_SCOPE.USER) {
 export function getUserTargetByType(type, directories) {
     switch (type) {
         case CONTENT_TYPES.SETTINGS:
+        case CONTENT_TYPES.BACKGROUNDS_METADATA:
             return directories.root;
         case CONTENT_TYPES.CHARACTER:
-            return directories.characters;
         case CONTENT_TYPES.SPRITES:
             return directories.characters;
         case CONTENT_TYPES.BACKGROUND:
@@ -614,13 +615,10 @@ async function downloadJannyCharacter(uuid) {
             const fileType = imageResult.headers.get('content-type');
 
             return { buffer, fileName, fileType };
-        } else {
-            console.error('Janny failed to download', downloadResult);
         }
-    } else {
-        console.error('Janny returned error', result.statusText, await result.text());
     }
 
+    console.error('Janny returned error', result.statusText, await result.text());
     throw new Error('Failed to download character');
 }
 

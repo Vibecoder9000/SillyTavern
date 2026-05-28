@@ -104,6 +104,7 @@ const STORAGE_KEYS = {
  * @property {string} backups - The directory where the backups are stored
  * @property {string} sysprompt - The directory where the system prompt data is stored
  * @property {string} reasoning - The directory where the reasoning templates are stored
+ * @property {string} uploads - The directory where the sandbox uploads are stored
  */
 
 /**

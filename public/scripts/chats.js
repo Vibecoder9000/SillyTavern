@@ -4,11 +4,14 @@ import { Popper, css, DOMPurify } from '../lib.js';
 import {
     addCopyToCodeBlocks,
     appendMediaToMessage,
+    buildSandboxDownloadUrl,
     characters,
     chat,
     eventSource,
     event_types,
     getCurrentChatId,
+    getCurrentSandboxCharacterName,
+    getCurrentSandboxWorkspace,
     getRequestHeaders,
     name2,
     reloadCurrentChat,
@@ -1898,12 +1901,106 @@ export function registerFileConverter(mimeType, converter) {
     converters[mimeType] = converter;
 }
 
+const SANDBOX_MEDIA_TAG_ATTRIBUTES = Object.freeze({
+    IMG: ['src', 'srcset'],
+    AUDIO: ['src'],
+    VIDEO: ['src', 'poster'],
+    SOURCE: ['src', 'srcset'],
+    TRACK: ['src'],
+});
+
+function toSandboxFilePath(rawUrl) {
+    if (typeof rawUrl !== 'string') {
+        return null;
+    }
+
+    const trimmed = rawUrl.trim();
+    if (!trimmed) {
+        return null;
+    }
+
+    if (trimmed.startsWith('#') || trimmed.startsWith('?') || trimmed.startsWith('//')) {
+        return null;
+    }
+
+    if (/^[a-z][a-z0-9+.-]*:/i.test(trimmed)) {
+        return null;
+    }
+
+    let candidate = trimmed.split('#')[0].split('?')[0].replace(/\\/g, '/');
+
+    if (candidate.startsWith('/uploads/')) {
+        candidate = candidate.slice('/uploads/'.length);
+    } else if (candidate.startsWith('uploads/')) {
+        candidate = candidate.slice('uploads/'.length);
+    } else if (candidate.startsWith('/')) {
+        return null;
+    }
+
+    candidate = candidate.replace(/^\.\/+/, '');
+    return candidate || null;
+}
+
+function rewriteSandboxMediaAttribute(node, attributeName) {
+    const currentValue = node.getAttribute(attributeName);
+    if (!currentValue) {
+        return;
+    }
+
+    if (attributeName === 'srcset') {
+        const rewrittenSrcSet = currentValue
+            .split(',')
+            .map((entry) => {
+                const trimmed = entry.trim();
+                if (!trimmed) {
+                    return trimmed;
+                }
+
+                const [rawUrl, ...descriptors] = trimmed.split(/\s+/);
+                const filePath = toSandboxFilePath(rawUrl);
+                if (!filePath) {
+                    return trimmed;
+                }
+
+                const sandboxUrl = buildSandboxDownloadUrl(filePath, getCurrentSandboxWorkspace(), getCurrentSandboxCharacterName());
+                return [sandboxUrl, ...descriptors].join(' ').trim();
+            })
+            .join(', ');
+
+        if (rewrittenSrcSet !== currentValue) {
+            node.setAttribute(attributeName, rewrittenSrcSet);
+        }
+        return;
+    }
+
+    const filePath = toSandboxFilePath(currentValue);
+    if (!filePath) {
+        return;
+    }
+
+    const sandboxUrl = buildSandboxDownloadUrl(filePath, getCurrentSandboxWorkspace(), getCurrentSandboxCharacterName());
+    node.setAttribute(attributeName, sandboxUrl);
+}
+
 export function addDOMPurifyHooks() {
     // Allow target="_blank" in links
     DOMPurify.addHook('afterSanitizeAttributes', function (node) {
         if ('target' in node) {
             node.setAttribute('target', '_blank');
             node.setAttribute('rel', 'noopener');
+        }
+
+        if (!(node instanceof Element)) {
+            return;
+        }
+
+        const mediaAttributes = SANDBOX_MEDIA_TAG_ATTRIBUTES[node.tagName];
+        if (!Array.isArray(mediaAttributes)) {
+            return;
+        }
+
+        for (const attributeName of mediaAttributes) {
+            rewriteSandboxMediaAttribute(node, attributeName);
         }
     });
 
@@ -2107,6 +2204,41 @@ async function onImageSwiped(messageId, element, direction) {
 }
 
 export function initChatUtilities() {
+    // Handle sandbox file download links rendered by the sandboxDownloadExt Showdown extension
+    // DOMPurify prefixes classes with "custom-", so .sandbox-download becomes .custom-sandbox-download
+    $(document).on('click', '.custom-sandbox-download', async function (e) {
+        e.preventDefault();
+        e.stopPropagation();
+        const filepath = $(this).attr('data-file');
+        const workspace = $(this).attr('data-workspace') || getCurrentSandboxWorkspace();
+        const character = $(this).attr('data-character') || getCurrentSandboxCharacterName();
+        if (!filepath) return;
+        try {
+            const url = buildSandboxDownloadUrl(filepath, workspace, character);
+            const response = await fetch(url, {
+                method: 'GET',
+                headers: getRequestHeaders(),
+            });
+            if (!response.ok) {
+                const errorData = await response.json().catch(() => ({ error: 'Download failed' }));
+                toastr.error(errorData.error || 'Download failed');
+                return;
+            }
+            const blob = await response.blob();
+            const blobUrl = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = blobUrl;
+            a.download = filepath.split('/').pop() || 'download';
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(blobUrl);
+        } catch (error) {
+            console.error('Error downloading sandbox file:', error);
+            toastr.error('Could not download the file.');
+        }
+    });
+
     $(document).on('click', '.mes_hide', async function () {
         const messageBlock = $(this).closest('.mes');
         const messageId = Number(messageBlock.attr('mesid'));
@@ -2211,6 +2343,54 @@ export function initChatUtilities() {
         openAttachmentManager();
     });
 
+    // Upload file(s) to the uploads sandbox directory
+    $('#sandbox_upload_input').on('change', async function () {
+        const fileInput = this;
+        if (!(fileInput instanceof HTMLInputElement) || !fileInput.files?.length) return;
+
+        const files = Array.from(fileInput.files);
+        let successCount = 0;
+        const workspace = getCurrentSandboxWorkspace();
+        const character = getCurrentSandboxCharacterName();
+        const uploadParams = new URLSearchParams({
+            destination: 'sandbox',
+            workspace,
+            character,
+        });
+
+        for (const file of files) {
+            try {
+                const formData = new FormData();
+                formData.append('file', file);
+
+                const headers = getRequestHeaders({ omitContentType: true });
+                const response = await fetch(`/api/files/upload-multipart?${uploadParams.toString()}`, {
+                    method: 'POST',
+                    headers: headers,
+                    body: formData,
+                });
+
+                if (!response.ok) {
+                    const errorText = await response.text();
+                    toastr.error(`Failed to upload ${file.name}: ${errorText}`);
+                    continue;
+                }
+
+                successCount++;
+            } catch (error) {
+                console.error('Error uploading file:', error);
+                toastr.error(`Error uploading ${file.name}`);
+            }
+        }
+
+        if (successCount > 0) {
+            toastr.success(`${successCount} file(s) uploaded to workspace "${workspace}".`);
+        }
+
+        // Reset the file input
+        $('#file_form').trigger('reset');
+    });
+
     $(document).on('click', '.mes_embed', function () {
         const messageBlock = $(this).closest('.mes');
         const messageId = Number(messageBlock.attr('mesid'));
@@ -2292,6 +2472,8 @@ export function initChatUtilities() {
         if (!power_user.click_to_edit) return;
         if (window.getSelection().toString()) return;
         if ($('.edit_textarea').length) return;
+        // Don't trigger edit if the user clicked on an interactive element
+        if ($(event.target).closest('a, button, input, textarea, .interactable, .tool-execute-button').length) return;
         $(this).closest('.mes').find('.mes_edit').trigger('click');
         if ($(event.target).closest('.mes_reasoning').length) {
             $('.reasoning_edit_textarea').trigger('focus');

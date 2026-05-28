@@ -262,7 +262,7 @@ import { initInputMarkdown } from './scripts/input-md-formatting.js';
 import { AbortReason } from './scripts/util/AbortReason.js';
 import { initSystemPrompts } from './scripts/sysprompt.js';
 import { registerExtensionSlashCommands as initExtensionSlashCommands } from './scripts/extensions-slashcommands.js';
-import { ToolManager } from './scripts/tool-calling.js';
+import { ToolManager, initToolCalling, stopActivePythonRun, stopActiveShellRun } from './scripts/tool-calling.js';
 import { addShowdownPatch } from './scripts/util/showdown-patch.js';
 import { applyBrowserFixes } from './scripts/browser-fixes.js';
 import { initServerHistory } from './scripts/server-history.js';
@@ -332,6 +332,49 @@ export {
     /** @deprecated Use getMaxPromptTokens instead. */
     getMaxPromptTokens as getMaxContextSize,
 };
+
+const TRUNCATION_NOTE = '\n[truncated- tool per-output length limit reached]\n';
+
+/**
+ * Truncates a string if its token count is estimated to exceed a specified limit.
+ * Uses an asynchronous token counter to check the total size, and then a character-based
+ * approximation for the truncation itself to ensure client-side performance.
+ * @param {string|Error} output The string to cap.
+ * @returns {Promise<string>} A promise that resolves to the original or truncated string.
+ */
+async function capToolOutput(output) {
+    if (output instanceof Error) {
+        output = output.message || String(output);
+    }
+    const truncationLimit = power_user.tool_output_truncation_limit ?? 4092;
+
+    // A limit of 0 disables truncation
+    if (truncationLimit <= 0) {
+        return output;
+    }
+
+    const contentTokenLimit = truncationLimit - 25;
+
+    // Use the async tokenizer to get an accurate count of the full output
+    const tokenCount = await getTokenCountAsync(output);
+
+    if (tokenCount <= contentTokenLimit) {
+        return output;
+    }
+
+    // Use a character-based approximation to perform the split.
+    const approximateCharLimit = contentTokenLimit * 4;
+    const halfCharLimit = Math.floor(approximateCharLimit / 2);
+
+    if (output.length <= approximateCharLimit) {
+        return output;
+    }
+
+    const start = output.substring(0, halfCharLimit);
+    const end = output.substring(output.length - halfCharLimit);
+
+    return `${start}${TRUNCATION_NOTE}${end}`;
+}
 
 /**
  * Wait for page to load before continuing the app initialization.
@@ -404,6 +447,8 @@ export let converter;
 
 export const systemUserName = 'SillyTavern System';
 export const neutralCharacterName = 'Assistant';
+export const SANDBOX_ROOT_WORKSPACE = '__root__';
+const DEFAULT_SANDBOX_WORKSPACE = 'default';
 let default_user_name = 'User';
 export let name1 = default_user_name;
 export let name2 = systemUserName;
@@ -518,6 +563,30 @@ async function getClientVersion() {
     }
 }
 
+/**
+ * Showdown extension that converts ![](filename) references to sandbox files
+ * into clickable download links instead of broken images.
+ * @returns {object[]} Showdown extension array
+ */
+function sandboxDownloadExt() {
+    const escapeAttr = (value) => String(value)
+        .replace(/"/g, '&quot;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;');
+
+    return [{
+        type: 'lang',
+        regex: /!\[\]\((?!https?:\/\/)([^)]+)\)/g,
+        replace: function (match, filepath) {
+            const sanitizedPath = escapeAttr(filepath);
+            const fileName = sanitizedPath.split('/').pop();
+            const workspace = escapeAttr(getCurrentSandboxWorkspace());
+            const character = escapeAttr(getCurrentSandboxCharacterName());
+            return `<a class="sandbox-download interactable" data-file="${sanitizedPath}" data-workspace="${workspace}" data-character="${character}" title="Download ${sanitizedPath}" style="color:blue;cursor:pointer;text-decoration:underline;">${fileName}</a>`;
+        },
+    }];
+}
+
 export function reloadMarkdownProcessor() {
     converter = new showdown.Converter({
         emoji: true,
@@ -528,7 +597,7 @@ export function reloadMarkdownProcessor() {
         simpleLineBreaks: true,
         strikethrough: true,
         disableForced4SpacesIndentedSublists: true,
-        extensions: [markdownUnderscoreExt()],
+        extensions: [markdownUnderscoreExt(), sandboxDownloadExt()],
     });
 
     // Inject the dinkus extension after creating the converter
@@ -544,6 +613,57 @@ export function getCurrentChatId() {
     } else if (this_chid !== undefined) {
         return characters[this_chid]?.chat;
     }
+}
+
+function getActiveSandboxCharacterName() {
+    if (this_chid !== undefined) {
+        return String(characters[this_chid]?.name ?? '').trim();
+    }
+
+    return String(name2 ?? '').trim();
+}
+
+export function isAssistantCharacterActive() {
+    return !selected_group && getActiveSandboxCharacterName() === neutralCharacterName;
+}
+
+export function getDefaultSandboxWorkspace() {
+    if (isAssistantCharacterActive()) {
+        return SANDBOX_ROOT_WORKSPACE;
+    }
+
+    if (selected_group) {
+        return DEFAULT_SANDBOX_WORKSPACE;
+    }
+
+    const characterName = getActiveSandboxCharacterName();
+    return characterName || DEFAULT_SANDBOX_WORKSPACE;
+}
+
+export function getCurrentSandboxWorkspace() {
+    const workspace = typeof chat_metadata?.sandbox_workspace === 'string'
+        ? chat_metadata.sandbox_workspace.trim()
+        : '';
+    return workspace || getDefaultSandboxWorkspace();
+}
+
+export function getCurrentSandboxCharacterName() {
+    return isAssistantCharacterActive() ? neutralCharacterName : getActiveSandboxCharacterName();
+}
+
+export function buildSandboxDownloadUrl(filepath, workspace = getCurrentSandboxWorkspace(), character = getCurrentSandboxCharacterName()) {
+    const params = new URLSearchParams();
+    params.set('file', filepath);
+
+    if (typeof workspace === 'string' && workspace.length > 0) {
+        params.set('workspace', workspace);
+    }
+
+    if (typeof character === 'string' && character.length > 0) {
+        params.set('character', character);
+    }
+
+    return `/api/extensions/tools/download?${params.toString()}`;
 }
 
 export const talkativeness_default = 0.5;
@@ -746,6 +866,7 @@ async function firstLoadInit() {
     await initExtensions();
     initExtensionSlashCommands();
     ToolManager.initToolSlashCommands();
+    initToolCalling();
     await initPresetManager();
     await initSystemMessages();
     await getSettings(initLoaderHandle);
@@ -2005,16 +2126,963 @@ function insertSVGIcon(mes, extra) {
  * @param {boolean} [options.rerenderMessage=true] Whether to re-render the message content (inside <c>.mes_text</c>)
  */
 export function updateMessageBlock(messageId, message, { rerenderMessage = true } = {}) {
+    hydrateToolResultMedia(message);
+    ensureMessageMediaIsArray(message);
     const messageElement = chatElement.find(`[mesid="${messageId}"]`);
     if (rerenderMessage) {
-        const text = message?.extra?.display_text ?? message.mes;
-        messageElement.find('.mes_text').html(messageFormatting(text, message.name, message.is_system, message.is_user, messageId, {}, false));
+        if (message.extra?.is_tool_call) {
+            messageElement.find('.mes_text').html(getToolCallMessageHtml(message, messageId));
+        } else if (message.extra?.is_tool_result) {
+            renderToolResultText(messageElement.find('.mes_text'), message, messageId, message.mes);
+        } else {
+            const text = message?.extra?.display_text ?? message.mes;
+            messageElement.find('.mes_text').html(messageFormatting(text, message.name, message.is_system, message.is_user, messageId, {}, false));
+        }
+    }
+
+    if (message.extra?.is_tool_call) {
+        messageElement.addClass('tool-call-message');
+    } else {
+        messageElement.removeClass('tool-call-message');
+    }
+
+    if (message.extra?.is_tool_result) {
+        messageElement.addClass('tool-result-message');
+    } else {
+        messageElement.removeClass('tool-result-message');
     }
 
     updateReasoningUI(messageElement);
 
     addCopyToCodeBlocks(messageElement);
     appendMediaToMessage(message, messageElement);
+}
+
+/**
+ * Safely parses tool-call arguments into an object.
+ * @param {any} args
+ * @returns {Record<string, any>}
+ */
+function parseToolCallArguments(args) {
+    if (args && typeof args === 'object' && !Array.isArray(args)) {
+        return args;
+    }
+
+    if (typeof args === 'string') {
+        try {
+            const parsed = JSON.parse(args);
+            return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+        } catch {
+            return {};
+        }
+    }
+
+    return {};
+}
+
+function formatToolArgumentValue(value) {
+    if (Array.isArray(value)) {
+        return value.map(item => formatToolArgumentValue(item)).join('\n');
+    }
+
+    if (value && typeof value === 'object') {
+        return JSON.stringify(value, null, 2);
+    }
+
+    if (typeof value === 'boolean') {
+        return value ? 'true' : 'false';
+    }
+
+    return String(value ?? '');
+}
+
+function formatToolArgumentsForDisplay(args, continueValue) {
+    const lines = [];
+
+    for (const [name, value] of Object.entries(args ?? {})) {
+        lines.push(`${name}: ${formatToolArgumentValue(value)}`);
+    }
+
+    if (continueValue !== undefined) {
+        lines.push(`continue: ${continueValue ? 'true' : 'false'}`);
+    }
+
+    return lines.join('\n');
+}
+
+function formatNativeToolResultText(content) {
+    return `<result>\n${String(content ?? '')}\n</result>`;
+}
+
+/**
+ * Checks if the provided tool call targets the PowerShell executor.
+ * @param {any} toolInfo
+ * @returns {boolean}
+ */
+function isShellToolCall(toolInfo) {
+    return toolInfo?.tool === 'execute_shell';
+}
+
+/**
+ * Checks if the provided tool call targets the Python executor.
+ * @param {any} toolInfo
+ * @returns {boolean}
+ */
+function isPythonToolCall(toolInfo) {
+    return toolInfo?.tool === 'execute_python';
+}
+
+/**
+ * Gets the live command tool kind for a tool call.
+ * @param {any} toolInfo
+ * @returns {'shell'|'python'|null}
+ */
+function getLiveCommandToolKind(toolInfo) {
+    if (isShellToolCall(toolInfo)) {
+        return 'shell';
+    }
+
+    if (isPythonToolCall(toolInfo)) {
+        return 'python';
+    }
+
+    return null;
+}
+
+/**
+ * Builds a one-line PowerShell command preview.
+ * @param {string} command
+ * @param {string} cwd
+ * @returns {string}
+ */
+function getShellCommandDetailsHtml(command, cwd) {
+    const trimmedCommand = String(command ?? '');
+    const trimmedCwd = String(cwd ?? '').trim();
+    const commandLine = trimmedCwd && trimmedCwd !== '.'
+        ? `${trimmedCwd}> ${trimmedCommand}`
+        : trimmedCommand;
+    return `
+        <div class="tool-shell-details">
+            <div class="tool-shell-detail-row tool-shell-command-row">
+                <pre class="tool-shell-command"><code>${DOMPurify.sanitize(commandLine)}</code></pre>
+            </div>
+        </div>
+    `;
+}
+
+/**
+ * Formats a shell run status for display.
+ * @param {string} status
+ * @returns {string}
+ */
+function formatShellStatusLabel(status) {
+    switch (status) {
+        case 'running':
+            return 'Running';
+        case 'failed':
+            return 'Failed';
+        case 'stopped':
+            return 'Stopped';
+        case 'timed_out':
+            return 'Timed out';
+        default:
+            return 'Completed';
+    }
+}
+
+function getNativeToolSegments(message) {
+    const storedSegments = Array.isArray(message?.extra?.native_tool_segments)
+        ? message.extra.native_tool_segments
+        : null;
+    if (storedSegments && storedSegments.length > 0) {
+        return storedSegments;
+    }
+
+    if (!message?.extra?.is_tool_call) {
+        return [];
+    }
+
+    const segments = [];
+    const prefixText = String(message.extra?.prefix_text ?? '');
+    if (prefixText) {
+        segments.push({ type: 'text', text: prefixText });
+    }
+
+    if (message.extra?.tool_call_info || message.extra?.tool_call_parse_error) {
+        segments.push({
+            type: 'tool',
+            tool_call: message.extra.tool_call_info ?? null,
+            parse_error: message.extra.tool_call_parse_error ?? null,
+            raw_tool_block: message.extra.tool_call_parse_error?.raw_tool_block ?? null,
+        });
+    }
+
+    return segments;
+}
+
+function getNativeToolExecutionState(message, segmentIndex) {
+    const nativeState = message?.extra?.native_tool_execution?.[segmentIndex];
+    if (nativeState && typeof nativeState.status === 'string') {
+        return nativeState.status;
+    }
+
+    if (!Array.isArray(message?.extra?.native_tool_segments) && message?.extra?.tool_call_started) {
+        return 'running';
+    }
+
+    return 'pending';
+}
+
+function buildToolExecuteButtonHtml(toolName, messageId, segmentIndex, status) {
+    let label = 'Execute';
+    let icon = 'fa-play';
+    let className = 'tool-execute-button menu_button menu_button_icon';
+    let disabled = '';
+
+    if (status === 'running') {
+        label = 'Executing...';
+        icon = 'fa-spinner fa-spin';
+        className += ' executing';
+        disabled = ' disabled';
+    } else if (status === 'done') {
+        label = 'Done';
+        icon = 'fa-check';
+        className += ' done';
+    } else if (status === 'failed') {
+        label = 'Failed';
+        icon = 'fa-rotate-right';
+        className += ' failed';
+    }
+
+    return `<div class="${className}" data-tool-name="${toolName}" data-message-id="${messageId}" data-segment-index="${segmentIndex}"${disabled} role="button" tabindex="0"><i class="fa-solid ${icon}"></i><span>${label}</span></div>`;
+}
+
+function renderNativeToolSegmentHtml(message, messageId, segment, segmentIndex, { includeExecuteButton = true } = {}) {
+    const toolInfo = segment?.tool_call ?? null;
+    const parseError = segment?.parse_error ?? null;
+    const hasValidToolInfo = !!toolInfo;
+    const detectedToolName = String(toolInfo?.tool ?? segment?.detected_tool_name ?? parseError?.tool_name ?? 'invalid_tool_call').trim();
+
+    if (!hasValidToolInfo && !parseError) {
+        return '';
+    }
+
+    const toolName = DOMPurify.sanitize(detectedToolName || 'invalid_tool_call');
+    const toolArgsObject = hasValidToolInfo ? parseToolCallArguments(toolInfo.args) : null;
+    const canExecuteTool = includeExecuteButton && (hasValidToolInfo || !!parseError);
+    const executionState = getNativeToolExecutionState(message, segmentIndex);
+
+    let html = '';
+    if (hasValidToolInfo && isShellToolCall(toolInfo)) {
+        const explanation = String(toolArgsObject.explanation ?? '').trim() || 'Runs a PowerShell command.';
+        const command = String(toolArgsObject.command ?? '');
+        const cwd = String(toolArgsObject.cwd ?? '.').trim() || '.';
+
+        html += '<div class="tool-call-box tool-shell-call-box">';
+        html += '<div class="tool-call-header">';
+        html += '<h4><i class="fa-solid fa-terminal"></i> Powershell</h4>';
+        if (canExecuteTool) {
+            html += `<div class="tool-call-header-actions">${buildToolExecuteButtonHtml(toolName, messageId, segmentIndex, executionState)}</div>`;
+        }
+        html += '</div>';
+        html += `<div class="tool-shell-summary"><p class="tool-shell-explanation">${DOMPurify.sanitize(explanation)}</p></div>`;
+        html += getShellCommandDetailsHtml(command, cwd);
+        html += '</div>';
+
+        return html;
+    }
+
+    const parseErrorMessage = String(parseError?.message ?? '').trim();
+    const rawToolBlock = String(segment?.raw_tool_block ?? parseError?.raw_tool_block ?? '').trim();
+    let toolArgs = rawToolBlock || '{}';
+
+    if (hasValidToolInfo) {
+        toolArgs = formatToolArgumentsForDisplay(toolArgsObject, toolInfo?.continue !== false);
+    }
+
+    html += '<div class="tool-call-box">';
+    html += '<div class="tool-call-header">';
+    html += '<h4><i class="fa-solid fa-cogs"></i> Tool Call</h4>';
+    if (canExecuteTool) {
+        html += `<div class="tool-call-header-actions">${buildToolExecuteButtonHtml(toolName, messageId, segmentIndex, executionState)}</div>`;
+    }
+    html += '</div>';
+    html += `<div class="tool-action"><p><b>Action:</b> <code>${toolName}</code></p>`;
+    if (parseErrorMessage) {
+        html += `<p><b>Error:</b> ${DOMPurify.sanitize(parseErrorMessage)}</p>`;
+    }
+    html += `<p><b>Arguments:</b></p><pre><code>${DOMPurify.sanitize(toolArgs)}</code></pre></div>`;
+    html += '</div>';
+
+    return html;
+}
+
+/**
+ * Builds formatted HTML for a tool call message.
+ * @param {ChatMessage} message Message object
+ * @param {number} messageId Message ID
+ * @param {object} [options={}] Render options
+ * @param {boolean} [options.includeExecuteButton=true] Include execute button when manual mode is enabled
+ * @returns {string} Tool call HTML
+ */
+function getToolCallMessageHtml(message, messageId, { includeExecuteButton = true } = {}) {
+    const segments = getNativeToolSegments(message);
+    if (segments.length === 0) {
+        return '';
+    }
+
+    const htmlParts = [];
+    segments.forEach((segment, segmentIndex) => {
+        if (segment?.type === 'text') {
+            const text = String(segment.text ?? '');
+            if (!text) {
+                return;
+            }
+
+            const textHtml = messageFormatting(
+                text,
+                message.name,
+                message.is_system,
+                message.is_user,
+                messageId,
+                {},
+                false,
+            );
+            htmlParts.push(`<div class="tool-prefix-text">${textHtml}</div>`);
+            return;
+        }
+
+        if (segment?.type === 'tool') {
+            htmlParts.push(renderNativeToolSegmentHtml(message, messageId, segment, segmentIndex, { includeExecuteButton }));
+        }
+    });
+
+    return htmlParts.join('');
+}
+
+/**
+ * Gets tool result text for display.
+ * @param {ChatMessage} message Message object
+ * @param {string} [fallbackText=''] Fallback text if tool_result_content is absent
+ * @returns {string} Display-ready tool result text
+ */
+function getToolResultDisplayText(message, fallbackText = '') {
+    const result = message?.extra?.tool_result_content ?? fallbackText;
+    const resultText = typeof result === 'string' ? result : String(result ?? '');
+    const isAgnosticToolResult = typeof message?.mes === 'string' && message.mes.includes('<result>');
+
+    if (!isAgnosticToolResult) {
+        return resultText;
+    }
+
+    return resultText
+        .replace(/(^|[^\\])\\r\\n/g, '$1\n')
+        .replace(/(^|[^\\])\\n/g, '$1\n');
+}
+
+/**
+ * Gets the main editable text for a message.
+ * Keeps reasoning in its dedicated editor instead of duplicating inline `<think>` blocks in the main textarea.
+ * @param {ChatMessage} message Message object
+ * @returns {string} Editable message text
+ */
+function getMessageEditText(message) {
+    if (message?.extra?.is_tool_call) {
+        return String(message?.mes ?? '');
+    }
+
+    if (message?.extra?.is_tool_result) {
+        return getToolResultDisplayText(message, message.mes);
+    }
+
+    return String(message?.mes ?? '');
+}
+
+/**
+ * Removes native tool-call markup from reasoning text.
+ * @param {string} reasoning Reasoning text
+ * @returns {string} Clean reasoning text
+ */
+function stripToolCallFromReasoning(reasoning) {
+    return trimSpaces(
+        ToolManager.stripNativeToolCallFromText(String(reasoning ?? ''))
+            .replace(/<\/?think>\s*/gi, ''),
+    );
+}
+
+/**
+ * Parses native tool calls from message text and, optionally, the separate reasoning field.
+ * Literal <think> blocks inside the message text are handled by ToolManager itself.
+ * @param {string} text Message text to parse
+ * @param {string} [reasoning=''] Separate reasoning text to parse when enabled
+ * @returns {object} Combined native tool parse result
+ */
+export function parseNativeToolCallsForMessage(text, reasoning = '') {
+    const messageText = String(text ?? '');
+    const reasoningText = String(reasoning ?? '');
+    const textParse = ToolManager.findAndParseNativeToolCalls(messageText);
+
+    if (!oai_settings.parse_tools_in_thinking_blocks || !reasoningText.trim().length) {
+        return {
+            ...textParse,
+            original_text: messageText,
+        };
+    }
+
+    const reasoningParse = ToolManager.findAndParseNativeToolCalls(reasoningText);
+    const reasoningToolSegments = Array.isArray(reasoningParse?.segments)
+        ? reasoningParse.segments.filter(segment => segment?.type === 'tool')
+        : [];
+
+    return {
+        segments: [
+            ...reasoningToolSegments,
+            ...(Array.isArray(textParse?.segments) ? textParse.segments : []),
+        ],
+        hasToolCalls: !!(reasoningParse?.hasToolCalls || textParse?.hasToolCalls),
+        hasErrors: !!(reasoningParse?.hasErrors || textParse?.hasErrors),
+        shouldContinue: !!(reasoningParse?.shouldContinue || textParse?.shouldContinue),
+        original_text: messageText,
+    };
+}
+
+/**
+ * Normalizes a parsed native tool call against the current message state.
+ * This keeps streamed reasoning separate from any leftover raw `</think>` or duplicated reasoning text
+ * that may still be present in the final accumulated output.
+ * @param {object} parsedTool Parsed tool call payload
+ * @param {ChatMessage} [message=null] Existing message state
+ * @returns {object} Normalized parsed tool call payload
+ */
+function normalizeNativeToolCallParse(parsedTool, message = null) {
+    const oldSegments = Array.isArray(message?.extra?.native_tool_segments) ? message.extra.native_tool_segments : [];
+    const oldExecution = message?.extra?.native_tool_execution && typeof message.extra.native_tool_execution === 'object'
+        ? message.extra.native_tool_execution
+        : {};
+    const execution = {};
+    const segments = Array.isArray(parsedTool?.segments) ? parsedTool.segments : [];
+
+    segments.forEach((segment, index) => {
+        if (segment?.type !== 'tool') {
+            return;
+        }
+
+        const previousSegment = oldSegments[index];
+        const previousState = oldExecution[index];
+        if (
+            previousSegment?.type === 'tool' &&
+            previousState &&
+            previousSegment.raw_tool_block === segment.raw_tool_block
+        ) {
+            execution[index] = structuredClone(previousState);
+        }
+    });
+
+    return {
+        ...parsedTool,
+        segments,
+        execution,
+    };
+}
+
+/**
+ * Applies native tool parsing state to a message while preserving raw text for manual fixes.
+ * @param {ChatMessage} message Message object
+ * @param {object|null} parsedTool Parsed native tool call result
+ * @param {object} [options={}] Apply options
+ * @param {boolean} [options.formatForDisplay=false] Replace message text with canonical tool-call formatting
+ * @returns {{ valid: boolean, parsedTool: object | null }}
+ */
+export function applyNativeToolCallParseToMessage(message, parsedTool, { formatForDisplay = false } = {}) {
+    message.extra = message.extra || {};
+
+    if (parsedTool?.hasToolCalls) {
+        const normalizedTool = normalizeNativeToolCallParse(parsedTool, message);
+        message.extra.is_tool_call = true;
+        message.extra.native_tool_segments = normalizedTool.segments;
+        message.extra.native_tool_execution = normalizedTool.execution;
+        delete message.extra.tool_call_info;
+        delete message.extra.tool_call_parse_error;
+        delete message.extra.prefix_text;
+
+        if (formatForDisplay && typeof parsedTool.original_text === 'string') {
+            message.mes = parsedTool.original_text;
+        }
+
+        return {
+            valid: normalizedTool.segments.some(segment => segment?.type === 'tool' && !!segment.tool_call),
+            parsedTool: normalizedTool,
+        };
+    }
+
+    delete message.extra.is_tool_call;
+    delete message.extra.tool_call_info;
+    delete message.extra.tool_call_parse_error;
+    delete message.extra.native_tool_segments;
+    delete message.extra.native_tool_execution;
+    delete message.extra.prefix_text;
+
+    return { valid: false, parsedTool: null };
+}
+
+/**
+ * Builds formatted HTML for a text tool result message.
+ * @param {ChatMessage} message Message object
+ * @param {number} messageId Message ID
+ * @param {string} [fallbackText=''] Fallback text if tool_result_content is absent
+ * @returns {string} Tool result HTML
+ */
+function getToolResultMessageHtml(message, messageId, fallbackText = '') {
+    const toolResult = getToolResultDisplayText(message, fallbackText);
+    const shellCommand = message?.extra?.shell_command;
+    const pythonCommand = message?.extra?.python_command;
+
+    if (shellCommand) {
+        const status = typeof shellCommand.status === 'string' ? shellCommand.status : 'completed';
+        const statusLabel = formatShellStatusLabel(status);
+        const statusBadge = status === 'running'
+            ? ''
+            : `<span class="tool-shell-status tool-shell-status-${DOMPurify.sanitize(status)}">${statusLabel}</span>`;
+        const stopButton = status === 'running'
+            ? `<button class="tool-stop-command-button" data-command-kind="shell" data-message-id="${messageId}"><i class="fa-solid fa-stop"></i> Stop command</button>`
+            : '';
+        const outputHtml = toolResult
+            ? `<pre><code>${DOMPurify.sanitize(toolResult)}</code></pre>`
+            : `<div class="tool-shell-empty">${status === 'running' ? 'Waiting for output...' : 'No output.'}</div>`;
+
+        return `
+            <div class="tool-result-box tool-shell-result-box">
+                <div class="tool-shell-header">
+                    <h4><i class="fa-solid fa-terminal"></i> Powershell</h4>
+                    <div class="tool-shell-header-actions">
+                        ${statusBadge}
+                        ${stopButton}
+                    </div>
+                </div>
+                ${outputHtml}
+            </div>
+        `;
+    }
+
+    if (pythonCommand) {
+        const status = typeof pythonCommand.status === 'string' ? pythonCommand.status : 'completed';
+        const statusLabel = formatShellStatusLabel(status);
+        const stopButton = status === 'running'
+            ? `<button class="tool-stop-command-button" data-command-kind="python" data-message-id="${messageId}"><i class="fa-solid fa-stop"></i> Stop command</button>`
+            : '';
+        const statusBadge = status === 'running'
+            ? ''
+            : `<span class="tool-shell-status tool-shell-status-${DOMPurify.sanitize(status)}">${statusLabel}</span>`;
+        const outputHtml = toolResult
+            ? `<pre><code>${DOMPurify.sanitize(toolResult)}</code></pre>`
+            : `<div class="tool-shell-empty">${status === 'running' ? 'Waiting for output...' : 'No output.'}</div>`;
+
+        return `
+            <div class="tool-result-box tool-shell-result-box tool-python-result-box">
+                <div class="tool-shell-header">
+                    <h4><i class="fa-brands fa-python"></i> Python</h4>
+                    <div class="tool-shell-header-actions">
+                        ${statusBadge}
+                        ${stopButton}
+                    </div>
+                </div>
+                ${outputHtml}
+            </div>
+        `;
+    }
+
+    return `<div class="tool-result-box"><h4><i class="fa-solid fa-check-circle"></i> Tool Result</h4><pre><code>${DOMPurify.sanitize(toolResult)}</code></pre></div>`;
+}
+
+/**
+ * Renders tool result text into a message container.
+ * Tool results may also include media, so the text should remain visible.
+ * @param {JQuery<HTMLElement>} container
+ * @param {ChatMessage} message
+ * @param {number} messageId
+ * @param {string} [fallbackText='']
+ */
+function renderToolResultText(container, message, messageId, fallbackText = '') {
+    container.html(getToolResultMessageHtml(message, messageId, fallbackText));
+}
+
+/**
+ * Builds a media attachment from a sandbox tool result payload item.
+ * @param {{ filepath?: string, workspace?: string, character?: string, type?: string }} item
+ * @returns {MediaAttachment|null}
+ */
+function buildToolResultMediaAttachment(item) {
+    if (!item?.filepath) {
+        return null;
+    }
+
+    return {
+        url: buildSandboxDownloadUrl(item.filepath, item.workspace, item.character),
+        type: item.type === 'video_display' ? MEDIA_TYPE.VIDEO : MEDIA_TYPE.IMAGE,
+        title: item.title || item.filepath,
+        source: MEDIA_SOURCE.API,
+    };
+}
+
+/**
+ * Extracts media attachments from structured tool results, including browser screenshots.
+ * @param {any} parsedToolResult Parsed tool result object
+ * @returns {MediaAttachment[]}
+ */
+function extractToolResultMediaAttachments(parsedToolResult) {
+    if (!parsedToolResult || typeof parsedToolResult !== 'object') {
+        return [];
+    }
+
+    const attachments = [];
+    const candidates = [];
+
+    if (parsedToolResult.type === 'image_display' || parsedToolResult.type === 'image_context' || parsedToolResult.type === 'video_display') {
+        candidates.push(parsedToolResult);
+    }
+    if (parsedToolResult.screenshot?.filepath) {
+        candidates.push(parsedToolResult.screenshot);
+    }
+    if (parsedToolResult.pre_click_screenshot?.filepath) {
+        candidates.push(parsedToolResult.pre_click_screenshot);
+    }
+    if (parsedToolResult.opened_tab_screenshot?.filepath) {
+        candidates.push(parsedToolResult.opened_tab_screenshot);
+    }
+
+    for (const candidate of candidates) {
+        const attachment = buildToolResultMediaAttachment(candidate);
+        if (!attachment || attachments.some(existing => existing.url === attachment.url)) {
+            continue;
+        }
+        attachments.push(attachment);
+    }
+
+    return attachments;
+}
+
+/**
+ * Hydrates media attachments from stored tool_result_content for browser/image tool results.
+ * @param {ChatMessage} mes Message object
+ */
+function hydrateToolResultMedia(mes) {
+    if (!mes?.extra?.is_tool_result || Array.isArray(mes.extra.media) && mes.extra.media.length > 0) {
+        return;
+    }
+
+    const rawResult = mes.extra.tool_result_content;
+    if (typeof rawResult !== 'string' || !rawResult.trim()) {
+        return;
+    }
+
+    try {
+        const parsed = JSON.parse(rawResult);
+        const attachments = extractToolResultMediaAttachments(parsed);
+        if (attachments.length === 0) {
+            return;
+        }
+
+        mes.extra.media = attachments;
+        mes.extra.media_index = 0;
+        mes.extra.inline_image = true;
+    } catch {
+        // Text-only tool results are expected here too.
+    }
+}
+
+/**
+ * Builds a media-bearing tool result message when the tool returned an image/video or browser screenshot.
+ * @param {string|object} toolResult Tool result payload
+ * @returns {Promise<ChatMessage|null>}
+ */
+async function createSpecialToolResultMessage(toolResult) {
+    try {
+        const parsed = typeof toolResult === 'string' ? JSON.parse(toolResult) : toolResult;
+        const attachments = extractToolResultMediaAttachments(parsed);
+        if (attachments.length === 0) {
+            return null;
+        }
+
+        const rawToolResult = typeof toolResult === 'string' ? toolResult : JSON.stringify(toolResult);
+        const cappedToolResult = await capToolOutput(rawToolResult);
+        return {
+            name: systemUserName,
+            is_user: false,
+            is_system: true,
+            mes: formatNativeToolResultText(cappedToolResult),
+            extra: {
+                is_tool_result: true,
+                tool_result_content: cappedToolResult,
+                media: attachments,
+                media_index: 0,
+                inline_image: true,
+            },
+        };
+    } catch (error) {
+        console.error('[Tool Result] Failed to parse special tool result:', error);
+        return null;
+    }
+}
+
+/**
+ * Creates a live PowerShell result message in the running state.
+ * @param {any} toolInfo
+ * @returns {ChatMessage}
+ */
+function createShellToolResultMessage(toolInfo) {
+    const toolArgs = parseToolCallArguments(toolInfo?.args);
+    const command = String(toolArgs.command ?? '');
+    const explanation = String(toolArgs.explanation ?? '').trim() || 'PowerShell command';
+    const cwd = String(toolArgs.cwd ?? '.').trim() || '.';
+    return {
+        name: systemUserName,
+        is_user: false,
+        is_system: true,
+        mes: formatNativeToolResultText(''),
+        extra: {
+            is_tool_result: true,
+            tool_result_content: '',
+            shell_command: {
+                command,
+                cwd,
+                explanation,
+                started_at: Date.now(),
+                status: 'running',
+            },
+        },
+    };
+}
+
+/**
+ * Creates a live Python result message in the running state.
+ * @param {any} toolInfo
+ * @returns {ChatMessage}
+ */
+function createPythonToolResultMessage(toolInfo) {
+    const toolArgs = parseToolCallArguments(toolInfo?.args);
+    const timeoutMs = Number.isFinite(Number(toolArgs.timeout_ms))
+        ? Math.floor(Number(toolArgs.timeout_ms))
+        : null;
+    return {
+        name: systemUserName,
+        is_user: false,
+        is_system: true,
+        mes: formatNativeToolResultText(''),
+        extra: {
+            is_tool_result: true,
+            tool_result_content: '',
+            python_command: {
+                started_at: Date.now(),
+                status: 'running',
+                timeout_ms: timeoutMs,
+            },
+        },
+    };
+}
+
+/**
+ * Builds a plain text tool result message for tools that do not return media.
+ * @param {string|object} toolResult
+ * @returns {Promise<ChatMessage>}
+ */
+async function createTextToolResultMessage(toolResult) {
+    const cappedToolResult = await capToolOutput(String(toolResult));
+    return {
+        name: systemUserName,
+        is_user: false,
+        is_system: true,
+        mes: formatNativeToolResultText(cappedToolResult),
+        extra: { is_tool_result: true, tool_result_content: cappedToolResult },
+    };
+}
+
+/**
+ * Builds the persisted result message for a completed non-shell tool invocation.
+ * @param {string|object} toolResult
+ * @returns {Promise<ChatMessage>}
+ */
+async function createCompletedToolResultMessage(toolResult) {
+    const specialMessage = await createSpecialToolResultMessage(toolResult);
+    return specialMessage || createTextToolResultMessage(toolResult);
+}
+
+function getNativeToolSegmentEntries(message) {
+    return getNativeToolSegments(message)
+        .map((segment, segmentIndex) => ({ segment, segmentIndex }))
+        .filter(entry => entry.segment?.type === 'tool');
+}
+
+function getNativeToolParseErrors(parsedTool) {
+    const segments = Array.isArray(parsedTool?.segments) ? parsedTool.segments : [];
+    return segments
+        .filter(segment => segment?.type === 'tool' && segment.parse_error)
+        .map(segment => segment.parse_error)
+        .filter(Boolean);
+}
+
+function hasExecutableNativeToolSegments(parsedTool) {
+    const segments = Array.isArray(parsedTool?.segments) ? parsedTool.segments : [];
+    return segments.some(segment => segment?.type === 'tool' && (!!segment.tool_call || !!segment.parse_error));
+}
+
+function setNativeToolExecutionState(message, segmentIndex, status, extra = {}) {
+    message.extra ??= {};
+    if (!message.extra.native_tool_execution || typeof message.extra.native_tool_execution !== 'object') {
+        message.extra.native_tool_execution = {};
+    }
+
+    message.extra.native_tool_execution[segmentIndex] = {
+        ...(message.extra.native_tool_execution[segmentIndex] ?? {}),
+        ...extra,
+        status,
+    };
+}
+
+function shouldContinueAfterNativeTool(toolInfo) {
+    return !(toolInfo?.continue === false || String(toolInfo?.continue).trim().toLowerCase() === 'false');
+}
+
+function shouldContinueAfterNativeToolSegment(segment) {
+    if (segment?.tool_call) {
+        return shouldContinueAfterNativeTool(segment.tool_call);
+    }
+
+    return !(segment?.continue === false || String(segment?.continue).trim().toLowerCase() === 'false');
+}
+
+function nativeToolMessageRequiresManualExecution(message) {
+    if (power_user.tool_click_to_execute) {
+        return true;
+    }
+
+    return getNativeToolSegmentEntries(message)
+        .some(({ segment }) => segment?.tool_call?.tool && ToolManager.requiresManualApproval(segment.tool_call.tool));
+}
+
+function getNativeToolExecutionSummary(message) {
+    const toolSegments = getNativeToolSegmentEntries(message)
+        .filter(({ segment }) => !!segment.tool_call || !!segment.parse_error);
+    const statuses = toolSegments.map(({ segmentIndex }) => getNativeToolExecutionState(message, segmentIndex));
+    const allDone = statuses.length > 0 && statuses.every(status => status === 'done');
+    const anyContinue = toolSegments.some(({ segment }) => shouldContinueAfterNativeToolSegment(segment));
+    const hasPending = statuses.some(status => status === 'pending' || status === 'running');
+    const hasFailure = statuses.some(status => status === 'failed');
+
+    return {
+        allDone,
+        anyContinue,
+        hasPending,
+        hasFailure,
+    };
+}
+
+async function executeNativeToolSegment(messageId, segmentIndex, { signal } = {}) {
+    const message = chat[messageId];
+    const segment = getNativeToolSegments(message)[segmentIndex];
+    const toolInfo = segment?.tool_call;
+    const parseError = segment?.parse_error ?? null;
+    if (!toolInfo && !parseError) {
+        throw new Error('Tool call information not found');
+    }
+
+    if (getNativeToolExecutionState(message, segmentIndex) === 'running') {
+        return {
+            executed: false,
+            shouldContinue: shouldContinueAfterNativeToolSegment(segment),
+            stopped: false,
+            failed: false,
+        };
+    }
+
+    setNativeToolExecutionState(message, segmentIndex, 'running');
+    updateMessageBlock(messageId, message);
+
+    if (!toolInfo && parseError) {
+        const parseErrorMessage = `Error: ${String(parseError.message ?? 'Failed to parse tool call.').trim()}`;
+        const resultMessage = await createCompletedToolResultMessage(parseErrorMessage);
+        chat.push(resultMessage);
+        addOneMessage(resultMessage);
+        setNativeToolExecutionState(message, segmentIndex, 'done');
+        updateMessageBlock(messageId, message);
+
+        return {
+            executed: true,
+            shouldContinue: shouldContinueAfterNativeToolSegment(segment),
+            stopped: false,
+            failed: false,
+        };
+    }
+
+    const liveCommandToolKind = getLiveCommandToolKind(toolInfo);
+    let liveCommandMessageId = null;
+    if (liveCommandToolKind) {
+        const liveShellMessage = liveCommandToolKind === 'shell'
+            ? createShellToolResultMessage(toolInfo)
+            : createPythonToolResultMessage(toolInfo);
+        chat.push(liveShellMessage);
+        liveCommandMessageId = chat.length - 1;
+        addOneMessage(liveShellMessage);
+    }
+
+    const toolResult = await ToolManager.invokeFunctionTool(toolInfo.tool, toolInfo.args, {
+        signal,
+        liveMessageId: liveCommandMessageId,
+    });
+
+    const failed = toolResult instanceof Error;
+    const shouldContinue = shouldContinueAfterNativeTool(toolInfo);
+    let stopped = false;
+
+    if (liveCommandToolKind) {
+        const commandStatus = liveCommandMessageId !== null
+            ? chat[liveCommandMessageId]?.extra?.shell_command?.status ?? chat[liveCommandMessageId]?.extra?.python_command?.status
+            : null;
+        if (commandStatus === 'stopped') {
+            stopped = true;
+        }
+        if (failed && liveCommandMessageId === null) {
+            const errorMessage = await createCompletedToolResultMessage(toolResult.toString());
+            chat.push(errorMessage);
+            addOneMessage(errorMessage);
+        }
+    } else {
+        const resultPayload = failed ? toolResult.toString() : toolResult;
+        const resultMessage = await createCompletedToolResultMessage(resultPayload);
+        chat.push(resultMessage);
+        addOneMessage(resultMessage);
+    }
+
+    setNativeToolExecutionState(message, segmentIndex, failed ? 'failed' : 'done');
+    updateMessageBlock(messageId, message);
+
+    return {
+        executed: true,
+        shouldContinue,
+        stopped,
+        failed,
+    };
+}
+
+async function executeNativeToolSegmentsForMessage(messageId, { signal } = {}) {
+    const message = chat[messageId];
+    const toolEntries = getNativeToolSegmentEntries(message)
+        .filter(({ segment }) => !!segment.tool_call || !!segment.parse_error);
+    let anyContinue = false;
+    let stopped = false;
+    let failed = false;
+
+    for (const { segmentIndex } of toolEntries) {
+        const result = await executeNativeToolSegment(messageId, segmentIndex, { signal });
+        anyContinue = anyContinue || result.shouldContinue;
+        stopped = stopped || result.stopped;
+        failed = failed || result.failed;
+    }
+
+    return {
+        anyContinue,
+        stopped,
+        failed,
+    };
 }
 
 /**
@@ -2453,11 +3521,24 @@ export function appendMediaToMessage(mes, messageElement, scrollBehavior = SCROL
 export function addCopyToCodeBlocks(messageElement) {
     const codeBlocks = $(messageElement).find('pre code');
     for (let i = 0; i < codeBlocks.length; i++) {
-        hljs.highlightElement(codeBlocks.get(i));
+        const block = codeBlocks.get(i);
+        // Only run hljs when the code block has an explicit language class (e.g. class="language-python").
+        // Without a declared language, hljs.highlightElement() falls back to full auto-detection which
+        // probes every registered language — O(N×languages) synchronous work that causes main-thread jank.
+        const hasLanguageClass = Array.from(block.classList).some(c => c.startsWith('language-'));
+        if (hasLanguageClass) {
+            hljs.highlightElement(block);
+        }
+        // Tool-call blocks are rendered as <details><summary>…</summary><pre><code class="language-json">
+        // by tool-calling.js. Skip the copy button for these — they are collapsible JSON payloads, not
+        // user-facing code snippets.
+        if (block.closest('details') !== null) {
+            continue;
+        }
         const copyButton = document.createElement('i');
         copyButton.classList.add('fa-solid', 'fa-copy', 'code-copy', 'interactable');
         copyButton.title = 'Copy code';
-        codeBlocks.get(i).appendChild(copyButton);
+        block.appendChild(copyButton);
         copyButton.addEventListener('click', function (e) {
             e.stopPropagation();
         });
@@ -2590,6 +3671,8 @@ export function addOneMessage(mes, { type = undefined, insertAfter = null, scrol
  * @returns {JQuery<HTMLElement>} Rendered HTMLElement.
  */
 export function updateMessageElement(mes, { messageId = chat.length - 1, messageElement = messageTemplate.clone(), adjustMediaScroll = SCROLL_BEHAVIOR.NONE } = {}) {
+    hydrateToolResultMedia(mes);
+    ensureMessageMediaIsArray(mes);
     let avatarImg = getThumbnailUrl('persona', user_avatar);
 
     //for non-user messages
@@ -2651,8 +3734,20 @@ export function updateMessageElement(mes, { messageId = chat.length - 1, message
         insertSVGIcon(messageElement, mes.extra);
     }
 
-    if (mes?.extra?.isSmallSys === true) {
-        messageElement.addClass('smallSysMes');
+    if (mes.extra?.is_tool_call) {
+        messageElement.addClass('tool-call-message');
+        messageElement.find('.mes_text').html(getToolCallMessageHtml(mes, messageId));
+    } else if (mes.extra?.is_tool_result) {
+        messageElement.addClass('tool-result-message');
+        renderToolResultText(messageElement.find('.mes_text'), mes, messageId, mes.mes);
+        appendMediaToMessage(mes, messageElement);
+    } else {
+        if (mes?.extra?.isSmallSys === true) {
+            messageElement.addClass('smallSysMes');
+        }
+
+        appendMediaToMessage(mes, messageElement, adjustMediaScroll);
+        messageElement.find('.mes_text').html(messageHTML);
     }
 
     if (Array.isArray(mes?.extra?.tool_invocations)) {
@@ -2666,8 +3761,6 @@ export function updateMessageElement(mes, { messageId = chat.length - 1, message
         $(this).parent().html('<div class="missing-avatar fa-solid fa-user-slash"></div>');
     });
 
-    appendMediaToMessage(mes, messageElement, adjustMediaScroll);
-    messageElement.find('.mes_text').html(messageHTML);
     addCopyToCodeBlocks(messageElement);
 
     // Set the swipes counter for all non-user messages.
@@ -3515,12 +4608,14 @@ class StreamingProcessor {
     /**
      * Creates a new streaming processor.
      * @param {string} type Generation type
-     * @param {boolean} forceName2 If true, force the use of name2
+     * @param {string} type Generation type
+     * @param {object} generateOptions The options object from the Generate function call.
+     * @param {boolean} dryRun Whether this is a dry run.
      * @param {Date} timeStarted Date when generation was started
      * @param {string} continueMessage Previous message if the type is 'continue'
      * @param {PromptReasoning} promptReasoning Prompt reasoning instance
      */
-    constructor(type, forceName2, timeStarted, continueMessage, promptReasoning) {
+    constructor(type, generateOptions, dryRun, timeStarted, continueMessage, promptReasoning) {
         this.result = '';
         this.messageId = -1;
         /** @type {HTMLElement} */
@@ -3534,7 +4629,9 @@ class StreamingProcessor {
         /** @type {HTMLTextAreaElement} */
         this.sendTextarea = document.querySelector('#send_textarea');
         this.type = type;
-        this.force_name2 = forceName2;
+        this.generateOptions = generateOptions;
+        this.dryRun = dryRun;
+        this.force_name2 = generateOptions.force_name2;
         this.isStopped = false;
         this.isFinished = false;
         this.generator = this.nullStreamingGeneration;
@@ -3696,7 +4793,10 @@ class StreamingProcessor {
                 false,
             );
             if (this.messageTextDom instanceof HTMLElement) {
-                if (power_user.stream_fade_in) {
+                const isTextToolResult = !!chat[messageId].extra?.is_tool_result;
+                if (isTextToolResult) {
+                    this.messageTextDom.innerHTML = getToolResultMessageHtml(chat[messageId], messageId, processedText);
+                } else if (power_user.stream_fade_in) {
                     applyStreamFadeIn(this.messageTextDom, formattedText);
                 } else {
                     this.messageTextDom.innerHTML = formattedText;
@@ -3759,7 +4859,6 @@ class StreamingProcessor {
             appendMediaToMessage(message, $(this.messageDom));
         }
 
-        // Store reasoning signature for models that support multi-turn context
         if (this.reasoningSignature) {
             message.extra = message.extra || {};
             message.extra.reasoning_signature = this.reasoningSignature;
@@ -3782,6 +4881,59 @@ class StreamingProcessor {
     async onFinishStreaming(messageId, text) {
         await this.finalizeIntermediaryMessage(messageId, text, { unlockUI: true });
 
+        if (oai_settings.native_tool_calling && this.type !== 'impersonate' && this.type !== 'regenerate') {
+            const parsedTool = parseNativeToolCallsForMessage(text, chat[messageId]?.extra?.reasoning ?? '');
+            const parseOutcome = applyNativeToolCallParseToMessage(chat[messageId], parsedTool, { formatForDisplay: true });
+            if (parseOutcome.parsedTool?.hasToolCalls) {
+                updateMessageBlock(messageId, chat[messageId]);
+                const parseErrors = getNativeToolParseErrors(parseOutcome.parsedTool);
+                const hasExecutableToolCalls = hasExecutableNativeToolSegments(parseOutcome.parsedTool);
+
+                if (parseErrors.length > 0) {
+                    if (parseErrors[0]) {
+                        ToolManager.showNativeToolCallParseError(parseErrors[0]);
+                    }
+                }
+
+                if (!hasExecutableToolCalls) {
+                    await saveChatConditional();
+                    unblockGeneration();
+                    return { suppressAutoContinue: true };
+                }
+
+                if (nativeToolMessageRequiresManualExecution(chat[messageId])) {
+                    await saveChatConditional();
+                    unblockGeneration();
+                    return { suppressAutoContinue: true };
+                }
+
+                const executionResult = await executeNativeToolSegmentsForMessage(messageId, {
+                    signal: this.abortController.signal,
+                });
+                await saveChatConditional();
+
+                if (power_user.tool_auto_continue && executionResult.anyContinue && !executionResult.stopped && !executionResult.failed) {
+                    const newOptions = { ...this.generateOptions, depth: this.generateOptions.depth + 1 };
+                    await Generate('normal', newOptions, this.dryRun);
+                    return { suppressAutoContinue: true };
+                }
+
+                unblockGeneration();
+                return { suppressAutoContinue: true };
+            } else {
+                if (chat[messageId].extra?.is_tool_call) {
+                    delete chat[messageId].extra.is_tool_call;
+                    delete chat[messageId].extra.tool_call_info;
+                    delete chat[messageId].extra.prefix_text;
+                    delete chat[messageId].extra.tool_call_parse_error;
+                    delete chat[messageId].extra.native_tool_segments;
+                    delete chat[messageId].extra.native_tool_execution;
+                    const toolMsgEl = chatElement.find(`.mes[mesid="${messageId}"]`);
+                    toolMsgEl.removeClass('tool-call-message');
+                }
+            }
+        }
+
         const isAborted = this.abortController.signal.aborted;
         if (!isAborted && power_user.auto_swipe && generatedTextFiltered(text)) {
             return await swipe(null, SWIPE_DIRECTION.RIGHT, { source: SWIPE_SOURCE.AUTO_SWIPE, repeated: true, forceMesId: chat.length - 1 });
@@ -3789,6 +4941,7 @@ class StreamingProcessor {
         await saveChatConditional();
 
         playMessageSound();
+        return { suppressAutoContinue: false };
     }
 
     onErrorStreaming() {
@@ -4467,7 +5620,7 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
     // Collect messages with usable content
     const canUseTools = ToolManager.isToolCallingSupported();
     const canPerformToolCalls = !dryRun && ToolManager.canPerformToolCalls(type) && depth < ToolManager.RECURSE_LIMIT;
-    let coreChat = chat.filter(x => !x.is_system || (canUseTools && Array.isArray(x.extra?.tool_invocations)));
+    let coreChat = chat.filter(x => !x.is_system || (canUseTools && Array.isArray(x.extra?.tool_invocations)) || x.extra?.is_tool_result);
     if (type === 'swipe') {
         coreChat.pop();
     }
@@ -4657,6 +5810,10 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
     // Add persona description to prompt
     addPersonaDescriptionExtensionPrompt();
 
+    const nativeToolPrompt = main_api !== 'openai' && oai_settings.native_tool_calling
+        ? await ToolManager.getNativeToolPrompt()
+        : null;
+
     // Prepare the system prompt for Text Completion APIs
     if (main_api !== 'openai') {
         if (power_user.sysprompt.enabled) {
@@ -4667,6 +5824,10 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
         } else {
             // Nullify if it's not enabled
             system = '';
+        }
+
+        if (nativeToolPrompt) {
+            system = [system, nativeToolPrompt].filter(Boolean).join('\n\n');
         }
     }
 
@@ -4695,6 +5856,13 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
     // Render the story string and combine with injections
     const storyString = renderStoryString(storyStringParams);
     let combinedStoryString = isInstruct ? formatInstructModeStoryString(storyString) : storyString;
+
+    if (nativeToolPrompt && !combinedStoryString.includes(nativeToolPrompt)) {
+        const formattedNativeToolPrompt = isInstruct
+            ? formatInstructModeSystemPrompt(nativeToolPrompt)
+            : nativeToolPrompt;
+        combinedStoryString = `${formattedNativeToolPrompt}\n\n${combinedStoryString}`;
+    }
 
     // Inject the story string as in-chat prompt (if needed)
     const applyStoryStringInject = main_api !== 'openai' && power_user.context.story_string_position === extension_prompt_types.IN_CHAT;
@@ -5358,7 +6526,8 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
 
         if (isStreamingEnabled() && type !== 'quiet') {
             continue_mag = promptReasoning.removePrefix(continue_mag);
-            streamingProcessor = new StreamingProcessor(type, force_name2, generation_started, continue_mag, promptReasoning);
+            const generateOptions = { automatic_trigger, force_name2, quiet_prompt, quietToLoud, skipWIAN, force_chid, signal, quietImage, quietName, jsonSchema, depth };
+            streamingProcessor = new StreamingProcessor(type, generateOptions, dryRun, generation_started, continue_mag, promptReasoning);
             if (isContinue) {
                 // Save reply does add cycle text to the prompt, so it's not needed here
                 streamingProcessor.firstMessageText = '';
@@ -5411,9 +6580,14 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
             }
 
             if (isStreamFinished) {
-                await streamingProcessor.onFinishStreaming(streamingProcessor.messageId, getMessage);
-                streamingProcessor = null;
-                triggerAutoContinue(messageChunk, isImpersonate);
+                const completedStreamingProcessor = streamingProcessor;
+                const finishResult = await completedStreamingProcessor.onFinishStreaming(completedStreamingProcessor.messageId, getMessage);
+                if (streamingProcessor === completedStreamingProcessor) {
+                    streamingProcessor = null;
+                }
+                if (!finishResult?.suppressAutoContinue) {
+                    triggerAutoContinue(messageChunk, isImpersonate);
+                }
                 return Object.defineProperties(new String(getMessage), {
                     'messageChunk': { value: messageChunk },
                     'fromStream': { value: true },
@@ -5530,6 +6704,61 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
                 depth = depth + 1;
                 await ToolManager.saveFunctionToolInvocations(invocationResult.invocations);
                 return Generate('normal', { automatic_trigger, force_name2, quiet_prompt, quietToLoud, skipWIAN, force_chid, signal, quietImage, quietName, depth }, dryRun);
+            }
+        }
+
+        // Native tool calling: detect XML tool tags in the non-streamed response text
+        if (oai_settings.native_tool_calling && depth < ToolManager.RECURSE_LIMIT) {
+            const parsedTool = parseNativeToolCallsForMessage(getMessage, reasoning);
+            const parseOutcome = applyNativeToolCallParseToMessage(chat[chat.length - 1], parsedTool, { formatForDisplay: true });
+            if (parseOutcome.parsedTool?.hasToolCalls) {
+                const parseErrors = getNativeToolParseErrors(parseOutcome.parsedTool);
+                const hasExecutableToolCalls = hasExecutableNativeToolSegments(parseOutcome.parsedTool);
+
+                updateMessageBlock(chat.length - 1, chat[chat.length - 1]);
+
+                if (parseErrors.length > 0) {
+                    if (parseErrors[0]) {
+                        ToolManager.showNativeToolCallParseError(parseErrors[0]);
+                    }
+                }
+
+                if (!hasExecutableToolCalls) {
+                    await saveChatConditional();
+                    unblockGeneration(type);
+                    generatedPromptCache = '';
+                    return;
+                }
+
+                if (nativeToolMessageRequiresManualExecution(chat[chat.length - 1])) {
+                    await saveChatConditional();
+                    unblockGeneration(type);
+                    generatedPromptCache = '';
+                    return;
+                }
+
+                const executionResult = await executeNativeToolSegmentsForMessage(chat.length - 1, { signal });
+                await saveChatConditional();
+
+                if (!power_user.tool_auto_continue || executionResult.stopped || executionResult.failed || !executionResult.anyContinue) {
+                    unblockGeneration(type);
+                    return;
+                }
+
+                const newOptions = { automatic_trigger, force_name2, quiet_prompt, quietToLoud, skipWIAN, force_chid, signal, quietImage, quietName, jsonSchema, depth: depth + 1 };
+                return Generate('normal', newOptions, dryRun);
+            } else {
+                const lastMsg = chat[chat.length - 1];
+                if (lastMsg?.extra?.is_tool_call) {
+                    delete lastMsg.extra.is_tool_call;
+                    delete lastMsg.extra.tool_call_info;
+                    delete lastMsg.extra.prefix_text;
+                    delete lastMsg.extra.tool_call_parse_error;
+                    delete lastMsg.extra.native_tool_segments;
+                    delete lastMsg.extra.native_tool_execution;
+                    const msgEl = $('#chat .mes').last();
+                    msgEl.removeClass('tool-call-message');
+                }
             }
         }
 
@@ -8110,7 +9339,7 @@ export function setGenerationParamsFromPreset(preset) {
 }
 
 // Common code for message editor done and auto-save
-function updateMessage(div) {
+function updateMessage(div, { preserveToolCallOnParseError = false } = {}) {
     const mesBlock = div.closest('.mes_block');
     let text = mesBlock.find('.edit_textarea').val()
         ?? mesBlock.find('.mes_text').text();
@@ -8150,6 +9379,25 @@ function updateMessage(div) {
         text = removeMacros(text);
     }
     mes.mes = text;
+    const parsedTool = parseNativeToolCallsForMessage(text, mes.extra?.reasoning ?? '');
+    const shouldTryParseToolCall = mes.extra?.is_tool_call || parsedTool.hasToolCalls;
+    if (shouldTryParseToolCall) {
+        if (parsedTool?.hasToolCalls) {
+            applyNativeToolCallParseToMessage(mes, parsedTool);
+        } else if (!preserveToolCallOnParseError) {
+            delete mes.extra.is_tool_call;
+            delete mes.extra.tool_call_info;
+            delete mes.extra.prefix_text;
+            delete mes.extra.tool_call_parse_error;
+            delete mes.extra.native_tool_segments;
+            delete mes.extra.native_tool_execution;
+        }
+    }
+    // Keep tool_result_content in sync with mes text for tool result messages
+    if (mes.extra?.is_tool_result && mes.extra.tool_result_content !== undefined) {
+        mes.extra.tool_result_content = text;
+        mes.mes = formatNativeToolResultText(text);
+    }
     if (mes.swipe_id !== undefined) {
         ensureSwipes(mes);
         mes.swipes[mes.swipe_id] = text;
@@ -8189,7 +9437,7 @@ function openMessageDelete(fromSlashCommand) {
 }
 
 function messageEditAuto(div) {
-    const { mesBlock, text, mes, bias } = updateMessage(div);
+    const { mesBlock, text, mes, bias } = updateMessage(div, { preserveToolCallOnParseError: true });
 
     mesBlock.find('.mes_text').val('');
     mesBlock.find('.mes_text').val(messageFormatting(
@@ -8238,7 +9486,7 @@ export async function messageEdit(editMessageId) {
 
     // Also edit reasoning, if it exists
     const reasoningEdit = messageBlock.find('.mes_reasoning_edit:visible');
-    if (reasoningEdit.length > 0) {
+    if (reasoningEdit.length > 0 && !editMessage?.extra?.is_tool_call) {
         reasoningEdit.trigger('click');
     }
 
@@ -8248,7 +9496,7 @@ export async function messageEdit(editMessageId) {
     editTextArea.dataset.macros = '';
     messageText.append(editTextArea);
 
-    const text = trimSpaces(editMessage.mes || '');
+    const text = trimSpaces(getMessageEditText(editMessage));
     const $editTextArea = $(editTextArea);
     $editTextArea.val(text);
 
@@ -8276,7 +9524,6 @@ export async function messageEdit(editMessageId) {
  * @param {number} [messageId=this_edit_mes_id]
  */
 async function messageEditCancel(messageId = this_edit_mes_id) {
-    let text = chat[messageId].mes;
     let thisMesDiv;
     // If this is the button then select it's parent. Otherwise, select by messageId.
     if (this?.classList?.contains('mes_edit_cancel')) {
@@ -8289,23 +9536,13 @@ async function messageEditCancel(messageId = this_edit_mes_id) {
     thisMesBlock.find('.mes_text').empty();
     thisMesDiv.find('.mes_edit_buttons').css('display', 'none');
     thisMesBlock.find('.mes_buttons').css('display', '');
-    thisMesBlock.find('.mes_text')
-        .append(messageFormatting(
-            text,
-            this_edit_mes_chname,
-            chat[messageId].is_system,
-            chat[messageId].is_user,
-            messageId,
-            {},
-            false,
-        ));
-    appendMediaToMessage(chat[messageId], thisMesDiv);
-    addCopyToCodeBlocks(thisMesDiv);
 
     const reasoningEditDone = thisMesBlock.find('.mes_reasoning_edit_cancel:visible');
     if (reasoningEditDone.length > 0) {
         reasoningEditDone.trigger('click');
     }
+
+    updateMessageBlock(messageId, chat[messageId]);
 
     await eventSource.emit(event_types.MESSAGE_UPDATED, messageId);
     if (messageId == this_edit_mes_id) {
@@ -8380,21 +9617,35 @@ async function messageEditDone(div) {
     mesBlock.find('.mes_text').empty();
     mesBlock.find('.mes_edit_buttons').css('display', 'none');
     mesBlock.find('.mes_buttons').css('display', '');
-    mesBlock.find('.mes_text').append(
-        messageFormatting(
-            text,
-            this_edit_mes_chname,
-            mes.is_system,
-            mes.is_user,
-            this_edit_mes_id,
-            {},
-            false,
-        ),
-    );
+    const mesElement = div.closest('.mes');
+    mesElement.toggleClass('tool-call-message', !!mes.extra?.is_tool_call);
+    mesElement.toggleClass('tool-result-message', !!mes.extra?.is_tool_result);
+
+    // Re-render tool call/result messages with their special formatting
+    if (mes.extra?.is_tool_result) {
+        hydrateToolResultMedia(mes);
+        ensureMessageMediaIsArray(mes);
+        renderToolResultText(mesBlock.find('.mes_text'), mes, this_edit_mes_id, text);
+    } else if (mes.extra?.is_tool_call) {
+        mesBlock.find('.mes_text').html(getToolCallMessageHtml(mes, this_edit_mes_id));
+    } else {
+        mesBlock.find('.mes_text').append(
+            messageFormatting(
+                text,
+                this_edit_mes_chname,
+                mes.is_system,
+                mes.is_user,
+                this_edit_mes_id,
+                {},
+                false,
+            ),
+        );
+    }
+
     mesBlock.find('.mes_bias').empty();
     mesBlock.find('.mes_bias').append(messageFormatting(bias, '', false, false, -1, {}, false));
-    appendMediaToMessage(mes, div.closest('.mes'));
-    addCopyToCodeBlocks(div.closest('.mes'));
+    appendMediaToMessage(mes, mesElement);
+    addCopyToCodeBlocks(mesElement);
 
     const reasoningEditDone = mesBlock.find('.mes_reasoning_edit_done:visible');
     if (reasoningEditDone.length > 0) {
@@ -11634,6 +12885,8 @@ jQuery(async function () {
             setTimeout(() => openMessageDelete(fromSlashCommand), animation_duration);
         } else if (id == 'option_close_chat') {
             await closeCurrentChat();
+        } else if (id == 'option_upload') {
+            $('#sandbox_upload_input').trigger('click');
         } else if (id === 'option_settings') {
             //var checkBox = document.getElementById("waifuMode");
             var topBar = document.getElementById('top-bar');
@@ -12556,6 +13809,81 @@ jQuery(async function () {
     $(document).on('click', '.open_characters_library', async function () {
         await getCharacters();
         await eventSource.emit(event_types.OPEN_CHARACTER_LIBRARY);
+    });
+
+    // Manual tool execution button handler
+    $(document).on('click', '.tool-execute-button', async function (e) {
+        e.stopPropagation();
+        e.preventDefault();
+        const button = $(this);
+        const messageId = parseInt(button.data('message-id'));
+        const segmentIndexRaw = Number(button.data('segment-index'));
+        const segmentIndex = Number.isInteger(segmentIndexRaw) ? segmentIndexRaw : 0;
+        const message = chat[messageId];
+
+        if (!message?.extra?.is_tool_call) {
+            toastr.error('Tool call information not found');
+            return;
+        }
+
+        // Prevent double-clicking
+        if (button.hasClass('executing')) {
+            return;
+        }
+
+        try {
+            const executionResult = await executeNativeToolSegment(messageId, segmentIndex, {});
+            await saveChatConditional();
+            const executionSummary = getNativeToolExecutionSummary(message);
+            if (
+                power_user.tool_auto_continue &&
+                !executionResult.stopped &&
+                !executionResult.failed &&
+                executionSummary.allDone &&
+                executionSummary.anyContinue &&
+                !executionSummary.hasFailure
+            ) {
+                const currentDepth = Number.isFinite(Number(message.extra?.depth))
+                    ? Number(message.extra.depth)
+                    : 0;
+                Generate('normal', { depth: currentDepth + 1 });
+            }
+        } catch (error) {
+            console.error('[Manual Tool Execution] Error:', error);
+            toastr.error('Failed to execute tool: ' + String(error));
+        }
+    });
+
+    $(document).on('click', '.tool-stop-command-button', async function (e) {
+        e.stopPropagation();
+        e.preventDefault();
+        const button = $(this);
+        const messageId = Number(button.data('message-id'));
+        const commandKind = String(button.data('command-kind') ?? '').trim().toLowerCase();
+
+        if (!Number.isInteger(messageId) || button.prop('disabled')) {
+            return;
+        }
+
+        button.prop('disabled', true);
+        button.addClass('executing');
+        button.html('<i class="fa-solid fa-spinner fa-spin"></i> Stopping...');
+
+        const stopped = commandKind === 'python'
+            ? await stopActivePythonRun(messageId)
+            : await stopActiveShellRun(messageId);
+        if (!stopped) {
+            button.prop('disabled', false);
+            button.removeClass('executing');
+            button.html('<i class="fa-solid fa-stop"></i> Stop command');
+            toastr.error(commandKind === 'python'
+                ? 'Unable to stop the running Python command.'
+                : 'Unable to stop the running PowerShell command.');
+        }
+    });
+
+    $(document).on('click', '.tool-shell-call-box, .tool-shell-result-box, .tool-python-result-box', function (e) {
+        e.stopPropagation();
     });
 
     // Added here to prevent execution before script.js is loaded and get rid of quirky timeouts

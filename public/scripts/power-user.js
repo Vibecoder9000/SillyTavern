@@ -9,7 +9,6 @@ import {
     getRequestHeaders,
     substituteParams,
     eventSource,
-    event_types,
     getCurrentChatId,
     printCharactersDebounced,
     setCharacterId,
@@ -32,6 +31,7 @@ import {
     deleteMessage,
     settingsReady,
 } from '../script.js';
+import { event_types } from './events.js';
 import { isMobile, initMovingUI, favsToHotswap } from './RossAscends-mods.js';
 import {
     groups,
@@ -131,6 +131,7 @@ export const power_user = {
     },
     markdown_escape_strings: '',
     chat_truncation: 100,
+    chat_inline_image_messages: 0,
     streaming_fps: 30,
     smooth_streaming: false,
     smooth_streaming_no_think: false,
@@ -338,6 +339,19 @@ export const power_user = {
     external_media_forbidden_overrides: [],
     pin_styles: true,
     click_to_edit: false,
+    hide_tool_messages: false,
+    auto_list_directory_context: false,
+    enable_dangerous_tools: false,
+    enable_image_generation: false,
+    enable_browser_tools: false,
+    tool_click_to_execute: true,
+    tool_bypass_mcp_mutable_warning: true,
+    tool_auto_continue: true,
+    tool_output_truncation_limit: 4092,
+    tool_max_stop_sequences: 0,
+    mcp: {
+        servers: [],
+    },
     media_display: MEDIA_DISPLAY.LIST,
     image_overswipe: IMAGE_OVERSWIPE.GENERATE,
 };
@@ -1566,6 +1580,22 @@ export async function loadPowerUserSettings(settings, data) {
         Object.assign(power_user, settings.power_user);
     }
 
+    power_user.tool_click_to_execute = power_user.tool_click_to_execute !== undefined
+        ? !!power_user.tool_click_to_execute
+        : true;
+    power_user.tool_bypass_mcp_mutable_warning = power_user.tool_bypass_mcp_mutable_warning !== undefined
+        ? !!power_user.tool_bypass_mcp_mutable_warning
+        : true;
+    power_user.tool_auto_continue = power_user.tool_auto_continue !== undefined
+        ? !!power_user.tool_auto_continue
+        : true;
+    power_user.tool_output_truncation_limit = Number.isFinite(Number(power_user.tool_output_truncation_limit))
+        ? Math.min(Math.max(Number(power_user.tool_output_truncation_limit), 0), 65536)
+        : 4092;
+    power_user.tool_max_stop_sequences = Number.isFinite(Number(power_user.tool_max_stop_sequences))
+        ? Math.min(Math.max(Math.trunc(Number(power_user.tool_max_stop_sequences)), 0), 64)
+        : 0;
+
     if (power_user.stscript === undefined) {
         power_user.stscript = defaultStscript;
     } else {
@@ -1746,6 +1776,8 @@ export async function loadPowerUserSettings(settings, data) {
 
     $('#chat_truncation').val(power_user.chat_truncation);
     $('#chat_truncation_counter').val(power_user.chat_truncation);
+    $('#chat_inline_image_messages').val(power_user.chat_inline_image_messages);
+    $('#chat_inline_image_messages_counter').val(power_user.chat_inline_image_messages);
 
     $('#streaming_fps').val(power_user.streaming_fps);
     $('#streaming_fps_counter').val(power_user.streaming_fps);
@@ -1781,6 +1813,17 @@ export async function loadPowerUserSettings(settings, data) {
     $('#forbid_external_media').prop('checked', power_user.forbid_external_media);
     $('#pin_styles').prop('checked', power_user.pin_styles);
     $('#click_to_edit').prop('checked', power_user.click_to_edit);
+    $('#hide_tool_messages').prop('checked', power_user.hide_tool_messages);
+    $('body').toggleClass('hide-tool-messages', power_user.hide_tool_messages);
+    $('#auto_list_directory_context').prop('checked', power_user.auto_list_directory_context);
+    $('#enable_dangerous_tools').prop('checked', power_user.enable_dangerous_tools);
+    $('#enable_image_generation').prop('checked', power_user.enable_image_generation);
+    $('#enable_browser_tools').prop('checked', power_user.enable_browser_tools);
+    $('#tool_click_to_execute').prop('checked', power_user.tool_click_to_execute);
+    $('#tool_bypass_mcp_mutable_warning').prop('checked', power_user.tool_bypass_mcp_mutable_warning);
+    $('#tool_auto_continue').prop('checked', power_user.tool_auto_continue);
+    $('#tool_output_truncation_limit, #tool_output_truncation_limit_counter').val(power_user.tool_output_truncation_limit);
+    $('#tool_max_stop_sequences, #tool_max_stop_sequences_counter').val(power_user.tool_max_stop_sequences);
     $('#media_display').val(power_user.media_display);
     $('#image_overswipe').val(power_user.image_overswipe);
 
@@ -3397,6 +3440,12 @@ jQuery(() => {
         saveSettingsDebounced();
     });
 
+    $('#chat_inline_image_messages').on('input', function () {
+        power_user.chat_inline_image_messages = Number($('#chat_inline_image_messages').val());
+        $('#chat_inline_image_messages_counter').val(power_user.chat_inline_image_messages);
+        saveSettingsDebounced();
+    });
+
     $('#streaming_fps').on('input', function () {
         power_user.streaming_fps = Number($('#streaming_fps').val());
         $('#streaming_fps_counter').val(power_user.streaming_fps);
@@ -4047,6 +4096,64 @@ jQuery(() => {
 
     $('#click_to_edit').on('input', function () {
         power_user.click_to_edit = !!$(this).prop('checked');
+        saveSettingsDebounced();
+    });
+
+    $('#hide_tool_messages').on('input', function () {
+        power_user.hide_tool_messages = !!$(this).prop('checked');
+        $('body').toggleClass('hide-tool-messages', power_user.hide_tool_messages);
+        saveSettingsDebounced();
+    });
+
+    $('#auto_list_directory_context').on('input', function () {
+        power_user.auto_list_directory_context = !!$(this).prop('checked');
+        saveSettingsDebounced();
+    });
+
+    $('#enable_dangerous_tools').on('input', function () {
+        power_user.enable_dangerous_tools = !!$(this).prop('checked');
+        eventSource.emit(event_types.DANGEROUS_TOOLS_TOGGLED);
+        saveSettingsDebounced();
+    });
+
+    $('#enable_image_generation').on('input', function () {
+        power_user.enable_image_generation = !!$(this).prop('checked');
+        eventSource.emit(event_types.IMAGE_GENERATION_TOGGLED);
+        saveSettingsDebounced();
+    });
+
+    $('#enable_browser_tools').on('input', function () {
+        power_user.enable_browser_tools = !!$(this).prop('checked');
+        eventSource.emit(event_types.BROWSER_TOOLS_TOGGLED);
+        saveSettingsDebounced();
+    });
+
+    $('#tool_click_to_execute').on('input', function () {
+        power_user.tool_click_to_execute = !!$(this).prop('checked');
+        saveSettingsDebounced();
+    });
+
+    $('#tool_bypass_mcp_mutable_warning').on('input', function () {
+        power_user.tool_bypass_mcp_mutable_warning = !!$(this).prop('checked');
+        saveSettingsDebounced();
+    });
+
+    $('#tool_auto_continue').on('input', function () {
+        power_user.tool_auto_continue = !!$(this).prop('checked');
+        saveSettingsDebounced();
+    });
+
+    $('#tool_output_truncation_limit').on('input', function () {
+        const value = Math.min(Math.max(Number($(this).val()) || 0, 0), 65536);
+        power_user.tool_output_truncation_limit = value;
+        $('#tool_output_truncation_limit_counter').val(value);
+        saveSettingsDebounced();
+    });
+
+    $('#tool_max_stop_sequences').on('input', function () {
+        const value = Math.min(Math.max(Math.trunc(Number($(this).val()) || 0), 0), 64);
+        power_user.tool_max_stop_sequences = value;
+        $('#tool_max_stop_sequences_counter').val(value);
         saveSettingsDebounced();
     });
 

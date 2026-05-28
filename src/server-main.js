@@ -13,7 +13,6 @@ import { csrfSync } from 'csrf-sync';
 import express from 'express';
 import compression from 'compression';
 import cookieSession from 'cookie-session';
-import multer from 'multer';
 import responseTime from 'response-time';
 import helmet from 'helmet';
 import bodyParser from 'body-parser';
@@ -63,13 +62,14 @@ import {
     setWindowTitle,
     getConfigValue,
 } from './util.js';
-import { UPLOADS_DIRECTORY } from './constants.js';
 
 // Routers
 import { router as usersPublicRouter } from './endpoints/users-public.js';
+import { publicRouter as thumbnailPublicRouter } from './endpoints/thumbnails.js';
 import { init as statsInit, onExit as statsOnExit } from './endpoints/stats.js';
 import { checkForNewContent } from './endpoints/content-manager.js';
 import { init as settingsInit } from './endpoints/settings.js';
+import { syncBackgroundsMetadata } from './endpoints/backgrounds-manager.js';
 import { redirectDeprecatedEndpoints, ServerStartup, setupPrivateEndpoints } from './server-startup.js';
 import { diskCache } from './endpoints/characters.js';
 import { migrateFlatSecrets } from './endpoints/secrets.js';
@@ -184,7 +184,13 @@ if (!cliArgs.disableCsrf) {
             req.session.csrfToken = token;
         },
         skipCsrfProtection: (req) => {
-            return cliArgs.enableCorsProxy ? /^\/proxy\//.test(req.path) : false;
+            if (cliArgs.enableCorsProxy && /^\/proxy\//.test(req.path)) {
+                return true;
+            }
+            if (req.method === 'GET' && req.path.startsWith('/thumbnail')) {
+                return true;
+            }
+            return false;
         },
         size: 32,
     });
@@ -254,6 +260,9 @@ app.post('/api/ping', (request, response) => {
     response.sendStatus(204);
 });
 
+// Host thumbnails
+app.use('/thumbnail', thumbnailPublicRouter);
+
 if (cliArgs.enableCorsProxy) {
     app.use('/proxy/:url(*)', corsProxyMiddleware);
 } else {
@@ -265,8 +274,6 @@ if (cliArgs.enableCorsProxy) {
 }
 
 // File uploads
-const uploadsPath = path.join(cliArgs.dataRoot, UPLOADS_DIRECTORY);
-app.use(multer({ dest: uploadsPath, limits: { fieldSize: 500 * 1024 * 1024 } }).single('avatar'));
 app.use(multerMonkeyPatch);
 
 app.get('/version', async function (_, response) {
@@ -301,6 +308,15 @@ async function preSetupTasks() {
     const directories = await getUserDirectoriesList();
     await migrateGroupChatsMetadataFormat(directories);
     await checkForNewContent(directories);
+
+    for (const userDirectories of directories) {
+        try {
+            await syncBackgroundsMetadata(userDirectories);
+        } catch (error) {
+            console.error(`Failed to sync background metadata for user at ${userDirectories.root}:`, error);
+        }
+    }
+
     await diskCache.verify(directories);
     migrateFlatSecrets(directories);
     cleanUploads();

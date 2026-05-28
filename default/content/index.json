@@ -24,6 +24,10 @@
         "type": "theme"
     },
     {
+        "filename": "backgrounds.json",
+        "type": "backgrounds_metadata"
+    },
+    {
         "filename": "backgrounds/__transparent.png",
         "type": "background"
     },

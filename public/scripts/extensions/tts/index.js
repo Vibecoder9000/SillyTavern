@@ -78,7 +78,7 @@ export function getPreviewString(lang) {
         'da-DK': 'Quizdeltagerne spiste jordbær med fløde, mens cirkusklovnen Walther spillede på xylofon',
         'ja-JP': 'いろはにほへと　ちりぬるを　わかよたれそ　つねならむ　うゐのおくやま　けふこえて　あさきゆめみし　ゑひもせす',
         'ko-KR': '가나다라마바사아자차카타파하',
-        'zh-CN': '我能吞下玻璃而不伤身体',
+        'zh-CN': 'I can eat glass, it does not hurt me.',
         'ro-RO': 'Muzicologă în bej vând whisky și tequila, preț fix',
         'bg-BG': 'Щъркелите се разпръснаха по цялото небе',
         'el-GR': 'Ταχίστη αλώπηξ βαφής ψημένη γη, δρασκελίζει υπέρ νωθρού κυνός',

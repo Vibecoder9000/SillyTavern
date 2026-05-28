@@ -5,11 +5,11 @@
     },
     {
         "lang": "zh-cn",
-        "display": "简体中文 (Chinese) (Simplified)"
+        "display": "Chinese (Simplified)"
     },
     {
         "lang": "zh-tw",
-        "display": "繁體中文 (Chinese) (Taiwan)"
+        "display": "Chinese (Taiwan)"
     },
     {
         "lang": "nl-nl",
@@ -33,7 +33,7 @@
     },
     {
         "lang": "ja-jp",
-        "display": "日本語 (Japanese)"
+        "display": "Japanese"
     },
     {
         "lang": "ko-kr",

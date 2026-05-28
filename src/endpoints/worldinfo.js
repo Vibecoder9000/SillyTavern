@@ -1,11 +1,18 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import multer from 'multer';
 
+import { UPLOADS_DIRECTORY } from '../constants.js';
 import express from 'express';
 import sanitize from 'sanitize-filename';
 import _ from 'lodash';
 import { sync as writeFileAtomicSync } from 'write-file-atomic';
 import { tryParse } from '../util.js';
+
+const upload = multer({
+    dest: path.join(globalThis.DATA_ROOT, UPLOADS_DIRECTORY),
+    limits: { fieldSize: 500 * 1024 * 1024 },
+});
 
 /**
  * Reads a World Info file and returns its contents
@@ -96,7 +103,7 @@ router.post('/delete', (request, response) => {
     return response.sendStatus(200);
 });
 
-router.post('/import', (request, response) => {
+router.post('/import', upload.single('file'), (request, response) => {
     if (!request.file) return response.sendStatus(400);
 
     const filename = `${path.parse(sanitize(request.file.originalname)).name}.json`;

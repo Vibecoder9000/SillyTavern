@@ -1,15 +1,19 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
+import multer from 'multer';
 import express from 'express';
 import sanitize from 'sanitize-filename';
 import { Jimp, JimpMime } from '../jimp.js';
 import { sync as writeFileAtomicSync } from 'write-file-atomic';
 import { imageSize as sizeOf } from 'image-size';
+import { UPLOADS_DIRECTORY } from '../constants.js';
 
 import { getConfigValue, invalidateFirefoxCache } from '../util.js';
 import { getThumbnailResolution, isAnimatedWebP, isAnimatedApng, thumbnailDimensions as dimensions } from './image-metadata.js';
 import { ResizeStrategy } from '@jimp/plugin-resize';
+
+export { dimensions };
 
 export const publicRouter = express.Router();
 export const apiRouter = express.Router();
@@ -17,9 +21,10 @@ export const apiRouter = express.Router();
 export const SKIPPED_EXTENSIONS = new Set(['.apng', '.mp4', '.webm', '.avi', '.mkv', '.flv', '.gif']);
 export const ALLOWED_IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.tif', '.tiff', '.apng']);
 
-const thumbnailsEnabled = !!getConfigValue('thumbnails.enabled', true, 'boolean');
-const quality = Math.min(100, Math.max(1, parseInt(getConfigValue('thumbnails.quality', 95, 'number'))));
-const pngFormat = String(getConfigValue('thumbnails.format', 'jpg')).toLowerCase().trim() === 'png';
+const upload = multer({ dest: UPLOADS_DIRECTORY });
+
+export const CONCURRENCY_LIMIT = 8;
+export const SKIPPED_EXTENSIONS_FOR_JIMP = ['.apng', '.mp4', '.webm', '.avi', '.mkv', '.flv', '.gif'];
 
 /**
  * @typedef {'bg' | 'avatar' | 'persona'} ThumbnailType
@@ -34,7 +39,6 @@ const pngFormat = String(getConfigValue('thumbnails.format', 'jpg')).toLowerCase
  */
 function getThumbnailFolder(directories, type) {
     let thumbnailFolder;
-
     switch (type) {
         case 'bg':
             thumbnailFolder = directories.thumbnailsBg;
@@ -46,7 +50,6 @@ function getThumbnailFolder(directories, type) {
             thumbnailFolder = directories.thumbnailsPersona;
             break;
     }
-
     return thumbnailFolder;
 }
 
@@ -58,7 +61,6 @@ function getThumbnailFolder(directories, type) {
  */
 function getOriginalFolder(directories, type) {
     let originalFolder;
-
     switch (type) {
         case 'bg':
             originalFolder = directories.backgrounds;
@@ -70,7 +72,6 @@ function getOriginalFolder(directories, type) {
             originalFolder = directories.avatars;
             break;
     }
-
     return originalFolder;
 }
 
@@ -83,11 +84,13 @@ function getOriginalFolder(directories, type) {
 export function invalidateThumbnail(directories, type, file) {
     const folder = getThumbnailFolder(directories, type);
     if (folder === undefined) throw new Error('Invalid thumbnail type');
-
     const pathToThumbnail = path.join(folder, sanitize(file));
-
     if (fs.existsSync(pathToThumbnail)) {
-        fs.unlinkSync(pathToThumbnail);
+        try {
+            fs.unlinkSync(pathToThumbnail);
+        } catch (e) {
+            console.error(`[invalidateThumbnail] Failed to delete thumbnail file ${pathToThumbnail}:`, e);
+        }
     }
 }
 
@@ -97,10 +100,11 @@ export function invalidateThumbnail(directories, type, file) {
  * @param {ThumbnailType} type - Type of thumbnail ('bg', 'avatar', 'persona').
  * @param {string} file - The filename of the image.
  * @param {boolean} [forceGenerate=false] - Whether to force generation even if a thumbnail exists.
+ * @param {boolean} [checkOnly=false] - Whether to only check for existence without generating.
  * @param {boolean|null} [isKnownAnimated=null] - If true, skips generation. If false, assumes static. If null, checks.
  * @returns {Promise<{path: string|null, aspectRatio: number|null, resolution: number|null}>} Path to thumbnail, its aspect ratio, and resolution.
  */
-export async function generateThumbnail(directories, type, file, forceGenerate = false, isKnownAnimated = null) {
+export async function generateThumbnail(directories, type, file, forceGenerate = false, checkOnly = false, isKnownAnimated = null) {
     // If the caller has already determined the file is animated, skip processing.
     if (isKnownAnimated) {
         return { path: null, aspectRatio: null, resolution: null };
@@ -108,6 +112,7 @@ export async function generateThumbnail(directories, type, file, forceGenerate =
 
     const thumbnailFolder = getThumbnailFolder(directories, type);
     const originalFolder = getOriginalFolder(directories, type);
+
     if (thumbnailFolder === undefined || originalFolder === undefined) throw new Error('Invalid thumbnail type');
     const pathToCachedFile = path.join(thumbnailFolder, file);
 
@@ -141,6 +146,12 @@ export async function generateThumbnail(directories, type, file, forceGenerate =
                 forceGenerate = true;
             }
         }
+
+        // If we're only checking and not forcing generation, return null
+        if (checkOnly && !forceGenerate) {
+            return { path: null, aspectRatio: null, resolution: null };
+        }
+
         if (!fs.existsSync(pathToOriginalFile)) {
             console.error(`[generateThumbnail] Cannot generate thumbnail, original file not found: ${pathToOriginalFile}`);
             return { path: null, aspectRatio: null, resolution: null };
@@ -210,6 +221,8 @@ async function processSingleImage(file, originalFolder, thumbnailFolder, type) {
 
         const thumbImage = image.clone();
         const thumbnailResolution = getThumbnailResolution(type);
+        const quality = Math.min(100, Math.max(1, parseInt(getConfigValue('thumbnails.quality', 95, 'number'))));
+        const pngFormat = String(getConfigValue('thumbnails.format', 'jpg')).toLowerCase().trim() === 'png';
 
         if (type === 'bg') {
             const [configWidth, configHeight] = dimensions[type];
@@ -242,12 +255,47 @@ async function processSingleImage(file, originalFolder, thumbnailFolder, type) {
 }
 
 /**
+ * API endpoint for uploading client-generated thumbnails.
+ * @param {express.Request} request - The Express request object.
+ * @param {express.Response} response - The Express response object.
+ */
+apiRouter.post('/upload-generated', upload.single('avatar'), async function (request, response) {
+    const rawFilename = request.query.originalFilename;
+    if (typeof rawFilename !== 'string') {
+        console.error('[Thumbnails API] originalFilename query parameter is missing or not a string.');
+        return response.sendStatus(400);
+    }
+    const sanitizedFilename = sanitize(rawFilename);
+    if (!request.file || !sanitizedFilename) {
+        console.error('[Thumbnails API] Request is missing file or originalFilename.');
+        return response.sendStatus(400);
+    }
+    const tempPath = request.file.path;
+    try {
+        const thumbnailFolder = getThumbnailFolder(request.user.directories, 'bg');
+        if (!thumbnailFolder) {
+            throw new Error('Background thumbnail directory not found for user.');
+        }
+        const destinationPath = path.join(thumbnailFolder, sanitizedFilename);
+        fs.renameSync(tempPath, destinationPath);
+        return response.sendStatus(204);
+    } catch (error) {
+        console.error(`[Thumbnails API] Failed to save generated thumbnail for ${sanitizedFilename}:`, error);
+        if (fs.existsSync(tempPath)) {
+            fs.unlinkSync(tempPath);
+        }
+        return response.sendStatus(500);
+    }
+});
+
+/**
  * Public endpoint for serving thumbnails.
  * @param {express.Request} request - The Express request object.
  * @param {express.Response} response - The Express response object.
  */
 publicRouter.get('/', async function (request, response) {
     try {
+        const thumbnailsEnabled = !!getConfigValue('thumbnails.enabled', true, 'boolean');
         const { file: rawFile, type, animated } = request.query;
         if (typeof rawFile !== 'string' || typeof type !== 'string') return response.sendStatus(400);
         if (!(type === 'bg' || type === 'avatar' || type === 'persona')) {

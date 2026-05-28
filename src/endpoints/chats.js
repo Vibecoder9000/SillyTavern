@@ -3,10 +3,17 @@ import path from 'node:path';
 import readline from 'node:readline';
 import process from 'node:process';
 
+import multer from 'multer';
+import { UPLOADS_DIRECTORY } from '../constants.js';
 import express from 'express';
 import sanitize from 'sanitize-filename';
 import { sync as writeFileAtomicSync } from 'write-file-atomic';
 import _ from 'lodash';
+
+const upload = multer({
+    dest: path.join(globalThis.DATA_ROOT, UPLOADS_DIRECTORY),
+    limits: { fieldSize: 500 * 1024 * 1024 },
+});
 
 import validateAvatarUrlMiddleware from '../middleware/validateFileName.js';
 import {
@@ -673,7 +680,7 @@ router.post('/export', validateAvatarUrlMiddleware, async function (request, res
     }
 });
 
-router.post('/group/import', function (request, response) {
+router.post('/group/import', upload.single('file'), function (request, response) {
     try {
         const filedata = request.file;
 
@@ -693,7 +700,7 @@ router.post('/group/import', function (request, response) {
     }
 });
 
-router.post('/import', validateAvatarUrlMiddleware, function (request, response) {
+router.post('/import', upload.single('file'), validateAvatarUrlMiddleware, function (request, response) {
     if (!request.body) return response.sendStatus(400);
 
     const format = request.body.file_type;

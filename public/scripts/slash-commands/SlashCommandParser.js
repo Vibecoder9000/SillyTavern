@@ -101,6 +101,23 @@ export class SlashCommandParser {
         }
     }
 
+    /**
+     * Removes a slash command and all of its aliases.
+     * @param {string} commandName The name of the command to remove.
+     */
+    static removeCommand(commandName) {
+        const command = this.commands[commandName];
+        if (!command) return;
+
+        delete this.commands[command.name];
+
+        if (Array.isArray(command.aliases)) {
+            command.aliases.forEach((alias) => {
+                delete this.commands[alias];
+            });
+        }
+    }
+
 
     get commands() {
         return SlashCommandParser.commands;

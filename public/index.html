@@ -14,7 +14,7 @@
     <style>
         /* Put critical CSS here. The rest should go in stylesheets. */
         body {
-            background-color: rgb(36, 36, 37);
+            background-color: rgb(19, 19, 19);
         }
     </style>
     <link rel="preload" as="style" href="style.css">
@@ -40,6 +40,8 @@
     <link rel="stylesheet" type="text/css" href="css/toggle-dependent.css">
     <link rel="stylesheet" type="text/css" href="css/world-info.css">
     <link rel="stylesheet" type="text/css" href="css/extensions-panel.css">
+    <link rel="stylesheet" type="text/css" href="css/tool-calling.css">
+    <link rel="stylesheet" type="text/css" href="css/drag-drop.css">
     <link rel="stylesheet" type="text/css" href="css/select2-overrides.css">
     <link rel="stylesheet" type="text/css" href="css/mobile-styles.css">
     <link rel="stylesheet" type="text/css" href="css/macros.css">
@@ -1986,7 +1988,7 @@
                                             </span>
                                         </div>
                                     </div>
-                                    <div class="range-block" data-source="makersuite,vertexai,aimlapi,openrouter,claude,electronhub,chutes,nanogpt">
+                                    <div class="range-block" data-source="makersuite,vertexai,aimlapi,openrouter,claude,xai,electronhub,chutes,nanogpt">
                                         <label for="openai_enable_web_search" class="checkbox_label flexWrap widthFreeExpand">
                                             <input id="openai_enable_web_search" type="checkbox" />
                                             <span data-i18n="Enable web search">Enable web search</span>
@@ -2147,12 +2149,9 @@
                                             <span data-i18n="Allows the model to return its thinking process.">
                                                 Allows the model to return its thinking process.
                                             </span>
-                                            <strong data-i18n="This setting enables or disables reasoning generation by the model." data-source="deepseek,zai,moonshot">
-                                                This setting enables or disables reasoning generation by the model.
-                                            </strong>
-                                            <strong data-i18n="This setting affects visibility only." data-source-mode="except" data-source="zai,moonshot,openrouter,deepseek">
-                                                This setting affects visibility only.
-                                            </strong>
+    <strong data-i18n="This setting affects visibility only." data-source-mode="except" data-source="zai,moonshot,openrouter,deepseek">
+        This setting affects visibility only.
+    </strong>
                                         </div>
                                     </div>
                                     <div class="flex-container flexFlowColumn wide100p textAlignCenter marginTop10" data-source="openai,custom,claude,xai,makersuite,vertexai,aimlapi,openrouter,pollinations,perplexity,cometapi,electronhub,azure_openai,chutes,nanogpt,deepseek">
@@ -2172,9 +2171,6 @@
                                             <div class="toggle-description justifyLeft marginBot5" data-source="openai,custom,xai,aimlapi,openrouter,pollinations,perplexity,cometapi,electronhub,azure_openai,chutes" data-i18n="OpenAI-style options: low, medium, high. Minimum and maximum are aliased to low and high. Auto does not send an effort level.">
                                                 OpenAI-style options: low, medium, high. Minimum and maximum are aliased to low and high. Auto does not send an effort level.
                                             </div>
-                                            <strong class="toggle-description justifyLeft marginBot5" data-source="openrouter">
-                                                Request model reasoning = Off with Reasoning Effort = Minimum disables reasoning entirely on models that support that, but can cause errors with some models.
-                                            </strong>
                                             <div class="toggle-description justifyLeft marginBot5" data-source="claude" data-i18n="Allocates a portion of the response length for thinking (min: 1024 tokens, low: 10%, medium: 25%, high: 50%, max: 95%), but minimum 1024 tokens. Auto does not request thinking.">
                                                 Allocates a portion of the response length for thinking (min: 1024 tokens, low: 10%, medium: 25%, high: 50%, max: 95%), but minimum 1024 tokens. Auto does not request thinking.
                                             </div>
@@ -2203,9 +2199,6 @@
                                             <div class="toggle-description justifyLeft marginBot5" data-i18n="Constrains the verbosity of the model's response.">
                                                 Constrains the verbosity of the model's response.
                                             </div>
-                                            <strong class="toggle-description justifyLeft marginBot5" data-source="claude">
-                                                On Opus 4.6 / Sonnet 4.6, a non-automatic Reasoning Effort takes precedence over Verbosity.
-                                            </strong>
                                         </div>
                                     </div>
                                     <div class="range-block" data-source="claude">
@@ -3180,7 +3173,6 @@
                                         <option value="claude-opus-4-6">claude-opus-4-6</option>
                                         <option value="claude-opus-4-5">claude-opus-4-5</option>
                                         <option value="claude-opus-4-5-20251101">claude-opus-4-5-20251101</option>
-                                        <option value="claude-sonnet-4-6">claude-sonnet-4-6</option>
                                         <option value="claude-sonnet-4-5">claude-sonnet-4-5</option>
                                         <option value="claude-sonnet-4-5-20250929">claude-sonnet-4-5-20250929</option>
                                         <option value="claude-haiku-4-5">claude-haiku-4-5</option>
@@ -3307,14 +3299,6 @@
                             <div>
                                 <h4 data-i18n="Google Model">Google Model</h4>
                                 <select id="model_google_select">
-                                    <optgroup label="Gemini 3.5">
-                                        <option value="gemini-3.5-flash">gemini-3.5-flash</option>
-                                    </optgroup>
-                                    <optgroup label="Gemini 3.1">
-                                        <option value="gemini-3.1-pro-preview">gemini-3.1-pro-preview</option>
-                                        <option value="gemini-3.1-flash-lite-preview">gemini-3.1-flash-lite-preview</option>
-                                        <option value="gemini-3.1-flash-image-preview">gemini-3.1-flash-image-preview</option>
-                                    </optgroup>
                                     <optgroup label="Gemini 3.0">
                                         <option value="gemini-3-pro-preview">gemini-3-pro-preview</option>
                                         <option value="gemini-3-pro-image-preview">gemini-3-pro-image-preview</option>
@@ -3490,14 +3474,6 @@
                                 <h4 data-i18n="Google Model">Google Model</h4>
                                 <select id="model_vertexai_select">
                                     <!-- data-mode="full" is for models that require a service account -->
-                                    <optgroup label="Gemini 3.5">
-                                        <option value="gemini-3.5-flash">gemini-3.5-flash</option>
-                                    </optgroup>
-                                    <optgroup label="Gemini 3.1">
-                                        <option value="gemini-3.1-pro-preview">gemini-3.1-pro-preview</option>
-                                        <option value="gemini-3.1-flash-lite-preview">gemini-3.1-flash-lite-preview</option>
-                                        <option value="gemini-3.1-flash-image-preview">gemini-3.1-flash-image-preview</option>
-                                    </optgroup>
                                     <optgroup label="Gemini 3.0">
                                         <option value="gemini-3-pro-preview">gemini-3-pro-preview</option>
                                         <option value="gemini-3-pro-image-preview">gemini-3-pro-image-preview</option>
@@ -3569,11 +3545,6 @@
                             <div data-for="api_key_siliconflow" class="neutral_warning" data-i18n="For privacy reasons, your API key will be hidden after you click 'Connect'.">
                                 For privacy reasons, your API key will be hidden after you click 'Connect'.
                             </div>
-                            <h4 data-i18n="SiliconFlow Endpoint">SiliconFlow Endpoint</h4>
-                            <select id="siliconflow_endpoint">
-                                <option value="global" data-i18n="Global (siliconflow.com)">Global (siliconflow.com)</option>
-                                <option value="cn" data-i18n="China (siliconflow.cn)">China (siliconflow.cn)</option>
-                            </select>
                             <h4>SiliconFlow Model</h4>
                             <select id="model_siliconflow_select">
                                 <option value="" data-i18n="-- Connect to the API --">-- Connect to the API --</option>
@@ -3880,24 +3851,17 @@
                             </select>
                         </div>
                         <div id="pollinations_form" data-source="pollinations">
-                            <h4 data-i18n="Pollinations Endpoint">Pollinations Endpoint</h4>
-                            <select id="pollinations_endpoint">
-                                <option value="anonymous" data-i18n="Anonymous (No Key)">Anonymous (No Key)</option>
-                                <option value="authenticated" data-i18n="Authenticated (API Key)">Authenticated (API Key)</option>
-                            </select>
-                            <div id="pollinations_key_section">
-                                <h4>
-                                    <a href="https://enter.pollinations.ai/" target="_blank" rel="noopener noreferrer" data-i18n="Pollinations API Key">
-                                        Pollinations API Key
-                                    </a>
-                                </h4>
-                                <div class="flex-container">
-                                    <input id="api_key_pollinations" name="api_key_pollinations" class="text_pole flex1" value="" type="text" placeholder="sk_..." autocomplete="off">
-                                    <div title="Manage API keys" data-i18n="[title]Manage API keys" class="menu_button fa-solid fa-key fa-fw manage-api-keys" data-key="api_key_pollinations"></div>
-                                </div>
-                                <div data-for="api_key_pollinations" class="neutral_warning" data-i18n="For privacy reasons, your API key will be hidden after you click 'Connect'.">
-                                    For privacy reasons, your API key will be hidden after you click 'Connect'.
-                                </div>
+                            <h4>
+                                <a href="https://enter.pollinations.ai/" target="_blank" rel="noopener noreferrer" data-i18n="Pollinations API Key">
+                                    Pollinations API Key
+                                </a>
+                            </h4>
+                            <div class="flex-container">
+                                <input id="api_key_pollinations" name="api_key_pollinations" class="text_pole flex1" value="" type="text" autocomplete="off">
+                                <div title="Manage API keys" data-i18n="[title]Manage API keys" class="menu_button fa-solid fa-key fa-fw manage-api-keys" data-key="api_key_pollinations"></div>
+                            </div>
+                            <div data-for="api_key_pollinations" class="neutral_warning" data-i18n="For privacy reasons, your API key will be hidden after you click 'Connect'.">
+                                For privacy reasons, your API key will be hidden after you click 'Connect'.
                             </div>
                             <h4 data-i18n="Pollinations Model">Pollinations Model</h4>
                             <select id="model_pollinations_select">
@@ -5359,6 +5323,18 @@
                                         <input class="neo-range-input" type="number" min="5" max="100" step="5" data-for="streaming_fps" id="streaming_fps_counter">
                                     </div>
                                 </div>
+                                <div class="alignitemscenter flex-container flexFlowColumn gap0">
+                                    <small>
+                                        <span data-i18n="Images to Send">Images to Send</span>
+                                        <div
+                                            class="fa-solid fa-circle-info opacity50p"
+                                            data-i18n="[title]The number of most recent image-bearing messages to inline in API requests. Older messages keep their text, but their images are omitted. (0 = All)"
+                                            title="The number of most recent image-bearing messages to inline in API requests. Older messages keep their text, but their images are omitted. (0 = All)"></div>
+                                    </small>
+                                    <input class="neo-range-slider" type="range" id="chat_inline_image_messages" name="chat_inline_image_messages" min="0" max="100" step="1">
+                                    <input class="neo-range-input" type="number" min="0" max="100" step="1" data-for="chat_inline_image_messages" id="chat_inline_image_messages_counter">
+                                    <small data-i18n="(0 = All)">(0 = All)</small>
+                                </div>
                                 <div id="examples-behavior-block">
                                     <label for="example_messages_behavior">
                                         <small data-i18n="Example Messages Behavior">
@@ -5655,101 +5631,256 @@
                 </div>
             </div>
         </div>
+        <div id="tools-button" class="drawer">
+            <div id="tools-drawer-toggle" class="drawer-toggle drawer-header" title="Tool Calling Settings" data-i18n="[title]Tool Calling Settings">
+                <div class="drawer-icon fa-solid fa-screwdriver-wrench fa-fw closedIcon"></div>
+            </div>
+            <div id="tools-drawer" class="drawer-content closedDrawer tools-drawer-layout">
+                <div id="tools-header-fixed">
+                    <div class="flex-container alignItemsBaseline wide100p">
+                        <h3 class="margin0" data-i18n="Tools">Tools</h3>
+                    </div>
+                </div>
+                <div id="tools-scrollable-content">
+                    <div class="tools-settings-grid">
+                        <section id="tool_calling_panel" class="tools-panel-card tool-calling-card">
+                            <div class="tools-panel-header">
+                                <div class="tools-panel-title">
+                                    <i class="fa-solid fa-wand-sparkles"></i>
+                                    <h4 class="margin0" data-i18n="Tool Calling">Tool Calling</h4>
+                                </div>
+                            </div>
+                            <div class="tools-panel-body">
+                                <label class="checkbox_label" for="tool_calling" title="Replace the API tool calling with inserting tools info into the system prompt and detecting <tool> tags. This is API and model agnostic." data-i18n="[title]Replace the API tool calling with inserting tools info into the system prompt and detecting <tool> tags. This is API and model agnostic.">
+                                    <input id="tool_calling" type="checkbox" />
+                                    <small data-i18n="Native Tool Calling">Native Tool Calling</small>
+                                </label>
+                                <div id="tool_calling_dependent_settings">
+                                    <label class="checkbox_label" for="tool_parse_in_thinking_blocks" title="When enabled, tool tags inside thinking blocks will be parsed as tools. When disabled, thinking blocks are ignored by the tool parser." data-i18n="[title]When enabled, tool tags inside thinking blocks will be parsed as tools. When disabled, thinking blocks are ignored by the tool parser.">
+                                        <input id="tool_parse_in_thinking_blocks" type="checkbox" />
+                                        <small data-i18n="Parse tools in thinking blocks">Parse tools in thinking blocks</small>
+                                    </label>
+                                    <label class="checkbox_label" for="hide_tool_messages" title="Hide tool call and result messages from the chat view. They will still be part of the chat history for the AI." data-i18n="[title]Hide tool call and result messages from the chat view. They will still be part of the chat history for the AI.">
+                                        <input id="hide_tool_messages" type="checkbox" />
+                                        <small data-i18n="Hide tool calls and results">Hide tool calls and results</small>
+                                    </label>
+                                    <label class="checkbox_label" for="auto_list_directory_context" title="Runs list_directory with path &quot;.&quot; in the background and adds the current uploads files and directories to native tool calling context." data-i18n="[title]Runs list_directory with path &quot;.&quot; in the background and adds the current uploads files and directories to native tool calling context.">
+                                        <input id="auto_list_directory_context" type="checkbox" />
+                                        <small data-i18n="Auto include file list context">Auto include file list context</small>
+                                    </label>
+                                    <label class="checkbox_label" for="enable_dangerous_tools" title="Enabling this allows the AI to execute code and modify files on the server." data-i18n="[title]WARNING: Enabling this allows the AI to execute code and modify files on the server. Use with extreme caution.">
+                                        <input id="enable_dangerous_tools" type="checkbox" />
+                                        <small data-i18n="Enable dangerous tools">Enable dangerous tools</small>
+                                    </label>
+                                    <label class="checkbox_label" for="enable_image_generation" title="Enables image generation tools that connect to a local Stable Diffusion WebUI instance (localhost:7860)." data-i18n="[title]Enables image generation tools that connect to a local Stable Diffusion WebUI instance (localhost:7860).">
+                                        <input id="enable_image_generation" type="checkbox" />
+                                        <small data-i18n="Enable image generation">Enable image generation</small>
+                                    </label>
+                                    <label class="checkbox_label" for="enable_browser_tools" title="Enables isolated Firefox browser tools that can browse pages, fetch DOM content, run controlled page JavaScript, take screenshots, and save downloads into the sandbox." data-i18n="[title]Enables isolated Firefox browser tools that can browse pages, fetch DOM content, run controlled page JavaScript, take screenshots, and save downloads into the sandbox.">
+                                        <input id="enable_browser_tools" type="checkbox" />
+                                        <small data-i18n="Enable browser tools">Enable browser tools</small>
+                                    </label>
+                                    <label class="checkbox_label" for="tool_click_to_execute" title="When enabled, tool calls wait for you to click Execute. When disabled, tool calls run automatically." data-i18n="[title]When enabled, tool calls wait for you to click Execute. When disabled, tool calls run automatically.">
+                                        <input id="tool_click_to_execute" type="checkbox" />
+                                        <small data-i18n="Click to execute tool calls">Click to execute tool calls</small>
+                                    </label>
+                                    <label class="checkbox_label" for="tool_bypass_mcp_mutable_warning" title="When enabled, mutable MCP tools run without an extra warning. When disabled, mutable MCP tools show a warning before execution." data-i18n="[title]When enabled, mutable MCP tools run without an extra warning. When disabled, mutable MCP tools show a warning before execution.">
+                                        <input id="tool_bypass_mcp_mutable_warning" type="checkbox" />
+                                        <small data-i18n="Bypass mutable MCP warnings">Bypass mutable MCP warnings</small>
+                                    </label>
+                                    <label class="checkbox_label" for="tool_auto_continue" title="When enabled, the chat continues automatically after all tool calls in a message are done if any executed tool used continue=true." data-i18n="[title]When enabled, the chat continues automatically after all tool calls in a message are done if any executed tool used continue=true.">
+                                        <input id="tool_auto_continue" type="checkbox" />
+                                        <small data-i18n="Auto-continue after tools">Auto-continue after tools</small>
+                                    </label>
+                                </div>
+                                <div class="tools-output-limit">
+                                    <small class="tools-output-label">
+                                        <span data-i18n="Output Limit">Output Limit</span>
+                                        <div class="fa-solid fa-circle-info opacity50p" data-i18n="[title]Maximum number of tokens for a single tool output before it is truncated. Set to 0 to disable." title="Maximum number of tokens for a single tool output before it is truncated. Set to 0 to disable."></div>
+                                    </small>
+                                    <div class="tools-output-controls">
+                                        <input class="neo-range-slider" type="range" id="tool_output_truncation_limit" name="tool_output_truncation_limit" min="0" max="65536" step="256" value="4092">
+                                        <input class="neo-range-input" type="number" min="0" max="65536" step="256" data-for="tool_output_truncation_limit" id="tool_output_truncation_limit_counter" value="4092">
+                                    </div>
+                                </div>
+                                <div class="tools-output-limit">
+                                    <small class="tools-output-label">
+                                        <span data-i18n="Max Stop Sequences">Max Stop Sequences</span>
+                                        <div class="fa-solid fa-circle-info opacity50p" data-i18n="[title]Maximum number of stop sequences sent with native tool calling requests. Helps with providers that enforce low stop sequence limits. Set to 0 to disable." title="Maximum number of stop sequences sent with native tool calling requests. Helps with providers that enforce low stop sequence limits. Set to 0 to disable."></div>
+                                    </small>
+                                    <div class="tools-output-controls">
+                                        <input class="neo-range-slider" type="range" id="tool_max_stop_sequences" name="tool_max_stop_sequences" min="0" max="64" step="1" value="0">
+                                        <input class="neo-range-input" type="number" min="0" max="64" step="1" data-for="tool_max_stop_sequences" id="tool_max_stop_sequences_counter" value="0">
+                                    </div>
+                                </div>
+                            </div>
+                        </section>
+                        <section class="tools-panel-card sandbox-card">
+                            <div class="tools-panel-header">
+                                <div class="tools-panel-title">
+                                    <i class="fa-solid fa-folder-open"></i>
+                                    <h4 class="margin0" data-i18n="Sandbox Workspace">Sandbox Workspace</h4>
+                                </div>
+                                <button id="sandbox_workspace_manage_button" type="button" class="menu_button menu_button_icon tools-section-button" title="Open sandbox manager." data-i18n="[title]Open sandbox manager.">
+                                    <i class="fa-solid fa-gear"></i>
+                                </button>
+                            </div>
+                            <div class="tools-panel-body">
+                                <div id="sandbox_workspace_setting" class="tools-field-block" title="Select the sandbox workspace used for tool file operations in this chat." data-i18n="[title]Select the sandbox workspace used for tool file operations in this chat.">
+                                    <label for="sandbox_workspace_select"><small data-i18n="Workspace:">Workspace:</small></label>
+                                    <div class="tools-workspace-controls">
+                                        <select id="sandbox_workspace_select" class="widthNatural flex1 margin0 text_pole">
+                                            <option value="__root__">uploads</option>
+                                        </select>
+                                        <button id="sandbox_workspace_refresh_button" type="button" class="menu_button menu_button_icon" title="Refresh workspaces." data-i18n="[title]Refresh workspaces.">
+                                            <i class="fa-solid fa-rotate"></i>
+                                        </button>
+                                        <button id="sandbox_workspace_add_button" type="button" class="menu_button menu_button_icon" title="Create workspace." data-i18n="[title]Create workspace.">
+                                            <i class="fa-solid fa-plus"></i>
+                                        </button>
+                                    </div>
+                                </div>
+                                <div class="tools-field-block">
+                                    <small data-i18n="Location:">Location:</small>
+                                    <div class="tools-static-pill tools-static-pill--path">
+                                        <i class="fa-solid fa-house"></i>
+                                        <span id="sandbox_location_label">uploads\\&lt;workspace&gt;</span>
+                                    </div>
+                                </div>
+                            </div>
+                        </section>
+                        <section class="tools-panel-card tools-panel-card--full mcp-card">
+                            <div class="tools-panel-header">
+                                <div class="tools-panel-title">
+                                    <i class="fa-solid fa-database"></i>
+                                    <h4 class="margin0" data-i18n="MCP Servers">MCP Servers</h4>
+                                </div>
+                                <div class="tools-panel-actions">
+                                    <button id="mcp_refresh_button" type="button" class="menu_button menu_button_icon tools-section-button" title="Refresh enabled MCP servers.">
+                                        <i class="fa-solid fa-rotate"></i>
+                                    </button>
+                                    <button id="mcp_manage_button" type="button" class="menu_button menu_button_icon tools-section-button" title="Manage MCP servers.">
+                                        <i class="fa-solid fa-gear"></i>
+                                    </button>
+                                </div>
+                            </div>
+                            <div class="tools-panel-body">
+                                <div id="mcp_status_summary" class="mcp-status-grid"></div>
+                                <div id="mcp_overview" class="mcp-overview-list"></div>
+                                <div id="mcp_context_summary" hidden></div>
+                            </div>
+                        </section>
+                    </div>
+                </div>
+            </div>
+        </div>
         <div id="backgrounds-button" class="drawer">
             <div id="backgrounds-drawer-toggle" class="drawer-toggle drawer-header" title="Change Background Image" data-i18n="[title]Change Background Image">
                 <div class="drawer-icon fa-solid fa-panorama fa-fw closedIcon"></div>
             </div>
             <div id="Backgrounds" class="drawer-content closedDrawer bg-drawer-layout">
                 <div id="bg-header-fixed">
-                    <div class="bg-header-row-1">
-                        <h3 class="margin0">
-                            <span data-i18n="Backgrounds">Backgrounds</span>
-                        </h3>
-                        <span class="expander"></span>
-                        <select id="background_fitting" class="text_pole" data-i18n="[title]Background Fitting" title="Background Fitting">
+                    <div class="flex-container alignItemsBaseline wide100p">
+                        <!-- Standard Mode Items -->
+                        <h3 class="margin0 standard-mode-item" data-i18n="Backgrounds">Backgrounds</h3>
+                        <input id="bg-filter" class="text_pole flex1 standard-mode-item" type="search" data-i18n="[placeholder]Search" placeholder="Search" />
+                        <select id="bg-sort-order" class="text_pole standard-mode-item" title="Sort by" data-i18n="[title]Sort by">
+                            <option value="alpha" data-i18n="A-Z" selected>A-Z</option>
+                            <option value="date" data-i18n="Date">Date</option>
+                        </select>
+                        <select id="background_fitting" class="text_pole standard-mode-item" data-i18n="[title]Background Fitting" title="Background Fitting">
+
                             <option value="classic" data-i18n="Classic">Classic</option>
                             <option value="cover" data-i18n="Cover">Cover</option>
                             <option value="contain" data-i18n="Contain">Contain</option>
                             <option value="stretch" data-i18n="Stretch">Stretch</option>
                             <option value="center" data-i18n="Center">Center</option>
                         </select>
-                        <div id="auto_background" class="menu_button menu_button_icon" data-i18n="[title]Automatically select a background based on the chat context" title="Automatically select a background based on the chat context.">
+                        <div id="auto_background" class="menu_button menu_button_icon standard-mode-item" data-i18n="[title]Automatically select a background based on the chat context" title="Automatically select a background based on the chat context.">
                             <i class="fa-solid fa-wand-magic"></i>
                             <span data-i18n="Auto-select">Auto-select</span>
                         </div>
-                        <button id="bg_add_folder_button" class="menu_button menu_button_icon" data-i18n="[title]New Folder" title="New Folder">
-                            <i class="fa-solid fa-folder-plus"></i>
-                            <span data-i18n="New Folder">New Folder</span>
-                        </button>
-                        <label for="add_bg_button" id="add_background_button_top" class="menu_button menu_button_icon" data-i18n="[title]Add a new background" title="Add a new background">
-                            <i class="fa-solid fa-upload"></i>
+                        <div id="bg_lock_button" class="menu_button menu_button_icon standard-mode-item" data-i18n="[title]Lock selected background for this chat" title="Lock selected background for this chat">
+                            <i class="fa-solid fa-lock"></i>
+                            <span data-i18n="Lock">Lock</span>
+                        </div>
+                        <div id="bg_select_button" class="menu_button menu_button_icon standard-mode-item" data-i18n="[title]Select multiple backgrounds" title="Select multiple backgrounds">
+                            <i class="fa-solid fa-check-to-slot"></i>
+                            <span data-i18n="Select">Select</span>
+                        </div>
+                        <label for="add_bg_button" id="add_background_button_top" class="menu_button menu_button_icon interactable standard-mode-item" title="Add a new background">
+                            <i class="fa-solid fa-plus"></i>
+
                             <span data-i18n="Add Background">Add Background</span>
                         </label>
-                    </div>
-                    <div class="bg-header-row-2">
-                        <input id="bg-filter" class="text_pole" type="search" data-i18n="[placeholder]Search..." placeholder="Search..." />
-                        <select id="bg-sort" class="text_pole margin0" title="Sort backgrounds" data-i18n="[title]Sort backgrounds">
-                            <option value="az" data-i18n="A-Z">A-Z</option>
-                            <option value="za" data-i18n="Z-A">Z-A</option>
-                            <option value="newest" data-i18n="Newest">Newest</option>
-                            <option value="oldest" data-i18n="Oldest">Oldest</option>
-                        </select>
-                    </div>
-                </div>
-                <div id="bg_tabs" class="heading-container-with-controls">
-                    <ul class="bg_tabs_list">
-                        <li class="bg_tab_button">
-                            <a href="#bg_global_tab" data-i18n="Global">Global</a>
-                        </li>
-                        <li class="bg_tab_button">
-                            <a href="#bg_chat_tab" data-i18n="Chat">Chat</a>
-                        </li>
-                        <div class="heading-controls">
-                            <button id="bg_group_add_to_folder_button" class="menu_button menu_button_icon" style="display:none;" data-i18n="[title]Add selected backgrounds to folder" title="Add selected backgrounds to folder">
-                                <i class="fa-solid fa-folder-tree"></i>
-                                <span data-i18n="Add to Folder">Add to Folder</span>
-                            </button>
-                            <button id="bg_selection_mode_button" class="menu_button menu_button_icon" data-i18n="[title]Select backgrounds for bulk folder actions" title="Select backgrounds for bulk folder actions">
-                                <i class="fa-solid fa-edit"></i>
-                                <span id="bg_group_select_count" style="display:none;"></span>
-                            </button>
-                            <button id="bg_thumb_zoom_out" class="menu_button menu_button_icon" title="Make thumbnails smaller" data-i18n="[title]Make thumbnails smaller">
-                                <i class="fa-solid fa-minus"></i>
-                            </button>
-                            <button id="bg_thumb_zoom_in" class="menu_button menu_button_icon" title="Make thumbnails larger" data-i18n="[title]Make thumbnails larger">
-                                <i class="fa-solid fa-plus"></i>
-                            </button>
-                        </div>
-                    </ul>
-                    <div id="bg_global_tab" class="bg_tab_panel">
-                        <div id="bg_folder_breadcrumb" class="bg_folder_breadcrumb" style="display:none;">
-                            <button id="bg_back_to_folders" class="menu_button menu_button_icon">
-                                <i class="fa-solid fa-arrow-left"></i>
-                                <span data-i18n="Back">Back</span>
-                            </button>
-                            <span id="bg_current_folder_name" class="bg_current_folder_name"></span>
-                            <span class="expander"></span>
-                            <button id="bg_folder_remove_selected_button" class="menu_button menu_button_icon" style="display:none;" data-i18n="[title]Remove selected backgrounds from this folder" title="Remove selected backgrounds from this folder">
-                                <i class="fa-solid fa-folder-minus"></i>
-                                <span data-i18n="Remove from Folder">Remove from Folder</span>
-                            </button>
-                        </div>
-                        <div id="bg_folder_grid" class="bg_list bg_folder_grid"></div>
-                        <div id="bg_menu_content" class="bg_list"></div>
-                    </div>
-                    <div id="bg_chat_tab" class="bg_tab_panel">
-                        <div id="bg_custom_content" class="bg_list"></div>
-                        <div id="bg_chat_hint" class="wide100p textAlignCenter">
-                            <span data-i18n="bg_chat_hint_1">Chat backgrounds generated with the</span> <code><i class="fa-solid fa-paintbrush"></i>&nbsp;Image Generation</code> <span data-i18n="bg_chat_hint_2">extension will appear here.</span>
-                        </div>
+                        <!-- Selection Mode Items -->
+                        <h3 class="margin0 selection-mode-item" data-i18n="Selection Mode">Selection Mode</h3>
+                        <span id="bg-selection-count" class="flex1 selection-mode-item" style="text-align: center;">0 selected</span>
+                        <div id="bg_select_all_button" class="menu_button menu_button_icon selection-mode-item" data-i18n="[title]Select all visible" title="Select all visible">
+                           <i class="fa-solid fa-check-double"></i>
+                           <span data-i18n="Select All">Select All</span>
+                       </div>
+                       <div id="bg_select_cancel_button" class="menu_button menu_button_icon selection-mode-item" data-i18n="[title]Cancel selection" title="Cancel selection">
+                           <i class="fa-solid fa-xmark"></i>
+                           <span data-i18n="Cancel">Cancel</span>
+                       </div>
                     </div>
                 </div>
+                <div id="bg-scrollable-content">
+                    <div id="bg_menu_content" class="bg_list">
+                    </div>
+                </div>
+
                 <form id="form_bg_upload" hidden>
                     <input type="file" id="add_bg_button" name="avatar" accept="image/*,video/*" multiple hidden>
                 </form>
-                <button id="bg-scroll-top" type="button" class="menu_button menu_button_icon" title="Scroll backgrounds to top" data-i18n="[title]Scroll backgrounds to top">
-                    <i class="fa-solid fa-chevron-up" aria-hidden="true"></i>
-                </button>
+                <div id="bg_scroll_top">
+                    <i class="fa-solid fa-chevron-up"></i>
+                </div>
+                <template id="thumbnail-menu-template">
+                    <div class="jg-menu">
+                        <div data-action="star" class="jg-button jg-star fa-fw pointer" data-i18n="[title]Star Background" title="Star Background">
+                            <i class="fa-solid fa-star"></i>
+                            <i class="fa-regular fa-star"></i>
+                        </div>
+                        <div data-action="add-to-folder" class="jg-button jg-add-to-folder fa-solid fa-folder-plus fa-fw pointer" data-i18n="[title]Add to Folder" title="Add to Folder"></div>
+                        <div data-action="edit" class="jg-button jg-edit fa-solid fa-pen-to-square fa-fw pointer" data-i18n="[title]Rename Background" title="Rename Background"></div>
+                        <div data-action="delete" class="jg-button jg-delete fa-solid fa-trash-can fa-fw pointer" data-i18n="[title]Delete Background" title="Delete Background"></div>
+                    </div>
+                </template>
+                <template id="starred-popup-template">
+                    <div class="popup-overlay">
+                        <div class="popup-panel">
+                            <div class="popup-header">
+                                <h3 data-i18n="Starred Backgrounds">Starred Backgrounds</h3>
+                                <div class="popup-header-buttons">
+                                    <div id="folder_set_thumbnail_button" class="popup-close-button" data-i18n="[title]Set Folder Thumbnail" title="Set Folder Thumbnail" style="display: none;">
+                                        <i class="fa-solid fa-image"></i>
+                                    </div>
+                                    <div class="popup-close-button" data-i18n="[title]Close" title="Close">
+                                        <i class="fa-solid fa-xmark"></i>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="popup-content">
+                            </div>
+                        </div>
+                    </div>
+                </template>
+                <template id="folder-chooser-popup-template">
+                    <div class="popup-overlay">
+                        <div class="popup-panel">
+                            <div class="popup-header">
+                                <h3 data-i18n="Add to Folder">Add to Folder</h3>
+                                <div class="popup-close-button" data-i18n="[title]Close" title="Close">
+                                    <i class="fa-solid fa-xmark"></i>
+                                </div>
+                            </div>
+                            <div class="popup-content" id="folder-chooser-content">
+                            </div>
+                        </div>
+                    </div>
+                </template>
             </div>
         </div>
         <div id="extensions-settings-button" class="drawer">
@@ -5899,18 +6030,12 @@
                                     <div class="persona_controls_buttons_block buttons_block">
                                         <div id="persona_rename_button" class="menu_button fa-solid fa-pencil" title="Rename Persona" data-i18n="[title]Rename Persona"></div>
                                         <div id="sync_name_button" class="menu_button fa-solid fa-sync" title="Click to set user name for all messages" data-i18n="[title]Click to set user name for all messages"></div>
-                                        <div id="persona_lore_button" class="menu_button fa-solid fa-globe" title="Persona Lore&#10;&#10;Click to load&#10;Shift/Alt-click or long-press to open 'Link to Persona Lorebook' popup" data-i18n="[title]persona_lore_button_title"></div>
+                                        <div id="persona_lore_button" class="menu_button fa-solid fa-globe" title="Persona Lore&#10;Alt+Click to open the lorebook" data-i18n="[title]Persona Lore Alt+Click to open the lorebook"></div>
 
                                         <div id="persona_set_image_button" class="menu_button fa-solid fa-image" title="Change Persona Image" data-i18n="[title]Change Persona Image"></div>
                                         <div id="persona_duplicate_button" class="menu_button fa-solid fa-clone" title="Duplicate Persona" data-i18n="[title]Duplicate Persona"></div>
                                         <div id="persona_delete_button" class="menu_button fa-solid fa-skull red_button" title="Delete Persona" data-i18n="[title]Delete Persona"></div>
                                     </div>
-                                    <label class="flex1 height100p" for="persona-management-dropdown">
-                                        <select id="persona-management-dropdown" class="text_pole">
-                                            <option value="default" disabled selected data-i18n="More...">More...</option>
-                                            <option id="persona_lorebook_link" data-i18n="Link to Persona Lorebook">Link to Persona Lorebook</option>
-                                        </select>
-                                    </label>
                                 </div>
 
                                 <h4 class="flex-container alignItemsBaseline">
@@ -6076,8 +6201,8 @@
                                                 <div id="favorite_button" class="menu_button fa-solid fa-star" title="Add to Favorites" data-i18n="[title]Add to Favorites"></div>
                                                 <input type="hidden" id="fav_checkbox" name="fav" />
                                                 <div id="advanced_div" class="menu_button fa-solid fa-book " title="Advanced Definitions" data-i18n="[title]Advanced Definition"></div>
-                                                <div id="world_button" class="menu_button fa-solid fa-globe" title="Character Lore&#10;&#10;Click to load&#10;Shift/Alt-click or long-press to open 'Link to World Info' popup" data-i18n="[title]world_button_title"></div>
-                                                <div class="chat_lorebook_button menu_button fa-solid fa-passport" title="Chat Lore&#10;&#10;Click to load&#10;Shift/Alt-click or long-press to open 'Link to Chat Lorebook' popup" data-i18n="[title]chat_lorebook_button_title"></div>
+                                                <div id="world_button" class="menu_button fa-solid fa-globe" title="Character Lore&#10;&#10;Click to load&#10;Shift-click to open 'Link to World Info' popup" data-i18n="[title]world_button_title"></div>
+                                                <div class="chat_lorebook_button menu_button fa-solid fa-passport" title="Chat Lore&#10;Alt+Click to open the lorebook" data-i18n="[title]Chat Lore Alt+Click to open the lorebook"></div>
                                                 <div id="char_connections_button" class="menu_button fa-solid fa-face-smile" title="Connected Personas" data-i18n="[title]Connected Personas"></div>
                                                 <div id="export_button" class="menu_button fa-solid fa-file-export " title="Export and Download" data-i18n="[title]Export and Download"></div>
                                                 <!-- <div id="set_chat_character_settings" class="menu_button fa-solid fa-scroll" title="Set a chat scenario override"></div> -->
@@ -6228,14 +6353,8 @@
                                 <div id="group-metadata-controls" class="marginTopBot5">
                                     <div class="flex-container wide100p">
                                         <input id="rm_group_chat_name" class="text_pole flex1" type="text" name="chat_name" data-i18n="[placeholder]Chat Name (Optional)" placeholder="Chat Name (Optional)" />
-                                        <div class="chat_lorebook_button menu_button fa-solid fa-passport" title="Chat Lore&#10;&#10;Click to load&#10;Shift/Alt-click or long-press to open 'Link to Chat Lorebook' popup" data-i18n="[title]chat_lorebook_button_title"></div>
+                                        <div class="chat_lorebook_button menu_button fa-solid fa-passport" title="Chat Lore" data-i18n="[title]Chat Lore"></div>
                                     </div>
-                                    <label class="flex1 height100p" for="group-chat-lorebook-dropdown">
-                                        <select id="group-chat-lorebook-dropdown" class="text_pole">
-                                            <option value="default" disabled selected data-i18n="More...">More...</option>
-                                            <option id="group_chat_lorebook_link" data-i18n="Link to Chat Lorebook">Link to Chat Lorebook</option>
-                                        </select>
-                                    </label>
                                     <div id="group_tags_div" class="wide100p">
                                         <div class="tag_controls">
                                             <input id="groupTagInput" class="text_pole textarea_compact tag_input flex1 margin0" data-i18n="[placeholder]Search / Create Tags" placeholder="Search / Create tags" />
@@ -6703,46 +6822,7 @@
                 <div id="select_chat_div"></div>
             </div>
         </div>
-        <div id="background_template" class="template_element">
-            <div class="bg_example flex-container" bgfile="" title="">
-                <div class="bg_example_img"></div>
-                <div class="mobile-only-menu-toggle">
-                    <i class="fa-solid fa-ellipsis-vertical"></i>
-                </div>
-                <div class="jg-menu">
-                    <div data-action="lock" class="jg-button jg-lock fa-solid fa-lock fa-fw pointer" data-i18n="[title]Lock" title="Lock"></div>
-                    <div data-action="unlock" class="jg-button jg-unlock fa-solid fa-lock-open fa-fw pointer" data-i18n="[title]Unlock" title="Unlock"></div>
-                    <div data-action="copy" class="jg-button jg-copy fa-solid fa-file-arrow-up" data-i18n="[title]Copy to global backgrounds" title="Copy to global backgrounds"></div>
-                    <div data-action="edit" class="jg-button jg-edit fa-solid fa-pen-to-square fa-fw pointer" data-i18n="[title]Rename Background" title="Rename Background"></div>
-                    <div data-action="delete" class="jg-button jg-delete fa-solid fa-trash-can fa-fw pointer" data-i18n="[title]Delete Background" title="Delete Background"></div>
-                    <div data-action="folder" class="jg-button jg-folder fa-solid fa-folder fa-fw pointer" data-i18n="[title]Add to folder" title="Add to folder"></div>
-                    <div data-action="set-cover" class="jg-button jg-set-cover fa-solid fa-image fa-fw pointer" data-i18n="[title]Set as folder cover" title="Set as folder cover"></div>
-                </div>
-                <div class="BGSampleTitle"></div>
-            </div>
-        </div>
-        <div id="bg_folder_tile_template" class="template_element">
-            <div class="bg_folder_tile" data-folder-id="">
-                <div class="bg_folder_tile_cover"></div>
-                <div class="bg_folder_tile_overlay">
-                    <i class="fa-solid fa-folder"></i>
-                    <span class="bg_folder_tile_name"></span>
-                </div>
-                <div class="mobile-only-menu-toggle">
-                    <i class="fa-solid fa-ellipsis-vertical"></i>
-                </div>
-                <div class="bg_folder_tile_menu jg-menu">
-                    <div data-action="rename-folder" class="jg-button fa-solid fa-pen-to-square fa-fw pointer" data-i18n="[title]Rename folder" title="Rename folder"></div>
-                    <div data-action="delete-folder" class="jg-button fa-solid fa-trash-can fa-fw pointer" data-i18n="[title]Delete folder" title="Delete folder"></div>
-                </div>
-            </div>
-        </div>
-        <div id="bg_new_folder_template" class="template_element">
-            <div class="bg_folder_tile bg_new_folder_tile">
-                <i class="fa-solid fa-folder-plus fa-2x"></i>
-                <span data-i18n="New Folder">New Folder</span>
-            </div>
-        </div>
+
         <!-- templates for JS to reuse when needed -->
         <div id="character_world_template" class="template_element">
             <div class="character_world range-block flexFlowColumn flex-container">
@@ -7426,7 +7506,6 @@
                                 <div title="Toggle media display style" class="mes_button mes_media_gallery fa-solid fa-photo-film" data-i18n="[title]Toggle media display style"></div>
                                 <div title="Toggle media display style" class="mes_button mes_media_list fa-solid fa-table-cells-large" data-i18n="[title]Toggle media display style"></div>
                                 <div title="Embed file or image" class="mes_button mes_embed fa-solid fa-paperclip" data-i18n="[title]Embed file or image"></div>
-                                <div title="Jump to swipe history" class="mes_button mes_swipe_picker fa-solid fa-bookmark" data-i18n="[title]Jump to swipe history" style="display: none;"></div>
                                 <div title="Create checkpoint" class="mes_button mes_create_bookmark fa-regular fa-solid fa-flag-checkered" data-i18n="[title]Create checkpoint"></div>
                                 <div title="Create branch" class="mes_button mes_create_branch fa-regular fa-code-branch" data-i18n="[title]Create Branch"></div>
                                 <div title="Copy" class="mes_button mes_copy fa-solid fa-copy " data-i18n="[title]Copy"></div>
@@ -8094,8 +8173,9 @@
             <div id="send_form" class="no-connection">
                 <form id="file_form" class="wide100p displayNone">
                     <div class="file_attached">
-                        <input id="file_form_input" type="file" multiple hidden>
-                        <input id="embed_file_input" type="file" multiple hidden>
+                        <input id="file_form_input" type="file" hidden multiple>
+                        <input id="embed_file_input" type="file" hidden multiple>
+                        <input id="sandbox_upload_input" type="file" hidden multiple>
                         <i class="fa-solid fa-file-alt"></i>
                         <span class="file_name">File Name</span>
                         <span class="file_size">File Size</span>
@@ -8127,8 +8207,44 @@
                         <div id="send_but" class="fa-solid fa-paper-plane interactable displayNone" title="Send a message" data-i18n="[title]Send a message"></div>
                     </div>
                 </div>
+                <div id="ask_user_panel" hidden>
+                    <div class="ask_user_panel_header">
+                        <div class="ask_user_panel_heading">
+                            <div id="ask_user_title" class="ask_user_panel_title"></div>
+                            <div id="ask_user_context" class="ask_user_panel_context" hidden></div>
+                        </div>
+                        <div class="ask_user_panel_nav">
+                            <button id="ask_user_prev" type="button" class="menu_button ask_user_nav_button" aria-label="Previous question" title="Previous question">
+                                <i class="fa-solid fa-chevron-left"></i>
+                            </button>
+                            <div id="ask_user_counter" class="ask_user_panel_counter">1 of 1</div>
+                            <button id="ask_user_next" type="button" class="menu_button ask_user_nav_button" aria-label="Next question" title="Next question">
+                                <i class="fa-solid fa-chevron-right"></i>
+                            </button>
+                        </div>
+                    </div>
+                    <div id="ask_user_options" class="ask_user_panel_options"></div>
+                    <div class="ask_user_panel_actions">
+                        <button id="ask_user_dismiss" type="button" class="menu_button ask_user_action_button ask_user_action_secondary">
+                            <span>Dismiss</span>
+                            <kbd>ESC</kbd>
+                        </button>
+                        <button id="ask_user_continue" type="button" class="menu_button ask_user_action_button ask_user_action_primary">
+                            <span>Continue</span>
+                            <i class="fa-solid fa-arrow-turn-down-left"></i>
+                        </button>
+                    </div>
+                </div>
             </div>
         </div>
+    </div>
+    <div id="drop_zone_container" class="displayNone">
+            <div id="sandbox_drop_zone">
+                    <h2>
+                            <span data-i18n="Drop here to upload to SillyTavern">Drop here to upload to SillyTavern</span>
+                            <span data-i18n="Drop elsewhere to import character">Drop elsewhere to import character</span>
+                    </h2>
+            </div>
     </div>
     <!-- popups live outside sheld to avoid blur conflicts -->
     <div id="options" class="font-family-reset" style="display: none;">
@@ -8190,6 +8306,10 @@
             <a id="option_impersonate" title="Ask AI to write your message for you" data-i18n="[title]Ask AI to write your message for you">
                 <i class="fa-lg fa-solid fa-user-secret"></i>
                 <span data-i18n="Impersonate">Impersonate</span>
+            </a>
+            <a id="option_upload" title="Upload a file to SillyTavern" data-i18n="[title]Upload a file to SillyTavern">
+                <i class="la-lg fa-solid fa-upload"></i>
+                <span data-i18n="Upload file">Upload file</span>
             </a>
             <a id="option_continue" title="Continue the last message" data-i18n="[title]Continue the last message">
                 <i class="fa-lg fa-solid fa-arrow-right"></i>

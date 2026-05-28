@@ -2,11 +2,20 @@ import fs from 'node:fs';
 import express from 'express';
 import fetch from 'node-fetch';
 
+import path from 'node:path';
+import multer from 'multer';
+
+import { UPLOADS_DIRECTORY } from '../../constants.js';
 import { forwardFetchResponse, delay } from '../../util.js';
 import { getOverrideHeaders, setAdditionalHeaders, setAdditionalHeadersByType } from '../../additional-headers.js';
 import { TEXTGEN_TYPES } from '../../constants.js';
 
 export const router = express.Router();
+
+const upload = multer({
+    dest: path.join(globalThis.DATA_ROOT, UPLOADS_DIRECTORY),
+    limits: { fieldSize: 500 * 1024 * 1024 },
+});
 
 router.post('/generate', async function (request, response_generate) {
     if (!request.body) return response_generate.sendStatus(400);
@@ -187,7 +196,7 @@ router.post('/status', async function (request, response) {
     response.send(result);
 });
 
-router.post('/transcribe-audio', async function (request, response) {
+router.post('/transcribe-audio', upload.single('file'), async function (request, response) {
     try {
         const server = request.body.server;
 

@@ -5,8 +5,15 @@ import express from 'express';
 import mime from 'mime-types';
 import sanitize from 'sanitize-filename';
 import { sync as writeFileAtomicSync } from 'write-file-atomic';
+import multer from 'multer';
 
+import { UPLOADS_DIRECTORY } from '../constants.js';
 import { getImageBuffers } from '../util.js';
+
+const upload = multer({
+    dest: path.join(globalThis.DATA_ROOT, UPLOADS_DIRECTORY),
+    limits: { fieldSize: 500 * 1024 * 1024 },
+});
 
 /**
  * Gets the path to the sprites folder for the provided character name
@@ -183,7 +190,7 @@ router.post('/delete', async (request, response) => {
     }
 });
 
-router.post('/upload-zip', async (request, response) => {
+router.post('/upload-zip', upload.single('sprite_pack'), async (request, response) => {
     const file = request.file;
     const name = String(request.body.name);
     const isSubfolder = name.includes('/');
@@ -236,7 +243,7 @@ router.post('/upload-zip', async (request, response) => {
     }
 });
 
-router.post('/upload', async (request, response) => {
+router.post('/upload', upload.single('sprite'), async (request, response) => {
     const file = request.file;
     const label = request.body.label;
     const name = String(request.body.name);

@@ -96,36 +96,32 @@
         font-size: 15px;
     }
 
-    #Backgrounds .bg_example .BGSampleTitle {
-        opacity: 1;
-        bottom: 0px;
+    .thumbnail {
+        min-width: 30px !important;
+        min-height: 30px !important;
     }
 
-    .bg_example:hover .jg-menu,
-    .bg_example:focus-within .jg-menu {
+    .thumbnail:hover .jg-menu,
+    .folder-button:hover .jg-menu {
         display: none;
     }
 
-    .bg_example.mobile-menu-open .jg-menu {
+    .thumbnail.mobile-menu-open .jg-menu,
+    .folder-button.mobile-menu-open .jg-menu {
         display: flex;
         z-index: 4;
     }
 
-    .bg_example.mobile-menu-open .mobile-only-menu-toggle {
-        opacity: 0;
-        pointer-events: none;
-    }
-
-    .bg_example .mobile-only-menu-toggle {
+    .mobile-only-menu-toggle {
         display: flex;
         align-items: center;
         justify-content: center;
         position: absolute;
         top: 5px;
         right: 5px;
-        width: 30px;
-        height: 30px;
-        background-color: rgba(0, 0, 0, 0.4);
+        width: 28px;
+        height: 28px;
+        background-color: rgba(0, 0, 0, 0.6);
         color: white;
         border-radius: 6px;
         z-index: 3;
@@ -133,18 +129,10 @@
         backdrop-filter: blur(2px);
     }
 
-    .bg_example .jg-button {
-        width: 30px;
-        height: 30px;
-    }
-
-    #background_fitting {
-        max-width: 6em;
-    }
-
-    #Backgrounds.drawer-content.openDrawer.bg-drawer-layout {
-        width: 100dvw;
-        max-width: 100dvw;
+    .blank-folder-button.folder-button .jg-menu {
+        right: 4px;
+        left: auto;
+        width: fit-content;
     }
 
     #bg_tabs .bg_tabs_list .bg_tab_button {
@@ -292,8 +280,7 @@
         width: 100dvw;
     }
 
-    #bg1,
-    #bg_custom {
+    #bg1 {
         height: 100vh !important;
         height: 100dvh !important;
         width: 100vw !important;
@@ -501,6 +488,117 @@
         display: none;
     }
 
+    .bg_list {
+        width: unset;
+    }
+
+    .popup-overlay {
+        display: block;
+        padding-top: 50px;
+        box-sizing: border-box;
+    }
+
+    .popup-panel {
+        width: 100%;
+        max-width: 100%;
+        margin: 0;
+
+        min-height: calc(100vh - 50px);
+        min-height: calc(10dvh - 50px);
+        max-height: 100%;
+
+        border-radius: 0;
+        border: none;
+    }
+
+    .popup.mcp-popup {
+        width: 100dvw;
+        max-width: 100dvw;
+        min-height: calc(100dvh - 50px);
+        max-height: calc(100dvh - 50px);
+        margin: 0;
+        border-radius: 0 0 20px 20px;
+        border: 1px solid var(--SmartThemeBorderColor);
+        top: var(--topBarBlockSize);
+    }
+
+    .popup.mcp-popup .popup-body,
+    .popup.mcp-popup .popup-content {
+        max-height: none;
+        height: 100%;
+    }
+
+    .popup.mcp-popup .popup-content {
+        overflow-y: auto;
+        overflow-x: hidden;
+    }
+
+    #bg-header-fixed > .flex-container {
+        flex-wrap: wrap;
+        row-gap: 0px;
+    }
+
+    /* This pseudo-element acts as a forced line break after the first row of buttons.
+       It is only active when not in selection mode. */
+    #Backgrounds:not(.selection-mode-active) #bg-header-fixed > .flex-container::after {
+        content: '';
+        order: 1;
+        flex-basis: 100%;
+        height: 0;
+    }
+
+    /* Standard Mode Mobile Layout */
+    .standard-mode-item[data-i18n="Backgrounds"] {
+        order: 1;
+        flex-grow: 1;
+    }
+    .standard-mode-item#background_fitting,
+    .standard-mode-item#auto_background,
+    .standard-mode-item#bg_lock_button {
+        order: 1;
+    }
+
+    .standard-mode-item#bg-filter {
+        order: 2;
+        flex-grow: 1;
+        min-width: 0;
+    }
+    .standard-mode-item#bg-sort-order,
+    .standard-mode-item#bg_select_button {
+        order: 2;
+    }
+
+    .standard-mode-item#add_background_button_top {
+        order: 3;
+        width: 100%;
+        text-align: center;
+        padding-top: 0.8rem;
+        padding-bottom: 0.8rem;
+        font-size: 1.1em;
+    }
+
+    /* Selection Mode Mobile Layout */
+    .selection-mode-item[data-i18n="Selection Mode"] {
+        order: 1;
+        flex-basis: 100%;
+        text-align: center;
+    }
+
+    .selection-mode-item#bg-selection-count {
+        order: 2;
+        flex-grow: 1;
+        text-align: left;
+        padding-left: 5px;
+    }
+    .selection-mode-item#bg_select_all_button,
+    .selection-mode-item#bg_select_cancel_button {
+        order: 2;
+    }
+
+    #Backgrounds.drawer-content.openDrawer.bg-drawer-layout {
+        width: 100dvw;
+        max-width: 100dvw;
+    }
     select[multiple] {
         max-height: 50px;
         overflow-y: auto;
@@ -564,6 +662,17 @@
     .drawer33pWidth {
         flex-basis: max(calc(100% / 2 - 10px), 180px);
     }
+
+    .BGSampleTitle {
+        display: none;
+    }
+
+    .blank-folder-button .BGSampleTitle,
+    #starred-folder-button .BGSampleTitle,
+    #add-folder-button .BGSampleTitle {
+        display: block;
+    }
+
 
     .tag.excluded:after {
         top: unset;
