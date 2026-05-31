@@ -589,6 +589,11 @@ export const ZAI_ENDPOINT = {
     CODING: 'coding',
 };
 
+export const POLLINATIONS_ENDPOINT = {
+    AUTHENTICATED: 'authenticated',
+    ANONYMOUS: 'anonymous',
+};
+
 export const SILICONFLOW_ENDPOINT = {
     GLOBAL: 'global',
     CN: 'cn',
