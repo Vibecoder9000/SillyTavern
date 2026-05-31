@@ -172,6 +172,102 @@
     overflow-y: auto;
 }
 
+.tool-invocation-list {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    margin-top: 8px;
+}
+
+.tool-invocation-card {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 9px 10px;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 8px;
+    background: rgba(0, 0, 0, 0.16);
+}
+
+.tool-invocation-card--error {
+    border-color: rgba(245, 101, 101, 0.45);
+    background: rgba(245, 101, 101, 0.08);
+}
+
+.tool-invocation-card-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+}
+
+.tool-invocation-card h4 {
+    margin: 0;
+    font-size: 0.92em;
+    line-height: 1.2;
+    overflow-wrap: anywhere;
+}
+
+.tool-invocation-status {
+    display: inline-flex;
+    align-items: center;
+    min-height: 22px;
+    padding: 0 8px;
+    border-radius: 999px;
+    font-size: 0.78em;
+    font-weight: 600;
+}
+
+.tool-invocation-status--error {
+    color: #ffb0b0;
+    background: rgba(245, 101, 101, 0.18);
+}
+
+.tool-display-metadata {
+    display: grid;
+    grid-template-columns: max-content minmax(0, 1fr);
+    gap: 5px 10px;
+    margin: 6px 0;
+}
+
+.tool-display-metadata-row {
+    display: contents;
+}
+
+.tool-display-metadata-label {
+    color: var(--SmartThemeEmColor);
+    font-size: 0.84em;
+    line-height: 1.35;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+
+.tool-display-metadata-value {
+    min-width: 0;
+    font-family: var(--monoFontFamily);
+    font-size: 0.92em;
+    line-height: 1.35;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
+
+.tool-display-payload {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.tool-display-payload-label {
+    color: var(--SmartThemeEmColor);
+    font-size: 0.84em;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+
+.tool-display-payload pre {
+    margin: 0;
+}
+
 #tools-drawer.drawer-content.openDrawer.tools-drawer-layout {
     display: flex;
 }
@@ -1695,5 +1791,14 @@ body.hide-tool-messages .tool-result-message {
 
     .tool-call-header-actions {
         justify-content: flex-start;
+    }
+
+    .tool-display-metadata {
+        grid-template-columns: 1fr;
+        gap: 2px;
+    }
+
+    .tool-display-metadata-value {
+        margin-bottom: 5px;
     }
 }

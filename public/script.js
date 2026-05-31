@@ -2147,34 +2147,129 @@ function parseToolCallArguments(args) {
     return {};
 }
 
-function formatToolArgumentValue(value) {
-    if (Array.isArray(value)) {
-        return value.map(item => formatToolArgumentValue(item)).join('\n');
-    }
+function isToolDisplayPlainObject(value) {
+    return value && typeof value === 'object' && !Array.isArray(value);
+}
 
-    if (value && typeof value === 'object') {
-        return JSON.stringify(value, null, 2);
-    }
-
+function formatToolDisplayValue(value) {
     if (typeof value === 'boolean') {
         return value ? 'true' : 'false';
     }
 
-    return String(value ?? '');
+    if (value === null || value === undefined) {
+        return '';
+    }
+
+    if (typeof value === 'string' || typeof value === 'number') {
+        return String(value);
+    }
+
+    return JSON.stringify(value, null, 2);
 }
 
-function formatToolArgumentsForDisplay(args, continueValue) {
-    const lines = [];
+function isToolDisplayMetadataKey(key) {
+    const normalized = String(key ?? '').trim().toLowerCase();
+    return normalized === 'continue'
+        || normalized === 'cwd'
+        || normalized === 'workspace'
+        || normalized === 'character'
+        || normalized === 'filename'
+        || normalized === 'url'
+        || normalized === 'uri'
+        || normalized.includes('filepath')
+        || normalized.includes('filepaths')
+        || normalized.includes('path');
+}
 
-    for (const [name, value] of Object.entries(args ?? {})) {
-        lines.push(`${name}: ${formatToolArgumentValue(value)}`);
+function labelToolDisplayKey(key, labelMap = {}) {
+    const rawKey = String(key ?? '');
+    return String(labelMap[rawKey] || rawKey);
+}
+
+function splitToolDisplayObject(value, { labelMap = {}, path = [] } = {}) {
+    if (Array.isArray(value)) {
+        const metadata = [];
+        const payload = [];
+
+        value.forEach((item, index) => {
+            const split = splitToolDisplayObject(item, { labelMap: {}, path: [...path, String(index)] });
+            metadata.push(...split.metadata);
+            if (split.hasPayload) {
+                payload.push(split.payload);
+            }
+        });
+
+        return {
+            metadata,
+            payload,
+            hasPayload: payload.length > 0,
+        };
     }
 
-    if (continueValue !== undefined) {
-        lines.push(`continue: ${continueValue ? 'true' : 'false'}`);
+    if (!isToolDisplayPlainObject(value)) {
+        return {
+            metadata: [],
+            payload: value,
+            hasPayload: value !== undefined && value !== null && value !== '',
+        };
     }
 
-    return lines.join('\n');
+    const metadata = [];
+    const payload = {};
+
+    for (const [key, entryValue] of Object.entries(value)) {
+        const displayKey = labelToolDisplayKey(key, path.length === 0 ? labelMap : {});
+        const displayPath = [...path, displayKey].join('.');
+
+        if (isToolDisplayMetadataKey(key)) {
+            metadata.push({
+                label: displayPath,
+                value: formatToolDisplayValue(entryValue),
+            });
+            continue;
+        }
+
+        const split = splitToolDisplayObject(entryValue, { labelMap: {}, path: [...path, displayKey] });
+        metadata.push(...split.metadata);
+        if (split.hasPayload) {
+            payload[displayKey] = split.payload;
+        }
+    }
+
+    return {
+        metadata,
+        payload,
+        hasPayload: Object.keys(payload).length > 0,
+    };
+}
+
+function renderToolMetadataRowsHtml(entries) {
+    const rows = entries
+        .filter(entry => String(entry?.value ?? '').trim())
+        .map(entry => `
+            <div class="tool-display-metadata-row">
+                <span class="tool-display-metadata-label">${escapeHtml(entry.label)}</span>
+                <span class="tool-display-metadata-value">${escapeHtml(entry.value)}</span>
+            </div>
+        `)
+        .join('');
+
+    return rows ? `<div class="tool-display-metadata">${rows}</div>` : '';
+}
+
+function renderToolPayloadBlockHtml(label, payload, language = 'json') {
+    if (payload === undefined || payload === null || payload === '') {
+        return '';
+    }
+
+    const text = typeof payload === 'string' ? payload : JSON.stringify(payload, null, 2);
+    const languageClass = language ? ` class="language-${DOMPurify.sanitize(language)}"` : '';
+    return `
+        <div class="tool-display-payload">
+            <div class="tool-display-payload-label">${DOMPurify.sanitize(label)}</div>
+            <pre><code${languageClass}>${escapeHtml(text)}</code></pre>
+        </div>
+    `;
 }
 
 function formatNativeToolResultText(content) {
@@ -2219,19 +2314,14 @@ function getLiveCommandToolKind(toolInfo) {
 /**
  * Builds a one-line PowerShell command preview.
  * @param {string} command
- * @param {string} cwd
  * @returns {string}
  */
-function getShellCommandDetailsHtml(command, cwd) {
-    const trimmedCommand = String(command ?? '');
-    const trimmedCwd = String(cwd ?? '').trim();
-    const commandLine = trimmedCwd && trimmedCwd !== '.'
-        ? `${trimmedCwd}> ${trimmedCommand}`
-        : trimmedCommand;
+function getShellCommandDetailsHtml(command) {
+    const commandLine = String(command ?? '');
     return `
         <div class="tool-shell-details">
             <div class="tool-shell-detail-row tool-shell-command-row">
-                <pre class="tool-shell-command"><code>${DOMPurify.sanitize(commandLine)}</code></pre>
+                <pre class="tool-shell-command"><code>${escapeHtml(commandLine)}</code></pre>
             </div>
         </div>
     `;
@@ -2353,7 +2443,11 @@ function renderNativeToolSegmentHtml(message, messageId, segment, segmentIndex, 
         }
         html += '</div>';
         html += `<div class="tool-shell-summary"><p class="tool-shell-explanation">${DOMPurify.sanitize(explanation)}</p></div>`;
-        html += getShellCommandDetailsHtml(command, cwd);
+        html += renderToolMetadataRowsHtml([
+            { label: 'cwd', value: cwd },
+            { label: 'continue', value: toolInfo?.continue !== false ? 'true' : 'false' },
+        ]);
+        html += getShellCommandDetailsHtml(command);
         html += '</div>';
 
         return html;
@@ -2361,10 +2455,21 @@ function renderNativeToolSegmentHtml(message, messageId, segment, segmentIndex, 
 
     const parseErrorMessage = String(parseError?.message ?? '').trim();
     const rawToolBlock = String(segment?.raw_tool_block ?? parseError?.raw_tool_block ?? '').trim();
-    let toolArgs = rawToolBlock || '{}';
+    const displayInfo = ToolManager.getToolDisplayInfo(detectedToolName);
+    const displayName = displayInfo.displayName || detectedToolName || 'Tool';
+    const metadataEntries = [];
 
     if (hasValidToolInfo) {
-        toolArgs = formatToolArgumentsForDisplay(toolArgsObject, toolInfo?.continue !== false);
+        if (displayInfo.displayMetadata?.type === 'mcp') {
+            metadataEntries.push(
+                { label: 'MCP server', value: displayInfo.displayMetadata.serverName },
+                { label: 'MCP tool', value: displayInfo.displayMetadata.toolTitle || displayInfo.displayMetadata.toolName },
+            );
+        }
+
+        if (detectedToolName && detectedToolName !== displayName) {
+            metadataEntries.push({ label: 'Technical name', value: detectedToolName });
+        }
     }
 
     html += '<div class="tool-call-box">';
@@ -2374,11 +2479,30 @@ function renderNativeToolSegmentHtml(message, messageId, segment, segmentIndex, 
         html += `<div class="tool-call-header-actions">${buildToolExecuteButtonHtml(toolName, messageId, segmentIndex, executionState)}</div>`;
     }
     html += '</div>';
-    html += `<div class="tool-action"><p><b>Action:</b> <code>${toolName}</code></p>`;
+    html += `<div class="tool-action"><p><b>Action:</b> <code>${escapeHtml(displayName)}</code></p>`;
     if (parseErrorMessage) {
         html += `<p><b>Error:</b> ${DOMPurify.sanitize(parseErrorMessage)}</p>`;
     }
-    html += `<p><b>Arguments:</b></p><pre><code>${DOMPurify.sanitize(toolArgs)}</code></pre></div>`;
+
+    if (hasValidToolInfo) {
+        const split = splitToolDisplayObject({
+            ...toolArgsObject,
+            continue: toolInfo?.continue !== false,
+        }, {
+            labelMap: displayInfo.argumentLabels,
+        });
+
+        html += renderToolMetadataRowsHtml([...metadataEntries, ...split.metadata]);
+        if (split.hasPayload) {
+            html += renderToolPayloadBlockHtml('Arguments', split.payload);
+        }
+    } else {
+        html += renderToolMetadataRowsHtml(metadataEntries);
+        if (rawToolBlock) {
+            html += renderToolPayloadBlockHtml('Raw tool block', rawToolBlock, 'xml');
+        }
+    }
+    html += '</div>';
     html += '</div>';
 
     return html;

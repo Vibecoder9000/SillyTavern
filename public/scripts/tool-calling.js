@@ -63,6 +63,7 @@ import { setPersonaDescription } from './personas.js';
  * @property {function} [formatMessage] - A function to format the tool call message.
  * @property {function} [shouldRegister] - A function to determine if the tool should be registered.
  * @property {boolean} [stealth] - A tool call result will not be shown in the chat. No follow-up generation will be performed.
+ * @property {object} [displayMetadata] - Optional display-only metadata for rendering tool calls.
  */
 
 /**
@@ -148,6 +149,154 @@ function withTimeout(promise, timeoutMs, timeoutMessage) {
  */
 function stringify(obj) {
     return typeof obj === 'string' ? obj : JSON.stringify(obj);
+}
+
+function isPlainObject(value) {
+    return value && typeof value === 'object' && !Array.isArray(value);
+}
+
+function formatToolDisplayValue(value) {
+    if (typeof value === 'boolean') {
+        return value ? 'true' : 'false';
+    }
+
+    if (value === null || value === undefined) {
+        return '';
+    }
+
+    if (typeof value === 'string' || typeof value === 'number') {
+        return String(value);
+    }
+
+    return JSON.stringify(value, null, 2);
+}
+
+function isToolDisplayMetadataKey(key) {
+    const normalized = String(key ?? '').trim().toLowerCase();
+    return normalized === 'continue'
+        || normalized === 'cwd'
+        || normalized === 'workspace'
+        || normalized === 'character'
+        || normalized === 'filename'
+        || normalized === 'url'
+        || normalized === 'uri'
+        || normalized.includes('filepath')
+        || normalized.includes('filepaths')
+        || normalized.includes('path');
+}
+
+function labelToolDisplayKey(key, labelMap = {}) {
+    const rawKey = String(key ?? '');
+    return String(labelMap[rawKey] || rawKey);
+}
+
+function appendToolMetadataRows(parent, entries) {
+    const filteredEntries = entries.filter(entry => String(entry?.value ?? '').trim());
+    if (!filteredEntries.length) {
+        return;
+    }
+
+    const rows = document.createElement('div');
+    rows.className = 'tool-display-metadata';
+
+    for (const entry of filteredEntries) {
+        const row = document.createElement('div');
+        row.className = 'tool-display-metadata-row';
+
+        const label = document.createElement('span');
+        label.className = 'tool-display-metadata-label';
+        label.textContent = entry.label;
+
+        const value = document.createElement('span');
+        value.className = 'tool-display-metadata-value';
+        value.textContent = entry.value;
+
+        row.append(label, value);
+        rows.append(row);
+    }
+
+    parent.append(rows);
+}
+
+function appendToolPayloadBlock(parent, label, payload, language = 'json') {
+    if (payload === undefined || payload === null || payload === '') {
+        return;
+    }
+
+    const section = document.createElement('div');
+    section.className = 'tool-display-payload';
+
+    const title = document.createElement('div');
+    title.className = 'tool-display-payload-label';
+    title.textContent = label;
+
+    const pre = document.createElement('pre');
+    const code = document.createElement('code');
+    if (language) {
+        code.classList.add(`language-${language}`);
+    }
+    code.textContent = typeof payload === 'string' ? payload : JSON.stringify(payload, null, 2);
+
+    pre.append(code);
+    section.append(title, pre);
+    parent.append(section);
+}
+
+function splitToolDisplayObject(value, { labelMap = {}, path = [] } = {}) {
+    if (Array.isArray(value)) {
+        const metadata = [];
+        const payload = [];
+
+        value.forEach((item, index) => {
+            const split = splitToolDisplayObject(item, { labelMap: {}, path: [...path, String(index)] });
+            metadata.push(...split.metadata);
+            if (split.hasPayload) {
+                payload.push(split.payload);
+            }
+        });
+
+        return {
+            metadata,
+            payload,
+            hasPayload: payload.length > 0,
+        };
+    }
+
+    if (!isPlainObject(value)) {
+        return {
+            metadata: [],
+            payload: value,
+            hasPayload: value !== undefined && value !== null && value !== '',
+        };
+    }
+
+    const metadata = [];
+    const payload = {};
+
+    for (const [key, entryValue] of Object.entries(value)) {
+        const displayKey = labelToolDisplayKey(key, path.length === 0 ? labelMap : {});
+        const displayPath = [...path, displayKey].join('.');
+
+        if (isToolDisplayMetadataKey(key)) {
+            metadata.push({
+                label: displayPath,
+                value: formatToolDisplayValue(entryValue),
+            });
+            continue;
+        }
+
+        const split = splitToolDisplayObject(entryValue, { labelMap: {}, path: [...path, displayKey] });
+        metadata.push(...split.metadata);
+        if (split.hasPayload) {
+            payload[displayKey] = split.payload;
+        }
+    }
+
+    return {
+        metadata,
+        payload,
+        hasPayload: Object.keys(payload).length > 0,
+    };
 }
 
 function maskNativeToolThinkingBlocks(text) {
@@ -839,6 +988,12 @@ class ToolDefinition {
     #stealth;
 
     /**
+     * Display-only metadata used by chat renderers.
+     * @type {object}
+     */
+    #displayMetadata;
+
+    /**
      * Creates a new ToolDefinition.
      * @param {string} name A unique name for the tool.
      * @param {string} displayName A user-friendly display name for the tool.
@@ -848,8 +1003,9 @@ class ToolDefinition {
      * @param {function} formatMessage A function that will be called to format the tool call toast.
      * @param {function} shouldRegister A function that will be called to determine if the tool should be registered.
      * @param {boolean} stealth A tool call result will not be shown in the chat. No follow-up generation will be performed.
+     * @param {object} displayMetadata Display-only metadata used by chat renderers.
      */
-    constructor(name, displayName, description, parameters, action, formatMessage, shouldRegister, stealth) {
+    constructor(name, displayName, description, parameters, action, formatMessage, shouldRegister, stealth, displayMetadata = {}) {
         this.#name = name;
         this.#displayName = displayName;
         this.#description = description;
@@ -858,6 +1014,7 @@ class ToolDefinition {
         this.#formatMessage = formatMessage;
         this.#shouldRegister = shouldRegister;
         this.#stealth = stealth;
+        this.#displayMetadata = displayMetadata && typeof displayMetadata === 'object' ? displayMetadata : {};
     }
 
     /**
@@ -909,6 +1066,18 @@ class ToolDefinition {
         return this.#displayName;
     }
 
+    get name() {
+        return this.#name;
+    }
+
+    get parameters() {
+        return resolveToolRegistrationValue(this.#parameters);
+    }
+
+    get displayMetadata() {
+        return this.#displayMetadata;
+    }
+
     get stealth() {
         return this.#stealth;
     }
@@ -929,6 +1098,7 @@ function createToolDefinition(registration) {
         formatMessage,
         shouldRegister,
         stealth,
+        displayMetadata,
     } = registration;
 
     return new ToolDefinition(
@@ -940,6 +1110,7 @@ function createToolDefinition(registration) {
         formatMessage,
         shouldRegister,
         stealth,
+        displayMetadata,
     );
 }
 
@@ -1749,6 +1920,14 @@ function rebuildMcpToolCacheForServer(server, tools) {
                 displayName,
                 description: formatMcpToolDescription(server, tool),
                 parameters: mappedSchema.schema,
+                displayMetadata: {
+                    type: 'mcp',
+                    serverId: server.id,
+                    serverName: server.name || server.id,
+                    toolName: tool.name,
+                    toolTitle: tool.title || tool.name,
+                    argumentLabels: mappedSchema.aliasToOriginal,
+                },
                 action: async (args, signal) => {
                     const currentServer = getMcpServerById(server.id);
                     if (!currentServer) {
@@ -4395,11 +4574,43 @@ export class ToolManager {
         return DANGEROUS_TOOLS.includes(String(name ?? '').trim()) && !power_user.enable_dangerous_tools;
     }
 
+    static getToolDisplayInfo(name) {
+        const toolName = String(name ?? '').trim();
+        const tool = this.#tools.get(toolName) || builtinNativeToolDefinitions.get(toolName);
+        if (!tool) {
+            return {
+                name: toolName,
+                displayName: toolName,
+                parameters: null,
+                argumentLabels: {},
+                mcpStatus: null,
+                displayMetadata: {},
+            };
+        }
+
+        const displayMetadata = tool.displayMetadata && typeof tool.displayMetadata === 'object'
+            ? tool.displayMetadata
+            : {};
+
+        return {
+            name: tool.name || toolName,
+            displayName: tool.displayName || toolName,
+            parameters: tool.parameters ?? null,
+            argumentLabels: displayMetadata.argumentLabels && typeof displayMetadata.argumentLabels === 'object'
+                ? displayMetadata.argumentLabels
+                : {},
+            mcpStatus: displayMetadata.type === 'mcp' && displayMetadata.serverId
+                ? (mcpServerStatus.get(displayMetadata.serverId) ?? {})
+                : null,
+            displayMetadata,
+        };
+    }
+
     /**
      * Registers a new tool with the tool registry.
      * @param {ToolRegistration} tool The tool to register.
      */
-    static registerFunctionTool({ name, displayName, description, parameters, action, formatMessage, shouldRegister, stealth }) {
+    static registerFunctionTool({ name, displayName, description, parameters, action, formatMessage, shouldRegister, stealth, displayMetadata }) {
         // Convert WIP arguments
         if (typeof arguments[0] !== 'object') {
             [name, description, parameters, action] = arguments;
@@ -4418,6 +4629,7 @@ export class ToolManager {
             formatMessage,
             shouldRegister,
             stealth,
+            displayMetadata,
         });
         this.#tools.set(name, definition);
         console.log('[ToolManager] Registered function tool:', definition);
@@ -5442,18 +5654,79 @@ Here are the available tools:
         const data = structuredClone(invocations);
         const detailsElement = document.createElement('details');
         const summaryElement = document.createElement('summary');
-        const preElement = document.createElement('pre');
-        const codeElement = document.createElement('code');
-        codeElement.classList.add('language-json');
-        data.forEach(i => {
-            i.parameters = tryParse(i.parameters);
-            i.result = tryParse(i.result);
-        });
-        codeElement.textContent = JSON.stringify(data, null, 2);
-        const toolNames = data.map(i => i.displayName || i.name);
+        const listElement = document.createElement('div');
+        listElement.className = 'tool-invocation-list';
+        const toolNames = data.map(i => i.displayName || this.getToolDisplayInfo(i.name).displayName || i.name);
         summaryElement.textContent = `Tool calls: ${this.#groupToolNames(toolNames)}`;
-        preElement.append(codeElement);
-        detailsElement.append(summaryElement, preElement);
+
+        data.forEach((invocation, index) => {
+            const displayInfo = this.getToolDisplayInfo(invocation.name);
+            const parsedParameters = tryParse(invocation.parameters);
+            const parsedResult = tryParse(invocation.result);
+            const displayName = invocation.displayName || displayInfo.displayName || invocation.name;
+            const card = document.createElement('article');
+            card.className = `tool-invocation-card${invocation.error ? ' tool-invocation-card--error' : ''}`;
+
+            const header = document.createElement('div');
+            header.className = 'tool-invocation-card-header';
+
+            const title = document.createElement('h4');
+            title.textContent = displayName || `Tool Call ${index + 1}`;
+            header.append(title);
+
+            if (invocation.error) {
+                const status = document.createElement('span');
+                status.className = 'tool-invocation-status tool-invocation-status--error';
+                status.textContent = 'Error';
+                header.append(status);
+            }
+
+            card.append(header);
+
+            const metadataEntries = [];
+            if (invocation.name && invocation.name !== displayName) {
+                metadataEntries.push({ label: 'Technical name', value: invocation.name });
+            }
+
+            if (displayInfo.displayMetadata?.type === 'mcp') {
+                metadataEntries.push(
+                    { label: 'MCP server', value: displayInfo.displayMetadata.serverName },
+                    { label: 'MCP tool', value: displayInfo.displayMetadata.toolTitle || displayInfo.displayMetadata.toolName },
+                );
+            }
+
+            if (isPlainObject(parsedParameters)) {
+                const parameterSplit = splitToolDisplayObject(parsedParameters, {
+                    labelMap: displayInfo.argumentLabels,
+                });
+                metadataEntries.push(...parameterSplit.metadata);
+                appendToolMetadataRows(card, metadataEntries);
+                if (parameterSplit.hasPayload) {
+                    appendToolPayloadBlock(card, 'Arguments', parameterSplit.payload);
+                }
+            } else {
+                appendToolMetadataRows(card, metadataEntries);
+                if (parsedParameters !== undefined && parsedParameters !== null && parsedParameters !== '') {
+                    appendToolPayloadBlock(card, 'Arguments', parsedParameters, typeof parsedParameters === 'string' ? 'text' : 'json');
+                }
+            }
+
+            if (isPlainObject(parsedResult)) {
+                const resultSplit = splitToolDisplayObject(parsedResult, {
+                    path: ['Result'],
+                });
+                appendToolMetadataRows(card, resultSplit.metadata);
+                if (resultSplit.hasPayload) {
+                    appendToolPayloadBlock(card, 'Result', resultSplit.payload);
+                }
+            } else if (parsedResult !== undefined && parsedResult !== null && parsedResult !== '') {
+                appendToolPayloadBlock(card, 'Result', parsedResult, typeof parsedResult === 'string' ? 'text' : 'json');
+            }
+
+            listElement.append(card);
+        });
+
+        detailsElement.append(summaryElement, listElement);
         return detailsElement.outerHTML;
     }
 
