@@ -659,6 +659,7 @@ const MCP_TOOL_CONTENT_PREVIEW_LIMIT = 4_000;
 const MCP_RESOURCE_PREVIEW_LIMIT = 6_000;
 const MCP_CONTEXT_UPDATED_EVENT = 'st-mcp-context-updated';
 const DANGEROUS_TOOLS = ['write_file', 'execute_shell', 'execute_python'];
+const TOOL_RESULT_ROLES = ['assistant', 'user', 'system'];
 const mcpDiscoveredTools = new Map();
 const builtinNativeToolDefinitions = new Map();
 const mcpServerStatus = new Map();
@@ -672,6 +673,11 @@ let sandboxRootPath = '';
 
 function resolveToolRegistrationValue(value) {
     return typeof value === 'function' ? value() : value;
+}
+
+function getConfiguredToolResultRole() {
+    const role = String(oai_settings.tool_result_role ?? '');
+    return TOOL_RESULT_ROLES.includes(role) ? role : 'system';
 }
 
 function getCurrentPlatformSyntaxLabel() {
@@ -5804,6 +5810,7 @@ Here are the available tools:
                 isSmallSys: true,
                 tool_invocations: invocations,
                 is_tool_result: true,
+                tool_result_role: getConfiguredToolResultRole(),
                 media: ToolManager.#extractToolInvocationMedia(invocations),
             },
         };

@@ -5660,6 +5660,14 @@
                                         <input id="tool_parse_in_thinking_blocks" type="checkbox" />
                                         <small data-i18n="Parse tools in thinking blocks">Parse tools in thinking blocks</small>
                                     </label>
+                                    <div class="tools-field-block" title="Choose which chat role tool result messages are sent back to the model as. Media-bearing tool results may still be sent as user if required by the provider." data-i18n="[title]Choose which chat role tool result messages are sent back to the model as. Media-bearing tool results may still be sent as user if required by the provider.">
+                                        <label for="tool_result_role"><small data-i18n="Tool Result Role">Tool Result Role</small></label>
+                                        <select id="tool_result_role" class="text_pole width100p margin0">
+                                            <option value="system" data-i18n="System">System</option>
+                                            <option value="assistant" data-i18n="Assistant">Assistant</option>
+                                            <option value="user" data-i18n="User">User</option>
+                                        </select>
+                                    </div>
                                     <label class="checkbox_label" for="hide_tool_messages" title="Hide tool call and result messages from the chat view. They will still be part of the chat history for the AI." data-i18n="[title]Hide tool call and result messages from the chat view. They will still be part of the chat history for the AI.">
                                         <input id="hide_tool_messages" type="checkbox" />
                                         <small data-i18n="Hide tool calls and results">Hide tool calls and results</small>
