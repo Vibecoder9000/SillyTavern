@@ -934,8 +934,6 @@ export async function stopActivePythonRun(messageId) {
         return false;
     }
 }
-const ASK_USER_MAX_QUESTIONS = 4;
-const ASK_USER_MAX_OPTIONS = 4;
 const ASK_USER_DEFAULT_FREE_FIELD_LABEL = 'Something else';
 const ASK_USER_DEFAULT_PLACEHOLDER = 'Something else';
 let askUserPanelInitialized = false;
@@ -2745,10 +2743,6 @@ function normalizeAskUserQuestion(question, questionIndex) {
     if (rawOptions.length === 0) {
         throw new Error(`Question ${questionIndex + 1} must include at least one option.`);
     }
-    if (rawOptions.length > ASK_USER_MAX_OPTIONS) {
-        throw new Error(`Question ${questionIndex + 1} has too many options. Max is ${ASK_USER_MAX_OPTIONS}.`);
-    }
-
     const options = rawOptions.map((option, optionIndex) => normalizeAskUserOption(option, questionIndex, optionIndex));
     const defaultSelected = new Set(normalizeAskUserStringArray(question.default_selected));
     const selectedValues = Array.from(new Set(options
@@ -2782,10 +2776,6 @@ function normalizeAskUserPayload(payload) {
 
     if (!Array.isArray(rawQuestions) || rawQuestions.length === 0) {
         throw new Error('ask_user requires at least one question.');
-    }
-
-    if (rawQuestions.length > ASK_USER_MAX_QUESTIONS) {
-        throw new Error(`ask_user supports a maximum of ${ASK_USER_MAX_QUESTIONS} questions.`);
     }
 
     return {
@@ -3011,7 +3001,7 @@ function registerBuiltinTools() {
         {
             name: 'ask_user',
             displayName: 'Ask User',
-            description: 'Ask the user questions.',
+            description: 'Ask questions, the system automatically appends a freeform field. No "something else" option needed',
             parameters: {
                 type: 'object',
                 properties: {
@@ -3019,7 +3009,6 @@ function registerBuiltinTools() {
                         type: 'array',
                         description: 'Questions',
                         minItems: 1,
-                        maxItems: 4,
                         items: {
                             type: 'object',
                             properties: {
@@ -3034,7 +3023,6 @@ function registerBuiltinTools() {
                                 options: {
                                     type: 'array',
                                     description: 'Answer options',
-                                    maxItems: 4,
                                     items: {
                                         type: 'string',
                                     },
