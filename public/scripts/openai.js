@@ -7107,7 +7107,7 @@ export function initOpenAI() {
         saveSettingsDebounced();
     });
 
-    $('#tool_result_role').on('input', function () {
+    $('#tool_result_role').on('change', function () {
         oai_settings.tool_result_role = getToolResultRole({
             tool_result_role: String($(this).val()),
         });
