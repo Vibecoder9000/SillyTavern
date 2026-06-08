@@ -286,14 +286,13 @@
     margin: 0 auto;
     width: var(--sheldWidth);
     max-width: var(--sheldWidth);
-    padding: 0;
-    border-top-left-radius: 0;
-    border-top-right-radius: 0;
+    padding: 5px;
+    border-radius: 10px;
 }
 
 #tools-header-fixed {
     flex-shrink: 0;
-    padding: 8px 12px;
+    padding: 5px 10px;
     background-color: var(--SmartThemeBlurTintColor);
     z-index: 10;
     position: relative;
@@ -306,7 +305,7 @@
     flex-grow: 1;
     overflow-y: auto;
     overflow-x: hidden;
-    padding: 10px;
+    padding: 5px;
     width: 100%;
     box-sizing: border-box;
     min-height: 0;
@@ -315,16 +314,16 @@
 .tools-settings-grid {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 10px;
+    gap: 8px;
     align-items: start;
 }
 
 .tools-panel-card {
     display: flex;
     flex-direction: column;
-    gap: 10px;
+    gap: 8px;
     min-width: 0;
-    padding: 8px 10px;
+    padding: 5px 6px;
     border: 0;
     border-radius: 0;
     background: transparent;
@@ -333,17 +332,17 @@
 
 .tools-settings-grid > .tools-panel-card:nth-child(1) {
     border-right: 1px solid rgba(255, 255, 255, 0.12);
-    padding-right: 14px;
+    padding-right: 10px;
 }
 
 .tools-settings-grid > .tools-panel-card:nth-child(2) {
-    padding-left: 14px;
+    padding-left: 10px;
 }
 
 .tools-panel-card--full {
     grid-column: 1 / -1;
     border-top: 1px solid rgba(255, 255, 255, 0.12);
-    padding-top: 14px;
+    padding-top: 8px;
 }
 
 .tools-panel-header,
@@ -366,7 +365,7 @@
 .tools-panel-title,
 .tools-panel-actions,
 .mcp-overview-summary {
-    gap: 8px;
+    gap: 6px;
 }
 
 .tools-panel-title i {
@@ -408,11 +407,11 @@
 .tools-panel-body,
 #tool_calling_dependent_settings,
 .mcp-overview-list {
-    gap: 10px;
+    gap: 6px;
 }
 
 .tools-inline-field {
-    gap: 8px;
+    gap: 6px;
     justify-content: space-between;
 }
 
@@ -424,36 +423,40 @@
 .tools-output-limit {
     display: flex;
     flex-direction: column;
-    gap: 6px;
-    padding-top: 8px;
+    gap: 4px;
+    padding-top: 6px;
     border-top: 1px solid rgba(255, 255, 255, 0.08);
 }
 
 .tools-output-label {
     display: inline-flex;
     align-items: center;
-    gap: 8px;
+    gap: 6px;
 }
 
 .tools-output-controls {
-    gap: 10px;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 6px;
 }
 
 .tools-output-controls .neo-range-slider {
-    flex: 1 1 auto;
+    flex: 0 0 auto;
+    margin-top: 0 !important;
+    width: 100% !important;
 }
 
 .tools-output-controls .neo-range-input {
-    width: 120px;
+    width: 100%;
     flex: 0 0 auto;
 }
 
 .tools-field-block {
-    gap: 4px;
+    gap: 3px;
 }
 
 .tools-workspace-controls {
-    gap: 6px;
+    gap: 4px;
 }
 
 .tools-static-pill {
@@ -486,7 +489,7 @@
 .mcp-status-grid {
     display: grid;
     grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: 8px;
+    gap: 6px;
 }
 
 .mcp-status-cell {
@@ -512,8 +515,8 @@
 }
 
 .mcp-overview-row {
-    gap: 10px;
-    padding: 8px 10px;
+    gap: 8px;
+    padding: 6px 8px;
     border: 1px solid rgba(255, 255, 255, 0.12);
     border-radius: 10px;
     background: rgba(0, 0, 0, 0.16);
