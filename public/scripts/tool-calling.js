@@ -209,6 +209,9 @@ function appendToolMetadataRows(parent, entries) {
 
         const value = document.createElement('span');
         value.className = 'tool-display-metadata-value';
+        if (entry?.dangerTrue) {
+            value.classList.add('tool-display-metadata-value--danger-true');
+        }
         value.textContent = entry.value;
 
         row.append(label, value);
@@ -230,6 +233,24 @@ function appendToolPayloadBlock(parent, label, payload, language = 'json') {
     title.className = 'tool-display-payload-label';
     title.textContent = label;
 
+    if (language === 'html') {
+        const body = document.createElement('div');
+        body.className = 'tool-display-payload-body';
+        body.innerHTML = String(typeof payload === 'string' ? payload : JSON.stringify(payload, null, 2));
+        section.append(title, body);
+        parent.append(section);
+        return;
+    }
+
+    if (language === 'markdown') {
+        const body = document.createElement('div');
+        body.className = 'tool-display-payload-body';
+        body.innerHTML = messageFormatting(String(typeof payload === 'string' ? payload : JSON.stringify(payload, null, 2)), '', false, false, -1, {}, false);
+        section.append(title, body);
+        parent.append(section);
+        return;
+    }
+
     const pre = document.createElement('pre');
     const code = document.createElement('code');
     if (language) {
@@ -240,6 +261,418 @@ function appendToolPayloadBlock(parent, label, payload, language = 'json') {
     pre.append(code);
     section.append(title, pre);
     parent.append(section);
+}
+
+const BUILTIN_TOOL_PAYLOAD_KEYS = new Set([
+    'content',
+    'text',
+    'prompt',
+    'query',
+    'command',
+    'code',
+    'questions',
+    'message',
+    'messages',
+    'body',
+    'script',
+    'html',
+    'markdown',
+    'input',
+]);
+
+const BUILTIN_TOOL_CODE_FIELDS = new Set([
+    'content',
+    'text',
+    'prompt',
+    'negative_prompt',
+    'code',
+    'command',
+    'script',
+]);
+
+const BUILTIN_TOOL_INLINE_ONLY_TOOLS = new Set([
+    'browser_open',
+    'browser_search',
+    'browser_tabs',
+    'browser_close',
+    'browser_go_back',
+    'browser_click',
+    'browser_pixel_click',
+    'browser_hover',
+    'browser_type',
+    'browser_key',
+    'browser_wait',
+    'browser_download',
+    'browser_screenshot',
+    'dom_fetch',
+]);
+
+const BUILTIN_TOOL_INLINE_KEYS = new Set([
+    'continue',
+    'cwd',
+    'workspace',
+    'character',
+    'filename',
+    'url',
+    'uri',
+    'session_id',
+    'tab_index',
+    'new_tab',
+    'engine',
+    'path',
+    'filepath',
+    'filepaths',
+    'overwrite',
+    'append',
+    'timeout_ms',
+    'width',
+    'height',
+    'steps',
+    'cfg_scale',
+    'sampler_name',
+    'seed',
+    'model',
+    'action',
+    'selector',
+    'x',
+    'y',
+    'button',
+    'key',
+    'keys',
+    'wait_ms',
+    'delay',
+]);
+
+function isBuiltinToolPayloadKey(key) {
+    return BUILTIN_TOOL_PAYLOAD_KEYS.has(String(key ?? '').trim().toLowerCase());
+}
+
+function isBuiltinToolInlineKey(key) {
+    return BUILTIN_TOOL_INLINE_KEYS.has(String(key ?? '').trim().toLowerCase());
+}
+
+function indentBuiltinToolLines(text, indentLevel = 1) {
+    const indent = '  '.repeat(Math.max(0, indentLevel));
+    return String(text ?? '')
+        .split('\n')
+        .map(line => `${indent}${line}`)
+        .join('\n');
+}
+
+function formatBuiltinToolArrayItem(item, indentLevel = 0) {
+    const prefix = `${'  '.repeat(Math.max(0, indentLevel))}- `;
+
+    if (item === null || item === undefined || item === '') {
+        return `${prefix}`.trimEnd();
+    }
+
+    if (typeof item === 'string' || typeof item === 'number' || typeof item === 'boolean') {
+        return `${prefix}${String(item)}`;
+    }
+
+    const itemText = formatBuiltinToolObjectValue(item, indentLevel + 1);
+    if (!itemText) {
+        return `${prefix}`.trimEnd();
+    }
+
+    const lines = String(itemText).split('\n');
+    return [
+        `${prefix}${lines[0]}`,
+        ...lines.slice(1).map(line => `${'  '.repeat(Math.max(0, indentLevel) + 1)}${line}`),
+    ].join('\n');
+}
+
+function formatBuiltinToolObjectValue(value, indentLevel = 0) {
+    if (Array.isArray(value)) {
+        return value
+            .map(item => formatBuiltinToolArrayItem(item, indentLevel))
+            .filter(Boolean)
+            .join('\n');
+    }
+
+    if (isPlainObject(value)) {
+        return Object.entries(value)
+            .filter(([, childValue]) => childValue !== undefined && childValue !== null && String(childValue).trim() !== '')
+            .map(([childKey, childValue]) => {
+                if (Array.isArray(childValue)) {
+                    return `${childKey}:\n${indentBuiltinToolLines(formatBuiltinToolObjectValue(childValue, indentLevel + 1))}`;
+                }
+
+                if (isPlainObject(childValue)) {
+                    return `${childKey}:\n${indentBuiltinToolLines(formatBuiltinToolObjectValue(childValue, indentLevel + 1))}`;
+                }
+
+                return `${childKey}: ${formatToolDisplayValue(childValue)}`;
+            })
+            .join('\n');
+    }
+
+    return formatToolDisplayValue(value);
+}
+
+function formatBuiltinToolInlineValue(value) {
+    if (Array.isArray(value)) {
+        return value
+            .map(item => {
+                if (item === null || item === undefined) {
+                    return '';
+                }
+
+                if (typeof item === 'string' || typeof item === 'number' || typeof item === 'boolean') {
+                    return formatToolDisplayValue(item);
+                }
+
+                return formatBuiltinToolObjectValue(item);
+            })
+            .filter(Boolean)
+            .join(', ');
+    }
+
+    if (isPlainObject(value)) {
+        return formatBuiltinToolObjectValue(value);
+    }
+
+    return formatToolDisplayValue(value);
+}
+
+function escapeToolDisplayHtml(value) {
+    return String(value ?? '')
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;')
+        .replaceAll("'", '&#39;');
+}
+
+function formatAskUserPayloadHtml(questions) {
+    const questionList = Array.isArray(questions) ? questions : [];
+    const blocks = questionList.map((question) => {
+        if (!isPlainObject(question)) {
+            const text = formatBuiltinToolObjectValue(question).trim();
+            return text ? `<div class="tool-display-metadata"><div class="tool-display-metadata-row"><span class="tool-display-metadata-value">${escapeToolDisplayHtml(text)}</span></div></div>` : '';
+        }
+
+        const prompt = String(question.prompt ?? '').trim();
+        const context = String(question.context ?? '').trim();
+        const options = Array.isArray(question.options)
+            ? question.options.map(option => String(option ?? '').trim()).filter(Boolean)
+            : [];
+        const rows = [];
+
+        if (prompt) {
+            rows.push(`
+                <div class="tool-display-metadata-row">
+                    <span class="tool-display-metadata-label">prompt</span>
+                    <span class="tool-display-metadata-value">${escapeToolDisplayHtml(prompt)}</span>
+                </div>
+            `);
+        }
+
+        if (context) {
+            rows.push(`
+                <div class="tool-display-metadata-row">
+                    <span class="tool-display-metadata-label">context</span>
+                    <span class="tool-display-metadata-value">${escapeToolDisplayHtml(context)}</span>
+                </div>
+            `);
+        }
+
+        if (options.length > 0) {
+            rows.push(`
+                <div class="tool-display-metadata-row">
+                    <span class="tool-display-metadata-label">options</span>
+                    <span class="tool-display-metadata-value"><ul style="margin: 0; padding-left: 18px;">${options.map(option => `<li>${escapeToolDisplayHtml(option)}</li>`).join('')}</ul></span>
+                </div>
+            `);
+        }
+
+        return rows.length ? `<div class="tool-display-metadata">${rows.join('')}</div>` : '';
+    }).filter(Boolean);
+
+    return blocks.join('');
+}
+
+function splitBuiltinToolDisplayObject(toolName, value, { labelMap = {} } = {}) {
+    if (toolName === 'ask_user') {
+        const metadata = [];
+        const payload = [];
+        const objectValue = isPlainObject(value) ? value : {};
+        if (Object.hasOwn(objectValue, 'continue')) {
+            metadata.push({
+                label: labelToolDisplayKey('continue', labelMap),
+                value: formatToolDisplayValue(objectValue.continue),
+            });
+        }
+
+        if (Object.hasOwn(objectValue, 'questions')) {
+            payload.push({
+                label: 'questions',
+                key: 'questions',
+                value: objectValue.questions,
+            });
+        }
+
+        return {
+            metadata,
+            payload,
+            hasPayload: payload.length > 0,
+        };
+    }
+
+    if (BUILTIN_TOOL_INLINE_ONLY_TOOLS.has(toolName)) {
+        const metadata = [];
+        const objectValue = isPlainObject(value) ? value : {};
+        for (const [key, entryValue] of Object.entries(objectValue)) {
+            const serializedValue = formatBuiltinToolInlineValue(entryValue);
+            if (!serializedValue) {
+                continue;
+            }
+
+            metadata.push({
+                label: labelToolDisplayKey(key, labelMap),
+                value: serializedValue,
+                dangerTrue: String(key ?? '').trim().toLowerCase() === 'continue' && entryValue === false,
+            });
+        }
+
+        return {
+            metadata,
+            payload: [],
+            hasPayload: false,
+        };
+    }
+
+    const metadata = [];
+    const payload = [];
+    const objectValue = isPlainObject(value) ? value : {};
+
+    for (const [key, entryValue] of Object.entries(objectValue)) {
+        const normalizedKey = String(key ?? '').trim().toLowerCase();
+        const displayKey = labelToolDisplayKey(key, labelMap);
+        const serializedValue = formatToolDisplayValue(entryValue);
+        if (!serializedValue) {
+            continue;
+        }
+
+        const shouldPayload = isBuiltinToolPayloadKey(normalizedKey)
+            || Array.isArray(entryValue)
+            || isPlainObject(entryValue)
+            || (typeof entryValue === 'string' && (entryValue.includes('\n') || entryValue.length > 96))
+            || (!isBuiltinToolInlineKey(normalizedKey) && typeof entryValue === 'string' && entryValue.length > 48);
+
+        if (shouldPayload) {
+            payload.push({
+                label: displayKey,
+                key,
+                value: entryValue,
+            });
+            continue;
+        }
+
+        metadata.push({
+            label: displayKey,
+            value: serializedValue,
+            dangerTrue: normalizedKey === 'overwrite' && entryValue === true,
+        });
+    }
+
+    return {
+        metadata,
+        payload,
+        hasPayload: payload.length > 0,
+    };
+}
+
+function formatAskUserPayload(questions) {
+    return formatAskUserPayloadHtml(questions);
+}
+
+function getBuiltinToolPayloadLanguage(toolName) {
+    return toolName === 'ask_user' ? 'html' : 'markdown';
+}
+
+function formatBuiltinToolPayloadText(toolName, payloadEntries) {
+    if (!Array.isArray(payloadEntries) || payloadEntries.length === 0) {
+        return '';
+    }
+
+    if (toolName === 'ask_user') {
+        const questionsEntry = payloadEntries.find(entry => entry.key === 'questions');
+        if (questionsEntry) {
+            return formatAskUserPayload(questionsEntry.value);
+        }
+    }
+
+    if (payloadEntries.length === 1) {
+        const [entry] = payloadEntries;
+        if (typeof entry.value === 'string' && isBuiltinToolPayloadKey(entry.key)) {
+            if (BUILTIN_TOOL_CODE_FIELDS.has(String(entry.key ?? '').trim().toLowerCase())) {
+                const language = String(entry.key ?? '').trim().toLowerCase() === 'code' && toolName === 'execute_python'
+                    ? 'python'
+                    : String(entry.key ?? '').trim().toLowerCase() === 'command'
+                        ? 'powershell'
+                        : '';
+                return language
+                    ? `\`\`\`${language}\n${entry.value}\n\`\`\``
+                    : `\`\`\`\n${entry.value}\n\`\`\``;
+            }
+            return entry.value;
+        }
+        if (Array.isArray(entry.value) || isPlainObject(entry.value)) {
+            return formatBuiltinToolObjectValue(entry.value);
+        }
+    }
+
+    return payloadEntries.map((entry) => {
+        const value = entry.value;
+        const label = entry.label;
+
+        if (typeof value === 'string') {
+            if (BUILTIN_TOOL_CODE_FIELDS.has(String(entry.key ?? '').trim().toLowerCase())) {
+                const language = String(entry.key ?? '').trim().toLowerCase() === 'code' && toolName === 'execute_python'
+                    ? 'python'
+                    : String(entry.key ?? '').trim().toLowerCase() === 'command'
+                        ? 'powershell'
+                        : '';
+                return language
+                    ? `**${label}:**\n\`\`\`${language}\n${value}\n\`\`\``
+                    : `**${label}:**\n\`\`\`\n${value}\n\`\`\``;
+            }
+            if (payloadEntries.length > 1 && isBuiltinToolPayloadKey(entry.key)) {
+                return `${label}: ${value}`;
+            }
+            if (isBuiltinToolPayloadKey(entry.key)) {
+                return value;
+            }
+            return `${label}: ${value}`;
+        }
+
+        if (Array.isArray(value)) {
+            const text = formatBuiltinToolObjectValue(value);
+            if (payloadEntries.length > 1 && isBuiltinToolPayloadKey(entry.key)) {
+                return `${label}: ${text}`;
+            }
+            return isBuiltinToolPayloadKey(entry.key) ? text : `${label}: ${text}`;
+        }
+
+        if (isPlainObject(value)) {
+            const text = formatBuiltinToolObjectValue(value);
+            if (payloadEntries.length > 1 && isBuiltinToolPayloadKey(entry.key)) {
+                return `${label}: ${text}`;
+            }
+            return isBuiltinToolPayloadKey(entry.key) ? text : `${label}: ${text}`;
+        }
+
+        return `${label}: ${formatBuiltinToolObjectValue(value)}`;
+    }).filter(Boolean).join('\n\n');
+}
+
+function getBuiltinToolPayloadLabel(payloadEntries, fallbackLabel = 'Arguments') {
+    if (Array.isArray(payloadEntries) && payloadEntries.length === 1) {
+        return payloadEntries[0].label;
+    }
+
+    return fallbackLabel;
 }
 
 function splitToolDisplayObject(value, { labelMap = {}, path = [] } = {}) {
@@ -5687,7 +6120,22 @@ Here are the available tools:
                 );
             }
 
-            if (isPlainObject(parsedParameters)) {
+            const isBuiltinTool = builtinNativeToolDefinitions.has(invocation.name);
+            if (isBuiltinTool && isPlainObject(parsedParameters)) {
+                const parameterSplit = splitBuiltinToolDisplayObject(invocation.name, parsedParameters, {
+                    labelMap: displayInfo.argumentLabels,
+                });
+                metadataEntries.push(...parameterSplit.metadata);
+                appendToolMetadataRows(card, metadataEntries);
+                if (parameterSplit.hasPayload) {
+                    appendToolPayloadBlock(
+                        card,
+                        getBuiltinToolPayloadLabel(parameterSplit.payload),
+                        formatBuiltinToolPayloadText(invocation.name, parameterSplit.payload),
+                        getBuiltinToolPayloadLanguage(invocation.name),
+                    );
+                }
+            } else if (isPlainObject(parsedParameters)) {
                 const parameterSplit = splitToolDisplayObject(parsedParameters, {
                     labelMap: displayInfo.argumentLabels,
                 });
