@@ -5267,9 +5267,7 @@ export class ToolManager {
             : listResult;
 
         this.#lastListDirectoryContext = trimmedListResult;
-        const workspace = getCurrentSandboxWorkspace();
-        const workspaceLabel = workspace === SANDBOX_ROOT_WORKSPACE ? 'uploads' : workspace;
-        return `Current sandbox workspace listing (workspace "${workspaceLabel}", auto-fetched using list_directory with path "."):\n${trimmedListResult}`;
+        return `Local workspace contents:\n${trimmedListResult}`;
     }
 
     static async #getMcpPromptContext() {
