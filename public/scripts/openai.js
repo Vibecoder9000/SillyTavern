@@ -3511,6 +3511,7 @@ class InvalidCharacterNameError extends Error {
  */
 class Message {
     static tokensPerImage = 85;
+    static inlineImageConversionQuality = 0.82;
 
     /** @type {number} */
     tokens;
@@ -3734,16 +3735,38 @@ class Message {
             chat_completion_sources.VERTEXAI,
         ];
         const sizeThreshold = 2 * 1024 * 1024;
+        const conversion = power_user.chat_inline_image_conversion || 'default';
+        const conversionType = this.getInlineImageConversionMimeType(conversion);
+        const needsConversion = Boolean(conversionType);
         const dataSize = image.length * 0.75;
         const safeMimeTypes = ['image/jpeg', 'image/png', 'image/webp'];
         const mimeType = image?.split(';')?.[0]?.split(':')?.[1];
+        const quality = needsConversion ? Message.inlineImageConversionQuality : undefined;
         if (compressImageSources.includes(oai_settings.chat_completion_source) && dataSize > sizeThreshold) {
             const maxSide = 2048;
-            image = await createThumbnail(image, maxSide, maxSide);
+            image = await createThumbnail(image, maxSide, maxSide, conversionType || 'image/jpeg', quality);
+        } else if (needsConversion) {
+            image = await createThumbnail(image, null, null, conversionType, quality);
         } else if (!safeMimeTypes.includes(mimeType)) {
             image = await createThumbnail(image, null, null);
         }
         return image;
+    }
+
+    /**
+     * Gets the target MIME type for inline image conversion.
+     * @param {string} conversion
+     * @returns {string|null}
+     */
+    getInlineImageConversionMimeType(conversion) {
+        switch (conversion) {
+            case 'webp':
+                return 'image/webp';
+            case 'jpeg':
+                return 'image/jpeg';
+            default:
+                return null;
+        }
     }
 
     /**
