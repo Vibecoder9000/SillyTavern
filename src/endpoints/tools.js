@@ -4,7 +4,7 @@ import fs from 'node:fs/promises';
 import { spawn, spawnSync } from 'node:child_process';
 import crypto from 'node:crypto';
 import { imageSize } from 'image-size';
-import { getSandboxDir, getUserSandboxRootDir, isPathInside } from './sandbox.js';
+import { getSandboxDir, getUserSandboxRootDir } from './sandbox.js';
 import { addMcpToolRoutes } from './tools-mcp.js';
 
 export const router = express.Router();
@@ -418,23 +418,10 @@ async function resolveSandboxWritePath(userHandle, workspace, character, filepat
         relativePath = fallbackPath;
     }
 
-    if (relativePath.startsWith('/')) {
-        relativePath = relativePath.substring(1);
-    }
-
-    if (!(await isPathInSandbox(relativePath, userHandle, workspace, character, { checkExists: false }))) {
-        throw new Error('Access denied: Path is outside the sandbox.');
-    }
-
     const sandboxDir = getSandboxDir(userHandle, workspace, character);
     const fullPath = path.resolve(sandboxDir, relativePath);
     const directory = path.dirname(fullPath);
     await fs.mkdir(directory, { recursive: true });
-
-    const realDir = await fs.realpath(directory);
-    if (!isPathInside(sandboxDir, realDir)) {
-        throw new Error('Access denied: Cannot write to a directory outside the sandbox.');
-    }
 
     return { filepath: relativePath, fullPath };
 }
@@ -542,7 +529,7 @@ function getSandboxMediaKind(filepath) {
 }
 
 /**
- * Validates a sandbox media file and returns basic metadata.
+ * Validates a media file and returns basic metadata.
  * This is intentionally permissive: it checks that raster images decode to non-zero dimensions,
  * while leaving model/API-specific acceptance rules to downstream consumers.
  * @param {string} userHandle
@@ -553,42 +540,37 @@ function getSandboxMediaKind(filepath) {
  * @returns {Promise<{ filepath: string, kind: 'image'|'video', size: number, width?: number, height?: number, mime_type?: string|null }>}
  */
 async function inspectSandboxMediaFile(userHandle, workspace, character, filepath, { allowVideo = false } = {}) {
-    let normalizedFilepath = String(filepath ?? '').trim();
-    if (!normalizedFilepath) {
+    const trimmedFilepath = String(filepath ?? '').trim();
+    if (!trimmedFilepath) {
         throw new Error('filepath is required.');
     }
 
-    if (normalizedFilepath.startsWith('/')) {
-        normalizedFilepath = normalizedFilepath.substring(1);
-    }
+    const sandboxDir = getSandboxDir(userHandle, workspace, character);
+    const fullPath = path.isAbsolute(trimmedFilepath)
+        ? trimmedFilepath
+        : path.resolve(sandboxDir, trimmedFilepath);
 
-    if (!(await isPathInSandbox(normalizedFilepath, userHandle, workspace, character, { checkExists: true }))) {
-        throw new Error('Access denied: Path is outside the sandbox.');
-    }
-
-    const mediaKind = getSandboxMediaKind(normalizedFilepath);
+    const mediaKind = getSandboxMediaKind(trimmedFilepath);
     if (mediaKind === 'image') {
         // Continue below.
     } else if (mediaKind === 'video' && allowVideo) {
         // Continue below.
     } else if (allowVideo) {
-        throw new Error(`The file "${normalizedFilepath}" is not a supported image or video type.`);
+        throw new Error(`The file "${trimmedFilepath}" is not a supported image or video type.`);
     } else {
-        throw new Error(`The file "${normalizedFilepath}" is not a supported image type.`);
+        throw new Error(`The file "${trimmedFilepath}" is not a supported image type.`);
     }
 
-    const sandboxDir = getSandboxDir(userHandle, workspace, character);
-    const fullPath = path.resolve(sandboxDir, normalizedFilepath);
     const stats = await fs.stat(fullPath);
     if (!stats.isFile()) {
-        throw new Error(`The file "${normalizedFilepath}" is not a file.`);
+        throw new Error(`The file "${trimmedFilepath}" is not a file.`);
     }
 
     const info = {
-        filepath: normalizedFilepath,
+        filepath: trimmedFilepath,
         kind: mediaKind,
         size: stats.size,
-        mime_type: guessMimeTypeFromFilepath(normalizedFilepath),
+        mime_type: guessMimeTypeFromFilepath(trimmedFilepath),
     };
 
     if (mediaKind !== 'image') {
@@ -597,14 +579,14 @@ async function inspectSandboxMediaFile(userHandle, workspace, character, filepat
 
     const buffer = await fs.readFile(fullPath);
     if (buffer.length === 0) {
-        throw new Error(`The file "${normalizedFilepath}" is empty.`);
+        throw new Error(`The file "${trimmedFilepath}" is empty.`);
     }
 
-    const extension = path.extname(normalizedFilepath).toLowerCase();
+    const extension = path.extname(trimmedFilepath).toLowerCase();
     if (extension === '.svg') {
         const svgText = buffer.toString('utf8').trim();
         if (!svgText || !/<svg\b/i.test(svgText)) {
-            throw new Error(`The file "${normalizedFilepath}" is not a valid SVG image.`);
+            throw new Error(`The file "${trimmedFilepath}" is not a valid SVG image.`);
         }
         return info;
     }
@@ -613,11 +595,11 @@ async function inspectSandboxMediaFile(userHandle, workspace, character, filepat
     try {
         dimensions = imageSize(buffer);
     } catch {
-        throw new Error(`The file "${normalizedFilepath}" is not a valid image.`);
+        throw new Error(`The file "${trimmedFilepath}" is not a valid image.`);
     }
 
     if (!dimensions?.width || !dimensions?.height) {
-        throw new Error(`The file "${normalizedFilepath}" is not a valid image.`);
+        throw new Error(`The file "${trimmedFilepath}" is not a valid image.`);
     }
 
     return {
@@ -2226,44 +2208,6 @@ async function executePageJavaScript(page, options) {
     return result;
 }
 
-/**
- * Safely checks if a given path is within the designated sandbox directory.
- * It resolves the path and uses fs.realpath to prevent path traversal
- * attacks via symbolic links.
- * @param {string} userPath - The path provided by the user/LLM.
- * @param {unknown} workspace - Active workspace identifier.
- * @param {unknown} character - Active character name.
- * @param {object} [options]
- * @param {boolean} [options.checkExists=true] - If true, checks the realpath of an existing file/dir when it exists.
- * Missing paths still return true when their resolved location stays inside the sandbox; callers should report ENOENT separately.
- * @returns {Promise<boolean>} - True if the path is safely within the sandbox.
- */
-async function isPathInSandbox(userPath, userHandle, workspace, character, { checkExists = true } = {}) {
-    const sandboxDir = getSandboxDir(userHandle, workspace, character);
-    const resolvedPath = path.resolve(sandboxDir, String(userPath ?? ''));
-
-    try {
-        if (!isPathInside(sandboxDir, resolvedPath)) {
-            return false;
-        }
-
-        if (checkExists) {
-            const realPath = await fs.realpath(resolvedPath);
-            if (!isPathInside(sandboxDir, realPath)) {
-                return false;
-            }
-        }
-
-        return true;
-    } catch (error) {
-        if (error.code === 'ENOENT') {
-            return isPathInside(sandboxDir, resolvedPath);
-        }
-        console.error('isPathInSandbox unexpected error:', error);
-        return false;
-    }
-}
-
 router.get('/workspaces', async (req, res) => {
     try {
         const userSandboxRoot = getUserSandboxRootDir(req.user.profile.handle);
@@ -2290,14 +2234,6 @@ router.get('/download', async (req, res) => {
 
     if (!filepath || typeof filepath !== 'string') {
         return res.status(400).json({ error: 'file query parameter is required.' });
-    }
-
-    if (filepath.startsWith('/')) {
-        filepath = filepath.substring(1);
-    }
-
-    if (!(await isPathInSandbox(filepath, req.user.profile.handle, workspace, character, { checkExists: true }))) {
-        return res.status(403).json({ error: 'Access denied: Path is outside the sandbox.' });
     }
 
     try {
@@ -2367,14 +2303,6 @@ router.post('/readfile', async (req, res) => {
         return res.status(400).json({ error: 'filepath is required.' });
     }
 
-    if (filepath.startsWith('/')) {
-        filepath = filepath.substring(1);
-    }
-
-    if (!(await isPathInSandbox(filepath, req.user.profile.handle, workspace, character, { checkExists: true }))) {
-        return res.status(403).json({ error: 'Access denied: Path is outside the sandbox.' });
-    }
-
     try {
         const sandboxDir = getSandboxDir(req.user.profile.handle, workspace, character);
         const fullPath = path.resolve(sandboxDir, filepath);
@@ -2395,22 +2323,11 @@ router.post('/listdir', async (req, res) => {
     let { path: dirPath = '.', workspace, character } = req.body;
     const sandboxDir = getSandboxDir(req.user.profile.handle, workspace, character);
 
-    if (dirPath.startsWith('/')) {
-        dirPath = dirPath.substring(1);
-    }
-    if (dirPath === '') {
-        dirPath = '.';
-    }
-
     try {
         await fs.mkdir(sandboxDir, { recursive: true });
     } catch (error) {
         console.error(`Error creating sandbox directory "${sandboxDir}":`, error);
         return res.status(500).json({ error: 'An error occurred while preparing the sandbox directory.' });
-    }
-
-    if (!(await isPathInSandbox(dirPath, req.user.profile.handle, workspace, character, { checkExists: true }))) {
-        return res.status(403).json({ error: 'Access denied: Path is outside the sandbox.' });
     }
 
     try {
@@ -2448,25 +2365,12 @@ router.post('/writefile', async (req, res) => {
         return res.status(400).json({ error: 'filepath and content are required.' });
     }
 
-    if (filepath.startsWith('/')) {
-        filepath = filepath.substring(1);
-    }
-
-    if (!(await isPathInSandbox(filepath, req.user.profile.handle, workspace, character, { checkExists: false }))) {
-        return res.status(403).json({ error: 'Access denied: Path is outside the sandbox.' });
-    }
-
     try {
         const sandboxDir = getSandboxDir(req.user.profile.handle, workspace, character);
         const fullPath = path.resolve(sandboxDir, filepath);
         const dir = path.dirname(fullPath);
 
         await fs.mkdir(dir, { recursive: true });
-
-        const realDir = await fs.realpath(dir);
-        if (!isPathInside(sandboxDir, realDir)) {
-            return res.status(403).json({ error: 'Access denied: Cannot write to a directory outside the sandbox.' });
-        }
 
         const flag = shouldOverwrite ? 'w' : 'a';
         await fs.writeFile(fullPath, content, { flag });
@@ -2481,7 +2385,7 @@ router.post('/writefile', async (req, res) => {
 
 /**
  * Best-effort extraction of the first invoked command from a PowerShell command string.
- * This is only used for the denylist check; sandboxing remains the primary safety boundary.
+ * This is only used for the denylist check.
  * @param {string} command
  * @returns {string}
  */
@@ -2713,12 +2617,6 @@ async function resolveShellWorkingDirectory(userHandle, workspace, character, cw
     if (typeof cwd !== 'string') {
         const error = new Error('cwd must be a string.');
         error.statusCode = 400;
-        throw error;
-    }
-
-    if (!(await isPathInSandbox(cwd, userHandle, workspace, character, { checkExists: true }))) {
-        const error = new Error('cwd must stay inside the sandbox and refer to an existing directory.');
-        error.statusCode = 403;
         throw error;
     }
 

@@ -741,14 +741,6 @@ function escapeRegExp(str) {
     return String(str ?? '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-function isAbsoluteOrRootedPath(value) {
-    const filepath = String(value ?? '').trim();
-    return /^[A-Za-z]:[\\/]/.test(filepath)
-        || filepath.startsWith('\\\\')
-        || filepath.startsWith('/')
-        || filepath.startsWith('\\');
-}
-
 function escapeXmlText(value) {
     return String(value ?? '')
         .replace(/&/g, '&amp;')
@@ -1559,8 +1551,8 @@ function getSandboxRequestContext(workspace = getCurrentSandboxWorkspace(), char
 }
 
 /**
- * Validates a sandbox media file before exposing it as an image/video tool result.
- * @param {string} filepath Sandbox-relative path.
+ * Validates a media file before exposing it as an image/video tool result.
+ * @param {string} filepath Media path.
  * @param {{ allowVideo?: boolean }} [options]
  * @returns {Promise<{ kind: 'image'|'video', filepath: string, width?: number, height?: number }>}
  */
@@ -3674,7 +3666,7 @@ function registerBuiltinTools() {
                 'properties': {
                     'filepath': {
                         'type': 'string',
-                        'description': 'Sandbox-relative media path',
+                        'description': 'Media file path',
                     },
                 },
                 'required': ['filepath'],
@@ -3685,10 +3677,6 @@ function registerBuiltinTools() {
 
                 if (!trimmedFilepath) {
                     return 'Error: filepath is required.';
-                }
-
-                if (isAbsoluteOrRootedPath(trimmedFilepath)) {
-                    return `Error: "${trimmedFilepath}" must be a sandbox-relative path, not an absolute path.`;
                 }
 
                 try {
@@ -3708,7 +3696,7 @@ function registerBuiltinTools() {
                 'properties': {
                     'filepath': {
                         'type': 'string',
-                        'description': 'Sandbox-relative image path',
+                        'description': 'Image file path',
                     },
                 },
                 'required': ['filepath'],
@@ -3719,10 +3707,6 @@ function registerBuiltinTools() {
 
                 if (!trimmedFilepath) {
                     return 'Error: filepath is required.';
-                }
-
-                if (isAbsoluteOrRootedPath(trimmedFilepath)) {
-                    return `Error: "${trimmedFilepath}" must be a sandbox-relative path, not an absolute path.`;
                 }
 
                 try {
