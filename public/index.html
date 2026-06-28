@@ -45,7 +45,9 @@
     <link rel="stylesheet" type="text/css" href="css/select2-overrides.css">
     <link rel="stylesheet" type="text/css" href="css/mobile-styles.css">
     <link rel="stylesheet" type="text/css" href="css/macros.css">
+    <link rel="stylesheet" type="text/css" href="css/world-sim.css">
     <link rel="stylesheet" type="text/css" href="css/user.css">
+    <link rel="stylesheet" type="text/css" href="css/layout-plus-plus.css">
     <link rel="icon" type="image/x-icon" href="favicon.ico">
     <!-- Scripts are loaded at the end of the body to improve page load speed -->
 </head>
@@ -4844,6 +4846,122 @@
                 </div>
             </div>
         </div>
+        <div id="world-sim-button" class="drawer">
+            <div class="drawer-toggle drawer-header" title="World Sim" data-i18n="[title]World Sim">
+                <div id="worldSimDrawerIcon" class="drawer-icon fa-solid fa-earth-americas fa-fw closedIcon"></div>
+                <div id="world-sim-clock" class="world-sim-clock">--:--</div>
+            </div>
+            <div id="world-sim-panel" class="drawer-content closedDrawer world-sim-panel">
+                <div class="world-sim-app" data-mtab="characters">
+                    <nav class="world-sim-mtabs" role="tablist">
+                        <button class="world-sim-mtab active" data-mtab="characters" type="button">Characters</button>
+                        <button class="world-sim-mtab" data-mtab="map" type="button">Map</button>
+                        <button class="world-sim-mtab" data-mtab="history" type="button">History</button>
+                        <button class="world-sim-mtab" data-mtab="actions" type="button">Actions</button>
+                    </nav>
+                    <aside class="world-sim-pane world-sim-roster-pane">
+                        <div class="world-sim-pane-head">
+                            <h3 class="margin0">Characters <span id="world-sim-roster-count" class="world-sim-count">(0)</span></h3>
+                        </div>
+                        <div class="world-sim-search-row">
+                            <div class="world-sim-search">
+                                <i class="fa-solid fa-magnifying-glass"></i>
+                                <input id="world-sim-search" type="search" class="text_pole" placeholder="Search characters...">
+                            </div>
+                            <button id="world-sim-filter-included" type="button" class="menu_button menu_button_icon" title="Show included only"><i class="fa-solid fa-filter"></i></button>
+                        </div>
+                        <div id="world-sim-roster" class="world-sim-roster"></div>
+                    </aside>
+
+                    <section class="world-sim-pane world-sim-center-pane">
+                        <div class="world-sim-dev-header">Under Development</div>
+                        <div class="world-sim-tabs" role="tablist">
+                            <button class="world-sim-tab active" data-tab="map" type="button">Map</button>
+                            <button class="world-sim-tab" data-tab="history" type="button">History</button>
+                            <button class="world-sim-tab" data-tab="conversations" type="button">Conversations</button>
+                        </div>
+                        <div class="world-sim-tab-body">
+                            <div id="world-sim-map-tab" class="world-sim-tabpane active">
+                                <div id="world-sim-map" class="world-sim-map">
+                                    <div class="world-sim-map-toolbar world-sim-map-toolbar-tl">
+                                        <button type="button" class="menu_button" data-map="add-location" title="Add location region"><i class="fa-solid fa-plus"></i><span>Location</span></button>
+                                    </div>
+                                    <div class="world-sim-map-toolbar world-sim-map-toolbar-br">
+                                        <button type="button" class="menu_button menu_button_icon" data-map="zoom-in" title="Zoom in"><i class="fa-solid fa-plus"></i></button>
+                                        <button type="button" class="menu_button menu_button_icon" data-map="zoom-out" title="Zoom out"><i class="fa-solid fa-minus"></i></button>
+                                        <button type="button" class="menu_button menu_button_icon" data-map="recenter" title="Recenter"><i class="fa-solid fa-crosshairs"></i></button>
+                                    </div>
+                                </div>
+                            </div>
+                            <div id="world-sim-history-tab" class="world-sim-tabpane">
+                                <div id="world-sim-history" class="world-sim-history"></div>
+                            </div>
+                            <div id="world-sim-conversations-tab" class="world-sim-tabpane">
+                                <div id="world-sim-conversations" class="world-sim-conversations"></div>
+                            </div>
+                        </div>
+                    </section>
+
+                    <aside class="world-sim-pane world-sim-actions-pane">
+                        <div class="world-sim-card">
+                            <div class="world-sim-card-head"><i class="fa-solid fa-bolt"></i> Actions</div>
+                            <button id="world-sim-run-now" type="button" class="menu_button world-sim-run-now"><i class="fa-solid fa-play"></i><span>Run Now</span></button>
+                            <label class="world-sim-field">
+                                <span>Ticks to Advance</span>
+                                <input id="world-sim-run-count" type="number" min="1" max="100" value="1" class="text_pole">
+                            </label>
+                            <label class="world-sim-checkbox">
+                                <input id="world-sim-autorun" type="checkbox">
+                                <span>Auto-run</span>
+                            </label>
+                        </div>
+                        <div class="world-sim-card">
+                            <div class="world-sim-card-head"><i class="fa-solid fa-gear"></i> Settings</div>
+                            <label class="world-sim-field world-sim-field-inline" title="Real-world minutes between automatic cycles when Auto-run is on">
+                                <span>Tick Interval</span>
+                                <input id="world-sim-tick-interval" type="number" class="text_pole" min="1">
+                                <em>min</em>
+                            </label>
+                            <label class="world-sim-field world-sim-field-inline" title="Pause Auto-run after this many minutes of inactivity">
+                                <span>Idle Pause</span>
+                                <input id="world-sim-auto-pause" type="number" class="text_pole" min="1">
+                                <em>min</em>
+                            </label>
+                            <label class="world-sim-field world-sim-field-inline" title="How many past updates per character are fed to the AI for context">
+                                <span>History Entries</span>
+                                <input id="world-sim-history-entries" type="number" class="text_pole" min="1">
+                                <em>n</em>
+                            </label>
+                        </div>
+                        <div id="world-sim-locations-list" class="world-sim-locations-list"></div>
+                        <div class="world-sim-setup-actions" aria-label="World Sim setup actions">
+                            <button id="world-sim-include-all" type="button" class="menu_button" title="Toggle every character between included and discluded for World Sim">Include All</button>
+                            <button id="world-sim-init-all" type="button" class="menu_button" title="Initialize every character that has not been initialized yet">Initialize All</button>
+                            <button id="world-sim-reset-all" type="button" class="menu_button menu_button_warning" title="Delete all World Sim data, locations, history, scenes, and initialization progress">Delete All Data</button>
+                        </div>
+                    </aside>
+
+                    <footer class="world-sim-statusbar">
+                        <div class="world-sim-status-item world-sim-status-run">
+                            <span id="world-sim-status-dot" class="world-sim-dot"></span>
+                            <span id="world-sim-status" class="world-sim-status-text">Paused</span>
+                        </div>
+                        <div class="world-sim-status-item">
+                            <span class="world-sim-status-label">Current Tick</span>
+                            <span id="world-sim-status-tick" class="world-sim-status-value">0</span>
+                        </div>
+                        <div class="world-sim-status-item">
+                            <span class="world-sim-status-label">In-World Time</span>
+                            <span id="world-sim-status-clock" class="world-sim-status-value">Day 1 · 12:00 AM</span>
+                        </div>
+                        <div class="world-sim-status-item">
+                            <span class="world-sim-status-label">Next Tick In</span>
+                            <span id="world-sim-countdown" class="world-sim-status-value">--</span>
+                        </div>
+                    </footer>
+                </div>
+            </div>
+        </div>
         <div id="user-settings-button" class="drawer">
             <div class="drawer-toggle">
                 <div class="drawer-icon fa-solid fa-user-cog fa-fw closedIcon" title="User Settings" data-i18n="[title]User Settings"></div>
@@ -5130,6 +5248,10 @@
                                 <label for="click_to_edit" class="checkbox_label" title="Click the message text in the chat log to edit it." data-i18n="[title]Click the message text in the chat log to edit it.">
                                     <input id="click_to_edit" type="checkbox" />
                                     <small data-i18n="Click to Edit">Click to Edit</small>
+                                </label>
+                                <label for="layout_plus_plus" class="checkbox_label" title="Enable the Layout++ mode for this screen width." data-i18n="[title]Enable the Layout++ mode for this screen width.">
+                                    <input id="layout_plus_plus" type="checkbox" />
+                                    <small data-i18n="Layout++">Layout++</small>
                                 </label>
                             </div>
                         </div>

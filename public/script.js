@@ -287,6 +287,7 @@ import { MacroEngine } from './scripts/macros/engine/MacroEngine.js';
 import { addChatBackupsBrowser } from './scripts/chat-backups.js';
 import { onboardingExperimentalMacroEngine } from './scripts/macros/engine/MacroDiagnostics.js';
 import { compressRequest, setRequestCompressionConfig } from './scripts/request-compression.js';
+import { initWorldSimUi } from './scripts/world-sim/ui.js';
 import { canJumpToSwipeForMessage, canOpenSwipePickerForMessage, initSwipePicker } from './scripts/swipe-picker.js';
 
 // API OBJECT FOR EXTERNAL WIRING
@@ -763,6 +764,15 @@ export let active_group = '';
 
 export const entitiesFilter = new FilterHelper(printCharactersDebounced);
 
+/**
+ * Group ids that should be hidden from the character/group grid. Populated at runtime by
+ * the World Sim extension for its roleplay "scene" groups, which are managed from the
+ * World Sim Conversations tab instead of the main list. Keyed by id so it survives reloads
+ * (repopulated from persisted World Sim state).
+ * @type {Set<string>}
+ */
+export const hiddenGroupIds = new Set();
+
 export function getRequestHeaders({ omitContentType = false } = {}) {
     const headers = {
         'Content-Type': 'application/json',
@@ -908,6 +918,7 @@ async function firstLoadInit() {
     await initLoaderHandle.hide();
     await fixViewport();
     await eventSource.emit(event_types.APP_READY);
+    await initWorldSimUi();
 }
 
 async function fixViewport() {
@@ -1276,7 +1287,7 @@ export function tagToEntity(tag) {
 export function getEntitiesList({ doFilter = false, doSort = true } = {}) {
     let entities = [
         ...characters.map((item, index) => characterToEntity(item, index)),
-        ...groups.map(item => groupToEntity(item)),
+        ...groups.filter(item => !hiddenGroupIds.has(item.id)).map(item => groupToEntity(item)),
         ...(power_user.bogus_folders ? tags.filter(isBogusFolder).sort(compareTagsForSort).map(item => tagToEntity(item)) : []),
     ];
 
@@ -3347,7 +3358,14 @@ function hydrateToolResultMedia(mes) {
  */
 async function createSpecialToolResultMessage(toolResult) {
     try {
-        const parsed = typeof toolResult === 'string' ? JSON.parse(toolResult) : toolResult;
+        let parsed = toolResult;
+        if (typeof toolResult === 'string') {
+            const trimmed = toolResult.trim();
+            if (!trimmed || !['{', '['].includes(trimmed[0])) {
+                return null;
+            }
+            parsed = JSON.parse(trimmed);
+        }
         const attachments = extractToolResultMediaAttachments(parsed);
         if (attachments.length === 0) {
             return null;
@@ -5462,7 +5480,8 @@ class StreamingProcessor {
                 });
                 await saveChatConditional();
 
-                if (power_user.tool_auto_continue && executionResult.anyContinue && !executionResult.stopped && !executionResult.failed) {
+                const allowNativeToolAutoContinue = this.generateOptions.nativeToolAutoContinue ?? power_user.tool_auto_continue;
+                if (allowNativeToolAutoContinue && executionResult.anyContinue && !executionResult.stopped && !executionResult.failed) {
                     const newOptions = { ...this.generateOptions, depth: this.generateOptions.depth + 1 };
                     await Generate('normal', newOptions, this.dryRun);
                     return { suppressAutoContinue: true };
@@ -5964,7 +5983,7 @@ function removeLastMessage() {
  * @param {boolean} dryRun Whether to actually generate a message or just assemble the prompt
  * @returns {Promise<any>} Returns a promise that resolves when the text is done generating.
  */
-export async function Generate(type, { automatic_trigger, force_name2, quiet_prompt, quietToLoud, skipWIAN, force_chid, signal, quietImage, quietName, jsonSchema = null, depth = 0 } = {}, dryRun = false) {
+export async function Generate(type, { automatic_trigger, force_name2, quiet_prompt, quietToLoud, skipWIAN, force_chid, signal, quietImage, quietName, jsonSchema = null, depth = 0, nativeToolAutoContinue = null } = {}, dryRun = false) {
     console.log('Generate entered');
     setGenerationProgress(0);
     generation_started = new Date();
@@ -7076,7 +7095,7 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
 
         if (isStreamingEnabled() && type !== 'quiet') {
             continue_mag = promptReasoning.removePrefix(continue_mag);
-            const generateOptions = { automatic_trigger, force_name2, quiet_prompt, quietToLoud, skipWIAN, force_chid, signal, quietImage, quietName, jsonSchema, depth };
+            const generateOptions = { automatic_trigger, force_name2, quiet_prompt, quietToLoud, skipWIAN, force_chid, signal, quietImage, quietName, jsonSchema, depth, nativeToolAutoContinue };
             streamingProcessor = new StreamingProcessor(type, generateOptions, dryRun, generation_started, continue_mag, promptReasoning);
             if (isContinue) {
                 // Save reply does add cycle text to the prompt, so it's not needed here
@@ -7290,12 +7309,13 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
                 const executionResult = await executeNativeToolSegmentsForMessage(chat.length - 1, { signal });
                 await saveChatConditional();
 
-                if (!power_user.tool_auto_continue || executionResult.stopped || executionResult.failed || !executionResult.anyContinue) {
+                const allowNativeToolAutoContinue = nativeToolAutoContinue ?? power_user.tool_auto_continue;
+                if (!allowNativeToolAutoContinue || executionResult.stopped || executionResult.failed || !executionResult.anyContinue) {
                     unblockGeneration(type);
                     return;
                 }
 
-                const newOptions = { automatic_trigger, force_name2, quiet_prompt, quietToLoud, skipWIAN, force_chid, signal, quietImage, quietName, jsonSchema, depth: depth + 1 };
+                const newOptions = { automatic_trigger, force_name2, quiet_prompt, quietToLoud, skipWIAN, force_chid, signal, quietImage, quietName, jsonSchema, depth: depth + 1, nativeToolAutoContinue };
                 return Generate('normal', newOptions, dryRun);
             } else {
                 const lastMsg = chat[chat.length - 1];

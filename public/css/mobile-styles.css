@@ -1,5 +1,8 @@
 /*will apply to anything 1000px or less. this catches ipads, horizontal phones, and vertical phones)*/
 @media screen and (max-width: 1000px) {
+    :root {
+        --sheldWidth: 100vw !important;
+    }
 
     #UI-Theme-Block,
     #UI-Customization,

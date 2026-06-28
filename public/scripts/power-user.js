@@ -111,6 +111,12 @@ export const send_on_enter_options = {
     ENABLED: 1,
 };
 
+const LAYOUT_PLUS_PLUS_MOBILE_BREAKPOINT = 1000;
+const DEFAULT_LAYOUT_PLUS_PLUS_MODES = Object.freeze({
+    desktop: true,
+    mobile: false,
+});
+
 export const persona_description_positions = _persona_description_positions;
 
 export const power_user = {
@@ -340,6 +346,8 @@ export const power_user = {
     external_media_forbidden_overrides: [],
     pin_styles: true,
     click_to_edit: false,
+    layout_plus_plus: true,
+    layout_plus_plus_modes: { ...DEFAULT_LAYOUT_PLUS_PLUS_MODES },
     hide_tool_messages: false,
     auto_list_directory_context: false,
     enable_dangerous_tools: false,
@@ -549,6 +557,89 @@ function switchCompactInputArea() {
 function switchSwipeNumAllMessages() {
     $('#show_swipe_num_all_messages').prop('checked', power_user.show_swipe_num_all_messages);
     $('body').toggleClass('swipeAllMessages', !!power_user.show_swipe_num_all_messages);
+}
+
+function isLayoutPlusPlusMobileViewport() {
+    return window.matchMedia(`(max-width: ${LAYOUT_PLUS_PLUS_MOBILE_BREAKPOINT}px)`).matches;
+}
+
+function getLayoutPlusPlusViewportKey() {
+    return isLayoutPlusPlusMobileViewport() ? 'mobile' : 'desktop';
+}
+
+function normalizeLayoutPlusPlusModes(modes, legacyValue = undefined) {
+    const normalized = { ...DEFAULT_LAYOUT_PLUS_PLUS_MODES };
+    const hasModes = modes && typeof modes === 'object' && !Array.isArray(modes);
+
+    if (hasModes) {
+        if (typeof modes.desktop === 'boolean') normalized.desktop = modes.desktop;
+        if (typeof modes.mobile === 'boolean') normalized.mobile = modes.mobile;
+        return normalized;
+    }
+
+    if (typeof legacyValue === 'boolean') {
+        return { desktop: legacyValue, mobile: legacyValue };
+    }
+
+    return normalized;
+}
+
+function syncLayoutPlusPlusForViewport() {
+    power_user.layout_plus_plus_modes = normalizeLayoutPlusPlusModes(power_user.layout_plus_plus_modes, power_user.layout_plus_plus);
+    power_user.layout_plus_plus = !!power_user.layout_plus_plus_modes[getLayoutPlusPlusViewportKey()];
+    return power_user.layout_plus_plus;
+}
+
+function setLayoutPlusPlusForViewport(enabled) {
+    power_user.layout_plus_plus_modes = normalizeLayoutPlusPlusModes(power_user.layout_plus_plus_modes, power_user.layout_plus_plus);
+    power_user.layout_plus_plus_modes[getLayoutPlusPlusViewportKey()] = !!enabled;
+    power_user.layout_plus_plus = !!enabled;
+}
+
+let layoutPlusPlusCssTextPromise = null;
+
+async function getLayoutPlusPlusCssText() {
+    layoutPlusPlusCssTextPromise ??= fetch('css/layout-plus-plus.css')
+        .then(response => {
+            if (!response.ok) {
+                throw new Error(`Failed to load Layout++ CSS: ${response.status}`);
+            }
+            return response.text();
+        });
+
+    return await layoutPlusPlusCssTextPromise;
+}
+
+async function applyLayoutPlusPlusStyles(enabled) {
+    const styleId = 'layout-plus-plus-runtime';
+    let style = document.getElementById(styleId);
+
+    if (!enabled) {
+        style?.remove();
+        return;
+    }
+
+    const cssText = await getLayoutPlusPlusCssText();
+
+    if (!style) {
+        style = document.createElement('style');
+        style.setAttribute('type', 'text/css');
+        style.setAttribute('id', styleId);
+    }
+
+    style.textContent = cssText;
+    document.head.appendChild(style);
+}
+
+function switchLayoutPlusPlus() {
+    const enabled = syncLayoutPlusPlusForViewport();
+    const mobileViewport = isLayoutPlusPlusMobileViewport();
+    $('body')
+        .toggleClass('layout-plus-plus', enabled)
+        .toggleClass('layout-plus-plus-mobile', enabled && mobileViewport)
+        .toggleClass('layout-plus-plus-desktop', enabled && !mobileViewport);
+    $('#layout_plus_plus').prop('checked', enabled);
+    void applyLayoutPlusPlusStyles(enabled).catch(error => console.warn('Failed to apply Layout++ styles:', error));
 }
 
 var originalSliderValues = [];
@@ -1174,6 +1265,11 @@ function applyCustomCSS() {
         document.head.appendChild(style);
     }
     style.innerHTML = power_user.custom_css;
+
+    const layoutPlusPlusStyle = document.getElementById('layout-plus-plus-runtime');
+    if (layoutPlusPlusStyle) {
+        document.head.appendChild(layoutPlusPlusStyle);
+    }
 }
 
 function applyBlurStrength() {
@@ -1433,6 +1529,22 @@ function applyTheme(name) {
             },
         },
         {
+            key: 'layout_plus_plus',
+            action: (oldValue, newValue) => {
+                if (theme.layout_plus_plus_modes === undefined) {
+                    setLayoutPlusPlusForViewport(!!newValue);
+                }
+                switchLayoutPlusPlus();
+            },
+        },
+        {
+            key: 'layout_plus_plus_modes',
+            action: () => {
+                power_user.layout_plus_plus_modes = normalizeLayoutPlusPlusModes(power_user.layout_plus_plus_modes, power_user.layout_plus_plus);
+                switchLayoutPlusPlus();
+            },
+        },
+        {
             key: 'media_display',
             action: (oldValue, newValue) => {
                 $('#media_display').val(power_user.media_display);
@@ -1511,6 +1623,7 @@ export function applyPowerUserSettings() {
     switchTokenCount();
     switchMessageActions();
     switchSwipeNumAllMessages();
+    switchLayoutPlusPlus();
 }
 
 export function applyStylePins() {
@@ -1584,6 +1697,9 @@ export async function loadPowerUserSettings(settings, data) {
         }
         Object.assign(power_user, settings.power_user);
     }
+
+    power_user.layout_plus_plus_modes = normalizeLayoutPlusPlusModes(power_user.layout_plus_plus_modes, power_user.layout_plus_plus);
+    syncLayoutPlusPlusForViewport();
 
     power_user.tool_click_to_execute = power_user.tool_click_to_execute !== undefined
         ? !!power_user.tool_click_to_execute
@@ -1819,6 +1935,7 @@ export async function loadPowerUserSettings(settings, data) {
     $('#forbid_external_media').prop('checked', power_user.forbid_external_media);
     $('#pin_styles').prop('checked', power_user.pin_styles);
     $('#click_to_edit').prop('checked', power_user.click_to_edit);
+    $('#layout_plus_plus').prop('checked', syncLayoutPlusPlusForViewport());
     $('#hide_tool_messages').prop('checked', power_user.hide_tool_messages);
     $('body').toggleClass('hide-tool-messages', power_user.hide_tool_messages);
     $('#auto_list_directory_context').prop('checked', power_user.auto_list_directory_context);
@@ -2622,6 +2739,8 @@ export function getThemeObject(name) {
         compact_input_area: power_user.compact_input_area,
         show_swipe_num_all_messages: power_user.show_swipe_num_all_messages,
         click_to_edit: power_user.click_to_edit,
+        layout_plus_plus: syncLayoutPlusPlusForViewport(),
+        layout_plus_plus_modes: { ...power_user.layout_plus_plus_modes },
         media_display: power_user.media_display,
     };
 }
@@ -3197,6 +3316,7 @@ jQuery(() => {
     $(window).on('resize', async () => {
         adjustAutocompleteDebounced();
         setHotswapsDebounced();
+        switchLayoutPlusPlus();
 
         if (isMobile()) {
             return;
@@ -4107,6 +4227,12 @@ jQuery(() => {
 
     $('#click_to_edit').on('input', function () {
         power_user.click_to_edit = !!$(this).prop('checked');
+        saveSettingsDebounced();
+    });
+
+    $('#layout_plus_plus').on('input', function () {
+        setLayoutPlusPlusForViewport(!!$(this).prop('checked'));
+        switchLayoutPlusPlus();
         saveSettingsDebounced();
     });
 

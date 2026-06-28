@@ -1,0 +1,1087 @@
+#world-sim-button {
+    width: 100%;
+}
+
+.world-sim-dev-header {
+    text-align: center;
+    color: #e74c3c;
+    font-weight: 700;
+    font-size: calc(var(--mainFontSize) * 1.1);
+    letter-spacing: 0.5px;
+    padding: 6px 0;
+}
+
+#world-sim-button .drawer-toggle {
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 100%;
+    height: 100%;
+}
+
+.world-sim-clock {
+    position: absolute;
+    bottom: -6px;
+    left: 50%;
+    transform: translateX(-50%);
+    min-width: 44px;
+    padding: 1px 4px;
+    font-size: calc(var(--mainFontSize) * 0.55);
+    line-height: 1;
+    color: var(--SmartThemeBodyColor);
+    text-align: center;
+    white-space: nowrap;
+    pointer-events: none;
+    background-color: color-mix(in srgb, var(--SmartThemeBlurTintColor) 92%, transparent);
+    border-radius: 4px;
+}
+
+/* ---- Full-screen three-pane panel ---- */
+
+#world-sim-panel.world-sim-panel {
+    width: var(--sheldWidth);
+    max-width: calc(100vw - 20px);
+    height: calc(100dvh - calc(var(--topBarBlockSize) + var(--bottomFormBlockSize)));
+    padding: 0;
+    overflow: hidden;
+    color: var(--SmartThemeBodyColor);
+    background-color: var(--SmartThemeBlurTintColor);
+    border: 1px solid var(--SmartThemeBorderColor);
+    border-radius: 10px;
+}
+
+.world-sim-app {
+    display: grid;
+    grid-template-columns: 250px minmax(0, 1fr) 230px;
+    grid-template-rows: minmax(0, 1fr) auto;
+    grid-template-areas:
+        "roster center actions"
+        "status status status";
+    width: 100%;
+    height: 100%;
+    min-height: 0;
+}
+
+.world-sim-pane {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    min-height: 0;
+    padding: 12px;
+}
+
+.world-sim-roster-pane {
+    grid-area: roster;
+    gap: 12px;
+    border-right: 1px solid color-mix(in srgb, var(--SmartThemeBorderColor) 70%, transparent);
+}
+
+.world-sim-center-pane {
+    grid-area: center;
+    gap: 10px;
+}
+
+.world-sim-actions-pane {
+    grid-area: actions;
+    gap: 10px;
+    overflow-y: auto;
+    border-left: 1px solid color-mix(in srgb, var(--SmartThemeBorderColor) 70%, transparent);
+}
+
+.world-sim-pane-head {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    justify-content: space-between;
+}
+
+.world-sim-pane-head h3 {
+    font-size: calc(var(--mainFontSize) * 1.05);
+}
+
+.world-sim-count {
+    opacity: 0.6;
+    font-weight: 400;
+}
+
+.world-sim-setup-actions {
+    display: grid;
+    gap: 8px;
+    margin-top: auto;
+    width: 100%;
+    align-self: stretch;
+}
+
+.world-sim-setup-actions .menu_button {
+    justify-content: center;
+    width: 100%;
+    min-width: 0;
+    white-space: nowrap;
+}
+
+/* ---- Roster search ---- */
+
+.world-sim-search-row {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+}
+
+.world-sim-search {
+    position: relative;
+    flex: 1;
+    min-width: 0;
+}
+
+.world-sim-search > i {
+    position: absolute;
+    top: 50%;
+    left: 9px;
+    opacity: 0.55;
+    transform: translateY(-50%);
+    pointer-events: none;
+}
+
+.world-sim-search input {
+    width: 100%;
+    padding-left: 28px;
+}
+
+#world-sim-filter-included.active {
+    color: var(--SmartThemeQuoteColor);
+    border-color: var(--SmartThemeQuoteColor);
+}
+
+/* ---- Roster list ---- */
+
+.world-sim-roster {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    min-height: 0;
+    overflow-y: auto;
+}
+
+.world-sim-char {
+    background-color: var(--black30a);
+    border: 1px solid var(--SmartThemeBorderColor);
+    border-radius: 8px;
+    transition: border-color 0.15s ease, box-shadow 0.15s ease, background-color 0.15s ease;
+}
+
+.world-sim-char.excluded {
+    opacity: 0.5;
+}
+
+.world-sim-char.selected {
+    background-color: color-mix(in srgb, var(--SmartThemeQuoteColor) 10%, var(--black30a));
+    border-color: color-mix(in srgb, var(--SmartThemeQuoteColor) 65%, var(--SmartThemeBorderColor));
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--SmartThemeQuoteColor) 18%, transparent);
+}
+
+.world-sim-char-row {
+    display: grid;
+    grid-template-columns: 38px minmax(0, 1fr) auto auto;
+    gap: 10px;
+    align-items: center;
+    padding: 8px 10px;
+    cursor: pointer;
+}
+
+.world-sim-char-avatar {
+    width: 38px;
+    height: 38px;
+    object-fit: cover;
+    border: 1px solid var(--SmartThemeBorderColor);
+    border-radius: var(--avatar-base-border-radius-round);
+}
+
+/* Follow the user's Avatars style setting */
+body.square-avatars .world-sim-char-avatar,
+body.square-avatars .world-sim-diff-charhead img {
+    border-radius: var(--avatar-base-border-radius);
+}
+
+body.rounded-avatars .world-sim-char-avatar,
+body.rounded-avatars .world-sim-diff-charhead img {
+    border-radius: var(--avatar-base-border-radius-rounded);
+}
+
+.world-sim-char-name {
+    min-width: 0;
+    overflow: hidden;
+    font-weight: 600;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.world-sim-char-meta {
+    display: flex;
+    gap: 4px;
+    align-items: center;
+    font-size: calc(var(--mainFontSize) * 0.72);
+    opacity: 0.6;
+}
+
+/* Toggle switch */
+.world-sim-toggle {
+    position: relative;
+    display: inline-block;
+    flex: 0 0 auto;
+    width: 34px;
+    height: 18px;
+}
+
+.world-sim-toggle input {
+    position: absolute;
+    width: 0;
+    height: 0;
+    opacity: 0;
+}
+
+.world-sim-toggle .track {
+    position: absolute;
+    inset: 0;
+    background-color: color-mix(in srgb, var(--SmartThemeBodyColor) 22%, transparent);
+    border-radius: 999px;
+    transition: background-color 0.15s ease;
+}
+
+.world-sim-toggle .track::before {
+    content: "";
+    position: absolute;
+    top: 2px;
+    left: 2px;
+    width: 14px;
+    height: 14px;
+    background-color: var(--SmartThemeBlurTintColor);
+    border-radius: 50%;
+    transition: transform 0.15s ease;
+}
+
+.world-sim-toggle input:checked + .track {
+    background-color: var(--SmartThemeQuoteColor);
+}
+
+.world-sim-toggle input:checked + .track::before {
+    transform: translateX(16px);
+}
+
+.world-sim-star {
+    cursor: pointer;
+    opacity: 0.45;
+    background: none;
+    border: 0;
+    color: inherit;
+    padding: 2px;
+}
+
+.world-sim-star.active {
+    opacity: 1;
+    color: var(--SmartThemeQuoteColor);
+}
+
+/* Expanded detail drawer */
+.world-sim-char-detail {
+    display: grid;
+    gap: 8px;
+    padding: 0 10px 12px;
+    border-top: 1px solid color-mix(in srgb, var(--SmartThemeBorderColor) 60%, transparent);
+}
+
+.world-sim-detail-field {
+    display: grid;
+    gap: 3px;
+}
+
+.world-sim-detail-field > label {
+    font-size: calc(var(--mainFontSize) * 0.76);
+    opacity: 0.7;
+}
+
+.world-sim-detail-field > label em {
+    font-style: normal;
+    opacity: 0.7;
+}
+
+.world-sim-detail-field textarea {
+    min-height: 48px;
+    resize: vertical;
+}
+
+.world-sim-position-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 6px;
+    align-items: center;
+}
+
+.world-sim-coord {
+    text-align: center;
+}
+
+.world-sim-init-char.menu_button {
+    align-self: flex-start;
+    margin: 0;
+    padding: 4px 14px;
+}
+
+.world-sim-detail-actions {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    margin-top: 2px;
+}
+
+.world-sim-init-badge {
+    display: inline-flex;
+    gap: 5px;
+    align-items: center;
+    font-size: calc(var(--mainFontSize) * 0.76);
+    color: var(--SmartThemeQuoteColor);
+}
+
+/* ---- Center tabs ---- */
+
+.world-sim-tabs {
+    display: flex;
+    gap: 4px;
+    border-bottom: 1px solid color-mix(in srgb, var(--SmartThemeBorderColor) 70%, transparent);
+}
+
+.world-sim-tab {
+    padding: 8px 14px;
+    font-size: calc(var(--mainFontSize) * 0.95);
+    cursor: pointer;
+    background: none;
+    border: 0;
+    border-bottom: 2px solid transparent;
+    color: inherit;
+    opacity: 0.65;
+}
+
+.world-sim-tab.active {
+    opacity: 1;
+    border-bottom-color: var(--SmartThemeQuoteColor);
+}
+
+.world-sim-tab-body {
+    position: relative;
+    flex: 1;
+    min-height: 0;
+}
+
+.world-sim-tabpane {
+    display: none;
+    width: 100%;
+    height: 100%;
+    min-height: 0;
+    overflow-y: auto;
+}
+
+.world-sim-tabpane.active {
+    display: block;
+}
+
+.world-sim-map {
+    position: relative;
+    width: 100%;
+    height: 100%;
+    min-height: 260px;
+    overflow: hidden;
+    background-color: var(--black50a);
+    border-radius: 8px;
+}
+
+.world-sim-map-svg {
+    display: block;
+    width: 100%;
+    height: 100%;
+    touch-action: none;
+    cursor: grab;
+}
+
+.world-sim-map-svg:active {
+    cursor: grabbing;
+}
+
+.world-sim-map-toolbar {
+    position: absolute;
+    z-index: 2;
+    display: flex;
+    gap: 0px;
+}
+
+.world-sim-map-toolbar .menu_button {
+    min-height: 46px;
+    padding: 10px 14px;
+    border-radius: 12px;
+    font-size: 15px;
+    line-height: 1;
+}
+
+.world-sim-map-toolbar .menu_button i {
+    font-size: 18px;
+}
+
+.world-sim-map-toolbar .menu_button.menu_button_icon {
+    min-width: 46px;
+    width: 46px;
+    padding: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.world-sim-map-toolbar-tl .menu_button {
+    gap: 0px;
+}
+
+.world-sim-map-toolbar-tl {
+    top: 0px;
+    left: 0px;
+}
+
+.world-sim-map-toolbar-br {
+    right: 0px;
+    bottom: 0px;
+    flex-direction: column;
+}
+
+.world-sim-map-perf {
+    position: absolute;
+    top: 10px;
+    right: 10px;
+    z-index: 2;
+    padding: 3px 6px;
+    font-size: 11px;
+    line-height: 1;
+    color: color-mix(in srgb, var(--SmartThemeBodyColor) 88%, transparent);
+    pointer-events: none;
+    background-color: color-mix(in srgb, var(--black50a) 82%, transparent);
+    border: 1px solid color-mix(in srgb, var(--SmartThemeBorderColor) 55%, transparent);
+    border-radius: 999px;
+    opacity: 0.72;
+    backdrop-filter: blur(4px);
+}
+
+/* Locations list overlay (top-right of the map) */
+.world-sim-locations-list {
+    display: flex;
+    flex: 1 1 auto;
+    flex-direction: column;
+    gap: 4px;
+    min-height: 0;
+    padding: 10px;
+    background-color: var(--black30a);
+    border: 1px solid var(--SmartThemeBorderColor);
+    border-radius: 8px;
+    font-size: 0.85em;
+    overflow-y: auto;
+    max-height: 280px;
+}
+
+.ws-loclist-head {
+    font-weight: bold;
+    opacity: 0.8;
+    padding-bottom: 2px;
+}
+
+.ws-loclist-empty {
+    opacity: 0.55;
+    font-style: italic;
+}
+
+.ws-loc-item {
+    padding: 5px 6px;
+    border-radius: 6px;
+    cursor: pointer;
+    border: 1px solid transparent;
+}
+
+.ws-loc-item:hover {
+    background-color: var(--white10a);
+}
+
+.ws-loc-item.selected {
+    background-color: var(--white10a);
+    border-color: var(--SmartThemeQuoteColor);
+    cursor: default;
+}
+
+.ws-loc-item.unplaced .ws-loc-item-name {
+    opacity: 0.55;
+    font-style: italic;
+}
+
+.ws-loc-item-name {
+    font-weight: 600;
+}
+
+.ws-loc-item-desc {
+    opacity: 0.65;
+    font-size: 0.92em;
+    margin-top: 2px;
+}
+
+.ws-loc-edit-name {
+    width: 100%;
+    margin-bottom: 4px;
+}
+
+.ws-loc-edit-desc {
+    width: 100%;
+    min-height: 48px;
+    resize: vertical;
+}
+
+/* SVG element styling */
+.ws-gridline {
+    stroke: color-mix(in srgb, var(--SmartThemeBodyColor) 15%, transparent);
+    stroke-width: 1px;
+    vector-effect: non-scaling-stroke;
+}
+
+.ws-axis {
+    stroke: color-mix(in srgb, var(--SmartThemeBodyColor) 32%, transparent);
+    stroke-width: 1.2px;
+    vector-effect: non-scaling-stroke;
+}
+
+.ws-axislabel {
+    fill: var(--SmartThemeBodyColor);
+    opacity: 0.45;
+    dominant-baseline: hanging;
+}
+
+.ws-loc {
+    fill: color-mix(in srgb, var(--SmartThemeQuoteColor) 14%, transparent);
+    stroke: color-mix(in srgb, var(--SmartThemeQuoteColor) 60%, transparent);
+    stroke-width: 1.5px;
+    vector-effect: non-scaling-stroke;
+    cursor: move;
+}
+
+.ws-loc.selected {
+    fill: color-mix(in srgb, var(--SmartThemeQuoteColor) 22%, transparent);
+    stroke-width: 2.5px;
+}
+
+.ws-loc-label {
+    fill: var(--SmartThemeBodyColor);
+    text-anchor: middle;
+    opacity: 0.85;
+    pointer-events: none;
+}
+
+.ws-handle {
+    cursor: pointer;
+}
+
+.ws-handle.resize {
+    fill: var(--SmartThemeQuoteColor);
+    cursor: nwse-resize;
+}
+
+.ws-handle.delete circle {
+    fill: var(--SmartThemeCheckboxUncheckedColor, #d34b4b);
+}
+
+.ws-handle-x {
+    fill: #fff;
+    text-anchor: middle;
+    pointer-events: none;
+}
+
+.ws-pin {
+    cursor: grab;
+}
+
+.ws-pin:active {
+    cursor: grabbing;
+}
+
+.ws-pin.selected .ws-pin-ring {
+    fill: color-mix(in srgb, var(--SmartThemeQuoteColor) 78%, white 22%);
+    filter: drop-shadow(0 0 10px color-mix(in srgb, var(--SmartThemeQuoteColor) 60%, transparent));
+}
+
+.ws-pin-ring {
+    fill: var(--SmartThemeQuoteColor);
+}
+
+.ws-pin-label {
+    fill: var(--SmartThemeBodyColor);
+    text-anchor: middle;
+    paint-order: stroke;
+    stroke: var(--black50a);
+    stroke-width: 3px;
+    vector-effect: non-scaling-stroke;
+}
+
+/* ---- History accordion ---- */
+
+.world-sim-history {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 4px 2px;
+}
+
+.world-sim-tick {
+    background-color: var(--black30a);
+    border: 1px solid var(--SmartThemeBorderColor);
+    border-radius: 8px;
+}
+
+.world-sim-tick.failed {
+    border-left: 4px solid var(--SmartThemeCheckboxUncheckedColor, #d34b4b);
+}
+
+.world-sim-tick.reverted {
+    opacity: 0.55;
+}
+
+.world-sim-tick-head {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    padding: 9px 12px;
+    cursor: pointer;
+}
+
+.world-sim-tick-head > .chevron {
+    opacity: 0.7;
+    transition: transform 0.15s ease;
+}
+
+.world-sim-tick.open .world-sim-tick-head > .chevron {
+    transform: rotate(90deg);
+}
+
+.world-sim-tick-title {
+    font-weight: 600;
+}
+
+.world-sim-tick-names {
+    margin-left: auto;
+    font-size: calc(var(--mainFontSize) * 0.82);
+    opacity: 0.7;
+}
+
+.world-sim-tick-body {
+    display: none;
+    flex-direction: column;
+    gap: 12px;
+    padding: 4px 12px 12px;
+}
+
+.world-sim-tick.open .world-sim-tick-body {
+    display: flex;
+}
+
+.world-sim-diff-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 14px;
+}
+
+.world-sim-diff-char {
+    display: grid;
+    gap: 8px;
+}
+
+.world-sim-diff-charhead {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    font-weight: 600;
+}
+
+.world-sim-diff-charhead img {
+    width: 22px;
+    height: 22px;
+    border-radius: var(--avatar-base-border-radius-round);
+    object-fit: cover;
+}
+
+.world-sim-diff-field > .world-sim-diff-label {
+    font-size: calc(var(--mainFontSize) * 0.78);
+    opacity: 0.7;
+}
+
+.world-sim-diff-pair {
+    display: grid;
+    grid-template-columns: 1fr auto 1fr;
+    gap: 6px;
+    align-items: stretch;
+}
+
+.world-sim-diff-pair > .arrow {
+    align-self: center;
+    opacity: 0.6;
+}
+
+.world-sim-diff-box {
+    padding: 6px 8px;
+    font-size: calc(var(--mainFontSize) * 0.82);
+    border-radius: 6px;
+    overflow-wrap: anywhere;
+}
+
+.world-sim-diff-box.before {
+    background-color: color-mix(in srgb, #d34b4b 22%, transparent);
+    border: 1px solid color-mix(in srgb, #d34b4b 45%, transparent);
+}
+
+.world-sim-diff-box.after {
+    background-color: color-mix(in srgb, #4bbf73 22%, transparent);
+    border: 1px solid color-mix(in srgb, #4bbf73 45%, transparent);
+}
+
+.world-sim-diff-box .micro {
+    display: block;
+    font-size: calc(var(--mainFontSize) * 0.68);
+    opacity: 0.7;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+}
+
+.world-sim-tick-actions {
+    display: flex;
+    gap: 8px;
+    justify-content: flex-end;
+}
+
+/* ---- Conversations tab ---- */
+
+.world-sim-conversations {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 4px 2px;
+}
+
+.world-sim-scene {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 12px;
+    background-color: var(--black30a);
+    border: 1px solid var(--SmartThemeBorderColor);
+    border-radius: 8px;
+}
+
+.world-sim-scene-avatars {
+    display: flex;
+    flex-shrink: 0;
+}
+
+.world-sim-scene-avatars img {
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    object-fit: cover;
+    border: 1px solid var(--SmartThemeBorderColor);
+    margin-left: -8px;
+}
+
+.world-sim-scene-avatars img:first-child {
+    margin-left: 0;
+}
+
+.world-sim-scene-meta {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+    flex: 1;
+}
+
+.world-sim-scene-title {
+    font-weight: 600;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.world-sim-scene-sub {
+    font-size: calc(var(--mainFontSize) * 0.82);
+    opacity: 0.7;
+}
+
+.world-sim-scene-actions {
+    display: flex;
+    gap: 6px;
+    flex-shrink: 0;
+}
+
+.world-sim-scene.committed {
+    border-left: 4px solid var(--SmartThemeQuoteColor, #6c9);
+}
+
+/* ---- Actions / Settings cards ---- */
+
+.world-sim-card {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 10px;
+    background-color: var(--black30a);
+    border: 1px solid var(--SmartThemeBorderColor);
+    border-radius: 8px;
+}
+
+.world-sim-card-head {
+    display: flex;
+    gap: 7px;
+    align-items: center;
+    font-weight: 600;
+}
+
+.world-sim-run-now {
+    justify-content: center;
+    gap: 6px;
+    width: 100%;
+}
+
+.world-sim-field {
+    display: grid;
+    gap: 4px;
+    margin: 0;
+    font-size: calc(var(--mainFontSize) * 0.84);
+}
+
+.world-sim-field-inline {
+    grid-template-columns: 1fr 72px auto;
+    align-items: center;
+}
+
+.world-sim-field-inline em {
+    font-style: normal;
+    opacity: 0.6;
+}
+
+.world-sim-checkbox {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    margin: 0;
+    font-size: calc(var(--mainFontSize) * 0.88);
+    cursor: pointer;
+}
+
+/* ---- Bottom status bar ---- */
+
+.world-sim-statusbar {
+    grid-area: status;
+    display: grid;
+    grid-template-columns: 1.4fr 1fr 1.4fr 1fr;
+    gap: 10px;
+    align-items: center;
+    padding: 10px 16px;
+    background-color: color-mix(in srgb, var(--SmartThemeBlurTintColor) 86%, black);
+    border-top: 1px solid var(--SmartThemeBorderColor);
+}
+
+.world-sim-status-item {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    text-align: center;
+}
+
+.world-sim-status-run {
+    flex-direction: row;
+    gap: 8px;
+    align-items: center;
+    justify-content: flex-start;
+    text-align: left;
+}
+
+.world-sim-status-label {
+    font-size: calc(var(--mainFontSize) * 0.72);
+    opacity: 0.6;
+}
+
+.world-sim-status-value {
+    font-weight: 600;
+}
+
+.world-sim-status-text {
+    font-weight: 600;
+}
+
+.world-sim-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background-color: color-mix(in srgb, var(--SmartThemeBodyColor) 35%, transparent);
+}
+
+.world-sim-dot.running {
+    background-color: #4bbf73;
+    box-shadow: 0 0 6px #4bbf73;
+}
+
+.world-sim-empty {
+    padding: 16px;
+    opacity: 0.65;
+    text-align: center;
+}
+
+/* ---- Responsive collapse ---- */
+
+/* Mobile-only section tab bar — hidden on desktop. */
+.world-sim-mtabs {
+    display: none;
+}
+
+@media (max-width: 1100px) {
+    .world-sim-app {
+        grid-template-columns: 280px minmax(0, 1fr);
+        grid-template-areas:
+            "roster center"
+            "actions actions"
+            "status status";
+        grid-template-rows: minmax(0, 1fr) auto auto;
+    }
+
+    .world-sim-actions-pane {
+        flex-direction: row;
+        flex-wrap: wrap;
+        border-left: 0;
+        border-top: 1px solid color-mix(in srgb, var(--SmartThemeBorderColor) 70%, transparent);
+    }
+
+    .world-sim-actions-pane .world-sim-card {
+        flex: 1;
+        min-width: 240px;
+    }
+}
+
+@media (max-width: 720px) {
+    /* Mobile drawer should cover the full viewport below the top bar. */
+    #world-sim-panel.world-sim-panel {
+        width: 100%;
+        min-width: 0;
+        max-width: 100%;
+        height: calc(100dvh - var(--topBarBlockSize));
+        max-height: calc(100dvh - var(--topBarBlockSize));
+        overflow: hidden;
+    }
+
+    .world-sim-app {
+        display: flex;
+        flex-direction: column;
+        height: 100%;
+        min-height: 0;
+    }
+
+    /* Mobile section tab bar */
+    .world-sim-mtabs {
+        display: flex;
+        position: sticky;
+        top: 0;
+        z-index: 3;
+        gap: 2px;
+        padding: 6px 8px 0;
+        background-color: var(--SmartThemeBlurTintColor);
+        border-bottom: 1px solid var(--SmartThemeBorderColor);
+    }
+
+    .world-sim-mtab {
+        flex: 1;
+        padding: 9px 4px;
+        font-size: calc(var(--mainFontSize) * 0.9);
+        cursor: pointer;
+        background: none;
+        border: 0;
+        border-bottom: 2px solid transparent;
+        color: inherit;
+        opacity: 0.6;
+    }
+
+    .world-sim-mtab.active {
+        opacity: 1;
+        border-bottom-color: var(--SmartThemeQuoteColor);
+    }
+
+    .world-sim-pane {
+        padding: 10px;
+    }
+
+    .world-sim-setup-actions {
+        width: 100%;
+        align-self: stretch;
+        align-items: stretch;
+    }
+
+    .world-sim-setup-actions .menu_button {
+        min-width: 0;
+    }
+
+    /* Only the active mobile tab's section is shown; status bar stays. */
+    .world-sim-roster-pane,
+    .world-sim-center-pane,
+    .world-sim-actions-pane {
+        display: none;
+    }
+
+    .world-sim-app[data-mtab="characters"] .world-sim-roster-pane {
+        display: flex;
+        flex: 1 1 auto;
+    }
+
+    .world-sim-app[data-mtab="map"] .world-sim-center-pane,
+    .world-sim-app[data-mtab="history"] .world-sim-center-pane {
+        display: flex;
+        flex: 1 1 auto;
+    }
+
+    .world-sim-app[data-mtab="actions"] .world-sim-actions-pane {
+        display: flex;
+        flex: 1 1 auto;
+        flex-direction: column;
+        overflow-y: auto;
+        border-left: 0;
+    }
+
+    /* Map & History are now top-level tabs, so hide the center sub-tab bar. */
+    .world-sim-tabs {
+        display: none;
+    }
+
+    .world-sim-app[data-mtab="map"] #world-sim-history-tab,
+    .world-sim-app[data-mtab="history"] #world-sim-map-tab {
+        display: none;
+    }
+
+    .world-sim-app[data-mtab="map"] #world-sim-map-tab,
+    .world-sim-app[data-mtab="history"] #world-sim-history-tab {
+        display: block;
+    }
+
+    .world-sim-roster {
+        flex: 1 1 auto;
+        min-height: 0;
+        max-height: none;
+    }
+
+    .world-sim-tab-body {
+        flex: 1 1 auto;
+        min-height: 0;
+    }
+
+    .world-sim-tabpane {
+        height: 100%;
+        min-height: 0;
+    }
+
+    .world-sim-statusbar {
+        position: static;
+        flex: 0 0 auto;
+        grid-template-columns: 1fr 1fr;
+    }
+}

@@ -64,6 +64,7 @@ import { setPersonaDescription } from './personas.js';
  * @property {function} [shouldRegister] - A function to determine if the tool should be registered.
  * @property {boolean} [stealth] - A tool call result will not be shown in the chat. No follow-up generation will be performed.
  * @property {object} [displayMetadata] - Optional display-only metadata for rendering tool calls.
+ * @property {boolean} [forceContinue] - Optional forced continue behavior for native XML tool calls.
  */
 
 /**
@@ -948,7 +949,14 @@ function parseNativeXmlBlocksToObject(childBlocks, schemaProperties = {}) {
         const childSchemaType = normalizeSchemaType(childSchema);
 
         if (childSchemaType === 'array') {
-            result[name] = blocks.map(block => parseNativeToolArgumentValue(block.value, childSchema?.items));
+            // Arrays of objects are meant to repeat the wrapper tag once per item, but models
+            // frequently emit a single wrapper with every item's child tags flattened inside it.
+            // Parse each wrapper into one-or-more objects so both forms behave the same.
+            if (normalizeSchemaType(childSchema?.items) === 'object') {
+                result[name] = blocks.flatMap(block => parseNativeXmlObjectItems(block.value, childSchema.items));
+            } else {
+                result[name] = blocks.map(block => parseNativeToolArgumentValue(block.value, childSchema?.items));
+            }
             continue;
         }
 
@@ -963,6 +971,46 @@ function parseNativeXmlBlocksToObject(childBlocks, schemaProperties = {}) {
     }
 
     return result;
+}
+
+/**
+ * Parses a single array-wrapper block whose items are objects into a list of objects.
+ * A new object begins whenever a non-array property tag repeats, so a single wrapper holding
+ * several flattened items splits correctly, while one-wrapper-per-item input yields one object
+ * per wrapper.
+ * @param {string} rawValue Inner text of one array-wrapper block.
+ * @param {object} itemSchema Schema for an individual array item (type: object).
+ * @returns {object[]}
+ */
+function parseNativeXmlObjectItems(rawValue, itemSchema) {
+    const schemaProperties = itemSchema?.properties && typeof itemSchema.properties === 'object'
+        ? itemSchema.properties
+        : {};
+    const propertyNames = Object.keys(schemaProperties);
+    const childBlocks = extractNativeXmlChildBlocks(String(rawValue ?? ''), propertyNames.length > 0 ? propertyNames : null);
+
+    if (!childBlocks || childBlocks.length === 0) {
+        return [parseNativeToolArgumentValue(rawValue, itemSchema)];
+    }
+
+    const segments = [];
+    let current = [];
+    const seen = new Set();
+    for (const child of childBlocks) {
+        const childType = normalizeSchemaType(schemaProperties?.[child.name]);
+        if (seen.has(child.name) && childType !== 'array') {
+            segments.push(current);
+            current = [];
+            seen.clear();
+        }
+        current.push(child);
+        seen.add(child.name);
+    }
+    if (current.length > 0) {
+        segments.push(current);
+    }
+
+    return segments.map(segment => parseNativeXmlBlocksToObject(segment, schemaProperties));
 }
 
 function parseNativeToolArgumentValue(rawValue, schema) {
@@ -1423,6 +1471,12 @@ class ToolDefinition {
     #displayMetadata;
 
     /**
+     * Forced continue behavior for native XML tool calls.
+     * @type {boolean|undefined}
+     */
+    #forceContinue;
+
+    /**
      * Creates a new ToolDefinition.
      * @param {string} name A unique name for the tool.
      * @param {string} displayName A user-friendly display name for the tool.
@@ -1433,8 +1487,9 @@ class ToolDefinition {
      * @param {function} shouldRegister A function that will be called to determine if the tool should be registered.
      * @param {boolean} stealth A tool call result will not be shown in the chat. No follow-up generation will be performed.
      * @param {object} displayMetadata Display-only metadata used by chat renderers.
+     * @param {boolean|undefined} forceContinue Forced continue behavior for native XML tool calls.
      */
-    constructor(name, displayName, description, parameters, action, formatMessage, shouldRegister, stealth, displayMetadata = {}) {
+    constructor(name, displayName, description, parameters, action, formatMessage, shouldRegister, stealth, displayMetadata = {}, forceContinue = undefined) {
         this.#name = name;
         this.#displayName = displayName;
         this.#description = description;
@@ -1444,6 +1499,7 @@ class ToolDefinition {
         this.#shouldRegister = shouldRegister;
         this.#stealth = stealth;
         this.#displayMetadata = displayMetadata && typeof displayMetadata === 'object' ? displayMetadata : {};
+        this.#forceContinue = typeof forceContinue === 'boolean' ? forceContinue : undefined;
     }
 
     /**
@@ -1510,6 +1566,10 @@ class ToolDefinition {
     get stealth() {
         return this.#stealth;
     }
+
+    get forceContinue() {
+        return this.#forceContinue;
+    }
 }
 
 /**
@@ -1528,6 +1588,7 @@ function createToolDefinition(registration) {
         shouldRegister,
         stealth,
         displayMetadata,
+        forceContinue,
     } = registration;
 
     return new ToolDefinition(
@@ -1540,6 +1601,7 @@ function createToolDefinition(registration) {
         shouldRegister,
         stealth,
         displayMetadata,
+        forceContinue,
     );
 }
 
@@ -4856,6 +4918,8 @@ export class ToolManager {
     static #tools = new Map();
 
     static #INPUT_DELTA_KEY = '__input_json_delta';
+    static #nativeToolStateCache = null;
+    static #nativeToolAllowlist = null;
 
     /**
      * The maximum number of times to recurse when parsing tool calls.
@@ -4864,30 +4928,145 @@ export class ToolManager {
     static RECURSE_LIMIT = 50;
     static #lastListDirectoryContext = '';
 
-    static #getNativeToolDefinitions() {
+    static #normalizeNativeToolNames(names) {
+        if (!Array.isArray(names)) {
+            return [];
+        }
+
+        return names
+            .map(name => String(name ?? '').trim())
+            .filter(Boolean);
+    }
+
+    static #hasScopedNativeToolAllowlist() {
+        return this.#nativeToolAllowlist instanceof Set && this.#nativeToolAllowlist.size > 0;
+    }
+
+    static #allowlistIncludesPrefix(prefix) {
+        if (!this.#hasScopedNativeToolAllowlist()) {
+            return false;
+        }
+
+        for (const name of this.#nativeToolAllowlist.values()) {
+            if (String(name ?? '').startsWith(prefix)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    static #isNativeToolAllowed(name) {
+        const normalizedName = String(name ?? '').trim();
+        return !this.#nativeToolAllowlist || this.#nativeToolAllowlist.has(normalizedName);
+    }
+
+    static #getCurrentNativeToolState() {
+        if (this.#nativeToolStateCache) {
+            return this.#nativeToolStateCache;
+        }
+
         const definitions = new Map();
+        const shadowedNames = new Set(this.tools.map(tool => tool.name));
 
         for (const tool of this.tools) {
+            if (this.#isNativeToolAllowed(tool.name) && this.#shouldRegisterNativeToolSync(tool)) {
+                definitions.set(tool.toFunctionOpenAI().function.name, tool);
+            }
+        }
+
+        for (const [name, tool] of builtinNativeToolDefinitions.entries()) {
+            if (!this.#isNativeToolAllowed(name) || shadowedNames.has(name) || !this.#shouldRegisterNativeToolSync(tool)) {
+                continue;
+            }
+            definitions.set(name, tool);
+        }
+
+        return {
+            definitions,
+            tagNames: Array.from(definitions.keys()),
+        };
+    }
+
+    static #shouldRegisterNativeToolSync(tool) {
+        if (!tool || typeof tool.shouldRegister !== 'function') {
+            return true;
+        }
+
+        try {
+            const register = tool.shouldRegister();
+            return register instanceof Promise ? true : register !== false;
+        } catch (error) {
+            console.warn('[ToolManager] Failed to synchronously resolve native tool registration state:', error);
+            return false;
+        }
+    }
+
+    static async #buildNativeToolState() {
+        const definitions = new Map();
+        const shadowedNames = new Set(this.tools.map(tool => tool.name));
+
+        for (const tool of this.tools) {
+            if (!this.#isNativeToolAllowed(tool.name)) {
+                continue;
+            }
+            const register = await tool.shouldRegister();
+            if (!register) {
+                continue;
+            }
             definitions.set(tool.toFunctionOpenAI().function.name, tool);
         }
 
         for (const [name, tool] of builtinNativeToolDefinitions.entries()) {
-            if (!definitions.has(name)) {
+            if (!this.#isNativeToolAllowed(name) || shadowedNames.has(name)) {
+                continue;
+            }
+            const register = typeof tool.shouldRegister === 'function'
+                ? await tool.shouldRegister()
+                : true;
+            if (register) {
                 definitions.set(name, tool);
             }
         }
 
-        return Array.from(definitions.values());
+        return {
+            definitions,
+            tagNames: Array.from(definitions.keys()),
+        };
+    }
+
+    static async #refreshNativeToolState() {
+        this.#nativeToolStateCache = await this.#buildNativeToolState();
+        return this.#nativeToolStateCache;
+    }
+
+    static invalidateNativeToolState() {
+        this.#nativeToolStateCache = null;
+    }
+
+    static setNativeToolAllowlist(names = null) {
+        const normalizedNames = this.#normalizeNativeToolNames(names);
+        this.#nativeToolAllowlist = normalizedNames.length ? new Set(normalizedNames) : null;
+        this.invalidateNativeToolState();
+    }
+
+    static clearNativeToolAllowlist() {
+        this.#nativeToolAllowlist = null;
+        this.invalidateNativeToolState();
+    }
+
+    static #getNativeToolDefinitions() {
+        return Array.from(this.#getCurrentNativeToolState().definitions.values());
     }
 
     static #getNativeToolDefinition(name) {
-        return this.#tools.get(name) || builtinNativeToolDefinitions.get(name) || null;
+        return this.#getCurrentNativeToolState().definitions.get(name) || null;
     }
 
     static #getNativeToolTagNames(additionalNames = []) {
-        const tagNames = new Set(this.#getNativeToolDefinitions().map(tool => tool.toFunctionOpenAI().function.name));
+        const tagNames = new Set(this.#getCurrentNativeToolState().tagNames);
         for (const name of additionalNames) {
-            if (typeof name === 'string' && name.trim()) {
+            if (typeof name === 'string' && name.trim() && this.#isNativeToolAllowed(name)) {
                 tagNames.add(name.trim());
             }
         }
@@ -5021,7 +5200,7 @@ export class ToolManager {
      * Registers a new tool with the tool registry.
      * @param {ToolRegistration} tool The tool to register.
      */
-    static registerFunctionTool({ name, displayName, description, parameters, action, formatMessage, shouldRegister, stealth, displayMetadata }) {
+    static registerFunctionTool({ name, displayName, description, parameters, action, formatMessage, shouldRegister, stealth, displayMetadata, forceContinue }) {
         // Convert WIP arguments
         if (typeof arguments[0] !== 'object') {
             [name, description, parameters, action] = arguments;
@@ -5041,8 +5220,10 @@ export class ToolManager {
             shouldRegister,
             stealth,
             displayMetadata,
+            forceContinue,
         });
         this.#tools.set(name, definition);
+        this.invalidateNativeToolState();
         console.log('[ToolManager] Registered function tool:', definition);
     }
 
@@ -5056,6 +5237,7 @@ export class ToolManager {
         }
 
         this.#tools.delete(name);
+        this.invalidateNativeToolState();
         console.log(`[ToolManager] Unregistered function tool: ${name}`);
     }
 
@@ -5188,6 +5370,10 @@ export class ToolManager {
         const tools = [];
 
         for (const tool of ToolManager.tools) {
+            if (!this.#isNativeToolAllowed(tool.name)) {
+                console.log('[ToolManager] Skipping tool registration due to active allowlist:', tool);
+                continue;
+            }
             const register = await tool.shouldRegister();
             if (!register) {
                 console.log('[ToolManager] Skipping tool registration:', tool);
@@ -5391,6 +5577,8 @@ export class ToolManager {
         const source = String(text ?? '');
         const { toolName, startIndex: toolTagIndex, openTag } = tagMatch;
         const effectiveToolName = String(tagMatch.wrappedToolName || toolName).trim();
+        const nativeToolDefinition = this.#getNativeToolDefinition(effectiveToolName);
+        const forcedContinue = nativeToolDefinition?.forceContinue;
         const closeTag = String(tagMatch.closeTag || `</${toolName}>`);
         const toolCloseTagIndex = findNativeXmlCloseTagIndex(source, toolName, toolTagIndex + openTag.length);
         const fallbackToolBlockEndIndex = toolCloseTagIndex !== -1 ? toolCloseTagIndex + closeTag.length : source.length;
@@ -5428,7 +5616,9 @@ export class ToolManager {
                     const args = parsedJson?.args && typeof parsedJson.args === 'object' && !Array.isArray(parsedJson.args)
                         ? parsedJson.args
                         : {};
-                    const shouldContinue = parsedJson?.continue !== false;
+                    const shouldContinue = typeof forcedContinue === 'boolean'
+                        ? forcedContinue
+                        : parsedJson?.continue !== false;
                     const parsed = {
                         tool: effectiveToolName,
                         args,
@@ -5466,7 +5656,7 @@ export class ToolManager {
                 }
             }
 
-            const schema = this.#getNativeToolDefinition(effectiveToolName)?.toFunctionOpenAI().function.parameters;
+            const schema = nativeToolDefinition?.toFunctionOpenAI().function.parameters;
             const allowedTagNames = [
                 ...Object.keys(schema?.properties ?? {}),
                 'continue',
@@ -5479,9 +5669,11 @@ export class ToolManager {
             const continueBlocks = childBlocks.filter(child => child.name === 'continue');
             const argumentBlocks = childBlocks.filter(child => child.name !== 'continue');
             const args = parseNativeXmlBlocksToObject(argumentBlocks, schema?.properties ?? {});
-            const shouldContinue = continueBlocks.length === 0
-                ? true
-                : !/^false$/i.test(String(continueBlocks[continueBlocks.length - 1].value ?? '').trim());
+            const shouldContinue = typeof forcedContinue === 'boolean'
+                ? forcedContinue
+                : continueBlocks.length === 0
+                    ? true
+                    : !/^false$/i.test(String(continueBlocks[continueBlocks.length - 1].value ?? '').trim());
 
             const parsed = {
                 tool: effectiveToolName,
@@ -5652,6 +5844,10 @@ export class ToolManager {
             return null;
         }
 
+        if (this.#hasScopedNativeToolAllowlist() && !this.#isNativeToolAllowed('list_directory')) {
+            return null;
+        }
+
         let listResult = await withTimeout(
             ToolManager.invokeFunctionTool('list_directory', { path: '.' }),
             LIST_DIRECTORY_CONTEXT_TIMEOUT_MS,
@@ -5688,6 +5884,10 @@ export class ToolManager {
     }
 
     static async #getMcpPromptContext() {
+        if (this.#hasScopedNativeToolAllowlist() && !this.#allowlistIncludesPrefix('mcp_')) {
+            return null;
+        }
+
         const state = getChatMcpState();
         const parts = [];
 
@@ -5724,10 +5924,11 @@ export class ToolManager {
      * @returns {Promise<string|null>} The instruction string or null if no tools are available.
      */
     static async getNativeToolPrompt() {
-        const nativeTools = this.#getNativeToolDefinitions();
+        const nativeTools = Array.from((await this.#refreshNativeToolState()).definitions.values());
         if (nativeTools.length === 0) {
             return null;
         }
+        const nativeToolNames = new Set(nativeTools.map(tool => tool.toFunctionOpenAI().function.name));
 
         const needsSdModelContext = nativeTools.some(tool => {
             const name = tool.toFunctionOpenAI().function.name;
@@ -5754,25 +5955,17 @@ line 3</code>
 Use <continue>true</continue> when you need the result before replying.
 Use <continue>false</continue> when you already gave your full reply and the tool is only a side effect.
 Tool results will be returned inside <result> tags.
-To provide a non-media file for the user to download, use the syntax \`![](filename.ext)\`
-To provide media to the user to download or view, use display_image.
+To provide a non-media file for the user to download, use the syntax \`![](filename.ext)\``);
 
-Examples:
-<read_file>
-<filepaths>docs/a.txt</filepaths>
-<filepaths>docs/b.txt</filepaths>
-<continue>true</continue>
-</read_file>
+        if (nativeToolNames.has('display_image')) {
+            finalPromptParts.push('To provide media to the user to download or view, use display_image.');
+        }
 
-<ask_user>
-<questions>
-<prompt>Character direction</prompt>
-<context>Choose one direction.</context>
-<options>Keep the real VTuber persona</options>
-<options>Fictionalize heavily</options>
-</questions>
+        finalPromptParts.push(`Example XML shape (replace the tag names and arguments with an actually available tool):
+<tool_name>
+<argument_name>value</argument_name>
 <continue>true</continue>
-</ask_user>
+</tool_name>
 
 Here are the available tools:
 `);
