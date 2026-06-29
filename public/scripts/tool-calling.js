@@ -1067,36 +1067,6 @@ function parseNativeToolArgumentValue(rawValue, schema) {
     return unescapeXmlText(trimmedValue);
 }
 
-function formatNativeToolParameterDescription(parameter, isRequired) {
-    const schemaType = normalizeSchemaType(parameter);
-    const description = String(parameter?.description ?? '').trim().replace(/\.$/, '');
-    const parts = [];
-
-    if (description) {
-        parts.push(description);
-    }
-
-    if (Array.isArray(parameter?.enum) && parameter.enum.length > 0) {
-        parts.push(`Choices: ${parameter.enum.map(value => String(value)).join(' | ')}`);
-    } else if (schemaType === 'array') {
-        const itemType = normalizeSchemaType(parameter?.items);
-        const childNames = Object.keys(parameter?.items?.properties ?? {});
-        parts.push('Repeat this tag once per value');
-        if (itemType === 'object') {
-            parts.push(childNames.length > 0 ? `Inside each tag, use child tags: ${childNames.join(', ')}` : 'Inside each tag, use nested child tags');
-        }
-    } else if (schemaType === 'object') {
-        const childNames = Object.keys(parameter?.properties ?? {});
-        parts.push(childNames.length > 0 ? `Use nested child tags: ${childNames.join(', ')}` : 'Use nested child tags');
-    }
-
-    if (!isRequired) {
-        parts.push('Optional');
-    }
-
-    return parts.join('. ').trim() + '.';
-}
-
 function formatNativeToolDescription(name, description, displayName) {
     const trimmed = String(description ?? '').trim();
 
@@ -1117,6 +1087,168 @@ function formatNativeToolDescription(name, description, displayName) {
     }
 
     return 'Runs this tool.';
+}
+
+function getNativeToolSchemaPlaceholder(schema) {
+    const schemaType = normalizeSchemaType(schema);
+
+    if (Array.isArray(schema?.enum) && schema.enum.length > 0) {
+        return schema.enum.map(value => String(value)).join('|');
+    }
+
+    switch (schemaType) {
+        case 'integer':
+            return 'integer';
+        case 'number':
+            return 'number';
+        case 'boolean':
+            return 'true|false';
+        case 'array':
+            return normalizeSchemaType(schema?.items) === 'object' ? '' : getNativeToolSchemaPlaceholder(schema?.items);
+        case 'object':
+            return '';
+        case 'string':
+        default:
+            return 'string';
+    }
+}
+
+function buildNativeToolXmlStructureLines(tagName, schema, indentLevel = 0) {
+    const indent = '  '.repeat(Math.max(0, indentLevel));
+    const schemaType = normalizeSchemaType(schema);
+
+    if (schemaType === 'object') {
+        const properties = schema?.properties && typeof schema.properties === 'object'
+            ? Object.entries(schema.properties)
+            : [];
+
+        if (properties.length === 0) {
+            return [`${indent}<${tagName}></${tagName}>`];
+        }
+
+        const lines = [`${indent}<${tagName}>`];
+        for (const [childName, childSchema] of properties) {
+            lines.push(...buildNativeToolXmlStructureLines(childName, childSchema, indentLevel + 1));
+        }
+        lines.push(`${indent}</${tagName}>`);
+        return lines;
+    }
+
+    if (schemaType === 'array') {
+        const itemLines = buildNativeToolXmlStructureLines(tagName, schema?.items, indentLevel);
+        if (itemLines.length > 0) {
+            itemLines.push(`${indent}<!-- repeat <${tagName}>...</${tagName}> for each item -->`);
+        }
+        return itemLines;
+    }
+
+    return [`${indent}<${tagName}>${getNativeToolSchemaPlaceholder(schema)}</${tagName}>`];
+}
+
+function collectNativeToolSchemaNotes(tagName, schema, path = []) {
+    const schemaType = normalizeSchemaType(schema);
+    const currentPath = [...path, tagName];
+    const notes = [];
+
+    if (schemaType === 'array') {
+        notes.push(`${currentPath.join('.')} repeats once per array item.`);
+        return notes.concat(collectNativeToolSchemaNotes(tagName, schema?.items, path));
+    }
+
+    if (schemaType === 'object') {
+        const properties = schema?.properties && typeof schema.properties === 'object'
+            ? Object.entries(schema.properties)
+            : [];
+
+        for (const [childName, childSchema] of properties) {
+            notes.push(...collectNativeToolSchemaNotes(childName, childSchema, currentPath));
+        }
+    }
+
+    return notes;
+}
+
+function formatNativeToolXmlSignature(toolName, schema, { includeContinue = true } = {}) {
+    const normalizedSchema = isPlainObject(schema) ? schema : { type: 'object', properties: {} };
+    const lines = buildNativeToolXmlStructureLines(toolName, normalizedSchema, 0);
+
+    if (includeContinue) {
+        if (lines.length > 0 && lines[lines.length - 1] === `</${toolName}>`) {
+            lines.splice(lines.length - 1, 0, '  <continue>true|false</continue>');
+        } else {
+            lines.push(`<continue>true|false</continue>`);
+        }
+    }
+
+    return lines.join('\n');
+}
+
+function formatNativeToolDefinitionText(toolName, description, schema, displayName) {
+    const normalizedSchema = isPlainObject(schema) ? schema : { type: 'object', properties: {} };
+    const required = new Set(Array.isArray(normalizedSchema?.required) ? normalizedSchema.required : []);
+    const properties = normalizedSchema?.properties && typeof normalizedSchema.properties === 'object'
+        ? Object.keys(normalizedSchema.properties)
+        : [];
+    const optional = properties.filter(propertyName => !required.has(propertyName));
+    const notes = collectNativeToolSchemaNotes(toolName, normalizedSchema);
+    notes.push('continue controls whether the model waits for the result before replying.');
+
+    const sections = [
+        toolName,
+        formatNativeToolDescription(toolName, description, displayName),
+        formatNativeToolXmlSignature(toolName, normalizedSchema),
+    ];
+
+    if (required.size > 0) {
+        sections.push(`Required tags: ${Array.from(required).join(', ')}.`);
+    }
+
+    if (optional.length > 0) {
+        sections.push(`Optional tags: ${optional.join(', ')}, continue.`);
+    } else {
+        sections.push('Optional tags: continue.');
+    }
+
+    if (notes.length > 0) {
+        sections.push(notes.join('\n'));
+    }
+
+    return sections.join('\n');
+}
+
+function formatNativeToolDefinitionHtml(toolName, description, schema, displayName) {
+    const text = formatNativeToolDefinitionText(toolName, description, schema, displayName);
+    const [title = '', subtitle = ''] = String(text).split('\n');
+    const codeBlock = formatNativeToolXmlSignature(toolName, schema);
+    const normalizedSchema = isPlainObject(schema) ? schema : { type: 'object', properties: {} };
+    const required = Array.isArray(normalizedSchema?.required) ? normalizedSchema.required : [];
+    const properties = normalizedSchema?.properties && typeof normalizedSchema.properties === 'object'
+        ? Object.keys(normalizedSchema.properties)
+        : [];
+    const optional = properties.filter(propertyName => !required.includes(propertyName));
+    const notes = collectNativeToolSchemaNotes(toolName, normalizedSchema);
+    notes.push('continue controls whether the model waits for the result before replying.');
+
+    const metaLines = [];
+    if (required.length > 0) {
+        metaLines.push(`<div><small><b>Required tags:</b> ${escapeToolDisplayHtml(required.join(', '))}</small></div>`);
+    }
+    metaLines.push(`<div><small><b>Optional tags:</b> ${escapeToolDisplayHtml(optional.length > 0 ? `${optional.join(', ')}, continue` : 'continue')}</small></div>`);
+
+    const noteHtml = notes.length > 0
+        ? `<div><small>${notes.map(note => escapeToolDisplayHtml(note)).join('<br>')}</small></div>`
+        : '';
+
+    return [
+        `<div><b>${escapeToolDisplayHtml(title)}</b></div>`,
+        `<div><small>${escapeToolDisplayHtml(subtitle)}</small></div>`,
+        '<pre class="justifyLeft wordBreakAll"><code class="flex padding5">',
+        escapeToolDisplayHtml(codeBlock),
+        '</code></pre>',
+        ...metaLines,
+        noteHtml,
+        '<hr>',
+    ].join('');
 }
 
 const LIST_DIRECTORY_CONTEXT_TIMEOUT_MS = 3000;
@@ -1519,7 +1651,7 @@ class ToolDefinition {
                 parameters: resolveToolRegistrationValue(this.#parameters),
             },
             toString: function () {
-                return `<div><b>${this.function.name}</b></div><div><small>${this.function.description}</small></div><pre class="justifyLeft wordBreakAll"><code class="flex padding5">${JSON.stringify(this.function.parameters, null, 2)}</code></pre><hr>`;
+                return formatNativeToolDefinitionHtml(this.function.name, this.function.description, this.function.parameters);
             },
         };
     }
@@ -5976,18 +6108,12 @@ Here are the available tools:
 
         const toolsString = nativeTools.map(tool => {
             const openAITool = tool.toFunctionOpenAI();
-            const schema = openAITool.function.parameters;
-            const required = new Set(Array.isArray(schema?.required) ? schema.required : []);
-            const argumentLines = Object.entries(schema?.properties ?? {}).map(([argName, parameter]) => {
-                return `${argName}: ${formatNativeToolParameterDescription(parameter, required.has(argName))}`;
-            });
-            argumentLines.push('continue: true | false.');
-
-            return [
+            return formatNativeToolDefinitionText(
                 openAITool.function.name,
-                formatNativeToolDescription(openAITool.function.name, openAITool.function.description, tool.displayName),
-                ...argumentLines,
-            ].join('\n');
+                openAITool.function.description,
+                openAITool.function.parameters,
+                tool.displayName,
+            );
         }).join('\n\n');
         finalPromptParts.push(toolsString);
 
@@ -6511,7 +6637,7 @@ Here are the available tools:
         SlashCommandParser.addCommandObject(SlashCommand.fromProps({
             name: 'tools-list',
             aliases: ['tool-list'],
-            helpString: 'Gets a list of all registered tools in the OpenAI function JSON format. Use the <code>return</code> argument to specify the return value type.',
+            helpString: 'Gets a list of all registered tools in the native XML format used by tool calling. Use the <code>return</code> argument to specify the return value type.',
             returns: 'A list of all registered tools.',
             namedArgumentList: [
                 SlashCommandNamedArgument.fromProps({
@@ -6526,9 +6652,14 @@ Here are the available tools:
             callback: async (args) => {
                 /** @type {any} */
                 const returnType = String(args?.return ?? 'popup-html').trim().toLowerCase();
-                const objectToStringFunc = (tools) => Array.isArray(tools) ? tools.map(x => x.toString()).join('\n\n') : tools.toString();
+                const objectToStringFunc = (tools) => Array.isArray(tools)
+                    ? tools.map(x => formatNativeToolDefinitionText(x.function.name, x.function.description, x.function.parameters)).join('\n\n')
+                    : formatNativeToolDefinitionText(tools.function.name, tools.function.description, tools.function.parameters);
+                const objectToHtmlFunc = (tools) => Array.isArray(tools)
+                    ? tools.map(x => formatNativeToolDefinitionHtml(x.function.name, x.function.description, x.function.parameters)).join('')
+                    : formatNativeToolDefinitionHtml(tools.function.name, tools.function.description, tools.function.parameters);
                 const tools = ToolManager.tools.map(tool => tool.toFunctionOpenAI());
-                return await slashCommandReturnHelper.doReturn(returnType ?? 'popup-html', tools ?? [], { objectToStringFunc });
+                return await slashCommandReturnHelper.doReturn(returnType ?? 'popup-html', tools ?? [], { objectToStringFunc, objectToHtmlFunc });
             },
         }));
 

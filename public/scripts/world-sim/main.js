@@ -17,7 +17,7 @@ import { humanizedDateTime } from '../RossAscends-mods.js';
 import { fireSelector, fireUpdater, fireInitialize, fireCommit, seedSceneOpening } from './llm.js';
 import { activateWorldSimToolScope, clearWorldSimToolScope, SELECT_CHARACTERS, WORLD_INITIALIZE, WORLD_UPDATE } from './tools.js';
 import { openWorldCharacterChat } from './world-character.js';
-import { beginRun, getRun, endRun, generateCycleId } from './run-context.js';
+import { beginRun, getRun, updateRun, endRun, generateCycleId } from './run-context.js';
 import { stopTimer } from './timer.js';
 import { updateWorldClock } from './ui.js';
 
