@@ -5,6 +5,7 @@
 
 import {
     getState,
+    getLocations,
     getRosterCharacter,
     setCharacterStrings,
     pushCharacterHistory,
@@ -18,7 +19,7 @@ import {
 import { getRun, updateRun, endRun } from './run-context.js';
 import { applyWorldUpdate } from './llm.js';
 import { renderAll, updateWorldClock } from './ui.js';
-import { fitToContent, refreshMap } from './map.js';
+import * as worldSimMap from './map.js';
 import { clearWorldSimToolScope } from './tools.js';
 
 /**
@@ -40,6 +41,28 @@ export async function onSelectCharacters(args) {
         return 'No characters selected; nothing to update.';
     }
 
+    const run = getRun();
+    if (run?.needsUpdaterChain) {
+        // The selector fired as a retry after runCycle already returned past the chaining point.
+        // Chain to the updater here so the tick completes. Deferred so ST finishes processing
+        // this tool action before the updater opens a fresh chat.
+        updateRun({ needsUpdaterChain: false });
+        const capturedIds = ids;
+        setTimeout(async () => {
+            try {
+                const { activateWorldSimToolScope, WORLD_UPDATE } = await import('./tools.js');
+                const { fireUpdater } = await import('./llm.js');
+                activateWorldSimToolScope([WORLD_UPDATE]);
+                await fireUpdater(capturedIds);
+                // If the updater didn't call the tool, leave scope/run alive for another retry.
+            } catch (error) {
+                console.error('World Sim updater failed after selector retry:', error);
+                clearWorldSimToolScope();
+                endRun();
+            }
+        }, 0);
+    }
+
     return `Selected: ${ids.join(', ')}`;
 }
 
@@ -54,11 +77,19 @@ export async function onWorldInitialize(args) {
     const update = normalizeInitialization(run, args);
     applyInitialize(run, update, args);
 
+    const charId = run?.characterIds?.[0] || update.characterId;
+    const missing = ['activity', 'plan', 'summary', 'x', 'y']
+        .filter(k => args?.[k] === undefined || args?.[k] === null || args?.[k] === '');
+    if (missing.length) {
+        console.warn(`[world-sim] Initialized ${charId} with MISSING fields: ${missing.join(', ')}`);
+    } else {
+        console.log(`[world-sim] Initialized ${charId} successfully (no missing fields).`);
+    }
+
     await saveWorldSimState();
     await renderAll();
     updateWorldClock();
-    fitToContent();
-    refreshMap();
+    if (charId) worldSimMap.selectCharacterOnMap(charId, { focus: false });
     await recordCycle(run, {
         updates: [update],
         globalMinutesPassed: 0,
@@ -140,12 +171,15 @@ function normalizeInitialization(run, args) {
  */
 function applyLocationRegistrations(args) {
     const list = Array.isArray(args.locations) ? args.locations : [];
+    const createdIds = [];
     for (const loc of list) {
         if (!loc || !loc.name) continue;
         const left = Number(loc.left);
         const bottom = Number(loc.bottom);
         const right = Number(loc.right);
         const top = Number(loc.top);
+        const id = String(loc.name).toLowerCase().replace(/[^a-z0-9]+/g, '-');
+        const existedBefore = !!getLocations().locations?.[id];
         const hasEdges = [left, bottom, right, top].every(Number.isFinite) && right > left && top > bottom;
         ensureLocationRegion(String(loc.name), hasEdges ? {
             x: left,
@@ -154,7 +188,9 @@ function applyLocationRegistrations(args) {
             h: top - bottom,
             description: loc.description,
         } : { description: loc.description });
+        if (!existedBefore && getLocations().locations?.[id]) createdIds.push(id);
     }
+    return createdIds;
 }
 
 /**
@@ -165,7 +201,7 @@ function applyLocationRegistrations(args) {
  * @param {object} args  Full tool args (may include `locations`)
  */
 function applyInitialize(run, update, args) {
-    applyLocationRegistrations(args);
+    const createdIds = applyLocationRegistrations(args);
 
     const id = run?.characterIds?.[0];
     if (!update) return;
@@ -177,7 +213,14 @@ function applyInitialize(run, update, args) {
     if (Number.isFinite(Number(update.y))) coords.y = Number(update.y);
     // Derive location from coords (most reliable); fall back to the model's text if no region matches.
     const location = locationFromCoords(coords.x, coords.y) || String(update.location || '');
-    if (location) ensureLocationRegion(location);
+    if (location) {
+        const id = String(location).toLowerCase().replace(/[^a-z0-9]+/g, '-');
+        const existedBefore = !!getLocations().locations?.[id];
+        ensureLocationRegion(location);
+        if (!existedBefore && getLocations().locations?.[id]) createdIds.push(id);
+    }
+
+    if (createdIds.length) worldSimMap.markJustInitializedLocations?.(createdIds);
 
     setCharacterStrings(targetId, {
         location,
@@ -193,7 +236,10 @@ function applyInitialize(run, update, args) {
     pushCharacterHistory(targetId, 'summary', String(update.summary || ''), tick);
 
     const char = getRosterCharacter(targetId);
-    if (char) char.initialized = true;
+    if (char) {
+        char.initialized = true;
+        char.included = true;
+    }
 }
 
 /**

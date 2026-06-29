@@ -510,6 +510,13 @@ body.rounded-avatars .world-sim-diff-charhead img {
     cursor: default;
 }
 
+.ws-loc-item.ws-loc-just-initialized {
+    background-color: color-mix(in srgb, #50d278 16%, var(--white10a));
+    border-color: color-mix(in srgb, #50d278 70%, transparent);
+    box-shadow: 0 0 0 1px color-mix(in srgb, #50d278 38%, transparent), 0 0 14px rgba(80, 210, 120, 0.26);
+    animation: ws-init-glow 1.2s ease-out 3;
+}
+
 .ws-loc-item.unplaced .ws-loc-item-name {
     opacity: 0.55;
     font-style: italic;
@@ -534,6 +541,12 @@ body.rounded-avatars .world-sim-diff-charhead img {
     width: 100%;
     min-height: 48px;
     resize: vertical;
+}
+
+@keyframes ws-init-glow {
+    0% { box-shadow: 0 0 0 2px rgba(80, 210, 120, 0.85), 0 0 10px 2px rgba(80, 210, 120, 0.4); }
+    60% { box-shadow: 0 0 0 2px rgba(80, 210, 120, 0.6), 0 0 10px 2px rgba(80, 210, 120, 0.2); }
+    100% { box-shadow: 0 0 0 2px rgba(80, 210, 120, 0.45), 0 0 0 0 transparent; }
 }
 
 /* SVG element styling */
@@ -566,6 +579,14 @@ body.rounded-avatars .world-sim-diff-charhead img {
 .ws-loc.selected {
     fill: color-mix(in srgb, var(--SmartThemeQuoteColor) 22%, transparent);
     stroke-width: 2.5px;
+    filter: drop-shadow(0 0 12px color-mix(in srgb, var(--SmartThemeQuoteColor) 62%, transparent));
+}
+
+.ws-loc.ws-loc-just-initialized {
+    fill: color-mix(in srgb, #50d278 28%, transparent);
+    stroke: color-mix(in srgb, #50d278 85%, transparent);
+    stroke-width: 2.5px;
+    filter: drop-shadow(0 0 16px rgba(80, 210, 120, 0.72));
 }
 
 .ws-loc-label {
@@ -605,6 +626,15 @@ body.rounded-avatars .world-sim-diff-charhead img {
 .ws-pin.selected .ws-pin-ring {
     fill: color-mix(in srgb, var(--SmartThemeQuoteColor) 78%, white 22%);
     filter: drop-shadow(0 0 10px color-mix(in srgb, var(--SmartThemeQuoteColor) 60%, transparent));
+}
+
+.ws-pin.selected .ws-pin-glow {
+    fill: color-mix(in srgb, var(--SmartThemeQuoteColor) 20%, transparent);
+    filter: drop-shadow(0 0 12px color-mix(in srgb, var(--SmartThemeQuoteColor) 62%, transparent));
+}
+
+.ws-pin.selected {
+    filter: drop-shadow(0 0 12px color-mix(in srgb, var(--SmartThemeQuoteColor) 55%, transparent));
 }
 
 .ws-pin-ring {

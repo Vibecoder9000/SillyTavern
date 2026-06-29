@@ -1,9 +1,11 @@
 import {
+    createEmptyCharacterHistory,
     getConfig,
     getRoster,
     getState,
     loadWorldSimState,
     resetWorldSimState,
+    resetCharacterWorldSimState,
     saveWorldSimState,
     getRosterCharacter,
     setCharacterStrings,
@@ -211,6 +213,30 @@ function bindEvents() {
         updateStatusBar();
     });
 
+    $(document).on('click', '.world-sim-reset-char', async function (e) {
+        e.stopPropagation();
+        const avatar = $(this).closest('.world-sim-char').data('avatar');
+        const char = ensureRosterEntry(avatar);
+        if (!char) return;
+
+        const confirmed = confirm(`Reset World Sim state for ${char.name || 'this character'}? This will clear their initialization, fields, and personal World Sim history.`);
+        if (!confirmed) return;
+
+        const reset = resetCharacterWorldSimState(char.id);
+        if (!reset) return;
+
+        if (selectedCharacterId === char.id) {
+            selectedCharacterId = null;
+            selectCharacterOnMap(null);
+        }
+
+        await saveWorldSimState();
+        renderRoster();
+        refreshMap();
+        updateStatusBar();
+        toastr.success(`${char.name || 'Character'} reset.`, 'World Sim');
+    });
+
     // --- Mobile section tabs (Characters / Map / History / Actions) ---
     $(document).on('click', '.world-sim-mtab', function () {
         const tab = $(this).data('mtab');
@@ -321,7 +347,9 @@ function ensureRosterEntry(avatar) {
     if (!entry) {
         addCharacterToRoster(avatar);
         entry = Object.values(roster.characters).find(c => c.avatar === avatar);
+        if (entry && !entry.history) entry.history = createEmptyCharacterHistory();
     }
+    if (entry && !entry.history) entry.history = createEmptyCharacterHistory();
     return entry;
 }
 
@@ -433,7 +461,7 @@ function buildDetail(id, strings, initialized) {
 
     const $actions = $detail.find('.world-sim-detail-actions');
     if (initialized) {
-        $actions.append('<span class="world-sim-init-badge"><i class="fa-solid fa-circle-check"></i> Initialized</span>');
+        $actions.append('<button class="world-sim-reset-char menu_button menu_button_warning" type="button" title="Clear this character\'s initialization, fields, and World Sim history">Reset</button>');
     } else {
         const disabled = bulkInitActive ? ' disabled' : '';
         $actions.append(`<button class="world-sim-init-char menu_button" type="button" title="Decide this character's starting state with the AI"${disabled}>Initialize</button>`);
@@ -704,6 +732,7 @@ function activateMapView() {
     $('.world-sim-mtab').removeClass('active');
     $('.world-sim-mtab[data-mtab="map"]').addClass('active');
     $('.world-sim-app').attr('data-mtab', 'map');
+    refreshMap({ viewBox: true, grid: true, locations: true, pins: true, list: true });
 }
 
 function areAllCharactersIncluded() {

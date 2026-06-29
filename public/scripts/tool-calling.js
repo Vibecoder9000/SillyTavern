@@ -753,6 +753,10 @@ function unescapeXmlText(value) {
     return String(value ?? '')
         .replace(/&lt;/g, '<')
         .replace(/&gt;/g, '>')
+        .replace(/&quot;/g, '"')
+        .replace(/&apos;/g, "'")
+        .replace(/&#(\d+);/g, (_, n) => String.fromCharCode(Number(n)))
+        .replace(/&#x([0-9a-fA-F]+);/g, (_, h) => String.fromCharCode(parseInt(h, 16)))
         .replace(/&amp;/g, '&');
 }
 

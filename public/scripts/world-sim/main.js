@@ -30,16 +30,18 @@ import { updateWorldClock } from './ui.js';
  * @param {string} failureMessage
  * @returns {boolean} Whether the run was still active and had to be cleaned up.
  */
-function failIfRunStillActive(cycleId, expectedToolName, failureMessage) {
+function failIfRunStillActive(cycleId, expectedToolName) {
     const run = getRun();
     if (!run || run.cycleId !== cycleId) {
         return false;
     }
 
+    // Don't clear the scope or end the run — the user may reroll or correct this generation,
+    // and the tool must remain visible for the retry. Cleanup happens when:
+    //   - the retry succeeds (tool action fires → clears scope and ends run), or
+    //   - a new run starts (activateWorldSimToolScope supersedes this one), or
+    //   - the catch block fires on a hard error.
     console.warn(`World Sim run ${cycleId} completed without calling ${expectedToolName}.`);
-    clearWorldSimToolScope();
-    endRun();
-    toastr.error(failureMessage, 'World Sim');
     return true;
 }
 
@@ -80,7 +82,10 @@ export async function runCycle({ ignorePaused = false } = {}) {
         const run = getRun();
         if (!run || run.cycleId !== cycleId) return; // selector bailed (no characters)
         if (!run.characterIds.length) {
-            failIfRunStillActive(cycleId, SELECT_CHARACTERS, 'World Sim did not receive a valid select_characters tool call.');
+            failIfRunStillActive(cycleId, SELECT_CHARACTERS);
+            // Signal that if the user retries the selector, onSelectCharacters must chain
+            // directly to the updater (runCycle has already returned past the chaining point).
+            updateRun({ needsUpdaterChain: true });
             return;
         }
 
@@ -88,7 +93,7 @@ export async function runCycle({ ignorePaused = false } = {}) {
         // chat so it doesn't pay to re-read the selector exchange.
         activateWorldSimToolScope([WORLD_UPDATE]);
         await fireUpdater(run.characterIds);
-        failIfRunStillActive(cycleId, WORLD_UPDATE, 'World Sim did not receive a valid world_update tool call.');
+        failIfRunStillActive(cycleId, WORLD_UPDATE);
     } catch (error) {
         console.error('World Sim cycle failed:', error);
         clearWorldSimToolScope();
@@ -163,7 +168,7 @@ export async function initializeCharacter(id) {
 
     try {
         await fireInitialize(char.avatar);
-        failIfRunStillActive(cycleId, WORLD_INITIALIZE, 'World Sim initialize did not receive a valid world_initialize tool call.');
+        failIfRunStillActive(cycleId, WORLD_INITIALIZE);
     } catch (error) {
         console.error('World Sim initialize failed:', error);
         clearWorldSimToolScope();
@@ -334,7 +339,7 @@ export async function commitRoleplayToWorldState(characterIds, chatMessages, { c
 
     try {
         await fireCommit(characterIds, chatMessages);
-        if (failIfRunStillActive(resolvedCycleId, WORLD_UPDATE, 'World Sim commit did not receive a valid world_update tool call.')) {
+        if (failIfRunStillActive(resolvedCycleId, WORLD_UPDATE)) {
             return false;
         }
         return true;

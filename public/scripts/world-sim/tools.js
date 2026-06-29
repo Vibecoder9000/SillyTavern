@@ -1,9 +1,23 @@
 import { ToolManager } from '../tool-calling.js';
+import { eventSource, event_types } from '../../script.js';
 
 const SELECT_CHARACTERS = 'select_characters';
 const WORLD_INITIALIZE = 'world_initialize';
 const WORLD_UPDATE = 'world_update';
-let clearActiveWorldSimToolScope = null;
+const ALL_WORLD_SIM_TOOL_NAMES = [SELECT_CHARACTERS, WORLD_INITIALIZE, WORLD_UPDATE];
+
+/**
+ * Single source of truth for the active world-sim tool scope: a Set of allowed tool names
+ * while a run is in progress, or null when no run is active (all world-sim tools stay hidden).
+ * Each world-sim tool's shouldRegister reads this, so visibility stays correct no matter how
+ * often ST recreates the tool objects (registerNativeToolCommand → #tools.clear()).
+ */
+let activeScope = null;
+
+/** Builds a shouldRegister closure reflecting live scope state for one world-sim tool. */
+function makeShouldRegister(name) {
+    return () => activeScope?.has(name) ?? false;
+}
 
 /**
  * Registers (or re-registers) the world-sim tools. ST's `registerNativeToolCommand` does
@@ -12,6 +26,7 @@ let clearActiveWorldSimToolScope = null;
  * init. Overwriting is safe — ST warns in the console but the new definition takes effect.
  */
 export function registerWorldSimTools() {
+    const newlyRegistered = !ToolManager.tools.some(t => t.name === WORLD_INITIALIZE);
 
     ToolManager.registerFunctionTool({
         name: SELECT_CHARACTERS,
@@ -33,7 +48,7 @@ export function registerWorldSimTools() {
             return onSelectCharacters(args);
         },
         formatMessage: (args) => `Selected characters: ${args.characterIds?.join(', ') || 'none'}`,
-        shouldRegister: () => false,
+        shouldRegister: makeShouldRegister(SELECT_CHARACTERS),
         stealth: false,
         forceContinue: false,
     });
@@ -74,7 +89,7 @@ export function registerWorldSimTools() {
             return onWorldInitialize(args);
         },
         formatMessage: () => 'Initialized 1 character',
-        shouldRegister: () => false,
+        shouldRegister: makeShouldRegister(WORLD_INITIALIZE),
         stealth: false,
         forceContinue: false,
     });
@@ -133,55 +148,50 @@ export function registerWorldSimTools() {
             return onWorldUpdate(args);
         },
         formatMessage: (args) => `World update: ${args.updates?.length || 0} character(s)`,
-        shouldRegister: () => false,
+        shouldRegister: makeShouldRegister(WORLD_UPDATE),
         stealth: false,
         forceContinue: false,
     });
-}
 
-function applyWorldSimToolScope(allowedToolNames = null) {
-    // Re-register in case ST's #tools.clear() was called since the last init.
-    registerWorldSimTools();
-
-    const allowedNames = allowedToolNames?.length ? allowedToolNames : [SELECT_CHARACTERS, WORLD_INITIALIZE, WORLD_UPDATE];
-
-    // Snapshot shouldRegister for every tool, then silence non-world-sim tools.
-    const worldSimNames = new Set(allowedNames);
-    const snapshots = ToolManager.tools.map(tool => ({ tool, prev: tool.shouldRegister }));
-    for (const { tool } of snapshots) {
-        tool.shouldRegister = worldSimNames.has(tool.name) ? () => true : () => false;
+    if (newlyRegistered) {
+        console.log('[world-sim] Registered tools:', ALL_WORLD_SIM_TOOL_NAMES.join(', '));
     }
-    ToolManager.setNativeToolAllowlist(allowedNames);
-
-    return () => {
-        for (const { tool, prev } of snapshots) {
-            tool.shouldRegister = prev;
-        }
-        ToolManager.clearNativeToolAllowlist();
-    };
 }
 
 /**
- * Activates the World Sim native-tool scope for the current run. The scope persists until
- * explicitly cleared so manual retry/correction turns keep the same whitelist.
+ * Activates the world-sim tool scope for the current run: only `allowedToolNames` are exposed
+ * to the model (every other tool is hidden via the native-tool allowlist), and the world-sim
+ * tools become visible because their shouldRegister reads `activeScope`. The scope persists
+ * until explicitly cleared, so reroll/correction turns keep the same whitelist.
  * @param {string[]|null} [allowedToolNames]
  */
 export function activateWorldSimToolScope(allowedToolNames = null) {
-    clearWorldSimToolScope();
-    clearActiveWorldSimToolScope = applyWorldSimToolScope(allowedToolNames);
+    const names = allowedToolNames?.length ? allowedToolNames : ALL_WORLD_SIM_TOOL_NAMES;
+    activeScope = new Set(names);
+    registerWorldSimTools();
+    ToolManager.setNativeToolAllowlist(names);
+    console.log('[world-sim] Tool scope active:', names.join(', '));
 }
 
 /**
- * Clears any active World Sim native-tool scope and restores the prior registrations.
+ * Clears the world-sim tool scope. World-sim tools immediately report shouldRegister() === false
+ * (activeScope is null), and the allowlist is removed so normal tools return.
  */
 export function clearWorldSimToolScope() {
-    if (!clearActiveWorldSimToolScope) {
-        return;
-    }
-
-    const cleanup = clearActiveWorldSimToolScope;
-    clearActiveWorldSimToolScope = null;
-    cleanup();
+    if (!activeScope) return;
+    activeScope = null;
+    ToolManager.clearNativeToolAllowlist();
+    console.log('[world-sim] Tool scope cleared.');
 }
+
+// ST clears the tool registry (registerNativeToolCommand → #tools.clear()) on settings/MCP/
+// chat changes — including the CHAT_CHANGED that fires during a run's doNewChat(). If a scope
+// is active, re-register the world-sim tools and re-assert the allowlist before the prompt is
+// built. GENERATION_STARTED fires before the tool prompt is assembled within Generate().
+eventSource.on(event_types.GENERATION_STARTED, () => {
+    if (!activeScope) return;
+    registerWorldSimTools();
+    ToolManager.setNativeToolAllowlist([...activeScope]);
+});
 
 export { SELECT_CHARACTERS, WORLD_INITIALIZE, WORLD_UPDATE };

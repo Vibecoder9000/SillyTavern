@@ -1250,6 +1250,11 @@ async function populateChatCompletion(prompts, chatCompletion, { bias, quietProm
     const nativeToolPrompt = oai_settings.native_tool_calling
         ? await ToolManager.getNativeToolPrompt()
         : null;
+    // Native tool instructions normally ride along with the 'main' prompt's content. That only
+    // works when 'main' is present, enabled, and relatively positioned — if it is set to In-chat
+    // (absolute) position, disabled, or absent, the concatenation never runs and tool calling
+    // silently breaks. Track whether it actually got attached so we can inject it on its own below.
+    let nativeToolPromptInjected = false;
 
     // Helper function for preparing a prompt, that already exists within the prompt collection, for completion
     const addToChatCompletion = async (source, target = null) => {
@@ -1276,6 +1281,7 @@ async function populateChatCompletion(prompts, chatCompletion, { bias, quietProm
                 ? message.content
                 : '';
             message.content = [mainContent, nativeToolPrompt].filter(Boolean).join('\n\n');
+            nativeToolPromptInjected = true;
         }
         collection.add(message);
         chatCompletion.add(collection, index);
@@ -1295,6 +1301,15 @@ async function populateChatCompletion(prompts, chatCompletion, { bias, quietProm
     // Collection of control prompts that will always be positioned last
     chatCompletion.setOverriddenPrompts(prompts.overriddenPrompts);
     const controlPrompts = new MessageCollection('controlPrompts');
+
+    // Fallback: if the native tool instructions did not get attached to the 'main' prompt above
+    // (main is In-chat/absolute, disabled, or absent), inject them here as a dedicated system
+    // control prompt so tool calling works regardless of how the user positioned their main prompt.
+    // Added before the quiet prompt so quiet stays last.
+    if (nativeToolPrompt && !nativeToolPromptInjected) {
+        const nativeToolMessage = await Message.createAsync('system', nativeToolPrompt, 'nativeToolPrompt');
+        controlPrompts.add(nativeToolMessage);
+    }
 
     const impersonateMessage = await Message.fromPromptAsync(prompts.get('impersonate')) ?? null;
     if (type === 'impersonate') controlPrompts.add(impersonateMessage);

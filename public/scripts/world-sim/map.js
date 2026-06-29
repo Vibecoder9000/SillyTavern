@@ -12,6 +12,11 @@ const LOCATION_CULL_PAD_PX = 240;
 const PIN_CULL_PAD_PX = 240;
 const CULL_PAD_VIEWPORT_RATIO = 0.35;
 const PAN_SEGMENT_REDRAW_RATIO = 0.55;
+const LABEL_LINE_HEIGHT = 1.2;
+const LABEL_CHAR_WIDTH = 0.6;
+const LABEL_PAD_X = 4;
+const LABEL_PAD_Y = 2;
+const LABEL_MAX_SHIFT_STEPS = 2;
 const MOBILE_SIMPLE_RENDER_MAX_WIDTH = 980;
 const MOBILE_LOCATION_LABEL_MAX_VISIBLE = 18;
 const MOBILE_PIN_LABEL_MAX_VISIBLE = 12;
@@ -21,6 +26,7 @@ let svg = null;
 let gridLayer = null;
 let locationsLayer = null;
 let pinsLayer = null;
+let labelsLayer = null;
 let defsLayer = null;
 let listEl = null;
 let perfEl = null;
@@ -30,6 +36,8 @@ let view = { x: -100, y: -100, w: 200, h: 200 };
 let drag = null;
 let dragRaf = 0;
 let selectedLoc = null;
+let selectedLocIds = new Set();
+let justInitializedLocIds = new Set();
 let selectedCharId = null;
 let saveQueued = false;
 let panCompositedMode = false;
@@ -100,7 +108,8 @@ export function initWorldSimMap(container) {
     gridLayer = el('g');
     locationsLayer = el('g');
     pinsLayer = el('g');
-    svg.append(defsLayer, gridLayer, locationsLayer, pinsLayer);
+    labelsLayer = el('g');
+    svg.append(defsLayer, gridLayer, locationsLayer, pinsLayer, labelsLayer);
     container.prepend(svg);
     perfEl = document.createElement('div');
     perfEl.className = 'world-sim-map-perf';
@@ -239,7 +248,7 @@ function processQueuedRender(frameStart = performance.now()) {
 }
 
 function renderMapLayers(profile, renderState) {
-    if (!svg || !gridLayer || !locationsLayer || !pinsLayer) return;
+    if (!svg || !gridLayer || !locationsLayer || !pinsLayer || !labelsLayer) return;
 
     const pxW = svg.clientWidth;
     const pxH = svg.clientHeight;
@@ -258,6 +267,8 @@ function renderMapLayers(profile, renderState) {
     profile.scale = scale;
     profile.view = { x: round(view.x), y: round(view.y), w: round(view.w), h: round(view.h) };
     profile.displayFlags = getDisplayFlags(panCompositedMode, scale);
+    const labelLayout = createLabelLayout(profile.viewport);
+    const labelsFragment = document.createDocumentFragment();
     if (renderState.grid) {
         const gridStart = performance.now();
         const gridCounts = drawGrid(scale, profile.displayFlags);
@@ -268,20 +279,25 @@ function renderMapLayers(profile, renderState) {
     }
     if (renderState.locations) {
         const locationsStart = performance.now();
-        const locationCounts = drawLocations(scale, profile.displayFlags);
+        const locationCounts = drawLocations(scale, profile.displayFlags, labelLayout);
         profile.locationsMs = performance.now() - locationsStart;
         profile.rendered.locations = true;
         profile.counts.locations = locationCounts.locations;
         profile.counts.totalLocations = locationCounts.totalLocations;
         profile.counts.locationHandles = locationCounts.handles;
+        if (locationCounts.labelsFragment) labelsFragment.appendChild(locationCounts.labelsFragment);
     }
     if (renderState.pins) {
         const pinsStart = performance.now();
-        const pinCounts = drawPins(scale, profile.displayFlags);
+        const pinCounts = drawPins(scale, profile.displayFlags, labelLayout);
         profile.counts.pins = pinCounts.pins;
         profile.counts.totalPins = pinCounts.totalPins;
         profile.pinsMs = performance.now() - pinsStart;
         profile.rendered.pins = true;
+        if (pinCounts.labelsFragment) labelsFragment.appendChild(pinCounts.labelsFragment);
+    }
+    if (renderState.locations || renderState.pins) {
+        labelsLayer.replaceChildren(labelsFragment);
     }
 }
 
@@ -313,9 +329,13 @@ function renderLocationsList() {
     }
 
     for (const [id, loc] of entries) {
-        const selected = selectedLoc === id;
+        const selected = selectedLocIds.has(id);
+        const justInitialized = justInitializedLocIds.has(id);
         const item = document.createElement('div');
-        item.className = 'ws-loc-item' + (selected ? ' selected' : '') + (isFiniteRect(loc) ? '' : ' unplaced');
+        item.className = 'ws-loc-item'
+            + (selected ? ' selected' : '')
+            + (justInitialized ? ' ws-loc-just-initialized' : '')
+            + (isFiniteRect(loc) ? '' : ' unplaced');
         item.setAttribute('data-loc-item', id);
 
         if (selected) {
@@ -353,9 +373,15 @@ function onListClick(e) {
     const item = e.target.closest('[data-loc-item]');
     if (!item) return;
     const id = item.getAttribute('data-loc-item');
+    clearJustInitializedLocation(id);
     selectedLoc = selectedLoc === id ? null : id;
-    if (selectedLoc) focusLocation(selectedLoc);
-    refreshMap({ locations: true, list: true });
+    if (selectedLoc) {
+        setSelectedLocationIds([selectedLoc], selectedLoc);
+        focusLocation(selectedLoc);
+    } else {
+        selectedLocIds = new Set();
+    }
+    refreshMap({ locations: true, pins: true, list: true, grid: true });
 }
 
 function onListInput(e) {
@@ -452,40 +478,64 @@ function drawGrid(scale, displayFlags = DEFAULT_DISPLAY_FLAGS) {
 
 /**
  * @param {number} scale world units per pixel
+ * @param {ReturnType<typeof createLabelLayout>} labelLayout
  */
-function drawLocations(scale, displayFlags = DEFAULT_DISPLAY_FLAGS) {
+function drawLocations(scale, displayFlags = DEFAULT_DISPLAY_FLAGS, labelLayout = null) {
     const locs = getLocations().locations || {};
-    const fragment = document.createDocumentFragment();
+    const boxesFragment = document.createDocumentFragment();
+    const labelsFragment = document.createDocumentFragment();
     const labelFontSize = `${(LABEL_PX + 1) * scale}px`;
     let locations = 0;
     let totalLocations = 0;
     let handles = 0;
     const bounds = getCullingBounds(scale, LOCATION_CULL_PAD_PX);
+    const entries = Object.entries(locs)
+        .filter(([, loc]) => isFiniteRect(loc))
+        .sort((a, b) => {
+            const aSelected = selectedLocIds.has(a[0]) ? 1 : 0;
+            const bSelected = selectedLocIds.has(b[0]) ? 1 : 0;
+            if (aSelected !== bSelected) return bSelected - aSelected;
+            return (b[1].w * b[1].h) - (a[1].w * a[1].h);
+        });
 
-    for (const [id, loc] of Object.entries(locs)) {
-        if (!isFiniteRect(loc)) continue;
+    for (const [id, loc] of entries) {
         totalLocations++;
         if (selectedLoc !== id && !rectIntersectsBounds(loc.x, loc.y, loc.w, loc.h, bounds)) continue;
         locations++;
         const sx = loc.x;
         const sy = -(loc.y + loc.h); // svg top edge
-        const selected = selectedLoc === id;
+        const selected = selectedLocIds.has(id);
+        const justInitialized = justInitializedLocIds.has(id);
         const rect = el('rect', {
             x: sx, y: sy, width: loc.w, height: loc.h,
-            rx: 0.15, class: 'ws-loc' + (selected ? ' selected' : ''), 'data-loc': id,
+            rx: 0.15,
+            class: 'ws-loc'
+                + (selected ? ' selected' : '')
+                + (justInitialized ? ' ws-loc-just-initialized' : ''),
+            'data-loc': id,
         });
-        if (displayFlags.showLocationBoxes) fragment.appendChild(rect);
+        if (displayFlags.showLocationBoxes) boxesFragment.appendChild(rect);
         if (displayFlags.showLocationLabels || selected) {
-            const label = el('text', { x: sx + loc.w / 2, y: sy + 0.04 + LABEL_PX * scale, class: 'ws-loc-label', 'data-loc': id });
-            label.style.fontSize = labelFontSize;
-            label.textContent = loc.name || id;
-            fragment.appendChild(label);
+            const text = String(loc.name || id);
+            const placed = placeLabel(labelLayout, {
+                text,
+                fontPx: LABEL_PX + 1,
+                anchorXWorld: sx + loc.w / 2,
+                anchorYWorld: sy + 0.04 + LABEL_PX * scale,
+                selected,
+            });
+            if (placed) {
+                const label = el('text', { x: placed.xWorld, y: placed.yWorld, class: 'ws-loc-label', 'data-loc': id });
+                label.style.fontSize = labelFontSize;
+                label.textContent = text;
+                labelsFragment.appendChild(label);
+            }
         }
 
         if (selected && displayFlags.showHandles) {
             const hr = PIN_PX * 0.5 * scale;
             // resize handle (upper-right corner in world = top-right in svg)
-            fragment.appendChild(el('rect', { x: sx + loc.w - hr, y: sy - hr, width: hr * 2, height: hr * 2, class: 'ws-handle resize', 'data-handle': id }));
+            boxesFragment.appendChild(el('rect', { x: sx + loc.w - hr, y: sy - hr, width: hr * 2, height: hr * 2, class: 'ws-handle resize', 'data-handle': id }));
             handles++;
             // delete handle (top-left)
             const del = el('g', { class: 'ws-handle delete', 'data-del': id });
@@ -494,24 +544,26 @@ function drawLocations(scale, displayFlags = DEFAULT_DISPLAY_FLAGS) {
             x1.style.fontSize = `${LABEL_PX * scale}px`;
             x1.textContent = '×';
             del.appendChild(x1);
-            fragment.appendChild(del);
+            boxesFragment.appendChild(del);
             handles++;
         }
     }
-    locationsLayer.replaceChildren(fragment);
-    return { locations, totalLocations, handles };
+    locationsLayer.replaceChildren(boxesFragment);
+    return { locations, totalLocations, handles, labelsFragment };
 }
 
 /**
  * @param {number} scale world units per pixel
+ * @param {ReturnType<typeof createLabelLayout>} labelLayout
  */
-function drawPins(scale, displayFlags = DEFAULT_DISPLAY_FLAGS) {
+function drawPins(scale, displayFlags = DEFAULT_DISPLAY_FLAGS, labelLayout = null) {
     const roster = getRoster();
     const state = getState();
     const r = PIN_PX;
     let idx = 0;
-    const fragment = document.createDocumentFragment();
-    const labelFontSize = `${LABEL_PX}px`;
+    const pinsFragment = document.createDocumentFragment();
+    const labelsFragment = document.createDocumentFragment();
+    const labelFontSize = `${LABEL_PX * scale}px`;
     const bounds = getCullingBounds(scale, PIN_CULL_PAD_PX);
 
     const included = Object.values(roster.characters || {}).filter(c => c.included);
@@ -534,6 +586,9 @@ function drawPins(scale, displayFlags = DEFAULT_DISPLAY_FLAGS) {
         if (!pointInBounds(cx, cy, bounds)) continue;
         const selected = selectedCharId === char.id;
         const g = el('g', { class: `ws-pin${selected ? ' selected' : ''}`, 'data-pin': char.id, transform: `translate(${cx} ${cy}) scale(${scale})` });
+        if (selected) {
+            g.appendChild(el('circle', { cx: 0, cy: 0, r: r * 1.7, class: 'ws-pin-glow' }));
+        }
         if (displayFlags.showPinRings) {
             g.appendChild(el('circle', { cx: 0, cy: 0, r: r * 1.08, class: 'ws-pin-ring' }));
         }
@@ -546,49 +601,97 @@ function drawPins(scale, displayFlags = DEFAULT_DISPLAY_FLAGS) {
         }
 
         if (displayFlags.showPinLabels) {
-            // The pin group is already scaled, so the label offset must stay in local pin units.
-            const label = el('text', { x: 0, y: r + LABEL_PX * 1.1, class: 'ws-pin-label' });
-            label.style.fontSize = labelFontSize;
-            label.textContent = char.name;
-            g.appendChild(label);
+            const placed = placeLabel(labelLayout, {
+                text: String(char.name || ''),
+                fontPx: LABEL_PX,
+                anchorXWorld: cx,
+                anchorYWorld: cy + (r + LABEL_PX * 1.1) * scale,
+                selected,
+            });
+            if (placed) {
+                const label = el('text', {
+                    x: placed.xWorld,
+                    y: placed.yWorld,
+                    class: 'ws-pin-label',
+                });
+                label.style.fontSize = labelFontSize;
+                label.textContent = char.name;
+                labelsFragment.appendChild(label);
+            }
         }
 
-        fragment.appendChild(g);
+        pinsFragment.appendChild(g);
     }
-    pinsLayer.replaceChildren(fragment);
-    return { pins: fragment.childElementCount, totalPins: included.length };
+    pinsLayer.replaceChildren(pinsFragment);
+    return { pins: pinsFragment.childElementCount, totalPins: included.length, labelsFragment };
 }
 
 // ---- Interaction ----
 
 function onPointerDown(e) {
-    const target = /** @type {Element} */ (e.target);
-    const delNode = target.closest('[data-del]');
-    if (delNode) {
-        const id = delNode.getAttribute('data-del');
-        deleteLocation(id);
+    // elementsFromPoint gives all hit elements top-to-bottom in render order,
+    // letting us apply explicit priority regardless of SVG z-layer.
+    const hits = document.elementsFromPoint(e.clientX, e.clientY)
+        .filter(n => svg.contains(n));
+
+    // Delete handle — highest priority
+    for (const node of hits) {
+        const del = node.closest('[data-del]');
+        if (del) { deleteLocation(del.getAttribute('data-del')); return; }
+    }
+
+    // Resize handle — always beats pin/loc drag
+    for (const node of hits) {
+        const handle = node.closest('[data-handle]');
+        if (handle) {
+            startDrag(e, { type: 'resize', id: handle.getAttribute('data-handle') });
+            return;
+        }
+    }
+
+    // Collect candidate pins and locs
+    const pinIds = [];
+    const locIds = [];
+    const seenPins = new Set();
+    const seenLocs = new Set();
+    for (const node of hits) {
+        const pin = node.closest('[data-pin]');
+        if (pin) {
+            const id = pin.getAttribute('data-pin');
+            if (!seenPins.has(id)) { seenPins.add(id); pinIds.push(id); }
+        }
+        const loc = node.closest('[data-loc]');
+        if (loc) {
+            const id = loc.getAttribute('data-loc');
+            if (!seenLocs.has(id)) { seenLocs.add(id); locIds.push(id); }
+        }
+    }
+
+    // Pins beat locs; among multiple locs pick the smallest area
+    if (pinIds.length) {
+        const id = pinIds[0];
+        selectedCharId = id;
+        startDrag(e, { type: 'pin', id });
         return;
     }
-    const handleNode = target.closest('[data-handle]');
-    if (handleNode) {
-        startDrag(e, { type: 'resize', id: handleNode.getAttribute('data-handle') });
+
+    if (locIds.length) {
+        const locs = getLocations().locations;
+        let bestId = locIds[0], bestArea = Infinity;
+        for (const id of locIds) {
+            const loc = locs[id];
+            const area = loc ? (loc.w || 0) * (loc.h || 0) : Infinity;
+            if (area < bestArea) { bestArea = area; bestId = id; }
+        }
+        setSelectedLocationIds([bestId], bestId);
+        clearJustInitializedLocation(bestId);
+        startDrag(e, { type: 'loc', id: bestId, world: screenToWorld(e) });
         return;
     }
-    const pinNode = target.closest('[data-pin]');
-    if (pinNode) {
-        selectedCharId = pinNode.getAttribute('data-pin');
-        startDrag(e, { type: 'pin', id: pinNode.getAttribute('data-pin') });
-        return;
-    }
-    const locNode = target.closest('[data-loc]');
-    if (locNode) {
-        const id = locNode.getAttribute('data-loc');
-        if (selectedLoc !== id) { selectedLoc = id; refreshMap({ locations: true, list: true, pins: false, grid: false }); }
-        startDrag(e, { type: 'loc', id, world: screenToWorld(e) });
-        return;
-    }
+
     if (selectedLoc || selectedCharId) {
         selectedLoc = null;
+        selectedLocIds = new Set();
         selectedCharId = null;
         refreshMap({ locations: true, list: true, pins: true, grid: false });
     }
@@ -789,6 +892,30 @@ export function fitToContent() {
 }
 
 /**
+ * Marks one or more location ids as newly initialized so the map/list can highlight them.
+ * @param {string|string[]} ids
+ */
+export function markJustInitializedLocations(ids) {
+    const list = Array.isArray(ids) ? ids : [ids];
+    let changed = false;
+    for (const id of list) {
+        if (!id || justInitializedLocIds.has(id)) continue;
+        justInitializedLocIds.add(id);
+        changed = true;
+    }
+    if (changed) refreshMap({ locations: true, list: true, pins: false, grid: false });
+}
+
+/**
+ * Clears a just-initialized marker for a location after the user opens it.
+ * @param {string} id
+ */
+function clearJustInitializedLocation(id) {
+    if (!id || !justInitializedLocIds.has(id)) return;
+    justInitializedLocIds.delete(id);
+}
+
+/**
  * Highlights a character's place on the map and optionally centers the view on it.
  * @param {string|null} characterId
  * @param {{ focus?: boolean }} [options]
@@ -799,22 +926,23 @@ export function selectCharacterOnMap(characterId, { focus = true } = {}) {
 
     if (!characterId) {
         selectedLoc = null;
+        selectedLocIds = new Set();
         refreshMap({ locations: true, pins: true, list: true, grid: false });
         return false;
     }
 
     const strings = getState().characters?.[characterId] || {};
     const locationName = locationFromCoords(strings.x, strings.y) || strings.location || '';
-    const locationId = findLocationIdByName(locationName);
-    selectedLoc = locationId;
+    const primaryLocationId = findLocationIdAtCoords(strings.x, strings.y) || findLocationIdByName(locationName);
+    setSelectedLocationIds(primaryLocationId ? [primaryLocationId] : [], primaryLocationId);
 
     if (focus) {
-        if (locationId) focusLocation(locationId);
+        if (primaryLocationId) focusLocation(primaryLocationId);
         else if (Number.isFinite(strings.x) && Number.isFinite(strings.y)) focusWorldPoint(strings.x, strings.y);
     }
 
-    refreshMap({ locations: true, pins: true, list: true, grid: false });
-    return Boolean(locationId || (Number.isFinite(strings.x) && Number.isFinite(strings.y)));
+    refreshMap({ locations: true, pins: true, list: true, grid: true });
+    return Boolean(primaryLocationId || (Number.isFinite(strings.x) && Number.isFinite(strings.y)));
 }
 
 function zoomCenter(factor) {
@@ -832,7 +960,7 @@ function addLocation() {
     const cxWorld = round(view.x + view.w / 2);
     const cyWorld = round(-(view.y + view.h / 2));
     locs.locations[id] = { name, description: '', x: cxWorld - size / 2, y: cyWorld - size / 2, w: size, h: size, adjacent: [] };
-    selectedLoc = id;
+    setSelectedLocationIds([id], id);
     queueSave();
     refreshMap({ locations: true, list: true, pins: false, grid: false });
 }
@@ -840,7 +968,11 @@ function addLocation() {
 function deleteLocation(id) {
     const locs = getLocations();
     delete locs.locations[id];
-    if (selectedLoc === id) selectedLoc = null;
+    if (selectedLoc === id) {
+        selectedLoc = null;
+        selectedLocIds = new Set();
+    }
+    justInitializedLocIds.delete(id);
     queueSave();
     refreshMap({ locations: true, list: true, pins: false, grid: false });
 }
@@ -856,6 +988,58 @@ function findLocationIdByName(name) {
     }
 
     return null;
+}
+
+function findLocationIdAtCoords(x, y) {
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+
+    for (const [id, loc] of Object.entries(getLocations().locations || {})) {
+        if (!isFiniteRect(loc)) continue;
+        if (x >= loc.x && x <= loc.x + loc.w && y >= loc.y && y <= loc.y + loc.h) {
+            return id;
+        }
+    }
+
+    return null;
+}
+
+function setSelectedLocationIds(ids, primaryId = null) {
+    selectedLocIds = new Set(Array.isArray(ids) ? ids.filter(Boolean) : []);
+    selectedLoc = primaryId || selectedLocIds.values().next().value || null;
+}
+
+function findConnectedLocationIds(seedId) {
+    const locs = getLocations().locations || {};
+    const seed = locs[seedId];
+    if (!isFiniteRect(seed)) return [];
+
+    const connected = new Set([seedId]);
+    let changed = true;
+    while (changed) {
+        changed = false;
+        for (const [id, loc] of Object.entries(locs)) {
+            if (connected.has(id) || !isFiniteRect(loc)) continue;
+            for (const cid of connected) {
+                const cur = locs[cid];
+                if (rectsTouchOrOverlap(cur, loc)) {
+                    connected.add(id);
+                    changed = true;
+                    break;
+                }
+            }
+        }
+    }
+    return [...connected];
+}
+
+function rectsTouchOrOverlap(a, b) {
+    if (!isFiniteRect(a) || !isFiniteRect(b)) return false;
+    return !(
+        a.x + a.w < b.x ||
+        b.x + b.w < a.x ||
+        a.y + a.h < b.y ||
+        b.y + b.h < a.y
+    );
 }
 
 // ---- helpers ----
@@ -926,6 +1110,59 @@ function getDisplayFlags(composited, scale = 0) {
     return flags;
 }
 
+function createLabelLayout(viewport) {
+    if (!viewport?.width || !viewport?.height || !view.w || !view.h) return null;
+    return {
+        viewport,
+        occupied: [],
+    };
+}
+
+function placeLabel(layout, { text, fontPx, anchorXWorld, anchorYWorld, selected = false }) {
+    if (!text) return null;
+    if (!layout) return { xWorld: anchorXWorld, yWorld: anchorYWorld };
+
+    const lineHeightPx = fontPx * LABEL_LINE_HEIGHT;
+    const widthPx = Math.max(fontPx, Math.ceil(text.length * fontPx * LABEL_CHAR_WIDTH + LABEL_PAD_X * 2));
+    const heightPx = Math.ceil(lineHeightPx + LABEL_PAD_Y * 2);
+    const anchorPx = worldToScreen(anchorXWorld, anchorYWorld, layout.viewport);
+    const candidates = [];
+
+    for (let step = 0; step <= LABEL_MAX_SHIFT_STEPS; step++) {
+        const baselinePx = anchorPx.y + step * lineHeightPx;
+        candidates.push({
+            left: anchorPx.x - widthPx / 2,
+            right: anchorPx.x + widthPx / 2,
+            top: baselinePx - lineHeightPx + LABEL_PAD_Y,
+            bottom: baselinePx + LABEL_PAD_Y,
+            baselinePx,
+        });
+    }
+
+    const initialOverlaps = intersectsAnyRect(candidates[0], layout.occupied);
+    if (!initialOverlaps) {
+        layout.occupied.push(candidates[0]);
+        return { xWorld: anchorXWorld, yWorld: anchorYWorld };
+    }
+
+    for (let step = 1; step < candidates.length; step++) {
+        const rect = candidates[step];
+        if (intersectsAnyRect(rect, layout.occupied)) continue;
+        layout.occupied.push(rect);
+        return {
+            xWorld: anchorXWorld,
+            yWorld: screenToWorldPoint(anchorPx.x, rect.baselinePx, layout.viewport).y,
+        };
+    }
+
+    if (selected) {
+        layout.occupied.push(candidates[0]);
+        return { xWorld: anchorXWorld, yWorld: anchorYWorld };
+    }
+
+    return null;
+}
+
 function getPanVisualWorldOffset(dx, dy) {
     if (!svg || !drag?.svg0) return { x: 0, y: 0 };
     const rect = svg.getBoundingClientRect();
@@ -942,7 +1179,7 @@ function setPanVisualOffset(dx, dy) {
 
     const { x, y } = active ? getPanVisualWorldOffset(dx, dy) : { x: 0, y: 0 };
     const transform = active ? `translate(${round(x)} ${round(y)})` : '';
-    for (const layer of [gridLayer, locationsLayer, pinsLayer]) {
+    for (const layer of [gridLayer, locationsLayer, pinsLayer, labelsLayer]) {
         if (!layer) continue;
         if (transform) layer.setAttribute('transform', transform);
         else layer.removeAttribute('transform');
@@ -1010,6 +1247,20 @@ function clientToWorld(clientX, clientY) {
     return { x: s.x, y: -s.y };
 }
 
+function worldToScreen(worldX, worldY, viewport) {
+    return {
+        x: ((worldX - view.x) / view.w) * viewport.width,
+        y: ((worldY - view.y) / view.h) * viewport.height,
+    };
+}
+
+function screenToWorldPoint(screenX, screenY, viewport) {
+    return {
+        x: view.x + (screenX / viewport.width) * view.w,
+        y: view.y + (screenY / viewport.height) * view.h,
+    };
+}
+
 function isFiniteRect(loc) {
     return loc && Number.isFinite(loc.x) && Number.isFinite(loc.y) && Number.isFinite(loc.w) && Number.isFinite(loc.h);
 }
@@ -1034,6 +1285,14 @@ function pointInBounds(x, ySvg, bounds) {
     // Pins are culled after being converted into SVG-space coordinates, so do not
     // invert Y here again or pins will disappear in the wrong half of the map.
     return x >= bounds.left && x <= bounds.right && ySvg >= bounds.top && ySvg <= bounds.bottom;
+}
+
+function intersectsAnyRect(rect, occupied) {
+    return occupied.some((other) => rectsOverlap(rect, other));
+}
+
+function rectsOverlap(a, b) {
+    return a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
 }
 
 function countVisibleLocations(bounds) {

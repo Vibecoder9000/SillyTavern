@@ -274,6 +274,30 @@ export function setCharacterStrings(characterId, strings) {
 }
 
 /**
+ * @returns {WorldSimHistory}
+ */
+export function createEmptyCharacterHistory() {
+    return { location: [], activity: [], plan: [], summary: [] };
+}
+
+/**
+ * Clears a single character's live world-sim state and initialization progress.
+ * Leaves locations and global world-sim history untouched.
+ * @param {string} characterId
+ * @returns {boolean}
+ */
+export function resetCharacterWorldSimState(characterId) {
+    const char = roster.characters[characterId];
+    if (!char) return false;
+
+    delete state.characters[characterId];
+    char.strings = { location: '', activity: '', plan: '', summary: '' };
+    char.history = createEmptyCharacterHistory();
+    char.initialized = false;
+    return true;
+}
+
+/**
  * @param {string} characterId
  * @param {keyof WorldSimStrings} key
  * @param {string} text
