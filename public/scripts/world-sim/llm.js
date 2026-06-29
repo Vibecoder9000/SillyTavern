@@ -222,7 +222,7 @@ function buildUpdaterPrompt(characterIds, dice) {
         const char = roster.characters[id];
         if (!char) continue;
         const chid = characters.findIndex(c => c.avatar === char.avatar);
-        const fullCard = getCharacterCardFields({ chid });
+        const fullCard = getCharacterCardFields({ chid, name2Override: char.name });
         prompt += `<character>\n`;
         prompt += `Name: ${char.name}\n`;
         prompt += `Description: ${fullCard.description}\n`;
@@ -272,11 +272,9 @@ function buildUpdaterPrompt(characterIds, dice) {
 export function buildInitialCharacterPrompt(avatar, cycles, extraInstructions = '') {
     const chid = characters.findIndex(c => c.avatar === avatar);
     const char = characters[chid];
-    const fullCard = getCharacterCardFields({ chid });
+    const fullCard = getCharacterCardFields({ chid, name2Override: char?.name });
 
-    let prompt = 'This new character is being introduced to the world simulator. Note if the text "World Sim appears in the info, it should actually be the character\'s name so pretend it is '
-	prompt += `${char?.name}`
-	prompt += '. (bug from {{char}} macro).\n\n';
+    let prompt = `This new character is being introduced to the world simulator. Use ${char?.name || 'Unknown'} as the actual character name in every card field and generated summary.\n\n`;
     prompt += 'Character card:\n';
     prompt += `Name: ${char?.name || 'Unknown'}\n`;
     prompt += `Description: ${fullCard.description}\n`;
@@ -291,7 +289,7 @@ prompt += 'New locations must extend the existing mapped area unless the related
 prompt += 'Normally, place at least one edge of the new location cluster directly against an edge of an existing location. ';
 prompt += 'Do not create a detached island, distant district, fresh map area, or isolated cluster merely because empty coordinates are available. Avoid randomly creating linear lines with seperated groups or following an axis for no good reason.';
 prompt += 'Being unrelated to existing characters is not a reason to place the character far away. Physical map continuity normally takes priority over thematic separation. ';
-prompt += 'Keep all new nearby and related locations contiguous. Locations may overlap when spatially appropriate. ';
+prompt += 'Keep all new nearby and related locations contiguous. Locations may overlap when spatially appropriate. Prioritize closer to 0,0 than farther away. Avoid expanding the map unless there\'s no space.';
 prompt += 'A single room should generally occupy about 100 square world units. ';
 prompt += 'A city should generally occupy about 1000 square world units.\n\n';
 
@@ -333,8 +331,6 @@ prompt += 'Related new locations must share full or partial boundaries with one 
 prompt += 'If no related-name character exists, at least one new location must also share a full or partial boundary with an existing location. ';
 prompt += 'If a related-name character does exist, the new cluster must instead be detached and substantially distant from that character\'s entire location cluster.\n\n';
 
-prompt += 'The simulator already knows which character is being initialized.\n';
-prompt += 'Do not include a character name or id.\n';
 prompt += 'Return one initialization result with:\n';
 prompt += '- activity: a brief phrase describing what the character is doing now; do not mention the user\n';
 prompt += '- plan: a brief phrase describing what the character intends to do next; do not frame it as interaction with the user or mention anyone else\n';

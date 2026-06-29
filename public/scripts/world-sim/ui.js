@@ -752,6 +752,10 @@ function canBulkInitializeUnattended() {
     return !power_user.tool_click_to_execute && !!power_user.tool_auto_continue;
 }
 
+function shouldBulkInitializeAutoAdvance() {
+    return !!power_user.tool_auto_continue;
+}
+
 async function startBulkInitializeQueue(targets) {
     stopBulkInitializePolling();
     bulkInitQueue = {
@@ -759,6 +763,7 @@ async function startBulkInitializeQueue(targets) {
         total: targets.length,
         currentIndex: 0,
         currentCharacterId: null,
+        autoAdvance: shouldBulkInitializeAutoAdvance(),
         unattended: canBulkInitializeUnattended(),
     };
     bulkInitActive = true;
@@ -829,6 +834,13 @@ async function pollBulkInitializeQueue() {
         renderRoster();
         refreshMap();
         updateStatusBar();
+
+        if (!bulkInitQueue.autoAdvance && bulkInitQueue.currentIndex < bulkInitQueue.total) {
+            finishBulkInitializeQueue();
+            toastr.info('Bulk initialize paused because Auto-continue after tools is off.', 'World Sim');
+            return;
+        }
+
         await continueBulkInitializeQueue();
         return;
     }

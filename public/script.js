@@ -5032,9 +5032,11 @@ export function createLazyFields(resolvers) {
  * Each field is only processed (baseChatReplace) when first accessed.
  * @param {Object} [options={}]
  * @param {number} [options.chid] Optional character index
+ * @param {string|null} [options.name1Override] Optional override for {{user}}
+ * @param {string|null} [options.name2Override] Optional override for {{char}}
  * @returns {CharacterCardFields} Character card fields with lazy evaluation
  */
-export function getCharacterCardFieldsLazy({ chid = undefined } = {}) {
+export function getCharacterCardFieldsLazy({ chid = undefined, name1Override = null, name2Override = null } = {}) {
     const currentChid = chid ?? this_chid;
     const character = characters[currentChid];
 
@@ -5048,54 +5050,54 @@ export function getCharacterCardFieldsLazy({ chid = undefined } = {}) {
         system: () => {
             if (!character) return '';
             const systemPrompt = chat_metadata.system_prompt || character.data?.system_prompt || '';
-            return power_user.prefer_character_prompt ? baseChatReplace(systemPrompt.trim()) : '';
+            return power_user.prefer_character_prompt ? baseChatReplace(systemPrompt.trim(), name1Override, name2Override) : '';
         },
         jailbreak: () => {
             if (!character) return '';
-            return power_user.prefer_character_jailbreak ? baseChatReplace(character.data?.post_history_instructions?.trim()) : '';
+            return power_user.prefer_character_jailbreak ? baseChatReplace(character.data?.post_history_instructions?.trim(), name1Override, name2Override) : '';
         },
         version: () => character?.data?.character_version ?? '',
         charDepthPrompt: () => {
             if (!character) return '';
-            return baseChatReplace(character.data?.extensions?.depth_prompt?.prompt?.trim());
+            return baseChatReplace(character.data?.extensions?.depth_prompt?.prompt?.trim(), name1Override, name2Override);
         },
         creatorNotes: () => {
             if (!character) return '';
-            return baseChatReplace(character.data?.creator_notes?.trim());
+            return baseChatReplace(character.data?.creator_notes?.trim(), name1Override, name2Override);
         },
         // These four fields may be overridden by group cards
         description: () => {
             if (groupCardsLazy) return groupCardsLazy.description;
             if (!character) return '';
-            return baseChatReplace(character.description?.trim());
+            return baseChatReplace(character.description?.trim(), name1Override, name2Override);
         },
         personality: () => {
             if (groupCardsLazy) return groupCardsLazy.personality;
             if (!character) return '';
-            return baseChatReplace(character.personality?.trim());
+            return baseChatReplace(character.personality?.trim(), name1Override, name2Override);
         },
         scenario: () => {
             if (groupCardsLazy) return groupCardsLazy.scenario;
             if (!character) return '';
             const scenarioText = chat_metadata.scenario || character.scenario || '';
-            return baseChatReplace(scenarioText.trim());
+            return baseChatReplace(scenarioText.trim(), name1Override, name2Override);
         },
         mesExamples: () => {
             if (groupCardsLazy) return groupCardsLazy.mesExamples;
             if (!character) return '';
             const exampleDialog = chat_metadata.mes_example || character.mes_example || '';
-            return baseChatReplace(exampleDialog.trim());
+            return baseChatReplace(exampleDialog.trim(), name1Override, name2Override);
         },
         firstMessage: () => {
             if (!character) return '';
             const firstMes = character.first_mes?.trim() || '';
-            return baseChatReplace(firstMes);
+            return baseChatReplace(firstMes, name1Override, name2Override);
         },
         alternateGreetings: () => {
             if (!character) return [];
             const altGreetings = character.data?.alternate_greetings;
             if (!Array.isArray(altGreetings)) return [];
-            return altGreetings.map(greeting => baseChatReplace(greeting?.trim()));
+            return altGreetings.map(greeting => baseChatReplace(greeting?.trim(), name1Override, name2Override));
         },
     };
 
@@ -5106,10 +5108,12 @@ export function getCharacterCardFieldsLazy({ chid = undefined } = {}) {
  * Returns the character card fields for the current character.
  * @param {Object} [options={}]
  * @param {number} [options.chid] Optional character index
+ * @param {string|null} [options.name1Override] Optional override for {{user}}
+ * @param {string|null} [options.name2Override] Optional override for {{char}}
  * @returns {CharacterCardFields} Character card fields
  */
-export function getCharacterCardFields({ chid = undefined } = {}) {
-    const lazy = getCharacterCardFieldsLazy({ chid });
+export function getCharacterCardFields({ chid = undefined, name1Override = null, name2Override = null } = {}) {
+    const lazy = getCharacterCardFieldsLazy({ chid, name1Override, name2Override });
 
     // Resolve all lazy fields into a plain object
     return {
