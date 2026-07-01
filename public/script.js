@@ -2401,7 +2401,6 @@ const BUILTIN_TOOL_INLINE_KEYS = new Set([
     'steps',
     'cfg_scale',
     'sampler_name',
-    'seed',
     'model',
     'action',
     'selector',
@@ -2886,6 +2885,112 @@ function buildToolExecuteButtonHtml(toolName, messageId, segmentIndex, status) {
     return `<div class="${className}" data-tool-name="${toolName}" data-message-id="${messageId}" data-segment-index="${segmentIndex}"${disabled} role="button" tabindex="0"><i class="fa-solid ${icon}"></i><span>${label}</span></div>`;
 }
 
+const sdToolWorkflowIntervals = new Map();
+
+function getSdToolWorkflowState(message, segmentIndex) {
+    return message?.extra?.native_tool_execution?.[segmentIndex]?.sd_workflow ?? null;
+}
+
+function ensureSdToolWorkflowState(message, segmentIndex, toolArgsObject = {}) {
+    message.extra ??= {};
+    message.extra.native_tool_execution ??= {};
+    message.extra.native_tool_execution[segmentIndex] ??= { status: 'pending' };
+    const nativeState = message.extra.native_tool_execution[segmentIndex];
+    nativeState.sd_workflow ??= {
+        prompt: String(toolArgsObject?.prompt ?? ''),
+        negative_prompt: String(toolArgsObject?.negative_prompt ?? ''),
+        model: String(toolArgsObject?.model ?? ''),
+        width: Number(toolArgsObject?.width) || 1024,
+        height: Number(toolArgsObject?.height) || 1024,
+        cfg_scale: Number(toolArgsObject?.cfg_scale) || 5,
+        sampler_name: String(toolArgsObject?.sampler_name ?? 'Euler a'),
+        scheduler: String(toolArgsObject?.scheduler ?? ''),
+        seed: -1,
+        warnings: [],
+        error: '',
+        batches: [],
+        selected_batch_id: '',
+        selected_draft_index: -1,
+        generate_progress: 0,
+        finish_progress: 0,
+        generate_task_id: '',
+        finish_task_id: '',
+    };
+    return nativeState.sd_workflow;
+}
+
+function getSdToolSelectedDraft(state) {
+    if (!state?.selected_batch_id || !Number.isInteger(state?.selected_draft_index) || state.selected_draft_index < 0) {
+        return null;
+    }
+
+    const batch = Array.isArray(state.batches) ? state.batches.find(item => item.id === state.selected_batch_id) : null;
+    return batch?.images?.[state.selected_draft_index] ?? null;
+}
+
+function isSdToolProgressActive(progress) {
+    const value = Number(progress) || 0;
+    return value > 0 && value < 1;
+}
+
+function renderSdToolProgressButtonHtml(label, action, enabled, progress = 0) {
+    const disabled = enabled ? '' : ' disabled';
+    const safeProgress = Math.max(0, Math.min(1, Number(progress) || 0));
+    const activeClass = isSdToolProgressActive(safeProgress) ? ' executing' : '';
+    return `<button type="button" class="menu_button menu_button_icon sd-tool-progress-button${activeClass}" data-sd-action="${action}" style="--progress:${safeProgress};"${disabled}><span>${escapeHtml(label)}</span></button>`;
+}
+
+function renderSdToolWorkflowHtml(message, messageId, segmentIndex, toolArgsObject) {
+    const state = ensureSdToolWorkflowState(message, segmentIndex, toolArgsObject);
+    const selectedDraft = getSdToolSelectedDraft(state);
+    const generateActive = isSdToolProgressActive(state.generate_progress);
+    const finishActive = isSdToolProgressActive(state.finish_progress);
+    const anyActive = generateActive || finishActive;
+    const warnings = Array.isArray(state.warnings) ? state.warnings : [];
+    const warningHtml = warnings.length
+        ? `<div class="sd-tool-warning-list">${warnings.map(warning => `<div class="sd-tool-warning">${escapeHtml(String(warning))}</div>`).join('')}</div>`
+        : '';
+    const errorHtml = state.error ? `<p class="tool-call-error">Error: ${escapeHtml(String(state.error))}</p>` : '';
+    const gridsHtml = Array.isArray(state.batches) ? state.batches.map(batch => {
+        const cells = Array.from({ length: 4 }, (_, index) => {
+            const image = batch.images?.[index] ?? null;
+            const selected = state.selected_batch_id === batch.id && state.selected_draft_index === index;
+            const buttonClass = `sd-tool-draft-cell${selected ? ' sd-tool-draft-cell--selected' : ''}`;
+            const imgHtml = image
+                ? `<img src="${escapeHtml(buildSandboxDownloadUrl(image.filepath, image.workspace, image.character))}" alt="Draft ${index + 1}" class="sd-tool-draft-image" />`
+                : '<div class="sd-tool-draft-placeholder"></div>';
+            return `<button type="button" class="${buttonClass}" data-sd-action="select-draft" data-batch-id="${escapeHtml(batch.id)}" data-draft-index="${index}" aria-pressed="${selected ? 'true' : 'false'}">${imgHtml}</button>`;
+        }).join('');
+        return `<div class="sd-tool-grid-batch"><div class="sd-tool-grid" style="aspect-ratio:${escapeHtml(`${batch.width} / ${batch.height}`)}">${cells}</div></div>`;
+    }).join('') : '';
+
+    return `
+        <div class="sd-tool-workflow" data-message-id="${messageId}" data-segment-index="${segmentIndex}">
+            <div class="sd-tool-actions">
+                ${renderSdToolProgressButtonHtml('Generate', 'generate', !anyActive, state.generate_progress)}
+                ${renderSdToolProgressButtonHtml('Finish', 'finish', !!selectedDraft && !anyActive, state.finish_progress)}
+            </div>
+            ${warningHtml}
+            ${errorHtml}
+            <div class="sd-tool-batches">${gridsHtml}</div>
+        </div>
+    `;
+}
+
+function getConfiguredSdToolUrl() {
+    const toolUrl = String(power_user.sd_tool_url ?? '').trim();
+    if (toolUrl) {
+        return toolUrl;
+    }
+
+    const extensionUrl = String(extension_settings?.sd?.auto_url ?? '').trim();
+    if (extensionUrl) {
+        return extensionUrl;
+    }
+
+    return 'http://localhost:7860';
+}
+
 function renderNativeToolSegmentHtml(message, messageId, segment, segmentIndex, { includeExecuteButton = true } = {}) {
     const toolInfo = segment?.tool_call ?? null;
     const parseError = segment?.parse_error ?? null;
@@ -2930,6 +3035,7 @@ function renderNativeToolSegmentHtml(message, messageId, segment, segmentIndex, 
     const displayInfo = ToolManager.getToolDisplayInfo(detectedToolName);
     const displayName = displayInfo.displayName || detectedToolName || 'Tool';
     const metadataEntries = [];
+    const isManualSdTool = hasValidToolInfo && detectedToolName === 'sd_txt2img' && power_user.tool_click_to_execute;
 
     if (hasValidToolInfo) {
         if (displayInfo.displayMetadata?.type === 'mcp') {
@@ -2943,7 +3049,7 @@ function renderNativeToolSegmentHtml(message, messageId, segment, segmentIndex, 
     html += '<div class="tool-call-box">';
     html += '<div class="tool-call-header">';
     html += `<h4><i class="fa-solid fa-cogs"></i> ${escapeHtml(detectedToolName)}</h4>`;
-    if (canExecuteTool) {
+    if (canExecuteTool && !isManualSdTool) {
         html += `<div class="tool-call-header-actions">${buildToolExecuteButtonHtml(toolName, messageId, segmentIndex, executionState)}</div>`;
     }
     html += '</div>';
@@ -2966,6 +3072,9 @@ function renderNativeToolSegmentHtml(message, messageId, segment, segmentIndex, 
                     formatBuiltinToolPayloadText(detectedToolName, split.payload),
                     getBuiltinToolPayloadLanguage(detectedToolName),
                 );
+            }
+            if (isManualSdTool) {
+                html += renderSdToolWorkflowHtml(message, messageId, segmentIndex, toolArgsObject);
             }
     } else {
         html += renderToolMetadataRowsHtml(metadataEntries);
@@ -3135,7 +3244,9 @@ function normalizeNativeToolCallParse(parsedTool, message = null) {
             previousState &&
             previousSegment.raw_tool_block === segment.raw_tool_block
         ) {
-            execution[index] = structuredClone(previousState);
+            const clonedState = structuredClone(previousState);
+            delete clonedState.sd_workflow;
+            execution[index] = clonedState;
         }
     });
 
@@ -3651,6 +3762,234 @@ async function executeNativeToolSegmentsForMessage(messageId, { signal } = {}) {
         stopped,
         failed,
     };
+}
+
+async function addStableDiffusionWorkflowImageMessage(prompt, image) {
+    const message = {
+        name: systemUserName,
+        force_avatar: system_avatar,
+        is_system: true,
+        is_user: false,
+        send_date: getMessageTimeStamp(),
+        mes: String(prompt || 'Generated image'),
+        extra: {
+            media: [{
+                url: buildSandboxDownloadUrl(image.filepath, image.workspace, image.character),
+                type: MEDIA_TYPE.IMAGE,
+                title: prompt || 'Generated image',
+                source: MEDIA_SOURCE.API,
+            }],
+            media_display: MEDIA_DISPLAY.GALLERY,
+            media_index: 0,
+            inline_image: false,
+        },
+    };
+    chat.push(message);
+    const messageId = chat.length - 1;
+    await eventSource.emit(event_types.MESSAGE_RECEIVED, messageId, 'extension');
+    addOneMessage(message);
+    await eventSource.emit(event_types.CHARACTER_MESSAGE_RENDERED, messageId, 'extension');
+    await saveChatConditional();
+}
+
+function startSdToolProgressPolling(intervalKey, messageId, segmentIndex, state, key, taskIdKey) {
+    clearInterval(sdToolWorkflowIntervals.get(intervalKey));
+    state[key] = 0.02;
+    updateMessageBlock(messageId, chat[messageId]);
+    const intervalId = setInterval(async () => {
+        try {
+            const params = new URLSearchParams({ url: getConfiguredSdToolUrl() });
+            if (taskIdKey && state?.[taskIdKey]) {
+                params.set('task_id', state[taskIdKey]);
+            }
+            const response = await fetch(`/api/extensions/tools/sd_txt2img/progress?${params.toString()}`, {
+                method: 'GET',
+                headers: getRequestHeaders(),
+            });
+            const data = await response.json();
+            const progress = Math.max(0, Math.min(0.97, Number(data?.progress) || 0));
+            state[key] = progress;
+        } catch {
+            state[key] = Math.min(0.97, (Number(state[key]) || 0) + 0.05);
+        }
+        updateMessageBlock(messageId, chat[messageId]);
+    }, 1000);
+    sdToolWorkflowIntervals.set(intervalKey, intervalId);
+}
+
+function stopSdToolProgressPolling(intervalKey, messageId, segmentIndex, state, key) {
+    clearInterval(sdToolWorkflowIntervals.get(intervalKey));
+    sdToolWorkflowIntervals.delete(intervalKey);
+    state[key] = 0;
+    updateMessageBlock(messageId, chat[messageId]);
+}
+
+async function handleSdToolGenerate(messageId, segmentIndex) {
+    const message = chat[messageId];
+    const segment = getNativeToolSegments(message)[segmentIndex];
+    const toolArgs = parseToolCallArguments(segment?.tool_call?.args);
+    const state = ensureSdToolWorkflowState(message, segmentIndex, toolArgs);
+    const workspace = getCurrentSandboxWorkspace();
+    const character = getCurrentSandboxCharacterName();
+    const batchId = `draft_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    state.error = '';
+    const pendingBatch = {
+        id: batchId,
+        width: state.width,
+        height: state.height,
+        images: [],
+    };
+    state.batches.push(pendingBatch);
+    updateMessageBlock(messageId, message);
+
+    const intervalKey = `${messageId}:${segmentIndex}:generate`;
+    state.generate_task_id = `task(${Math.random().toString(36).slice(2)}${Date.now().toString(36)})`;
+    startSdToolProgressPolling(intervalKey, messageId, segmentIndex, state, 'generate_progress', 'generate_task_id');
+    try {
+        console.warn('SD workflow browser request', {
+            source: 'native-tool-generate',
+            stage: 'draft',
+            task_id: state.generate_task_id,
+            promptLength: String(state.prompt ?? '').length,
+            width: state.width,
+            height: state.height,
+            sampler_name: state.sampler_name,
+            scheduler: state.scheduler,
+            cfg_scale: state.cfg_scale,
+            url: getConfiguredSdToolUrl(),
+            workspace,
+            character,
+        });
+        const response = await fetch('/api/extensions/tools/sd_txt2img/workflow', {
+            method: 'POST',
+            headers: getRequestHeaders(),
+            body: JSON.stringify({
+                stage: 'draft',
+                prompt: state.prompt,
+                negative_prompt: state.negative_prompt,
+                model: state.model,
+                width: state.width,
+                height: state.height,
+                cfg_scale: state.cfg_scale,
+                sampler_name: state.sampler_name,
+                scheduler: state.scheduler,
+                task_id: state.generate_task_id,
+                url: getConfiguredSdToolUrl(),
+                workspace,
+                character,
+            }),
+        });
+        const result = await response.json();
+        if (!response.ok) {
+            throw new Error(result?.error || response.statusText);
+        }
+
+        const batch = state.batches.find(item => item.id === batchId);
+        if (batch) {
+            batch.images = (Array.isArray(result.images) ? result.images : []).map(image => ({
+                ...image,
+                workspace,
+                character,
+                prompt: state.prompt,
+                negative_prompt: state.negative_prompt,
+                model: state.model,
+                width: state.width,
+                height: state.height,
+                sampler_name: state.sampler_name,
+                scheduler: state.scheduler,
+                cfg_scale: state.cfg_scale,
+            }));
+        }
+        state.generate_task_id = String(result?.taskId ?? state.generate_task_id ?? '');
+        state.warnings = Array.isArray(result.warnings) ? result.warnings : [];
+    } catch (error) {
+        state.error = String(error?.message ?? error);
+        state.batches = state.batches.filter(batch => batch.id !== batchId || (Array.isArray(batch.images) && batch.images.length > 0));
+    } finally {
+        stopSdToolProgressPolling(intervalKey, messageId, segmentIndex, state, 'generate_progress');
+        updateMessageBlock(messageId, message);
+        await saveChatConditional();
+    }
+}
+
+async function handleSdToolFinish(messageId, segmentIndex) {
+    const message = chat[messageId];
+    const segment = getNativeToolSegments(message)[segmentIndex];
+    const state = getSdToolWorkflowState(message, segmentIndex);
+    const selectedDraft = getSdToolSelectedDraft(state);
+    const workspace = getCurrentSandboxWorkspace();
+    const character = getCurrentSandboxCharacterName();
+    if (!selectedDraft) {
+        return;
+    }
+
+    state.error = '';
+    const selectedSeed = selectedDraft.seed;
+    const intervalKey = `${messageId}:${segmentIndex}:finish`;
+    state.finish_task_id = `task(${Math.random().toString(36).slice(2)}${Date.now().toString(36)})`;
+    startSdToolProgressPolling(intervalKey, messageId, segmentIndex, state, 'finish_progress', 'finish_task_id');
+    try {
+        console.warn('SD workflow browser request', {
+            source: 'native-tool-finish',
+            stage: 'final',
+            task_id: state.finish_task_id,
+            promptLength: String(state.prompt ?? '').length,
+            width: state.width,
+            height: state.height,
+            sampler_name: state.sampler_name,
+            scheduler: state.scheduler,
+            cfg_scale: state.cfg_scale,
+            selected_seed: selectedSeed,
+            url: getConfiguredSdToolUrl(),
+            workspace,
+            character,
+        });
+        const response = await fetch('/api/extensions/tools/sd_txt2img/workflow', {
+            method: 'POST',
+            headers: getRequestHeaders(),
+            body: JSON.stringify({
+                stage: 'final',
+                prompt: state.prompt,
+                negative_prompt: state.negative_prompt,
+                model: state.model,
+                width: state.width,
+                height: state.height,
+                cfg_scale: state.cfg_scale,
+                sampler_name: state.sampler_name,
+                scheduler: state.scheduler,
+                selected_seed: selectedSeed,
+                task_id: state.finish_task_id,
+                url: getConfiguredSdToolUrl(),
+                workspace,
+                character,
+            }),
+        });
+        const result = await response.json();
+        if (!response.ok) {
+            throw new Error(result?.error || response.statusText);
+        }
+
+        state.finish_task_id = String(result?.taskId ?? state.finish_task_id ?? '');
+        state.warnings = Array.isArray(result.warnings) ? result.warnings : [];
+        if (result.image?.filepath) {
+            await addStableDiffusionWorkflowImageMessage(state.prompt, {
+                ...result.image,
+                workspace,
+                character,
+            });
+        }
+
+        if (power_user.tool_auto_continue && shouldContinueAfterNativeToolSegment(segment)) {
+            const currentDepth = Number.isFinite(Number(message.extra?.depth)) ? Number(message.extra.depth) : 0;
+            await Generate('normal', { depth: currentDepth + 1 });
+        }
+    } catch (error) {
+        state.error = String(error?.message ?? error);
+    } finally {
+        stopSdToolProgressPolling(intervalKey, messageId, segmentIndex, state, 'finish_progress');
+        updateMessageBlock(messageId, message);
+        await saveChatConditional();
+    }
 }
 
 /**
@@ -14425,6 +14764,39 @@ jQuery(async function () {
         } catch (error) {
             console.error('[Manual Tool Execution] Error:', error);
             toastr.error('Failed to execute tool: ' + String(error));
+        }
+    });
+
+    $(document).on('click', '.sd-tool-progress-button, .sd-tool-draft-cell', async function (e) {
+        e.stopPropagation();
+        e.preventDefault();
+        const button = $(this);
+        const workflow = button.closest('.sd-tool-workflow');
+        const messageId = Number(workflow.data('message-id'));
+        const segmentIndex = Number(workflow.data('segment-index'));
+        const message = chat[messageId];
+        const state = getSdToolWorkflowState(message, segmentIndex);
+        if (!message || !state) {
+            return;
+        }
+
+        const action = String(button.data('sd-action') ?? '').trim();
+        if (action === 'select-draft') {
+            state.selected_batch_id = String(button.data('batch-id') ?? '');
+            state.selected_draft_index = Number(button.data('draft-index'));
+            state.error = '';
+            updateMessageBlock(messageId, message);
+            await saveChatConditional();
+            return;
+        }
+
+        if (action === 'generate') {
+            await handleSdToolGenerate(messageId, segmentIndex);
+            return;
+        }
+
+        if (action === 'finish') {
+            await handleSdToolFinish(messageId, segmentIndex);
         }
     });
 

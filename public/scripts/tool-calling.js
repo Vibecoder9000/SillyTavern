@@ -1,6 +1,7 @@
 import { DOMPurify } from '../lib.js';
 import { power_user } from './power-user.js';
 import { accountStorage } from './util/AccountStorage.js';
+import { extension_settings } from './extensions.js';
 
 import {
     addOneMessage,
@@ -331,7 +332,6 @@ const BUILTIN_TOOL_INLINE_KEYS = new Set([
     'steps',
     'cfg_scale',
     'sampler_name',
-    'seed',
     'model',
     'action',
     'selector',
@@ -1280,6 +1280,20 @@ let sandboxWorkspaceRefreshButtonInitialized = false;
 let sandboxWorkspaceAddButtonInitialized = false;
 let sandboxRootPath = '';
 
+function getConfiguredSdToolUrl() {
+    const toolUrl = String(power_user.sd_tool_url ?? '').trim();
+    if (toolUrl) {
+        return toolUrl;
+    }
+
+    const extensionUrl = String(extension_settings?.sd?.auto_url ?? '').trim();
+    if (extensionUrl) {
+        return extensionUrl;
+    }
+
+    return 'http://localhost:7860';
+}
+
 function resolveToolRegistrationValue(value) {
     return typeof value === 'function' ? value() : value;
 }
@@ -1310,7 +1324,8 @@ function getCurrentPlatformSyntaxLabel() {
 
 async function refreshSdToolModelsCache() {
     try {
-        const response = await fetch('/api/extensions/tools/sd_models', {
+        const params = new URLSearchParams({ url: getConfiguredSdToolUrl() });
+        const response = await fetch(`/api/extensions/tools/sd_models?${params.toString()}`, {
             method: 'GET',
             headers: getRequestHeaders(),
         });
@@ -1361,10 +1376,6 @@ function getSdTxt2ImgToolParameters() {
                 type: 'integer',
                 description: 'Pixel height',
             },
-            steps: {
-                type: 'integer',
-                description: 'Steps 1-150',
-            },
             cfg_scale: {
                 type: 'number',
                 description: 'CFG 1-30',
@@ -1373,13 +1384,9 @@ function getSdTxt2ImgToolParameters() {
                 type: 'string',
                 description: 'Name of the sampler to use',
             },
-            seed: {
-                type: 'integer',
-                description: 'Seed -1 is random',
-            },
-            alwayson_scripts: {
-                type: 'object',
-                description: 'Script arguments. See localhost:7860/sdapi/v1/script-info',
+            scheduler: {
+                type: 'string',
+                description: 'Name of the scheduler to use',
             },
         },
         required: ['prompt'],
@@ -4921,28 +4928,46 @@ function registerBuiltinTools() {
             name: 'sd_txt2img',
             description: 'Generates a Stable Diffusion image and saves it to disk.',
             parameters: getSdTxt2ImgToolParameters,
-            action: async ({ prompt, negative_prompt, model, width, height, steps, cfg_scale, sampler_name, seed, alwayson_scripts }) => {
+            action: async ({ prompt, negative_prompt, model, width, height, cfg_scale, sampler_name, scheduler }) => {
                 try {
+                    if (power_user.tool_click_to_execute) {
+                        return JSON.stringify({
+                            type: 'sd_workflow_pending',
+                            message: 'Stable Diffusion draft selection is waiting in the tool card.',
+                        });
+                    }
+
                     const sandbox = getSandboxRequestContext();
 
                     const payload = {
+                        stage: 'final',
                         prompt,
                         negative_prompt: negative_prompt || '',
                         model: model || '',
                         width: width || 1024,
                         height: height || 1024,
-                        steps: steps || 25,
                         cfg_scale: cfg_scale || 5,
                         sampler_name: sampler_name || 'Euler a',
-                        seed: seed ?? -1,
+                        scheduler: scheduler || '',
+                        url: getConfiguredSdToolUrl(),
                         ...sandbox,
                     };
 
-                    if (alwayson_scripts) {
-                        payload.alwayson_scripts = alwayson_scripts;
-                    }
+                    console.warn('SD workflow browser request', {
+                        source: 'tool-calling-sd_txt2img',
+                        stage: payload.stage,
+                        promptLength: String(payload.prompt ?? '').length,
+                        width: payload.width,
+                        height: payload.height,
+                        sampler_name: payload.sampler_name,
+                        scheduler: payload.scheduler,
+                        cfg_scale: payload.cfg_scale,
+                        url: payload.url,
+                        workspace: sandbox.workspace,
+                        character: sandbox.character,
+                    });
 
-                    const response = await fetch('/api/extensions/tools/sd_txt2img', {
+                    const response = await fetch('/api/extensions/tools/sd_txt2img/workflow', {
                         method: 'POST',
                         headers: getRequestHeaders(),
                         body: JSON.stringify(payload),
@@ -4956,12 +4981,12 @@ function registerBuiltinTools() {
                     const result = await response.json();
                     return JSON.stringify({
                         type: 'image_display',
-                        filepath: result.filepath,
-                        info: result.info || 'Image generated successfully.',
+                        filepath: result.image?.filepath,
+                        info: [result.info || 'Image generated successfully.', ...(Array.isArray(result.warnings) ? result.warnings : [])].filter(Boolean).join('\n'),
                         ...sandbox,
                     });
                 } catch (error) {
-                    return `Error: Could not connect to Stable Diffusion WebUI. Make sure it is running at localhost:7860 with --api flag. ${error.message}`;
+                    return `Error: Could not connect to Stable Diffusion WebUI at ${getConfiguredSdToolUrl()}. Make sure it is running with the API enabled. ${error.message}`;
                 }
             },
         },

@@ -352,6 +352,7 @@ export const power_user = {
     auto_list_directory_context: false,
     enable_dangerous_tools: false,
     enable_image_generation: false,
+    sd_tool_url: '',
     enable_browser_tools: false,
     tool_click_to_execute: true,
     tool_bypass_mcp_mutable_warning: true,
@@ -1704,6 +1705,9 @@ export async function loadPowerUserSettings(settings, data) {
     power_user.tool_click_to_execute = power_user.tool_click_to_execute !== undefined
         ? !!power_user.tool_click_to_execute
         : true;
+    power_user.sd_tool_url = typeof power_user.sd_tool_url === 'string'
+        ? power_user.sd_tool_url
+        : '';
     power_user.tool_bypass_mcp_mutable_warning = power_user.tool_bypass_mcp_mutable_warning !== undefined
         ? !!power_user.tool_bypass_mcp_mutable_warning
         : true;
@@ -1941,6 +1945,7 @@ export async function loadPowerUserSettings(settings, data) {
     $('#auto_list_directory_context').prop('checked', power_user.auto_list_directory_context);
     $('#enable_dangerous_tools').prop('checked', power_user.enable_dangerous_tools);
     $('#enable_image_generation').prop('checked', power_user.enable_image_generation);
+    $('#sd_tool_url').val(power_user.sd_tool_url);
     $('#enable_browser_tools').prop('checked', power_user.enable_browser_tools);
     $('#tool_click_to_execute').prop('checked', power_user.tool_click_to_execute);
     $('#tool_bypass_mcp_mutable_warning').prop('checked', power_user.tool_bypass_mcp_mutable_warning);
@@ -4255,6 +4260,12 @@ jQuery(() => {
 
     $('#enable_image_generation').on('input', function () {
         power_user.enable_image_generation = !!$(this).prop('checked');
+        eventSource.emit(event_types.IMAGE_GENERATION_TOGGLED);
+        saveSettingsDebounced();
+    });
+
+    $('#sd_tool_url').on('input', function () {
+        power_user.sd_tool_url = String($(this).val() ?? '').trim();
         eventSource.emit(event_types.IMAGE_GENERATION_TOGGLED);
         saveSettingsDebounced();
     });

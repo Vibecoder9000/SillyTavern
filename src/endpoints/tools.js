@@ -6,6 +6,7 @@ import crypto from 'node:crypto';
 import { imageSize } from 'image-size';
 import { getSandboxDir, getUserSandboxRootDir } from './sandbox.js';
 import { addMcpToolRoutes } from './tools-mcp.js';
+import { tryParse } from '../util.js';
 
 export const router = express.Router();
 
@@ -38,6 +39,818 @@ const BROWSER_SCREENSHOT_CLICK_PERSIST_MS = 5_000;
 const browserStates = new Map();
 const SANDBOX_IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.svg']);
 const SANDBOX_VIDEO_EXTENSIONS = new Set(['.mp4', '.webm', '.ogg', '.mov']);
+const SD_WORKFLOW_DEFAULT_UPSCALER = '4xUltrasharp_4xUltrasharpV10';
+const SD_NEO_PAYLOAD_CACHE_TTL_MS = 5 * 60 * 1000;
+const sdNeoPayloadCache = new Map();
+
+function parseSdGenerationInfo(info) {
+    if (typeof info !== 'string' || !info.trim()) {
+        return {};
+    }
+
+    try {
+        return JSON.parse(info);
+    } catch {
+        return {};
+    }
+}
+
+async function fetchStableDiffusionJson(endpoint, init = {}) {
+    const baseUrl = String(init.baseUrl ?? SD_WEBUI_URL);
+    const requestInit = { ...init };
+    delete requestInit.baseUrl;
+    const response = await fetch(`${baseUrl}${endpoint}`, requestInit);
+    const text = await response.text();
+    let data = null;
+
+    try {
+        data = text ? JSON.parse(text) : null;
+    } catch {
+        data = text;
+    }
+
+    if (!response.ok) {
+        throw new Error(typeof data === 'string' ? data : JSON.stringify(data));
+    }
+
+    return data;
+}
+
+async function fetchStableDiffusionText(endpoint, init = {}) {
+    const baseUrl = String(init.baseUrl ?? SD_WEBUI_URL);
+    const requestInit = { ...init };
+    delete requestInit.baseUrl;
+    const response = await fetch(`${baseUrl}${endpoint}`, requestInit);
+    const text = await response.text();
+
+    if (!response.ok) {
+        throw new Error(text || response.statusText);
+    }
+
+    return text;
+}
+
+function resolveStableDiffusionBaseUrl(source = {}) {
+    const value = Array.isArray(source?.url) ? source.url[0] : source?.url;
+    const rawUrl = String(value ?? '').trim();
+    if (!rawUrl) {
+        return SD_WEBUI_URL;
+    }
+
+    try {
+        const url = new URL(rawUrl);
+        let pathname = url.pathname.replace(/\/+$/, '');
+        if (/\/sdapi\/v1$/i.test(pathname)) {
+            pathname = pathname.replace(/\/sdapi\/v1$/i, '');
+        }
+        url.pathname = pathname || '/';
+        url.search = '';
+        url.hash = '';
+        return url.toString().replace(/\/$/, '');
+    } catch {
+        return rawUrl.replace(/\/+$/, '');
+    }
+}
+
+async function detectStableDiffusionBackend(baseUrl) {
+    try {
+        const info = await fetchStableDiffusionJson('/info', { baseUrl });
+        if (info?.named_endpoints?.['/txt2img']) {
+            return 'neo';
+        }
+    } catch {
+        // Fall through and try the SDAPI compatibility layer.
+    }
+
+    try {
+        await fetchStableDiffusionJson('/sdapi/v1/options', { baseUrl });
+        return 'sdapi';
+    } catch {
+        // Ignore; caller will surface a connection error if nothing matches.
+    }
+
+    return 'unknown';
+}
+
+async function requireStableDiffusionBackend(baseUrl) {
+    const backend = await detectStableDiffusionBackend(baseUrl);
+    if (backend === 'sdapi' || backend === 'neo') {
+        return backend;
+    }
+
+    throw new Error(`Could not detect a supported Stable Diffusion API at ${baseUrl}.`);
+}
+
+async function fetchStableDiffusionNeoInfo(baseUrl) {
+    return fetchStableDiffusionJson('/info', { baseUrl });
+}
+
+async function fetchStableDiffusionNeoConfig(baseUrl) {
+    return fetchStableDiffusionJson('/config', { baseUrl });
+}
+
+function getStableDiffusionNeoTxt2ImgDependency(config) {
+    return Array.isArray(config?.dependencies)
+        ? config.dependencies.find(dep => dep?.api_name === 'txt2img_1' || dep?.api_name === 'txt2img')
+        : null;
+}
+
+function getStableDiffusionNeoConfigComponentMap(config) {
+    const components = new Map();
+    for (const component of config?.components ?? []) {
+        components.set(Number(component?.id), component);
+    }
+    return components;
+}
+
+async function fetchStableDiffusionNeoModels(baseUrl) {
+    const joinResult = await fetchStableDiffusionJson('/call/refresh_model_list', {
+        baseUrl,
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ data: [] }),
+    });
+
+    const eventId = String(joinResult?.event_id ?? '');
+    if (!eventId) {
+        throw new Error('Neo did not return an event_id while refreshing models.');
+    }
+
+    const streamText = await fetchStableDiffusionText(`/call/refresh_model_list/${eventId}`, { baseUrl });
+    const completeLine = streamText.split(/\r?\n/).find(line => line.startsWith('data: ['));
+    const payload = completeLine ? JSON.parse(completeLine.slice(6)) : null;
+    const choices = Array.isArray(payload?.[0]?.choices) ? payload[0].choices : [];
+
+    return choices.map(choice => {
+        const value = Array.isArray(choice) ? String(choice[1] ?? choice[0] ?? '') : String(choice ?? '');
+        const text = Array.isArray(choice) ? String(choice[0] ?? choice[1] ?? '') : String(choice ?? '');
+        return { value, text, title: text, model_name: text };
+    }).filter(model => model.value);
+}
+
+function getStableDiffusionNeoDependency(config, apiName) {
+    return Array.isArray(config?.dependencies)
+        ? config.dependencies.find(dep => dep?.api_name === apiName || dep?.api_name === `/${apiName}`)
+        : null;
+}
+
+function getStableDiffusionNeoParameterIndex(info, label, occurrence = 1) {
+    const parameters = info?.named_endpoints?.['/txt2img']?.parameters;
+    if (!Array.isArray(parameters)) {
+        return -1;
+    }
+
+    let seen = 0;
+    for (const [index, parameter] of parameters.entries()) {
+        if (parameter?.label === label) {
+            seen++;
+            if (seen === occurrence) {
+                return index;
+            }
+        }
+    }
+
+    return -1;
+}
+
+async function captureStableDiffusionNeoTxt2ImgPayload(baseUrl) {
+    const cached = sdNeoPayloadCache.get(baseUrl);
+    if (cached && (Date.now() - cached.capturedAt) < SD_NEO_PAYLOAD_CACHE_TTL_MS) {
+        return structuredClone(cached.payload);
+    }
+
+    const firefox = await getPlaywrightFirefox();
+    const browser = await firefox.launch({ headless: true });
+    const page = await browser.newPage();
+    let payload = null;
+
+    try {
+        await page.route(`${baseUrl.replace(/\/$/, '')}/queue/join*`, async route => {
+            const request = route.request();
+            const body = request.postDataJSON();
+            if (Array.isArray(body?.data) && typeof body?.fn_index === 'number' && body.data.length > 100) {
+                payload = body;
+                await route.abort();
+                return;
+            }
+            await route.continue();
+        });
+
+        await page.goto(baseUrl, { waitUntil: 'domcontentloaded' });
+        await page.getByRole('button', { name: 'Generate' }).click();
+
+        for (let attempt = 0; attempt < 40 && !payload; attempt++) {
+            await page.waitForTimeout(250);
+        }
+    } finally {
+        await page.close().catch(() => {});
+        await browser.close().catch(() => {});
+    }
+
+    if (!payload) {
+        throw new Error('Failed to capture a Neo txt2img payload from the running web UI.');
+    }
+
+    sdNeoPayloadCache.set(baseUrl, {
+        capturedAt: Date.now(),
+        payload: structuredClone(payload),
+    });
+
+    return payload;
+}
+
+async function switchStableDiffusionNeoModel(model, warnings, baseUrl, sessionHash) {
+    if (!model) {
+        return;
+    }
+
+    try {
+        const config = await fetchStableDiffusionNeoConfig(baseUrl);
+        const dependency = getStableDiffusionNeoDependency(config, 'checkpoint_change');
+        if (!dependency) {
+            throw new Error('Neo model-switch endpoint was not found.');
+        }
+
+        const response = await fetch(`${baseUrl}/run/predict`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                data: [model, 'xl'],
+                event_data: null,
+                fn_index: dependency.id,
+                trigger_id: 3663,
+                session_hash: sessionHash || crypto.randomBytes(8).toString('hex'),
+            }),
+        });
+
+        if (!response.ok) {
+            throw new Error(await response.text());
+        }
+    } catch (error) {
+        warnings.push(`Requested model "${model}" was unavailable. Using the currently loaded model instead.`);
+        console.warn('Failed to switch Neo model:', error);
+    }
+}
+
+async function switchStableDiffusionModel(model, warnings, baseUrl) {
+    if (!model) {
+        return;
+    }
+
+    try {
+        let optionsData = null;
+        try {
+            optionsData = await fetchStableDiffusionJson('/sdapi/v1/options', { baseUrl });
+        } catch {
+            optionsData = null;
+        }
+
+        const payload = {
+            sd_model_checkpoint: model,
+        };
+
+        const forgePreset = String(optionsData?.forge_preset ?? '').trim().toLowerCase();
+        const forgePresetKey = forgePreset ? `forge_checkpoint_${forgePreset}` : '';
+        if (forgePresetKey && optionsData && Object.hasOwn(optionsData, forgePresetKey)) {
+            payload[forgePresetKey] = model;
+        }
+
+        await fetchStableDiffusionJson('/sdapi/v1/options', {
+            baseUrl,
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+        });
+    } catch (error) {
+        warnings.push(`Requested model "${model}" was unavailable. Using the currently loaded model instead.`);
+        console.warn('Failed to switch Stable Diffusion model:', error);
+    }
+}
+
+async function getStableDiffusionWorkflowCapabilities(baseUrl) {
+    const warnings = [];
+    const capabilities = {
+        forge: false,
+        adetailer: false,
+        hiresFix: true,
+        upscalerAvailable: false,
+        detectorAvailable: false,
+    };
+
+    try {
+        const optionsData = await fetchStableDiffusionJson('/sdapi/v1/options', { baseUrl });
+        capabilities.forge = !!optionsData && typeof optionsData === 'object' && 'forge_preset' in optionsData;
+    } catch (error) {
+        warnings.push('Could not verify Forge capabilities from the running backend.');
+        console.warn('Failed to inspect Stable Diffusion options:', error);
+    }
+
+    try {
+        const upscalers = await fetchStableDiffusionJson('/sdapi/v1/upscalers', { baseUrl });
+        capabilities.upscalerAvailable = Array.isArray(upscalers) && upscalers.some(item => String(item?.name ?? '').trim() === SD_WORKFLOW_DEFAULT_UPSCALER);
+        if (!capabilities.upscalerAvailable) {
+            warnings.push(`Final enhancement warning: upscaler "${SD_WORKFLOW_DEFAULT_UPSCALER}" was not found.`);
+        }
+    } catch (error) {
+        warnings.push('Final enhancement warning: could not inspect installed upscalers.');
+        console.warn('Failed to inspect Stable Diffusion upscalers:', error);
+    }
+
+    try {
+        const scriptInfo = await fetchStableDiffusionJson('/sdapi/v1/script-info', { baseUrl });
+        const scriptNames = Array.isArray(scriptInfo) ? scriptInfo.map(script => String(script?.name ?? '').trim().toLowerCase()) : [];
+        capabilities.adetailer = scriptNames.includes('adetailer');
+        capabilities.detectorAvailable = capabilities.adetailer;
+        if (!capabilities.adetailer) {
+            warnings.push('Final enhancement warning: ADetailer was not found.');
+        }
+    } catch (error) {
+        warnings.push('Final enhancement warning: could not inspect script-info for ADetailer.');
+        console.warn('Failed to inspect Stable Diffusion script-info:', error);
+    }
+
+    if (!capabilities.forge) {
+        warnings.push('Final enhancement warning: Forge-specific enhancements could not be confirmed.');
+    }
+
+    return { capabilities, warnings };
+}
+
+async function getStableDiffusionNeoWorkflowCapabilities(baseUrl) {
+    const warnings = [];
+    const capabilities = {
+        forge: true,
+        adetailer: false,
+        hiresFix: false,
+        deepCache: false,
+        upscalerAvailable: false,
+        detectorAvailable: false,
+        cfgCutoff: false,
+    };
+
+    try {
+        const info = await fetchStableDiffusionNeoInfo(baseUrl);
+        const config = await fetchStableDiffusionNeoConfig(baseUrl);
+        const parameters = info?.named_endpoints?.['/txt2img']?.parameters ?? [];
+        const labels = parameters.map(parameter => String(parameter?.label ?? ''));
+        const components = config?.components ?? [];
+        const hasComponentLabel = label => components.some(component => String(component?.props?.label ?? '') === label);
+
+        capabilities.hiresFix = labels.includes('Hires. fix');
+        capabilities.upscalerAvailable = labels.includes('Upscaler') || hasComponentLabel('Upscaler');
+        capabilities.deepCache = labels.includes('Enable DeepCache for passes') || hasComponentLabel('Enable DeepCache for passes');
+        capabilities.cfgCutoff = labels.includes('CFG cutoff step') || hasComponentLabel('CFG cutoff step');
+
+        if (!capabilities.hiresFix) {
+            warnings.push('Hires.fix unavailable: Neo does not expose the Hires. fix controls.');
+        }
+        if (!capabilities.cfgCutoff) {
+            warnings.push('CFG cutoff unavailable: Neo does not expose CFG cutoff controls.');
+        }
+        if (!capabilities.deepCache) {
+            warnings.push('DeepCache unavailable: Neo does not expose DeepCache controls.');
+        }
+    } catch (error) {
+        warnings.push('Could not inspect Neo txt2img controls.');
+        console.warn('Failed to inspect Neo txt2img controls:', error);
+    }
+
+    try {
+        const adetailer = await fetchStableDiffusionJson('/adetailer/v1/ad_model', { baseUrl });
+        const models = Array.isArray(adetailer?.ad_model) ? adetailer.ad_model.map(item => String(item)) : [];
+        capabilities.adetailer = models.length > 0;
+        capabilities.detectorAvailable = models.includes('face_yolov8s.pt');
+        if (!capabilities.adetailer) {
+            warnings.push('ADetailer unavailable: Neo did not report any ADetailer detectors.');
+        } else if (!capabilities.detectorAvailable) {
+            warnings.push('ADetailer warning: face_yolov8s.pt was not found.');
+        }
+    } catch (error) {
+        warnings.push('ADetailer warning: could not inspect installed ADetailer detectors.');
+        console.warn('Failed to inspect Neo ADetailer detectors:', error);
+    }
+
+    return { capabilities, warnings };
+}
+
+async function getStableDiffusionProgressState(baseUrl) {
+    try {
+        const data = await fetchStableDiffusionJson('/sdapi/v1/progress', { baseUrl });
+        return {
+            progress: Number.isFinite(Number(data?.progress)) ? Number(data.progress) : 0,
+            eta_relative: Number.isFinite(Number(data?.eta_relative)) ? Number(data.eta_relative) : null,
+            state: data?.state ?? {},
+        };
+    } catch (error) {
+        console.warn('Failed to inspect Stable Diffusion progress:', error);
+        return {
+            progress: 0,
+            eta_relative: null,
+            state: {},
+        };
+    }
+}
+
+async function getStableDiffusionNeoProgressState(baseUrl, taskId) {
+    if (!taskId) {
+        return {
+            progress: 0,
+            eta_relative: null,
+            state: {},
+        };
+    }
+
+    try {
+        const data = await fetchStableDiffusionJson('/internal/progress', {
+            baseUrl,
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                id_task: taskId,
+                live_preview: false,
+            }),
+        });
+
+        return {
+            progress: Number.isFinite(Number(data?.progress)) ? Number(data.progress) : 0,
+            eta_relative: Number.isFinite(Number(data?.eta)) ? Number(data.eta) : null,
+            state: {
+                active: !!data?.active,
+                queued: !!data?.queued,
+                completed: !!data?.completed,
+                textinfo: data?.textinfo ?? '',
+            },
+        };
+    } catch (error) {
+        console.warn('Failed to inspect Neo progress:', error);
+        return {
+            progress: 0,
+            eta_relative: null,
+            state: {},
+        };
+    }
+}
+
+async function saveStableDiffusionImages(req, images, workspace, character, info) {
+    const sandboxDir = getSandboxDir(req.user.profile.handle, workspace, character);
+    await fs.mkdir(sandboxDir, { recursive: true });
+
+    const parsedInfo = parseSdGenerationInfo(info);
+    const infotexts = Array.isArray(parsedInfo?.infotexts) ? parsedInfo.infotexts : [];
+    const seeds = Array.isArray(parsedInfo?.all_seeds) ? parsedInfo.all_seeds : [];
+    const subseeds = Array.isArray(parsedInfo?.all_subseeds) ? parsedInfo.all_subseeds : [];
+
+    const savedImages = [];
+    for (const [index, imageBase64] of images.entries()) {
+        const imageBuffer = Buffer.from(imageBase64, 'base64');
+        const filename = `sd_${Date.now()}_${index}_${crypto.randomBytes(4).toString('hex')}.png`;
+        const filepath = path.join(sandboxDir, filename);
+        await fs.writeFile(filepath, imageBuffer);
+        savedImages.push({
+            filepath: filename,
+            seed: Number.isFinite(Number(seeds[index])) ? Number(seeds[index]) : null,
+            subseed: Number.isFinite(Number(subseeds[index])) ? Number(subseeds[index]) : null,
+            generationInfo: infotexts[index] || info || '',
+        });
+    }
+
+    return savedImages;
+}
+
+async function saveStableDiffusionNeoImages(req, galleryItems, workspace, character, info) {
+    const sandboxDir = getSandboxDir(req.user.profile.handle, workspace, character);
+    await fs.mkdir(sandboxDir, { recursive: true });
+
+    const parsedInfo = typeof info === 'string' ? tryParse(info) ?? parseSdGenerationInfo(info) : (info ?? {});
+    const infotexts = Array.isArray(parsedInfo?.infotexts) ? parsedInfo.infotexts : [];
+    const seeds = Array.isArray(parsedInfo?.all_seeds) ? parsedInfo.all_seeds : [];
+    const subseeds = Array.isArray(parsedInfo?.all_subseeds) ? parsedInfo.all_subseeds : [];
+    const expectedImageCount = Math.max(seeds.length, subseeds.length, infotexts.length, 0);
+    const reportedFirstImageIndex = Number(parsedInfo?.index_of_first_image);
+    const fallbackFirstImageIndex = expectedImageCount > 0 && galleryItems.length > expectedImageCount
+        ? galleryItems.length - expectedImageCount
+        : 0;
+    const firstImageIndex = Number.isInteger(reportedFirstImageIndex)
+        && reportedFirstImageIndex >= 0
+        && reportedFirstImageIndex < galleryItems.length
+        ? Math.max(reportedFirstImageIndex, fallbackFirstImageIndex)
+        : fallbackFirstImageIndex;
+    const imageItems = galleryItems.slice(
+        firstImageIndex,
+        expectedImageCount > 0 ? firstImageIndex + expectedImageCount : undefined,
+    );
+
+    const savedImages = [];
+    for (const [index, item] of imageItems.entries()) {
+        const sourcePath = item?.image?.path;
+        if (!sourcePath) {
+            continue;
+        }
+
+        const extension = path.extname(sourcePath) || '.png';
+        const filename = `sd_${Date.now()}_${index}_${crypto.randomBytes(4).toString('hex')}${extension}`;
+        const filepath = path.join(sandboxDir, filename);
+        await fs.copyFile(sourcePath, filepath);
+        savedImages.push({
+            filepath: filename,
+            seed: Number.isFinite(Number(seeds[index])) ? Number(seeds[index]) : null,
+            subseed: Number.isFinite(Number(subseeds[index])) ? Number(subseeds[index]) : null,
+            generationInfo: infotexts[index] || JSON.stringify(parsedInfo || {}),
+        });
+    }
+
+    return savedImages;
+}
+
+function buildStableDiffusionDraftPayload(body) {
+    return {
+        prompt: body.prompt,
+        negative_prompt: body.negative_prompt || '',
+        width: body.width || 1024,
+        height: body.height || 1024,
+        steps: 12,
+        cfg_scale: body.cfg_scale || 5,
+        sampler_name: body.sampler_name || 'Euler a',
+        scheduler: body.scheduler || undefined,
+        seed: body.seed ?? -1,
+        batch_size: 4,
+        n_iter: 1,
+        enable_hr: false,
+        save_images: false,
+        send_images: true,
+        do_not_save_grid: true,
+        do_not_save_samples: true,
+    };
+}
+
+function buildStableDiffusionFinalPayload(body, selectedSeed, capabilities) {
+    const payload = {
+        prompt: body.prompt,
+        negative_prompt: body.negative_prompt || '',
+        width: body.width || 1024,
+        height: body.height || 1024,
+        steps: 24,
+        cfg_scale: body.cfg_scale || 5,
+        sampler_name: body.sampler_name || 'Euler a',
+        scheduler: body.scheduler || undefined,
+        seed: Number.isFinite(Number(selectedSeed)) ? Number(selectedSeed) : (body.seed ?? -1),
+        batch_size: 1,
+        n_iter: 1,
+        save_images: false,
+        send_images: true,
+        do_not_save_grid: true,
+        do_not_save_samples: true,
+    };
+
+    if (capabilities.hiresFix && capabilities.upscalerAvailable) {
+        payload.enable_hr = true;
+        payload.hr_upscaler = SD_WORKFLOW_DEFAULT_UPSCALER;
+        payload.hr_scale = 1.75;
+        payload.hr_second_pass_steps = 8;
+        payload.denoising_strength = 0.4;
+        // Forge Neo's sdapi path expects the hires module list to be an iterable.
+        // Leaving it unset can become None and crash the hires pass.
+        payload.hr_additional_modules = ['Use same choices'];
+    }
+
+    if (capabilities.adetailer && capabilities.detectorAvailable) {
+        payload.alwayson_scripts = {
+            ADetailer: {
+                args: [
+                    true,
+                    true,
+                    {
+                        ad_model: 'face_yolov8s.pt',
+                        ad_prompt: ' ',
+                        ad_negative_prompt: ' ',
+                    },
+                ],
+            },
+        };
+    }
+
+    return payload;
+}
+
+function setStableDiffusionNeoPayloadValue(payload, info, label, value, occurrence = 1) {
+    const index = getStableDiffusionNeoParameterIndex(info, label, occurrence);
+    if (index >= 0 && Array.isArray(payload?.data)) {
+        payload.data[index] = value;
+    }
+}
+
+function setStableDiffusionNeoPayloadStateValue(payload, config, matcher, updateValue) {
+    const dependency = getStableDiffusionNeoTxt2ImgDependency(config);
+    if (!dependency || !Array.isArray(payload?.data)) {
+        return false;
+    }
+
+    const componentMap = getStableDiffusionNeoConfigComponentMap(config);
+
+    for (const [index, inputId] of dependency.inputs.entries()) {
+        const component = componentMap.get(Number(inputId));
+        if (!component) {
+            continue;
+        }
+        if (!matcher(component)) {
+            continue;
+        }
+
+        payload.data[index] = updateValue(payload.data[index], component);
+        return true;
+    }
+
+    return false;
+}
+
+function getStableDiffusionNeoComponentDefaultValue(component) {
+    if (component?.props && Object.hasOwn(component.props, 'value')) {
+        return structuredClone(component.props.value);
+    }
+
+    if (component?.type === 'gallery') {
+        return [];
+    }
+
+    if (component?.type === 'file') {
+        return null;
+    }
+
+    return undefined;
+}
+
+function resetStableDiffusionNeoScriptInputs(payload, config, matcher) {
+    const dependency = getStableDiffusionNeoTxt2ImgDependency(config);
+    if (!dependency || !Array.isArray(payload?.data)) {
+        return;
+    }
+
+    const componentMap = getStableDiffusionNeoConfigComponentMap(config);
+
+    for (const [index, inputId] of dependency.inputs.entries()) {
+        const component = componentMap.get(Number(inputId));
+        if (!component || !matcher(component)) {
+            continue;
+        }
+
+        payload.data[index] = getStableDiffusionNeoComponentDefaultValue(component);
+    }
+}
+
+function buildStableDiffusionNeoADetailerState(currentValue = {}) {
+    return {
+        ...currentValue,
+        ad_model: 'face_yolov8s.pt',
+        ad_prompt: ' ',
+        ad_negative_prompt: ' ',
+        ad_tab_enable: true,
+    };
+}
+
+function summarizeStableDiffusionWorkflowRequest(details) {
+    return {
+        backend: details.backend,
+        stage: details.stage,
+        promptLength: String(details.prompt ?? '').length,
+        negativePromptLength: String(details.negative_prompt ?? '').length,
+        width: details.width,
+        height: details.height,
+        cfg_scale: details.cfg_scale,
+        sampler_name: details.sampler_name,
+        scheduler: details.scheduler,
+        seed: details.seed,
+        selected_seed: details.selected_seed ?? null,
+        batch_size: details.batch_size,
+        steps: details.steps,
+        cfg_cutoff_step: details.cfg_cutoff_step ?? null,
+        deepcache: details.deepcache ?? null,
+        hires_fix: details.hires_fix ?? null,
+        hires_steps: details.hires_steps ?? null,
+        hr_scale: details.hr_scale ?? null,
+        denoising_strength: details.denoising_strength ?? null,
+        adetailer: details.adetailer ?? null,
+        script: details.script ?? null,
+        workspace: details.workspace ?? null,
+        character: details.character ?? null,
+    };
+}
+
+async function appendStableDiffusionWorkflowRouteLog(entry) {
+    try {
+        const logPath = path.join(globalThis.DATA_ROOT, 'sd-workflow-route.log');
+        const line = `${new Date().toISOString()} ${JSON.stringify(entry)}\n`;
+        await fs.appendFile(logPath, line, 'utf8');
+    } catch (error) {
+        console.warn('Failed to write sd workflow route log:', error);
+    }
+}
+
+function applyStableDiffusionNeoOverrides(payload, info, config, body, selectedSeed, stage, capabilities, warnings, sessionHash) {
+    if (!Array.isArray(payload?.data)) {
+        throw new Error('Neo payload is missing the txt2img data array.');
+    }
+
+    const taskId = String(body.task_id || payload.data[0] || `task(${crypto.randomBytes(8).toString('hex')})`);
+    payload.data[0] = taskId;
+    payload.session_hash = sessionHash || crypto.randomBytes(8).toString('hex');
+
+    setStableDiffusionNeoPayloadValue(payload, info, 'Prompt', body.prompt ?? '', 1);
+    setStableDiffusionNeoPayloadValue(payload, info, 'Negative Prompt', body.negative_prompt || '', 1);
+    setStableDiffusionNeoPayloadValue(payload, info, 'Styles', []);
+    setStableDiffusionNeoPayloadValue(payload, info, 'Batch Count', 1);
+    setStableDiffusionNeoPayloadValue(payload, info, 'Batch Size', stage === 'draft' ? 4 : 1);
+    setStableDiffusionNeoPayloadValue(payload, info, 'Width', body.width || 1024);
+    setStableDiffusionNeoPayloadValue(payload, info, 'Height', body.height || 1024);
+    resetStableDiffusionNeoScriptInputs(
+        payload,
+        config,
+        component => {
+            const elemId = String(component?.props?.elem_id ?? '');
+            return elemId === 'script_list'
+                || elemId.startsWith('script_txt2img_prompt_matrix_')
+                || elemId.startsWith('script_txt2img_prompts_from_file_or_textbox_')
+                || elemId.startsWith('script_txt2img_xyz_plot_')
+                || elemId.startsWith('script_txt2img_imagestitch_');
+        },
+    );
+    setStableDiffusionNeoPayloadValue(payload, info, 'Script', 'None');
+    setStableDiffusionNeoPayloadValue(payload, info, 'Sampling Method', body.sampler_name || 'Euler a');
+    setStableDiffusionNeoPayloadValue(payload, info, 'Schedule Type', body.scheduler || 'Automatic');
+    setStableDiffusionNeoPayloadValue(payload, info, 'Seed', Number.isFinite(Number(selectedSeed)) ? Number(selectedSeed) : (body.seed ?? -1));
+    setStableDiffusionNeoPayloadValue(payload, info, 'CFG Scale', body.cfg_scale || 5);
+    setStableDiffusionNeoPayloadValue(payload, info, 'Distilled CFG Scale', stage === 'draft' ? 4 : 8);
+    setStableDiffusionNeoPayloadValue(payload, info, 'Sampling Steps', stage === 'draft' ? 12 : 24);
+    setStableDiffusionNeoPayloadValue(payload, info, 'CFG cutoff step', stage === 'draft' ? 4 : 8);
+    setStableDiffusionNeoPayloadValue(payload, info, 'CFG after cutoff', 1);
+    if (capabilities.deepCache) {
+        setStableDiffusionNeoPayloadValue(payload, info, 'Enable DeepCache for passes', stage === 'draft' ? 'First' : 'Both');
+        setStableDiffusionNeoPayloadValue(payload, info, 'Enable for ADetailer pass', false);
+    }
+
+    if (stage === 'draft') {
+        setStableDiffusionNeoPayloadValue(payload, info, 'Hires. fix', false);
+        setStableDiffusionNeoPayloadValue(payload, info, 'ADetailer', false);
+        return { taskId };
+    }
+
+    if (capabilities.hiresFix) {
+        setStableDiffusionNeoPayloadValue(payload, info, 'Hires. fix', true);
+        setStableDiffusionNeoPayloadValue(payload, info, 'Denoising strength', 0.4);
+        setStableDiffusionNeoPayloadValue(payload, info, 'Upscale by', 1.75);
+        setStableDiffusionNeoPayloadValue(payload, info, 'Hires steps', 8);
+    }
+
+    if (capabilities.adetailer && capabilities.detectorAvailable) {
+        setStableDiffusionNeoPayloadValue(payload, info, 'ADetailer', true);
+        setStableDiffusionNeoPayloadStateValue(
+            payload,
+            config,
+            component => component?.type === 'state'
+                && component?.props?.value
+                && typeof component.props.value === 'object'
+                && 'ad_model' in component.props.value,
+            currentValue => buildStableDiffusionNeoADetailerState(currentValue),
+        );
+    }
+
+    return { taskId };
+}
+
+function parseStableDiffusionNeoQueueResult(streamText) {
+    const events = streamText
+        .split(/\r?\n\r?\n/)
+        .map(block => block.split(/\r?\n/).filter(line => line.startsWith('data: ')).map(line => line.slice(6)).join('\n'))
+        .filter(Boolean)
+        .map(data => tryParse(data) ?? data);
+
+    return events.find(event => event?.msg === 'process_completed') ?? null;
+}
+
+
+async function runStableDiffusionNeoTxt2Img(baseUrl, payload) {
+    const joinResult = await fetchStableDiffusionJson('/queue/join?', {
+        baseUrl,
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+    });
+
+    const eventId = String(joinResult?.event_id ?? '');
+    if (!eventId) {
+        throw new Error('Neo did not return an event_id.');
+    }
+
+    const streamText = await fetchStableDiffusionText(`/queue/data?session_hash=${encodeURIComponent(payload.session_hash)}`, {
+        baseUrl,
+    });
+
+    const completed = parseStableDiffusionNeoQueueResult(streamText);
+    if (!completed?.success) {
+        throw new Error(completed?.output?.error || 'Neo generation failed.');
+    }
+
+    return completed.output;
+}
 
 // Track active processes to kill previous ones when new ones start
 const activeProcesses = {
@@ -3026,93 +3839,288 @@ router.post('/executepython/stop', (req, res) => {
 
 router.get('/sd_models', async (_req, res) => {
     try {
-        const response = await fetch(`${SD_WEBUI_URL}/sdapi/v1/sd-models`);
+        const baseUrl = resolveStableDiffusionBaseUrl(_req.query);
+        const backend = await requireStableDiffusionBackend(baseUrl);
+        if (backend === 'neo') {
+            return res.json(await fetchStableDiffusionNeoModels(baseUrl));
+        }
+
+        const response = await fetch(`${baseUrl}/sdapi/v1/sd-models`);
         if (!response.ok) {
             const text = await response.text();
             return res.status(response.status).json({ error: `SD WebUI error: ${text}` });
         }
-        const models = await response.json();
-        return res.json(models);
+        return res.json(await response.json());
     } catch (error) {
         console.error('Failed to fetch SD models:', error);
-        return res.status(502).json({ error: `Could not connect to Stable Diffusion WebUI at ${SD_WEBUI_URL}. Is it running with --api?` });
+        const baseUrl = resolveStableDiffusionBaseUrl(_req.query);
+        return res.status(502).json({ error: `Could not connect to Stable Diffusion WebUI at ${baseUrl}.` });
     }
 });
 
-router.post('/sd_txt2img', async (req, res) => {
+router.get('/sd_txt2img/progress', async (req, res) => {
     try {
-        const { 
-            prompt, negative_prompt, model, width, height, 
-            steps, cfg_scale, sampler_name, seed, 
-            workspace, character, alwayson_scripts 
-        } = req.body;
+        const baseUrl = resolveStableDiffusionBaseUrl(req.query);
+        const backend = await requireStableDiffusionBackend(baseUrl);
+        const progress = backend === 'neo'
+            ? await getStableDiffusionNeoProgressState(baseUrl, String(req.query.task_id || ''))
+            : await getStableDiffusionProgressState(baseUrl);
+        return res.json(progress);
+    } catch (error) {
+        console.error('Failed to fetch Stable Diffusion progress:', error);
+        return res.status(502).json({ error: `Could not connect to Stable Diffusion WebUI at ${resolveStableDiffusionBaseUrl(req.query)}.` });
+    }
+});
+
+router.post('/sd_txt2img/workflow', async (req, res) => {
+    try {
+        const {
+            stage = 'final',
+            prompt,
+            negative_prompt,
+            model,
+            width,
+            height,
+            cfg_scale,
+            sampler_name,
+            scheduler,
+            seed,
+            selected_seed,
+            task_id,
+            workspace,
+            character,
+        } = req.body ?? {};
 
         if (!prompt) {
             return res.status(400).json({ error: 'prompt is required' });
         }
+        const baseUrl = resolveStableDiffusionBaseUrl(req.body);
+        const backend = await requireStableDiffusionBackend(baseUrl);
+        await appendStableDiffusionWorkflowRouteLog({
+            event: 'route-hit',
+            backend,
+            stage,
+            promptLength: String(prompt ?? '').length,
+            width: width || 1024,
+            height: height || 1024,
+            hasSelectedSeed: selected_seed !== undefined && selected_seed !== null,
+        });
 
-        // If a model is specified, switch to it first
-        if (model) {
-            const optionsRes = await fetch(`${SD_WEBUI_URL}/sdapi/v1/options`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ sd_model_checkpoint: model }),
+        if (backend === 'neo') {
+            const neoSessionHash = crypto.randomBytes(8).toString('hex');
+            const { capabilities, warnings } = await getStableDiffusionNeoWorkflowCapabilities(baseUrl);
+            await switchStableDiffusionNeoModel(model, warnings, baseUrl, neoSessionHash);
+
+            const info = await fetchStableDiffusionNeoInfo(baseUrl);
+            const config = await fetchStableDiffusionNeoConfig(baseUrl);
+            const payload = await captureStableDiffusionNeoTxt2ImgPayload(baseUrl);
+            const { taskId } = applyStableDiffusionNeoOverrides(payload, info, config, {
+                prompt,
+                negative_prompt,
+                width,
+                height,
+                cfg_scale,
+                sampler_name,
+                scheduler,
+                seed,
+                task_id,
+            }, selected_seed, stage, capabilities, warnings, neoSessionHash);
+            await appendStableDiffusionWorkflowRouteLog({
+                event: 'neo-request',
+                taskId,
+                request: summarizeStableDiffusionWorkflowRequest({
+                    backend,
+                    stage,
+                    prompt,
+                    negative_prompt,
+                    width: width || 1024,
+                    height: height || 1024,
+                    cfg_scale: cfg_scale || 5,
+                    sampler_name: sampler_name || 'Euler a',
+                    scheduler: scheduler || 'Automatic',
+                    seed,
+                    selected_seed,
+                    batch_size: stage === 'draft' ? 4 : 1,
+                    steps: stage === 'draft' ? 12 : 24,
+                    cfg_cutoff_step: capabilities.cfgCutoff ? (stage === 'draft' ? 4 : 8) : null,
+                    deepcache: capabilities.deepCache ? (stage === 'draft' ? 'First' : 'Both') : null,
+                    hires_fix: stage === 'final' && capabilities.hiresFix,
+                    hires_steps: stage === 'final' && capabilities.hiresFix ? 8 : null,
+                    hr_scale: stage === 'final' && capabilities.hiresFix ? 1.75 : null,
+                    denoising_strength: stage === 'final' && capabilities.hiresFix ? 0.4 : null,
+                    adetailer: stage === 'final' && capabilities.adetailer && capabilities.detectorAvailable,
+                    script: 'None',
+                    workspace,
+                    character,
+                }),
             });
-            if (!optionsRes.ok) {
-                const text = await optionsRes.text();
-                return res.status(optionsRes.status).json({ error: `Failed to switch model: ${text}` });
+            console.warn('Stable Diffusion workflow request:', summarizeStableDiffusionWorkflowRequest({
+                backend,
+                stage,
+                prompt,
+                negative_prompt,
+                width: width || 1024,
+                height: height || 1024,
+                cfg_scale: cfg_scale || 5,
+                sampler_name: sampler_name || 'Euler a',
+                scheduler: scheduler || 'Automatic',
+                seed,
+                selected_seed,
+                batch_size: stage === 'draft' ? 4 : 1,
+                steps: stage === 'draft' ? 12 : 24,
+                cfg_cutoff_step: capabilities.cfgCutoff ? (stage === 'draft' ? 4 : 8) : null,
+                deepcache: capabilities.deepCache ? (stage === 'draft' ? 'First' : 'Both') : null,
+                hires_fix: stage === 'final' && capabilities.hiresFix,
+                hires_steps: stage === 'final' && capabilities.hiresFix ? 8 : null,
+                hr_scale: stage === 'final' && capabilities.hiresFix ? 1.75 : null,
+                denoising_strength: stage === 'final' && capabilities.hiresFix ? 0.4 : null,
+                adetailer: stage === 'final' && capabilities.adetailer && capabilities.detectorAvailable,
+                script: 'None',
+                workspace,
+                character,
+            }));
+
+            const neoResult = await runStableDiffusionNeoTxt2Img(baseUrl, payload);
+            const outputData = Array.isArray(neoResult?.data) ? neoResult.data : [];
+            const gallery = Array.isArray(outputData[0]?.value) ? outputData[0].value : [];
+            const generationInfo = String(outputData[2] || '');
+            const savedImages = await saveStableDiffusionNeoImages(req, gallery, workspace, character, generationInfo);
+
+            if (stage === 'draft') {
+                return res.json({
+                    taskId,
+                    warnings,
+                    images: savedImages,
+                    info: generationInfo,
+                });
             }
+
+            return res.json({
+                taskId,
+                warnings,
+                image: savedImages[0] ?? null,
+                info: generationInfo,
+            });
         }
 
-        const payload = {
+        const { capabilities, warnings } = await getStableDiffusionWorkflowCapabilities(baseUrl);
+        await switchStableDiffusionModel(model, warnings, baseUrl);
+
+        if (stage === 'draft') {
+            const payload = buildStableDiffusionDraftPayload({
+                prompt,
+                negative_prompt,
+                width,
+                height,
+                cfg_scale,
+                sampler_name,
+                scheduler,
+                seed,
+            });
+
+            const draftResult = await fetchStableDiffusionJson('/sdapi/v1/txt2img', {
+                baseUrl,
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload),
+            });
+
+            if (!Array.isArray(draftResult?.images) || draftResult.images.length === 0) {
+                return res.status(500).json({ error: 'No draft images returned from SD WebUI' });
+            }
+
+            const savedDrafts = await saveStableDiffusionImages(req, draftResult.images, workspace, character, draftResult.info || '');
+            return res.json({
+                taskId: task_id || null,
+                warnings,
+                images: savedDrafts,
+                info: draftResult.info || '',
+            });
+        }
+
+        let finalPayload = buildStableDiffusionFinalPayload({
             prompt,
             negative_prompt,
             width,
             height,
-            steps,
             cfg_scale,
             sampler_name,
+            scheduler,
             seed,
-        };
+        }, selected_seed, capabilities);
 
-        if (alwayson_scripts) {
-            payload.alwayson_scripts = alwayson_scripts;
+        let finalResult;
+        try {
+            finalResult = await fetchStableDiffusionJson('/sdapi/v1/txt2img', {
+                baseUrl,
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(finalPayload),
+            });
+        } catch (error) {
+            const errorText = String(error?.message ?? error);
+
+            if (finalPayload.alwayson_scripts) {
+                warnings.push(`Final enhancement unavailable: ${errorText}`);
+                delete finalPayload.alwayson_scripts;
+                try {
+                    finalResult = await fetchStableDiffusionJson('/sdapi/v1/txt2img', {
+                        baseUrl,
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(finalPayload),
+                    });
+                } catch (retryError) {
+                    const retryText = String(retryError?.message ?? retryError);
+                    if (finalPayload.enable_hr) {
+                        warnings.push(`Hires.fix unavailable: ${retryText}`);
+                        delete finalPayload.enable_hr;
+                        delete finalPayload.hr_upscaler;
+                        delete finalPayload.hr_scale;
+                        delete finalPayload.hr_second_pass_steps;
+                        delete finalPayload.denoising_strength;
+                        finalResult = await fetchStableDiffusionJson('/sdapi/v1/txt2img', {
+                            baseUrl,
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(finalPayload),
+                        });
+                    } else {
+                        throw retryError;
+                    }
+                }
+            } else if (finalPayload.enable_hr) {
+                warnings.push(`Hires.fix unavailable: ${errorText}`);
+                delete finalPayload.enable_hr;
+                delete finalPayload.hr_upscaler;
+                delete finalPayload.hr_scale;
+                delete finalPayload.hr_second_pass_steps;
+                delete finalPayload.denoising_strength;
+                finalResult = await fetchStableDiffusionJson('/sdapi/v1/txt2img', {
+                    baseUrl,
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(finalPayload),
+                });
+            } else {
+                throw error;
+            }
         }
 
-        // Generate the image
-        const genResponse = await fetch(`${SD_WEBUI_URL}/sdapi/v1/txt2img`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload),
-        });
-
-        if (!genResponse.ok) {
-            const text = await genResponse.text();
-            return res.status(genResponse.status).json({ error: `Image generation failed: ${text}` });
+        if (!Array.isArray(finalResult?.images) || finalResult.images.length === 0) {
+            return res.status(500).json({ error: 'No final image returned from SD WebUI' });
         }
 
-        const genResult = await genResponse.json();
-
-        if (!genResult.images || genResult.images.length === 0) {
-            return res.status(500).json({ error: 'No images returned from SD WebUI' });
-        }
-
-        // Save the first image to the uploads directory
-        const imageBuffer = Buffer.from(genResult.images[0], 'base64');
-        const filename = `sd_${Date.now()}_${crypto.randomBytes(4).toString('hex')}.png`;
-        const sandboxDir = getSandboxDir(req.user.profile.handle, workspace, character);
-        const filepath = path.join(sandboxDir, filename);
-
-        await fs.mkdir(sandboxDir, { recursive: true });
-        await fs.writeFile(filepath, imageBuffer);
-
+        const savedFinals = await saveStableDiffusionImages(req, finalResult.images, workspace, character, finalResult.info || '');
         return res.json({
-            filepath: filename,
-            info: genResult.info || 'Image generated successfully.',
+            taskId: task_id || null,
+            warnings,
+            image: savedFinals[0],
+            info: finalResult.info || '',
         });
     } catch (error) {
-        console.error('Failed to generate image via SD WebUI:', error);
-        return res.status(502).json({ error: `Could not connect to Stable Diffusion WebUI at ${SD_WEBUI_URL}. Is it running with --api?` });
+        console.error('Failed to run Stable Diffusion workflow:', error);
+        return res.status(502).json({ error: `Stable Diffusion workflow failed: ${String(error?.message ?? error)}` });
     }
 });
 

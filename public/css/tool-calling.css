@@ -1825,6 +1825,100 @@ body.hide-tool-messages .tool-result-message {
     pointer-events: none;
 }
 
+.sd-tool-workflow {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    margin-top: 12px;
+}
+
+.sd-tool-actions {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.sd-tool-progress-button {
+    position: relative;
+    overflow: hidden;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 30px;
+    padding: 4px 8px;
+}
+
+.sd-tool-progress-button.executing,
+.sd-tool-progress-button:disabled {
+    opacity: 0.8;
+    pointer-events: none;
+}
+
+.sd-tool-progress-button::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(90deg, rgba(74, 132, 74, 0.45), rgba(74, 132, 74, 0.2));
+    transform: scaleX(var(--progress, 0));
+    transform-origin: left;
+    z-index: 0;
+}
+
+.sd-tool-progress-button span {
+    position: relative;
+    z-index: 1;
+}
+
+.sd-tool-batches {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.sd-tool-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+    width: min(100%, 420px);
+}
+
+.sd-tool-draft-cell {
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 8px;
+    padding: 0;
+    overflow: hidden;
+    background: rgba(255, 255, 255, 0.04);
+    min-height: 80px;
+}
+
+.sd-tool-draft-cell--selected {
+    filter: brightness(1.12);
+    border-color: rgba(122, 184, 122, 0.7);
+}
+
+.sd-tool-draft-image,
+.sd-tool-draft-placeholder {
+    width: 100%;
+    height: 100%;
+    display: block;
+    object-fit: cover;
+}
+
+.sd-tool-draft-placeholder {
+    background: rgba(255, 255, 255, 0.05);
+}
+
+.sd-tool-warning-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.sd-tool-warning {
+    font-size: calc(var(--mainFontSize) * 0.9);
+    opacity: 0.9;
+}
+
 @media screen and (max-width: 600px) {
     .tool-call-header {
         flex-direction: column;

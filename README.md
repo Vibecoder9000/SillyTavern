@@ -31,7 +31,7 @@ A complete tool calling infrastructure that enables LLMs to interact with your s
   - UTF-8 encoding support on Windows
   - Real-time output streaming
 
-- **Image Generation** - Integration with Stable Diffusion WebUI
+- **Image Generation** - Integration with Forge Neo or Forge
   - Generate images via txt2img API
   - Automatic saving to user's sandbox directory
 

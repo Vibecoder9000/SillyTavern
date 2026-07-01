@@ -48,6 +48,9 @@ export const slashCommandReturnHelper = {
     async doReturn(type, value, { objectToStringFunc = o => o?.toString(), objectToHtmlFunc = null } = {}) {
         const shouldHtml = type.endsWith('html');
         const actualConverterFunc = shouldHtml && objectToHtmlFunc ? objectToHtmlFunc : objectToStringFunc;
+        // objectToHtmlFunc is expected to already return sanitizable HTML, not markdown - running it through
+        // showdown would mangle things like underscores in already-rendered tags/entities.
+        const isPreRenderedHtml = shouldHtml && !!objectToHtmlFunc && typeof value !== 'string';
         const stringValue = typeof value !== 'string' ? actualConverterFunc(value) : value;
 
         switch (type) {
@@ -57,7 +60,9 @@ export const slashCommandReturnHelper = {
             case 'chat-html':
             case 'toast-text':
             case 'toast-html': {
-                const htmlOrNotHtml = shouldHtml ? DOMPurify.sanitize((new showdown.Converter()).makeHtml(stringValue)) : escapeHtml(stringValue);
+                const htmlOrNotHtml = shouldHtml
+                    ? DOMPurify.sanitize(isPreRenderedHtml ? stringValue : (new showdown.Converter()).makeHtml(stringValue))
+                    : escapeHtml(stringValue);
 
                 if (type.startsWith('popup')) await callGenericPopup(htmlOrNotHtml, POPUP_TYPE.TEXT, '', { allowVerticalScrolling: true, wide: true });
                 if (type.startsWith('chat')) sendSystemMessage(system_message_types.GENERIC, htmlOrNotHtml);

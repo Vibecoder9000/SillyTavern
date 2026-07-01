@@ -5814,10 +5814,14 @@
                                         <input id="enable_dangerous_tools" type="checkbox" />
                                         <small data-i18n="Enable dangerous tools">Enable dangerous tools</small>
                                     </label>
-                                    <label class="checkbox_label" for="enable_image_generation" title="Enables image generation tools that connect to a local Stable Diffusion WebUI instance (localhost:7860)." data-i18n="[title]Enables image generation tools that connect to a local Stable Diffusion WebUI instance (localhost:7860).">
+                                    <label class="checkbox_label" for="enable_image_generation" title="Enables native image generation tools that connect to a Stable Diffusion or Forge WebUI instance." data-i18n="[title]Enables native image generation tools that connect to a Stable Diffusion or Forge WebUI instance.">
                                         <input id="enable_image_generation" type="checkbox" />
                                         <small data-i18n="Enable image generation">Enable image generation</small>
                                     </label>
+                                    <div class="tools-field-block" title="Base URL used by native Stable Diffusion tools. Leave blank to fall back to the Stable Diffusion extension URL." data-i18n="[title]Base URL used by native Stable Diffusion tools. Leave blank to fall back to the Stable Diffusion extension URL.">
+                                        <label for="sd_tool_url"><small data-i18n="Image generation URL">Image generation URL</small></label>
+                                        <input id="sd_tool_url" class="text_pole width100p" type="text" placeholder="http://localhost:7860" />
+                                    </div>
                                     <label class="checkbox_label" for="enable_browser_tools" title="Enables isolated Firefox browser tools that can browse pages, fetch DOM content, run controlled page JavaScript, take screenshots, and save downloads into the sandbox." data-i18n="[title]Enables isolated Firefox browser tools that can browse pages, fetch DOM content, run controlled page JavaScript, take screenshots, and save downloads into the sandbox.">
                                         <input id="enable_browser_tools" type="checkbox" />
                                         <small data-i18n="Enable browser tools">Enable browser tools</small>
