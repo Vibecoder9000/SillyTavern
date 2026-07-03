@@ -350,32 +350,37 @@ publicRouter.get('/', async function (request, response) {
             return response.sendFile(pathToOriginalFile);
         };
 
-        const originalFolder = getOriginalFolder(request.user.directories, type);
-        const pathToOriginalFile = path.resolve(path.join(originalFolder, file));
         const animatedEnabled = animated === 'true';
         const fileExtension = path.extname(file).toLowerCase();
+        const originalFolder = getOriginalFolder(request.user.directories, type);
+        const pathToOriginalFile = path.resolve(path.join(originalFolder, file));
+        const thumbnailFolder = getThumbnailFolder(request.user.directories, type);
+        const pathToCachedFile = path.join(thumbnailFolder, file);
         const isAnimatedFormat = SKIPPED_EXTENSIONS.has(fileExtension);
-        const needsStaticFallbackCheck = !animatedEnabled && (isAnimatedFormat || fileExtension === '.webp' || fileExtension === '.png');
-        const isAnimatedOriginalFile = needsStaticFallbackCheck && isAnimatedOriginal(pathToOriginalFile, fileExtension);
 
         if (!thumbnailsEnabled) {
+            const needsStaticFallbackCheck = !animatedEnabled && (isAnimatedFormat || fileExtension === '.webp' || fileExtension === '.png');
+            const isAnimatedOriginalFile = needsStaticFallbackCheck && isAnimatedOriginal(pathToOriginalFile, fileExtension);
             if (!animatedEnabled && isAnimatedOriginalFile) {
                 return response.sendStatus(404);
             }
             return serveOriginal();
         }
 
-        // Serve original for animated formats or GIFs
+        // Serve original for animated formats or GIFs when animation is explicitly allowed.
         if (animatedEnabled && isAnimatedFormat) {
             return serveOriginal();
         }
 
-        if (!animatedEnabled && isAnimatedOriginalFile) {
-            return response.sendStatus(404);
+        // Fast path: if a cached thumbnail already exists and animations are disabled,
+        // serve it immediately without reopening the original file to inspect animation state.
+        if (!animatedEnabled && fs.existsSync(pathToCachedFile)) {
+            invalidateFirefoxCache(pathToCachedFile, request, response);
+            return response.sendFile(file, { root: thumbnailFolder, dotfiles: 'allow' });
         }
 
-        const thumbnailFolder = getThumbnailFolder(request.user.directories, type);
-        const pathToCachedFile = path.join(thumbnailFolder, file);
+        const needsStaticFallbackCheck = !animatedEnabled && (isAnimatedFormat || fileExtension === '.webp' || fileExtension === '.png');
+        const isAnimatedOriginalFile = needsStaticFallbackCheck && isAnimatedOriginal(pathToOriginalFile, fileExtension);
 
         // Try to generate thumbnail if it doesn't exist
         if (!fs.existsSync(pathToCachedFile)) {

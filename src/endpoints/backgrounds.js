@@ -14,6 +14,9 @@ import { generateSingleFileMetadata, syncPromise } from './backgrounds-manager.j
 
 const upload = multer({ dest: UPLOADS_DIRECTORY });
 let isSyncComplete = false;
+const DEFAULT_BACKGROUNDS_METADATA = Object.freeze({ version: 1, images: {}, folders: [], tags: [], thumbnailSystemVersion: 2, thumbnailConfigSignature: null });
+const backgroundMetadataCache = new Map();
+const backgroundMetadataLoadPromises = new Map();
 
 // When the main sync promise resolves, we flip the flag to true.
 syncPromise.then(() => {
@@ -51,6 +54,7 @@ class BackgroundsMetadataManager {
      * @param {object} userDirectories The user's directory paths.
      */
     constructor(userDirectories) {
+        this.userDirectories = userDirectories;
         this.jsonPath = path.join(userDirectories.root, 'backgrounds.json');
     }
 
@@ -66,7 +70,7 @@ class BackgroundsMetadataManager {
         } catch (error) {
             // If the file doesn't exist or is corrupt, return a default structure.
             if (error.code === 'ENOENT' || error instanceof SyntaxError) {
-                return { version: 1, images: {}, folders: [], tags: [], thumbnailSystemVersion: 2 };
+                return structuredClone(DEFAULT_BACKGROUNDS_METADATA);
             }
             throw error; // Rethrow other errors
         } finally {
@@ -90,7 +94,7 @@ class BackgroundsMetadataManager {
                 metadata = JSON.parse(rawData);
             } catch (error) {
                 if (error.code === 'ENOENT' || error instanceof SyntaxError) {
-                    metadata = { version: 1, images: {}, folders: [], tags: [], thumbnailSystemVersion: 2 };
+                    metadata = structuredClone(DEFAULT_BACKGROUNDS_METADATA);
                 } else {
                     throw error;
                 }
@@ -100,10 +104,106 @@ class BackgroundsMetadataManager {
 
             const jsonString = JSON.stringify(metadata, null, 4);
             await writeFileAtomic(this.jsonPath, jsonString, 'utf8');
+            setCachedBackgroundMetadata(this.userDirectories.root, metadata);
 
             return result;
         } finally {
             release();
+        }
+    }
+}
+
+/**
+ * Ensures all expected top-level background metadata collections exist.
+ * @param {object} metadata Raw metadata object.
+ * @returns {object} Normalized metadata object.
+ */
+function normalizeBackgroundMetadata(metadata) {
+    const normalized = metadata && typeof metadata === 'object' ? metadata : structuredClone(DEFAULT_BACKGROUNDS_METADATA);
+    normalized.images = normalized.images && typeof normalized.images === 'object' ? normalized.images : {};
+    normalized.folders = Array.isArray(normalized.folders) ? normalized.folders : [];
+    normalized.tags = Array.isArray(normalized.tags) ? normalized.tags : [];
+    if (typeof normalized.version !== 'number') {
+        normalized.version = DEFAULT_BACKGROUNDS_METADATA.version;
+    }
+    if (typeof normalized.thumbnailSystemVersion !== 'number') {
+        normalized.thumbnailSystemVersion = DEFAULT_BACKGROUNDS_METADATA.thumbnailSystemVersion;
+    }
+    if (typeof normalized.thumbnailConfigSignature !== 'string' && normalized.thumbnailConfigSignature !== null) {
+        normalized.thumbnailConfigSignature = DEFAULT_BACKGROUNDS_METADATA.thumbnailConfigSignature;
+    }
+    return normalized;
+}
+
+/**
+ * Stores a metadata snapshot in the in-memory cache.
+ * @param {string} userRoot User data root.
+ * @param {object} metadata Metadata snapshot.
+ * @returns {object} Cached snapshot.
+ */
+function setCachedBackgroundMetadata(userRoot, metadata) {
+    const normalized = normalizeBackgroundMetadata(metadata);
+    backgroundMetadataCache.set(userRoot, normalized);
+    return normalized;
+}
+
+/**
+ * Reads metadata from disk once and reuses it until a mutation updates the cache.
+ * @param {object} userDirectories The user's directory paths.
+ * @returns {Promise<object>} Cached or freshly loaded metadata.
+ */
+async function getCachedBackgroundMetadata(userDirectories) {
+    const cached = backgroundMetadataCache.get(userDirectories.root);
+    if (cached) {
+        return cached;
+    }
+
+    const pendingLoad = backgroundMetadataLoadPromises.get(userDirectories.root);
+    if (pendingLoad) {
+        return pendingLoad;
+    }
+
+    const manager = new BackgroundsMetadataManager(userDirectories);
+    const loadPromise = manager.read()
+        .then(metadata => setCachedBackgroundMetadata(userDirectories.root, metadata))
+        .finally(() => backgroundMetadataLoadPromises.delete(userDirectories.root));
+    backgroundMetadataLoadPromises.set(userDirectories.root, loadPromise);
+    return loadPromise;
+}
+
+/**
+ * Clears folder thumbnail references that point to a removed file.
+ * @param {object} metadata Background metadata object.
+ * @param {string} filename Deleted filename.
+ * @returns {void}
+ */
+function clearFolderThumbnailReference(metadata, filename) {
+    if (!Array.isArray(metadata?.folders)) {
+        return;
+    }
+
+    for (const folder of metadata.folders) {
+        if (folder?.thumbnailFile === filename) {
+            folder.thumbnailFile = null;
+        }
+    }
+}
+
+/**
+ * Renames folder thumbnail references when a background filename changes.
+ * @param {object} metadata Background metadata object.
+ * @param {string} oldFilename Previous filename.
+ * @param {string} newFilename New filename.
+ * @returns {void}
+ */
+function renameFolderThumbnailReference(metadata, oldFilename, newFilename) {
+    if (!Array.isArray(metadata?.folders) || oldFilename === newFilename) {
+        return;
+    }
+
+    for (const folder of metadata.folders) {
+        if (folder?.thumbnailFile === oldFilename) {
+            folder.thumbnailFile = newFilename;
         }
     }
 }
@@ -136,8 +236,7 @@ router.use(async (req, res, next) => {
  */
 router.post('/all', async function (request, response) {
     try {
-        const manager = new BackgroundsMetadataManager(request.user.directories);
-        const metadata = await manager.read();
+        const metadata = await getCachedBackgroundMetadata(request.user.directories);
 
         // The frontend expects an array of image data. The keys of the 'images' object are the filenames, so we need to transform it
         const allImages = Object.entries(metadata.images).map(([filename, data]) => ({
@@ -159,8 +258,7 @@ router.post('/all', async function (request, response) {
  */
 router.post('/folders', async function (request, response) {
     try {
-        const manager = new BackgroundsMetadataManager(request.user.directories);
-        const metadata = await manager.read();
+        const metadata = await getCachedBackgroundMetadata(request.user.directories);
 
         const config = { width: dimensions.bg[0], height: dimensions.bg[1] };
         const folders = metadata.folders || [];
@@ -204,6 +302,7 @@ router.post('/delete', getFileNameValidationFunction('bg'), async function (requ
             if (metadata.images[filename]) {
                 delete metadata.images[filename];
             }
+            clearFolderThumbnailReference(metadata, filename);
         });
 
         return response.status(200).send('ok');
@@ -233,7 +332,7 @@ router.post('/rename', async function (request, response) {
 
         // If the names are the same, it's a no-op. Return the existing data.
         if (oldFilename === desiredNewFilename) {
-            const metadata = await manager.read();
+            const metadata = await getCachedBackgroundMetadata(request.user.directories);
             return response.json({ filename: oldFilename, ...metadata.images[oldFilename] });
         }
 
@@ -273,6 +372,7 @@ router.post('/rename', async function (request, response) {
             }
             delete metadata.images[oldFilename];
             metadata.images[finalNewFilename] = data;
+            renameFolderThumbnailReference(metadata, oldFilename, finalNewFilename);
             return data;
         });
 
@@ -517,6 +617,7 @@ router.post('/folders/create', async function (request, response) {
             const folder = {
                 id: uuidv4(),
                 name: sanitize(request.body.name),
+                thumbnailFile: null,
             };
 
             metadata.folders.push(folder);
@@ -671,8 +772,15 @@ router.post('/folders/set-thumbnail', async function (request, response) {
                 throw err;
             }
 
+            const sanitizedFilename = filename ? sanitize(filename) : null;
+            if (sanitizedFilename && !metadata.images[sanitizedFilename]) {
+                const err = new Error(`Background '${sanitizedFilename}' not found in metadata.`);
+                err.statusCode = 404;
+                throw err;
+            }
+
             // Set the thumbnail file. If filename is null or undefined, it clears the thumbnail.
-            folderToUpdate.thumbnailFile = filename ? sanitize(filename) : null;
+            folderToUpdate.thumbnailFile = sanitizedFilename;
         });
 
         return response.status(200).send('ok');

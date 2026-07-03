@@ -162,10 +162,13 @@ export async function syncBackgroundsMetadata(userDirectories) {
         let metadata;
         let migrationTriggeredByFileIssues = false;
         let fileMigrationReasons = [];
+        let metadataSanitized = false;
 
         try {
             const rawData = await fs.readFile(backgroundsJsonPath, 'utf8');
             metadata = JSON.parse(rawData);
+            metadata.images = metadata.images && typeof metadata.images === 'object' ? metadata.images : {};
+            metadata.folders = Array.isArray(metadata.folders) ? metadata.folders : [];
 
             // Data-integrity based migration check.
             // Iterate through images to find all reasons for migration.
@@ -224,6 +227,26 @@ export async function syncBackgroundsMetadata(userDirectories) {
         const filesOnDiskSet = new Set(imageFilesOnDisk);
         const metadataImageKeys = Object.keys(metadata.images);
         const filesToProcess = [];
+        const validFolderIds = new Set(metadata.folders.map(folder => folder.id));
+
+        for (const imageMeta of Object.values(metadata.images)) {
+            if (!Array.isArray(imageMeta?.folderIds)) {
+                continue;
+            }
+
+            const filteredFolderIds = imageMeta.folderIds.filter(folderId => validFolderIds.has(folderId));
+            if (filteredFolderIds.length !== imageMeta.folderIds.length) {
+                imageMeta.folderIds = filteredFolderIds;
+                metadataSanitized = true;
+            }
+        }
+
+        for (const folder of metadata.folders) {
+            if (folder?.thumbnailFile && !filesOnDiskSet.has(folder.thumbnailFile)) {
+                folder.thumbnailFile = null;
+                metadataSanitized = true;
+            }
+        }
 
         // Check for thumbnails that need regeneration due to a configuration change.
         const needsThumbRegen = new Set();
@@ -268,7 +291,7 @@ export async function syncBackgroundsMetadata(userDirectories) {
         }
 
         const filesToDelete = metadataImageKeys.filter(filename => !filesOnDiskSet.has(filename));
-        const hasChanges = filesToProcess.length > 0 || filesToDelete.length > 0 || needsThumbRegen.size > 0;
+        const hasChanges = filesToProcess.length > 0 || filesToDelete.length > 0 || needsThumbRegen.size > 0 || metadataSanitized;
 
         if (!hasChanges) {
             return; // Nothing to do.

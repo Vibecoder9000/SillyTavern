@@ -208,6 +208,18 @@ div#add-folder-button.folder-button .thumbnail-placeholder,
     transition: opacity 0.15s ease-in-out;
 }
 
+#main-backgrounds-container.thumbnail-virtualized-container {
+    display: block;
+    position: relative;
+    min-height: 1px;
+    overflow-anchor: none;
+}
+
+.thumbnail-virtualized-spacer {
+    width: 100%;
+    pointer-events: none;
+}
+
 #main-backgrounds-container.fading-out {
     opacity: 0;
     pointer-events: none;
@@ -405,6 +417,7 @@ div#add-folder-button.folder-button .thumbnail-placeholder,
 
 .thumbnail {
     flex-shrink: 0;
+    position: relative;
 
     width: var(--thumb-width);
     height: var(--thumb-height);

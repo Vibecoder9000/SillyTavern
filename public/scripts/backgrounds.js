@@ -9,13 +9,15 @@ import { Popup } from './popup.js';
 const PNG_PIXEL_B64 = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
 const FOLDER_LIMIT = 100;
 const SERVER_THUMBNAIL_CACHE = new Map();
+const SERVER_THUMBNAIL_PROMISES = new Map();
 const LOCAL_STATIC_THUMBNAIL_CACHE = new Map();
 const LOCAL_STATIC_THUMBNAIL_PROMISES = new Map();
 const STATIC_THUMBNAIL_PERSIST_PROMISES = new Map();
 const STATIC_THUMBNAIL_FAILURE_COOLDOWNS = new Map();
-const BACKGROUND_THUMB_ROOT_MARGIN = '200px 0px';
+const BACKGROUND_THUMB_ROOT_MARGIN = '600px 0px';
 const POPUP_THUMB_ROOT_MARGIN = '150px 0px';
-const MAX_CONCURRENT_THUMBNAIL_LOADS = 4;
+const DESKTOP_MAX_CONCURRENT_THUMBNAIL_LOADS = 10;
+const MOBILE_MAX_CONCURRENT_THUMBNAIL_LOADS = 4;
 const MAX_CONCURRENT_STATIC_THUMBNAIL_GENERATIONS = 1;
 const MAX_CONCURRENT_STATIC_THUMBNAIL_PERSISTS = 1;
 const STATIC_THUMBNAIL_RETRY_LIMIT = 3;
@@ -23,6 +25,9 @@ const STATIC_THUMBNAIL_RETRY_DELAY_MS = 750;
 const STATIC_THUMBNAIL_FAILURE_COOLDOWN_MS = 7 * 24 * 60 * 60 * 1000;
 const STATIC_THUMBNAIL_FAILURE_RESET_WIDTH_DELTA = 400;
 const THUMBNAIL_RENDER_BATCH_SIZE = 8;
+const THUMBNAIL_ROW_GAP = 5;
+const DESKTOP_VIRTUAL_OVERSCAN_PX = 1200;
+const MOBILE_VIRTUAL_OVERSCAN_PX = 700;
 let THUMBNAIL_CONFIG = { width: 160, height: 90 };
 let backgroundSelector = null;
 let hasGalleryLoaded = false;
@@ -124,7 +129,7 @@ export let background_settings = {
 };
 
 /**
- * Fetches and caches a thumbnail from the server.
+ * Preloads a server thumbnail and caches whether the URL is usable.
  * @param {string} thumbnailUrl - The URL of the thumbnail.
  * @returns {Promise<{ src: string, hasContent: boolean }>} The thumbnail result.
  */
@@ -132,20 +137,33 @@ async function getCachedServerThumbnail(thumbnailUrl) {
     if (SERVER_THUMBNAIL_CACHE.has(thumbnailUrl)) {
         return { src: SERVER_THUMBNAIL_CACHE.get(thumbnailUrl), hasContent: true };
     }
-    try {
-        const response = await fetch(thumbnailUrl, {
-            cache: 'no-cache',
-            headers: getRequestHeaders(),
-        });
-        if (!response.ok) return { src: PNG_PIXEL_B64, hasContent: false };
-        const blob = await response.blob();
-        const blobUrl = URL.createObjectURL(blob);
-        SERVER_THUMBNAIL_CACHE.set(thumbnailUrl, blobUrl);
-        return { src: blobUrl, hasContent: true };
-    } catch (error) {
-        console.warn(`Failed to fetch server thumbnail ${thumbnailUrl}:`, error);
-        return { src: PNG_PIXEL_B64, hasContent: false };
+
+    if (SERVER_THUMBNAIL_PROMISES.has(thumbnailUrl)) {
+        return SERVER_THUMBNAIL_PROMISES.get(thumbnailUrl);
     }
+
+    const fetchPromise = (async () => {
+        try {
+            await new Promise((resolve, reject) => {
+                const preloadImage = new Image();
+                preloadImage.decoding = 'async';
+                preloadImage.onload = () => resolve();
+                preloadImage.onerror = () => reject(new Error('Thumbnail failed to load'));
+                preloadImage.src = thumbnailUrl;
+            });
+
+            SERVER_THUMBNAIL_CACHE.set(thumbnailUrl, thumbnailUrl);
+            return { src: thumbnailUrl, hasContent: true };
+        } catch (error) {
+            console.warn(`Failed to load server thumbnail ${thumbnailUrl}:`, error);
+            return { src: PNG_PIXEL_B64, hasContent: false };
+        } finally {
+            SERVER_THUMBNAIL_PROMISES.delete(thumbnailUrl);
+        }
+    })();
+
+    SERVER_THUMBNAIL_PROMISES.set(thumbnailUrl, fetchPromise);
+    return fetchPromise;
 }
 
 /**
@@ -165,6 +183,15 @@ function getThumbnailUrl(filename) {
  */
 function buildThumbnailRequestUrl(baseUrl, shouldAnimate) {
     return `${baseUrl}&animated=${shouldAnimate}`;
+}
+
+/**
+ * Gets the appropriate thumbnail concurrency for the current viewport.
+ * Desktop can keep more requests in flight so scrolling stays ahead of the user.
+ * @returns {number} Maximum concurrent thumbnail loads.
+ */
+function getMaxConcurrentThumbnailLoads() {
+    return window.innerWidth <= 1000 ? MOBILE_MAX_CONCURRENT_THUMBNAIL_LOADS : DESKTOP_MAX_CONCURRENT_THUMBNAIL_LOADS;
 }
 
 /**
@@ -726,6 +753,7 @@ function createThumbnailElement(imageData, calculatedSize, options = {}) {
     }
 
     const imgElement = new Image();
+    imgElement.decoding = 'async';
     imgElement.dataset.src = imageData.thumbnailUrl;
     imgElement.src = PNG_PIXEL_B64;
     clipper.appendChild(imgElement);
@@ -772,6 +800,7 @@ function createThumbnailElement(imageData, calculatedSize, options = {}) {
 class BackgroundSelector {
     constructor(containerId) {
         this.container = document.getElementById(containerId);
+        this.scrollContainer = document.getElementById('bg-scrollable-content');
         this.images = [];
         this.filteredImages = [];
         this.folderLists = [];
@@ -783,14 +812,47 @@ class BackgroundSelector {
         this.isInitialRender = true;
         this.sortOrder = 'alpha';
         this.imageLookup = new Map();
+        this.folderImageIndex = new Map();
+        this.bulkSelectedFiles = new Set();
+        this.virtualRows = [];
+        this.virtualRowIndexByFile = new Map();
+        this.totalVirtualHeight = 0;
+        this.renderedRowRange = { start: -1, end: -1 };
+        this.topSpacer = null;
+        this.visibleRowsContainer = null;
+        this.bottomSpacer = null;
+        this.renderedRowElements = new Map();
+        this.pendingVisibleRowsUpdate = false;
+        this.forceVisibleRowsUpdate = false;
+        this.pendingBackgroundAction = null;
+        this.onScroll = () => this.scheduleVisibleRowsUpdate();
         this.renderVersion = 0;
         this.debouncedRender = debounce(() => this.render(false), 150);
         this.setupImageObserver();
         this.setupResizeObserver();
         this.debouncedSearch = debounce((query) => this.search(query), 250);
+        this.setupVirtualScroll();
         this.setupDropToUpload();
         this.setupScrollToTop();
         window.addEventListener('resize', refreshStaticThumbnailFailureContext, { passive: true });
+    }
+
+    getScrollContainer() {
+        if (!this.scrollContainer?.isConnected) {
+            this.scrollContainer = document.getElementById('bg-scrollable-content');
+        }
+
+        return this.scrollContainer;
+    }
+
+    setupVirtualScroll() {
+        const scrollContainer = this.getScrollContainer();
+        if (!scrollContainer) {
+            return;
+        }
+
+        scrollContainer.removeEventListener('scroll', this.onScroll);
+        scrollContainer.addEventListener('scroll', this.onScroll, { passive: true });
     }
 
     setupResizeObserver() {
@@ -817,14 +879,31 @@ class BackgroundSelector {
                     this.queueThumbnailLoad(thumbElement);
                 }
             });
-        }, { root: null, rootMargin: BACKGROUND_THUMB_ROOT_MARGIN, threshold: 0.01 });
+        }, { root: this.getScrollContainer(), rootMargin: BACKGROUND_THUMB_ROOT_MARGIN, threshold: 0.01 });
     }
 
     setData(imageDataList) {
         this.images = imageDataList;
         this.imageLookup = new Map(imageDataList.map(image => [image.filename, image]));
+        this.rebuildFolderImageIndex();
         const currentQuery = $('#bg-filter').val() || '';
         this.search(currentQuery);
+    }
+
+    rebuildFolderImageIndex() {
+        this.folderImageIndex = new Map();
+
+        for (const image of this.images) {
+            if (!Array.isArray(image.folderIds)) {
+                continue;
+            }
+
+            for (const folderId of image.folderIds) {
+                const folderImages = this.folderImageIndex.get(folderId) ?? [];
+                folderImages.push(image);
+                this.folderImageIndex.set(folderId, folderImages);
+            }
+        }
     }
 
     search(query, newFilename = null) {
@@ -837,6 +916,10 @@ class BackgroundSelector {
 
         // Apply sorting to the filtered list before rendering
         this._sortImages(this.filteredImages);
+        const scrollContainer = this.getScrollContainer();
+        if (scrollContainer) {
+            scrollContainer.scrollTop = 0;
+        }
 
         this.render(true, newFilename);
     }
@@ -945,9 +1028,18 @@ class BackgroundSelector {
 
         // Clear only the main thumbnail container, leaving the folders untouched.
         mainContainer.replaceChildren();
-        mainContainer.className = 'thumbnail-container'; // Reset class in case it was modified
+        mainContainer.className = 'thumbnail-virtualized-container';
+        this.topSpacer = null;
+        this.visibleRowsContainer = null;
+        this.bottomSpacer = null;
+        this.renderedRowElements.clear();
+        this.renderedRowRange = { start: -1, end: -1 };
 
         if (this.filteredImages.length === 0) {
+            this.virtualRows = [];
+            this.virtualRowIndexByFile.clear();
+            this.totalVirtualHeight = 0;
+            this.renderedRowElements.clear();
             mainContainer.innerHTML = `<p class="no-bgs-found-message">${translate('No backgrounds found.')}</p>`;
             return;
         }
@@ -964,8 +1056,9 @@ class BackgroundSelector {
                 targetRowHeight,
                 minThumbsPerRow,
             );
-
-            await this.renderRowsInBatches(mainContainer, allRows, renderVersion);
+            this.cacheVirtualRows(allRows);
+            this.initializeVirtualizedContainers(mainContainer);
+            this.updateVisibleRows(true);
         } catch (error) {
             console.error('Failed to render background layout:', error);
             toastr.error('A background has corrupted data and could not be displayed. Check console for details.');
@@ -975,36 +1068,272 @@ class BackgroundSelector {
 
         // If a new filename was provided, find and highlight it now.
         if (newFilename && renderVersion === this.renderVersion) {
-            const newThumb = document.querySelector(`.thumbnail[data-bgfile="${newFilename}"]`);
-            if (newThumb) {
-                highlightNewBackground(newThumb);
-            }
+            this.focusBackground(newFilename, { flash: true, click: true });
         }
 
         setTimeout(() => { this.isInitialRender = false; }, 100);
     }
 
-    async renderRowsInBatches(mainContainer, allRows, renderVersion) {
-        for (let i = 0; i < allRows.length; i += THUMBNAIL_RENDER_BATCH_SIZE) {
-            if (renderVersion !== this.renderVersion) {
-                return;
-            }
+    cacheVirtualRows(allRows) {
+        this.virtualRows = [];
+        this.virtualRowIndexByFile.clear();
 
-            const fragment = document.createDocumentFragment();
-            const batchRows = allRows.slice(i, i + THUMBNAIL_RENDER_BATCH_SIZE);
+        let top = 0;
+        allRows.forEach((rowData, index) => {
+            const row = {
+                ...rowData,
+                index,
+                top,
+                bottom: top + rowData.height,
+            };
+            this.virtualRows.push(row);
+            row.images.forEach(image => this.virtualRowIndexByFile.set(image.filename, index));
+            top = row.bottom + THUMBNAIL_ROW_GAP;
+        });
 
-            batchRows.forEach(rowData => {
-                const rowElement = createRowElement(rowData);
-                fragment.appendChild(rowElement);
-                rowElement.querySelectorAll('.thumbnail').forEach(thumb => this.imageObserver.observe(thumb));
-            });
+        this.totalVirtualHeight = this.virtualRows.length > 0
+            ? this.virtualRows[this.virtualRows.length - 1].bottom
+            : 0;
+    }
 
-            mainContainer.appendChild(fragment);
+    initializeVirtualizedContainers(mainContainer) {
+        this.topSpacer = document.createElement('div');
+        this.topSpacer.className = 'thumbnail-virtualized-spacer';
 
-            if (i + THUMBNAIL_RENDER_BATCH_SIZE < allRows.length) {
-                await nextFrame();
+        this.visibleRowsContainer = document.createElement('div');
+        this.visibleRowsContainer.className = 'thumbnail-container';
+
+        this.bottomSpacer = document.createElement('div');
+        this.bottomSpacer.className = 'thumbnail-virtualized-spacer';
+
+        mainContainer.append(this.topSpacer, this.visibleRowsContainer, this.bottomSpacer);
+    }
+
+    getVirtualOverscanPx() {
+        return window.innerWidth <= 1000 ? MOBILE_VIRTUAL_OVERSCAN_PX : DESKTOP_VIRTUAL_OVERSCAN_PX;
+    }
+
+    scheduleVisibleRowsUpdate(force = false) {
+        if (force) {
+            this.forceVisibleRowsUpdate = true;
+        }
+
+        if (this.pendingVisibleRowsUpdate) {
+            return;
+        }
+
+        this.pendingVisibleRowsUpdate = true;
+        requestAnimationFrame(() => {
+            const forceRender = this.forceVisibleRowsUpdate;
+            this.pendingVisibleRowsUpdate = false;
+            this.forceVisibleRowsUpdate = false;
+            this.updateVisibleRows(forceRender);
+        });
+    }
+
+    findFirstVisibleRow(offset) {
+        if (this.virtualRows.length === 0) {
+            return -1;
+        }
+
+        let low = 0;
+        let high = this.virtualRows.length - 1;
+        let result = this.virtualRows.length - 1;
+
+        while (low <= high) {
+            const mid = Math.floor((low + high) / 2);
+            if (this.virtualRows[mid].bottom >= offset) {
+                result = mid;
+                high = mid - 1;
+            } else {
+                low = mid + 1;
             }
         }
+
+        return result;
+    }
+
+    findLastVisibleRow(offset) {
+        if (this.virtualRows.length === 0) {
+            return -1;
+        }
+
+        let low = 0;
+        let high = this.virtualRows.length - 1;
+        let result = 0;
+
+        while (low <= high) {
+            const mid = Math.floor((low + high) / 2);
+            if (this.virtualRows[mid].top <= offset) {
+                result = mid;
+                low = mid + 1;
+            } else {
+                high = mid - 1;
+            }
+        }
+
+        return result;
+    }
+
+    createVirtualRowElement(rowData) {
+        const rowElement = createRowElement(rowData);
+        rowElement.dataset.rowIndex = String(rowData.index);
+        rowElement.querySelectorAll('.thumbnail').forEach(thumb => {
+            if (this.bulkSelectedFiles.has(thumb.dataset.bgfile)) {
+                thumb.classList.add('is-bulk-selected');
+            }
+            this.imageObserver.observe(thumb);
+        });
+        this.renderedRowElements.set(rowData.index, rowElement);
+        return rowElement;
+    }
+
+    removeRenderedRow(rowIndex) {
+        const rowElement = this.renderedRowElements.get(rowIndex);
+        if (!rowElement) {
+            return;
+        }
+
+        rowElement.querySelectorAll('.thumbnail').forEach(thumb => {
+            this.imageObserver.unobserve(thumb);
+            untrackThumbnailElement(thumb);
+        });
+        rowElement.remove();
+        this.renderedRowElements.delete(rowIndex);
+    }
+
+    clearRenderedRows() {
+        for (const rowIndex of Array.from(this.renderedRowElements.keys())) {
+            this.removeRenderedRow(rowIndex);
+        }
+    }
+
+    getVirtualContainerOffset() {
+        const scrollContainer = this.getScrollContainer();
+        const virtualContainer = this.visibleRowsContainer?.parentElement;
+        if (!scrollContainer || !virtualContainer) {
+            return 0;
+        }
+
+        const scrollRect = scrollContainer.getBoundingClientRect();
+        const containerRect = virtualContainer.getBoundingClientRect();
+        return (containerRect.top - scrollRect.top) + scrollContainer.scrollTop;
+    }
+
+    updateVisibleRows(force = false) {
+        if (!this.visibleRowsContainer || this.virtualRows.length === 0) {
+            return;
+        }
+
+        const scrollContainer = this.getScrollContainer();
+        const scrollTop = scrollContainer?.scrollTop ?? 0;
+        const viewportHeight = scrollContainer?.clientHeight ?? window.innerHeight;
+        const overscan = this.getVirtualOverscanPx();
+        const containerOffset = this.getVirtualContainerOffset();
+        const galleryScrollTop = Math.max(0, scrollTop - containerOffset);
+        const startOffset = Math.max(0, galleryScrollTop - overscan);
+        const endOffset = Math.max(0, galleryScrollTop + viewportHeight + overscan);
+        const start = this.findFirstVisibleRow(startOffset);
+        const end = this.findLastVisibleRow(endOffset);
+
+        if (start < 0 || end < 0) {
+            return;
+        }
+
+        if (!force && start === this.renderedRowRange.start && end === this.renderedRowRange.end) {
+            this.flushPendingBackgroundAction();
+            return;
+        }
+
+        const nextIndexes = new Set();
+        for (let i = start; i <= end; i++) {
+            nextIndexes.add(i);
+        }
+
+        for (const rowIndex of Array.from(this.renderedRowElements.keys())) {
+            if (!nextIndexes.has(rowIndex)) {
+                this.removeRenderedRow(rowIndex);
+            }
+        }
+
+        const orderedRows = [];
+        for (let i = start; i <= end; i++) {
+            orderedRows.push(this.renderedRowElements.get(i) ?? this.createVirtualRowElement(this.virtualRows[i]));
+        }
+
+        this.visibleRowsContainer.replaceChildren(...orderedRows);
+        this.topSpacer.style.height = `${this.virtualRows[start].top}px`;
+        this.bottomSpacer.style.height = `${Math.max(0, this.totalVirtualHeight - this.virtualRows[end].bottom)}px`;
+        this.renderedRowRange = { start, end };
+        this.flushPendingBackgroundAction();
+    }
+
+    scrollRowIntoView(rowIndex, behavior = 'smooth') {
+        const row = this.virtualRows[rowIndex];
+        const scrollContainer = this.getScrollContainer();
+        if (!row || !scrollContainer) {
+            return;
+        }
+
+        const containerOffset = this.getVirtualContainerOffset();
+        const centeredTop = Math.max(
+            0,
+            containerOffset + row.top - Math.max(0, (scrollContainer.clientHeight - row.height) / 2),
+        );
+        const maxScrollTop = Math.max(0, scrollContainer.scrollHeight - scrollContainer.clientHeight);
+        const targetTop = Math.min(centeredTop, maxScrollTop);
+        scrollContainer.scrollTo({ top: targetTop, behavior });
+    }
+
+    focusBackground(filename, options = {}) {
+        if (!filename) {
+            return;
+        }
+
+        const action = {
+            filename,
+            flash: !!options.flash,
+            click: !!options.click,
+        };
+        const existingThumb = this.container.querySelector(`.thumbnail[data-bgfile="${filename}"]`);
+        if (existingThumb) {
+            this.executeBackgroundAction(existingThumb, action);
+            return;
+        }
+
+        const rowIndex = this.virtualRowIndexByFile.get(filename);
+        if (rowIndex === undefined) {
+            return;
+        }
+
+        this.pendingBackgroundAction = action;
+        this.scrollRowIntoView(rowIndex, options.behavior ?? 'smooth');
+        this.scheduleVisibleRowsUpdate(true);
+    }
+
+    executeBackgroundAction(thumb, action) {
+        thumb.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        if (action.flash) {
+            flashHighlight($(thumb));
+        }
+        if (action.click) {
+            thumb.click();
+        }
+    }
+
+    flushPendingBackgroundAction() {
+        if (!this.pendingBackgroundAction) {
+            return;
+        }
+
+        const thumb = this.container.querySelector(`.thumbnail[data-bgfile="${this.pendingBackgroundAction.filename}"]`);
+        if (!thumb) {
+            return;
+        }
+
+        const action = this.pendingBackgroundAction;
+        this.pendingBackgroundAction = null;
+        this.executeBackgroundAction(thumb, action);
     }
 
     queueThumbnailLoad(thumbElement) {
@@ -1018,7 +1347,9 @@ class BackgroundSelector {
     }
 
     processThumbnailQueue() {
-        while (this.activeThumbnailLoads < MAX_CONCURRENT_THUMBNAIL_LOADS && this.thumbnailLoadQueue.length > 0) {
+        const maxConcurrentLoads = getMaxConcurrentThumbnailLoads();
+
+        while (this.activeThumbnailLoads < maxConcurrentLoads && this.thumbnailLoadQueue.length > 0) {
             const thumbElement = this.thumbnailLoadQueue.shift();
             if (!thumbElement || !thumbElement.isConnected) {
                 continue;
@@ -1149,6 +1480,7 @@ class BackgroundSelector {
     }
 
     reapplySelectionStyles(selectedFiles) {
+        this.bulkSelectedFiles = new Set(selectedFiles || []);
         this.container.querySelectorAll('.thumbnail.is-bulk-selected').forEach(thumb => {
             thumb.classList.remove('is-bulk-selected');
         });
@@ -1168,8 +1500,15 @@ class BackgroundSelector {
     destroy() {
         if (this.imageObserver) this.imageObserver.disconnect();
         if (this.resizeObserver) this.resizeObserver.disconnect();
+        this.getScrollContainer()?.removeEventListener('scroll', this.onScroll);
         this.renderVersion++;
         this.imageLookup.clear();
+        this.folderImageIndex.clear();
+        this.bulkSelectedFiles.clear();
+        this.virtualRows = [];
+        this.virtualRowIndexByFile.clear();
+        this.clearRenderedRows();
+        this.pendingBackgroundAction = null;
         pruneDisconnectedElements(selectedThumbnailElements);
         pruneDisconnectedElements(lockedThumbnailElements);
         this.folderLists = [];
@@ -1201,12 +1540,20 @@ function normalizeBgName(name) {
  */
 export async function getBackgrounds() {
     try {
-        // Stage 1: Fetch folders and config immediately. This is fast.
-        const folderResponse = await fetch('/api/backgrounds/folders', {
+        const folderRequest = fetch('/api/backgrounds/folders', {
             method: 'POST',
             headers: getRequestHeaders(),
             body: JSON.stringify({}),
         });
+
+        const imageRequest = fetch('/api/backgrounds/all', {
+            method: 'POST',
+            headers: getRequestHeaders(),
+            body: JSON.stringify({}),
+        });
+
+        // Stage 1: Render folders as soon as that smaller payload arrives.
+        const folderResponse = await folderRequest;
         if (!folderResponse.ok) throw new Error(`Folder fetch failed: ${folderResponse.statusText}`);
         const { config, folders = [] } = await folderResponse.json();
 
@@ -1217,12 +1564,8 @@ export async function getBackgrounds() {
             backgroundSelector.renderFolders();
         }
 
-        // Stage 2: Fetch the larger image list.
-        const imageResponse = await fetch('/api/backgrounds/all', {
-            method: 'POST',
-            headers: getRequestHeaders(),
-            body: JSON.stringify({}),
-        });
+        // Stage 2: Finish the image list request that was already started in parallel.
+        const imageResponse = await imageRequest;
         if (!imageResponse.ok) throw new Error(`Image fetch failed: ${imageResponse.statusText}`);
         const { images: imagesFromServer = [] } = await imageResponse.json();
 
@@ -1247,6 +1590,10 @@ export async function getBackgrounds() {
 
         if (backgroundSelector) {
             backgroundSelector.setData(imageDataList);
+            const hasInvalidFolderThumbnail = backgroundSelector.folderLists.some(folder => folder.thumbnailFile && !backgroundSelector.imageLookup.has(folder.thumbnailFile));
+            if (hasInvalidFolderThumbnail) {
+                backgroundSelector.renderFolders();
+            }
             updateStateFromChatMetadata();
             highlightSelectedBackground();
         }
@@ -1524,6 +1871,20 @@ function highlightLockedBackground() {
 }
 
 /**
+ * Creates a folder icon overlay element.
+ * @param {boolean} [dark=false] Whether to use the darker folder style.
+ * @returns {HTMLDivElement} Folder icon overlay.
+ */
+function createFolderIconOverlay(dark = false) {
+    const iconOverlay = document.createElement('div');
+    iconOverlay.className = dark ? 'folder-icon-overlay dark-folder-overlay' : 'folder-icon-overlay';
+    const folderIcon = document.createElement('i');
+    folderIcon.className = 'fa-solid fa-folder';
+    iconOverlay.appendChild(folderIcon);
+    return iconOverlay;
+}
+
+/**
  * Creates a blank folder element, representing a user-created background list.
  * @param {object} folder - The folder data object.
  * @param {object} [options] - Optional configuration.
@@ -1538,17 +1899,25 @@ function createBlankFolderElement(folder, options = { withMenu: true }) {
 
     const clipper = document.createElement('div');
     clipper.className = 'thumbnail-clipper';
+    const addFolderFallback = () => {
+        if (!clipper.querySelector('.folder-icon-overlay')) {
+            clipper.prepend(createFolderIconOverlay(true));
+        }
+    };
 
     if (folder.thumbnailFile) {
         const finalUrl = buildThumbnailRequestUrl(getThumbnailUrl(folder.thumbnailFile), false);
 
         const imgElement = new Image();
+        imgElement.decoding = 'async';
         imgElement.src = PNG_PIXEL_B64; // Start with a placeholder
         clipper.appendChild(imgElement);
 
         // Asynchronously load the real thumbnail
         getCachedServerThumbnail(finalUrl).then(({ src, hasContent }) => {
             if (!hasContent) {
+                imgElement.remove();
+                addFolderFallback();
                 return;
             }
 
@@ -1561,12 +1930,7 @@ function createBlankFolderElement(folder, options = { withMenu: true }) {
         imgElement.style.opacity = 0;
         imgElement.style.transition = 'opacity 0.4s ease';
     } else {
-        const iconOverlay = document.createElement('div');
-        iconOverlay.className = 'folder-icon-overlay dark-folder-overlay';
-        const folderIcon = document.createElement('i');
-        folderIcon.className = 'fa-solid fa-folder';
-        iconOverlay.appendChild(folderIcon);
-        clipper.appendChild(iconOverlay);
+        addFolderFallback();
     }
 
     const titleDiv = document.createElement('div');
@@ -1618,14 +1982,7 @@ function createStarredFolderElement() {
 
     const clipper = document.createElement('div');
     clipper.className = 'thumbnail-clipper';
-
-    const iconOverlay = document.createElement('div');
-    iconOverlay.className = 'folder-icon-overlay';
-
-    const folderIcon = document.createElement('i');
-    folderIcon.className = 'fa-solid fa-folder';
-
-    iconOverlay.appendChild(folderIcon);
+    const iconOverlay = createFolderIconOverlay();
     clipper.appendChild(iconOverlay);
     button.appendChild(clipper);
 
@@ -1695,6 +2052,7 @@ async function onDeleteFolderClick(e) {
                 image.folderIds = image.folderIds.filter(id => id !== folderId);
             }
         });
+        backgroundSelector.rebuildFolderImageIndex();
 
         // 3. Re-render the folders UI
         backgroundSelector.renderFolders();
@@ -1824,6 +2182,13 @@ async function onRenameBackgroundClick(e) {
             backgroundSelector.imageLookup.delete(bgNames.oldBg);
             backgroundSelector.imageLookup.set(updatedImageData.filename, imageToUpdate);
         }
+        let shouldRerenderFolders = false;
+        backgroundSelector.folderLists.forEach(folder => {
+            if (folder.thumbnailFile === bgNames.oldBg) {
+                folder.thumbnailFile = updatedImageData.filename;
+                shouldRerenderFolders = true;
+            }
+        });
 
         // Perform a targeted DOM update.
         const thumbnailElements = document.querySelectorAll(`.thumbnail[data-bgfile="${bgNames.oldBg}"]`);
@@ -1846,6 +2211,10 @@ async function onRenameBackgroundClick(e) {
         // If the renamed item was the selected one, update global settings.
         if (wasSelected) {
             background_settings.name = updatedImageData.filename;
+        }
+
+        if (shouldRerenderFolders) {
+            backgroundSelector.renderFolders();
         }
 
         // Display a notification to the user showing the final filename.
@@ -1909,6 +2278,17 @@ async function onDeleteBackgroundClick(e) {
                 backgroundSelector.filteredImages.splice(filteredIndexToDelete, 1);
             }
             backgroundSelector.imageLookup.delete(bgFile);
+            backgroundSelector.rebuildFolderImageIndex();
+            let shouldRerenderFolders = false;
+            backgroundSelector.folderLists.forEach(folder => {
+                if (folder.thumbnailFile === bgFile) {
+                    folder.thumbnailFile = null;
+                    shouldRerenderFolders = true;
+                }
+            });
+            if (shouldRerenderFolders) {
+                backgroundSelector.renderFolders();
+            }
         }, { once: true });
     } catch (error) {
         console.error(error);
@@ -1964,13 +2344,7 @@ async function autoBackgroundCommand() {
     )?.filename;
 
     if (matchedFilename) {
-        const thumbnail = document.querySelector(`.thumbnail[data-bgfile="${matchedFilename}"]`);
-
-        if (thumbnail) {
-            thumbnail.scrollIntoView({ behavior: 'smooth', block: 'center' });
-            flashHighlight($(thumbnail));
-            $(thumbnail).trigger('click');
-        }
+        backgroundSelector.focusBackground(matchedFilename, { flash: true, click: true });
     }
     return '';
 }
@@ -2114,6 +2488,8 @@ async function uploadBackground(formData) {
         };
 
         backgroundSelector.images.push(newImageClientData);
+        backgroundSelector.imageLookup.set(newBgFilename, newImageClientData);
+        backgroundSelector.rebuildFolderImageIndex();
         backgroundSelector.images.sort((a, b) => a.filename.localeCompare(b.filename, undefined, { numeric: true }));
         backgroundSelector.search($('#bg-filter').val() || '', newBgFilename);
     } catch (error) {
@@ -2520,7 +2896,7 @@ function openCustomFolderPopup(folderId) {
 
     const renderContent = async () => {
         const renderVersion = ++popupRenderVersion;
-        const folderImages = backgroundSelector.images.filter(img => Array.isArray(img.folderIds) && img.folderIds.includes(folderId));
+        const folderImages = [...(backgroundSelector.folderImageIndex.get(folderId) ?? [])];
         contentArea.innerHTML = '';
         if (folderImages.length === 0) {
             contentArea.innerHTML = `<p style="text-align: center; padding: 20px;">${translate('This folder is empty.')}</p>`;
@@ -2701,6 +3077,7 @@ async function onRemoveFromFolderClick(filename, folderId, renderCallback) {
 
     // Optimistically update the client-side data
     imageToUpdate.folderIds = newFolderIds;
+    backgroundSelector.rebuildFolderImageIndex();
 
     try {
         const response = await fetch('/api/backgrounds/update-folders', {
@@ -2720,6 +3097,7 @@ async function onRemoveFromFolderClick(filename, folderId, renderCallback) {
         toastr.error('Failed to update folder. Reverting change.');
         // Roll back on failure
         imageToUpdate.folderIds = originalFolderIds;
+        backgroundSelector.rebuildFolderImageIndex();
     }
 }
 
@@ -2796,6 +3174,7 @@ function openFolderChooserPopup(filename) {
 
                 if (!imageToUpdate.folderIds.includes(folderId)) {
                     imageToUpdate.folderIds.push(folderId); // Optimistic update
+                    backgroundSelector.rebuildFolderImageIndex();
 
                     try {
                         const response = await fetch('/api/backgrounds/update-folders', {
@@ -2813,6 +3192,7 @@ function openFolderChooserPopup(filename) {
                         console.error('Failed to save folder update:', error);
                         toastr.error('Failed to update folder. Reverting change.');
                         imageToUpdate.folderIds.pop(); // Roll back on failure
+                        backgroundSelector.rebuildFolderImageIndex();
                     }
                 } else {
                     toastr.info(`'${filename}' is already in that folder.`);
@@ -2866,7 +3246,7 @@ export async function initBackgrounds() {
         selectedBackgrounds = new Set();
         $('#Backgrounds').addClass('selection-mode-active');
         $('#bg_menu_content').addClass('selection-active');
-        $('.thumbnail.is-bulk-selected').removeClass('is-bulk-selected');
+        backgroundSelector.reapplySelectionStyles([]);
         updateSelectionCount();
     };
 
@@ -2875,7 +3255,7 @@ export async function initBackgrounds() {
         selectedBackgrounds = new Set();
         $('#Backgrounds').removeClass('selection-mode-active');
         $('#bg_menu_content').removeClass('selection-active');
-        $('.thumbnail.is-bulk-selected').removeClass('is-bulk-selected');
+        backgroundSelector.reapplySelectionStyles([]);
     };
 
     const handleThumbnailBulkSelect = (thumbnailElement) => {
@@ -2890,6 +3270,7 @@ export async function initBackgrounds() {
             selectedBackgrounds.delete(bgFile);
             $thumb.removeClass('is-bulk-selected');
         }
+        backgroundSelector.reapplySelectionStyles(Array.from(selectedBackgrounds));
         updateSelectionCount();
     };
 
@@ -2929,6 +3310,7 @@ export async function initBackgrounds() {
                     image.folderIds.push(folderId);
                 }
             });
+            backgroundSelector.rebuildFolderImageIndex();
 
             toastr.success(stringFormat(translate('{0} backgrounds added to folder.'), [filenamesToAdd.length]));
         } catch (error) {
@@ -3118,14 +3500,13 @@ export async function initBackgrounds() {
         if (allVisibleSelected) {
             visibleFilenames.forEach(file => {
                 selectedBackgrounds.delete(file);
-                document.querySelector(`.thumbnail[data-bgfile="${file}"]`)?.classList.remove('is-bulk-selected');
             });
         } else {
             visibleFilenames.forEach(file => {
                 selectedBackgrounds.add(file);
-                document.querySelector(`.thumbnail[data-bgfile="${file}"]`)?.classList.add('is-bulk-selected');
             });
         }
+        backgroundSelector.reapplySelectionStyles(Array.from(selectedBackgrounds));
         updateSelectionCount();
     });
 
