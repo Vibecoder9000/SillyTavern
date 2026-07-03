@@ -27,6 +27,43 @@ export const CONCURRENCY_LIMIT = 8;
 export const SKIPPED_EXTENSIONS_FOR_JIMP = ['.apng', '.mp4', '.webm', '.avi', '.mkv', '.flv', '.gif'];
 
 /**
+ * Determines whether the source file is animated and therefore should not be
+ * served as a static-thumbnail fallback.
+ * @param {string} pathToOriginalFile Absolute path to the original file.
+ * @param {string} fileExtension Lowercased file extension.
+ * @returns {boolean} True if the original file is animated or a video format.
+ */
+function isAnimatedOriginal(pathToOriginalFile, fileExtension) {
+    if (SKIPPED_EXTENSIONS.has(fileExtension)) {
+        return true;
+    }
+
+    if (!fs.existsSync(pathToOriginalFile)) {
+        return false;
+    }
+
+    if (fileExtension !== '.webp' && fileExtension !== '.png') {
+        return false;
+    }
+
+    try {
+        const buffer = fs.readFileSync(pathToOriginalFile);
+
+        if (fileExtension === '.webp') {
+            return isAnimatedWebP(buffer);
+        }
+
+        if (fileExtension === '.png') {
+            return isAnimatedApng(buffer);
+        }
+    } catch (error) {
+        console.warn(`[thumbnail] Failed to inspect animation state for ${pathToOriginalFile}:`, error);
+    }
+
+    return false;
+}
+
+/**
  * @typedef {'bg' | 'avatar' | 'persona'} ThumbnailType
  */
 
@@ -313,21 +350,28 @@ publicRouter.get('/', async function (request, response) {
             return response.sendFile(pathToOriginalFile);
         };
 
-        if (!thumbnailsEnabled) {
-            return serveOriginal();
-        }
-
+        const originalFolder = getOriginalFolder(request.user.directories, type);
+        const pathToOriginalFile = path.resolve(path.join(originalFolder, file));
         const animatedEnabled = animated === 'true';
         const fileExtension = path.extname(file).toLowerCase();
         const isAnimatedFormat = SKIPPED_EXTENSIONS.has(fileExtension);
+        const needsStaticFallbackCheck = !animatedEnabled && (isAnimatedFormat || fileExtension === '.webp' || fileExtension === '.png');
+        const isAnimatedOriginalFile = needsStaticFallbackCheck && isAnimatedOriginal(pathToOriginalFile, fileExtension);
+
+        if (!thumbnailsEnabled) {
+            if (!animatedEnabled && isAnimatedOriginalFile) {
+                return response.sendStatus(404);
+            }
+            return serveOriginal();
+        }
 
         // Serve original for animated formats or GIFs
         if (animatedEnabled && isAnimatedFormat) {
             return serveOriginal();
         }
 
-        if (fileExtension === '.gif') {
-            return serveOriginal();
+        if (!animatedEnabled && isAnimatedOriginalFile) {
+            return response.sendStatus(404);
         }
 
         const thumbnailFolder = getThumbnailFolder(request.user.directories, type);
@@ -338,6 +382,9 @@ publicRouter.get('/', async function (request, response) {
             const thumbResult = await generateThumbnail(request.user.directories, type, file, false);
             // If generation failed (path is null), serve the original file
             if (!thumbResult.path) {
+                if (!animatedEnabled && isAnimatedOriginalFile) {
+                    return response.sendStatus(404);
+                }
                 return serveOriginal();
             }
         }

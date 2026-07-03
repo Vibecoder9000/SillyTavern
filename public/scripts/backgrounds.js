@@ -9,6 +9,20 @@ import { Popup } from './popup.js';
 const PNG_PIXEL_B64 = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
 const FOLDER_LIMIT = 100;
 const SERVER_THUMBNAIL_CACHE = new Map();
+const LOCAL_STATIC_THUMBNAIL_CACHE = new Map();
+const LOCAL_STATIC_THUMBNAIL_PROMISES = new Map();
+const STATIC_THUMBNAIL_PERSIST_PROMISES = new Map();
+const STATIC_THUMBNAIL_FAILURE_COOLDOWNS = new Map();
+const BACKGROUND_THUMB_ROOT_MARGIN = '200px 0px';
+const POPUP_THUMB_ROOT_MARGIN = '150px 0px';
+const MAX_CONCURRENT_THUMBNAIL_LOADS = 4;
+const MAX_CONCURRENT_STATIC_THUMBNAIL_GENERATIONS = 1;
+const MAX_CONCURRENT_STATIC_THUMBNAIL_PERSISTS = 1;
+const STATIC_THUMBNAIL_RETRY_LIMIT = 3;
+const STATIC_THUMBNAIL_RETRY_DELAY_MS = 750;
+const STATIC_THUMBNAIL_FAILURE_COOLDOWN_MS = 7 * 24 * 60 * 60 * 1000;
+const STATIC_THUMBNAIL_FAILURE_RESET_WIDTH_DELTA = 400;
+const THUMBNAIL_RENDER_BATCH_SIZE = 8;
 let THUMBNAIL_CONFIG = { width: 160, height: 90 };
 let backgroundSelector = null;
 let hasGalleryLoaded = false;
@@ -17,6 +31,13 @@ const BG_METADATA_KEY = 'custom_background';
 const LIST_METADATA_KEY = 'chat_backgrounds';
 let backgroundLoadPromise = null;
 let backgroundNameMap = null;
+const thumbnailElementsByFile = new Map();
+const selectedThumbnailElements = new Set();
+const lockedThumbnailElements = new Set();
+const staticThumbnailGenerationQueue = [];
+const staticThumbnailPersistQueue = [];
+let lastStaticThumbnailFailureWidth = window.innerWidth;
+let lastStaticThumbnailFailureIsMobile = window.innerWidth <= 1000;
 
 /**
  * Toggles the starred status of a background by calling the server API and then updates the UI.
@@ -105,25 +126,25 @@ export let background_settings = {
 /**
  * Fetches and caches a thumbnail from the server.
  * @param {string} thumbnailUrl - The URL of the thumbnail.
- * @returns {Promise<string>} A Blob URL for the cached thumbnail or a placeholder.
+ * @returns {Promise<{ src: string, hasContent: boolean }>} The thumbnail result.
  */
 async function getCachedServerThumbnail(thumbnailUrl) {
     if (SERVER_THUMBNAIL_CACHE.has(thumbnailUrl)) {
-        return SERVER_THUMBNAIL_CACHE.get(thumbnailUrl);
+        return { src: SERVER_THUMBNAIL_CACHE.get(thumbnailUrl), hasContent: true };
     }
     try {
         const response = await fetch(thumbnailUrl, {
             cache: 'no-cache',
             headers: getRequestHeaders(),
         });
-        if (!response.ok) return PNG_PIXEL_B64;
+        if (!response.ok) return { src: PNG_PIXEL_B64, hasContent: false };
         const blob = await response.blob();
         const blobUrl = URL.createObjectURL(blob);
         SERVER_THUMBNAIL_CACHE.set(thumbnailUrl, blobUrl);
-        return blobUrl;
+        return { src: blobUrl, hasContent: true };
     } catch (error) {
         console.warn(`Failed to fetch server thumbnail ${thumbnailUrl}:`, error);
-        return PNG_PIXEL_B64;
+        return { src: PNG_PIXEL_B64, hasContent: false };
     }
 }
 
@@ -134,6 +155,462 @@ async function getCachedServerThumbnail(thumbnailUrl) {
  */
 function getThumbnailUrl(filename) {
     return `/thumbnail?file=${encodeURIComponent(filename)}&type=bg`;
+}
+
+/**
+ * Builds a thumbnail request URL for the requested animation mode.
+ * @param {string} baseUrl Base thumbnail URL.
+ * @param {boolean} shouldAnimate Whether to allow animated media.
+ * @returns {string} Request URL.
+ */
+function buildThumbnailRequestUrl(baseUrl, shouldAnimate) {
+    return `${baseUrl}&animated=${shouldAnimate}`;
+}
+
+/**
+ * Clears in-memory failure cooldowns when the viewport meaningfully changes.
+ * This lets desktop and mobile contexts retry independently without causing
+ * immediate crash/reload loops on the same constrained layout.
+ * @returns {void}
+ */
+function refreshStaticThumbnailFailureContext() {
+    const currentWidth = window.innerWidth;
+    const currentIsMobile = currentWidth <= 1000;
+    const hasLargeWidthChange = Math.abs(currentWidth - lastStaticThumbnailFailureWidth) >= STATIC_THUMBNAIL_FAILURE_RESET_WIDTH_DELTA;
+    const hasModeChange = currentIsMobile !== lastStaticThumbnailFailureIsMobile;
+
+    if (hasLargeWidthChange || hasModeChange) {
+        STATIC_THUMBNAIL_FAILURE_COOLDOWNS.clear();
+        lastStaticThumbnailFailureWidth = currentWidth;
+        lastStaticThumbnailFailureIsMobile = currentIsMobile;
+        return;
+    }
+
+    lastStaticThumbnailFailureWidth = currentWidth;
+    lastStaticThumbnailFailureIsMobile = currentIsMobile;
+}
+
+/**
+ * Checks whether a file is currently cooling down after repeated failures.
+ * @param {string} filename Background filename.
+ * @returns {boolean} True if generation should be skipped for now.
+ */
+function isStaticThumbnailCoolingDown(filename) {
+    refreshStaticThumbnailFailureContext();
+
+    const retryAfter = STATIC_THUMBNAIL_FAILURE_COOLDOWNS.get(filename);
+    if (!retryAfter) {
+        return false;
+    }
+
+    if (retryAfter <= Date.now()) {
+        STATIC_THUMBNAIL_FAILURE_COOLDOWNS.delete(filename);
+        return false;
+    }
+
+    return true;
+}
+
+/**
+ * Starts a temporary cooldown after repeated failures so the same mobile
+ * context does not repeatedly load large originals and crash again.
+ * @param {string} filename Background filename.
+ * @returns {void}
+ */
+function markStaticThumbnailCooldown(filename) {
+    refreshStaticThumbnailFailureContext();
+    STATIC_THUMBNAIL_FAILURE_COOLDOWNS.set(filename, Date.now() + STATIC_THUMBNAIL_FAILURE_COOLDOWN_MS);
+}
+
+/**
+ * Waits for a short period before retrying a temporary failure.
+ * @param {number} ms Delay in milliseconds.
+ * @returns {Promise<void>}
+ */
+function wait(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+/**
+ * Waits until the next animation frame so long renders can yield to the UI.
+ * @returns {Promise<void>}
+ */
+function nextFrame() {
+    return new Promise(resolve => requestAnimationFrame(() => resolve()));
+}
+
+/**
+ * Removes disconnected DOM nodes from a thumbnail set.
+ * @param {Set<HTMLElement>} elements Elements to prune.
+ * @returns {Set<HTMLElement>} The same set after pruning.
+ */
+function pruneDisconnectedElements(elements) {
+    if (!elements) {
+        return new Set();
+    }
+
+    for (const element of elements) {
+        if (!element.isConnected) {
+            elements.delete(element);
+            selectedThumbnailElements.delete(element);
+            lockedThumbnailElements.delete(element);
+        }
+    }
+
+    return elements;
+}
+
+/**
+ * Gets tracked thumbnail elements for a specific file.
+ * @param {string} filename Background filename.
+ * @returns {Set<HTMLElement>} Tracked thumbnail elements.
+ */
+function getTrackedThumbnailElements(filename) {
+    if (!filename) {
+        return new Set();
+    }
+
+    const elements = thumbnailElementsByFile.get(filename);
+    return pruneDisconnectedElements(elements);
+}
+
+/**
+ * Removes a thumbnail element from the global tracking sets.
+ * @param {HTMLElement} element Thumbnail element.
+ * @param {string} [filename] Optional filename override.
+ * @returns {void}
+ */
+function untrackThumbnailElement(element, filename = element?.dataset?.bgfile) {
+    if (!element || !filename) {
+        return;
+    }
+
+    const elements = thumbnailElementsByFile.get(filename);
+    if (!elements) {
+        return;
+    }
+
+    elements.delete(element);
+    selectedThumbnailElements.delete(element);
+    lockedThumbnailElements.delete(element);
+
+    if (elements.size === 0) {
+        thumbnailElementsByFile.delete(filename);
+    }
+}
+
+/**
+ * Applies the current custom-background state to one thumbnail.
+ * @param {HTMLElement} thumb Thumbnail element.
+ * @param {Set<string>} customBgSet Current custom background set.
+ * @returns {void}
+ */
+function applyCustomStateToThumbnail(thumb, customBgSet) {
+    const filename = thumb?.dataset?.bgfile;
+    if (!filename) {
+        return;
+    }
+
+    thumb.setAttribute('custom', String(customBgSet.has(filename)));
+}
+
+/**
+ * Applies the current selection state to one thumbnail.
+ * @param {HTMLElement} thumb Thumbnail element.
+ * @param {string} selectedFilename Selected background filename.
+ * @returns {void}
+ */
+function applySelectedStateToThumbnail(thumb, selectedFilename) {
+    thumb.classList.remove('selected');
+    selectedThumbnailElements.delete(thumb);
+
+    if (selectedFilename && thumb.dataset.bgfile === selectedFilename) {
+        thumb.classList.add('selected');
+        selectedThumbnailElements.add(thumb);
+    }
+}
+
+/**
+ * Applies the current chat-lock state to one thumbnail.
+ * @param {HTMLElement} thumb Thumbnail element.
+ * @param {string | null} lockedFilename Locked background filename.
+ * @returns {void}
+ */
+function applyLockedStateToThumbnail(thumb, lockedFilename) {
+    thumb.dataset.isChatLocked = 'false';
+    lockedThumbnailElements.delete(thumb);
+
+    if (lockedFilename && thumb.dataset.bgfile === lockedFilename) {
+        thumb.dataset.isChatLocked = 'true';
+        lockedThumbnailElements.add(thumb);
+    }
+}
+
+/**
+ * Gets the locked background filename from chat metadata.
+ * @returns {string | null} Locked filename, if any.
+ */
+function getLockedBackgroundFilename() {
+    const lockedBackgroundUrl = chat_metadata[BG_METADATA_KEY];
+    if (!lockedBackgroundUrl) {
+        return null;
+    }
+
+    const match = lockedBackgroundUrl.match(/backgrounds\/(.+)"\)$/);
+    if (!match || !match[1]) {
+        return null;
+    }
+
+    return decodeURIComponent(match[1]);
+}
+
+/**
+ * Tracks a newly created thumbnail element and applies current UI state.
+ * @param {HTMLElement} thumb Thumbnail element.
+ * @returns {void}
+ */
+function trackThumbnailElement(thumb) {
+    const filename = thumb?.dataset?.bgfile;
+    if (!filename) {
+        return;
+    }
+
+    const elements = thumbnailElementsByFile.get(filename) ?? new Set();
+    elements.add(thumb);
+    thumbnailElementsByFile.set(filename, elements);
+
+    const customBgSet = new Set(chat_metadata[LIST_METADATA_KEY] || []);
+    applyCustomStateToThumbnail(thumb, customBgSet);
+    applySelectedStateToThumbnail(thumb, background_settings.name);
+    applyLockedStateToThumbnail(thumb, getLockedBackgroundFilename());
+}
+
+/**
+ * Runs async work with a small concurrency cap so thumbnail generation does not
+ * stampede memory usage when several animated items become visible together.
+ * @template T
+ * @param {Array<() => Promise<T>>} queue Queue storing deferred work functions.
+ * @param {{ current: number }} state Mutable active-count holder.
+ * @param {number} limit Maximum parallel tasks.
+ * @param {() => void} pump Function that continues draining the queue.
+ * @param {() => Promise<T>} task The work to schedule.
+ * @returns {Promise<T>}
+ */
+function enqueueLimitedTask(queue, state, limit, pump, task) {
+    return new Promise((resolve, reject) => {
+        queue.push(async () => {
+            state.current++;
+            try {
+                resolve(await task());
+            } catch (error) {
+                reject(error);
+            } finally {
+                state.current--;
+                pump();
+            }
+        });
+
+        if (state.current < limit) {
+            pump();
+        }
+    });
+}
+
+const staticGenerationState = { current: 0 };
+const staticPersistState = { current: 0 };
+
+/**
+ * Drains the local static-thumbnail generation queue.
+ * @returns {void}
+ */
+function processStaticThumbnailGenerationQueue() {
+    while (staticGenerationState.current < MAX_CONCURRENT_STATIC_THUMBNAIL_GENERATIONS && staticThumbnailGenerationQueue.length > 0) {
+        const nextTask = staticThumbnailGenerationQueue.shift();
+        void nextTask();
+    }
+}
+
+/**
+ * Drains the server-persist queue for generated static thumbnails.
+ * @returns {void}
+ */
+function processStaticThumbnailPersistQueue() {
+    while (staticPersistState.current < MAX_CONCURRENT_STATIC_THUMBNAIL_PERSISTS && staticThumbnailPersistQueue.length > 0) {
+        const nextTask = staticThumbnailPersistQueue.shift();
+        void nextTask();
+    }
+}
+
+/**
+ * Retries a thumbnail operation a few times before giving up for this session.
+ * Failures are treated as temporary because missing thumbs can be caused by
+ * transient browser pressure or a different user profile such as mobile mode.
+ * @template T
+ * @param {string} label Log label.
+ * @param {() => Promise<T>} operation Async work to retry.
+ * @returns {Promise<T>}
+ */
+async function withThumbnailRetries(label, operation) {
+    let lastError;
+
+    for (let attempt = 1; attempt <= STATIC_THUMBNAIL_RETRY_LIMIT; attempt++) {
+        try {
+            return await operation();
+        } catch (error) {
+            lastError = error;
+            console.warn(`${label}: attempt ${attempt}/${STATIC_THUMBNAIL_RETRY_LIMIT} failed.`, error);
+
+            if (attempt < STATIC_THUMBNAIL_RETRY_LIMIT) {
+                await wait(STATIC_THUMBNAIL_RETRY_DELAY_MS * attempt);
+            }
+        }
+    }
+
+    throw lastError;
+}
+
+/**
+ * Completes thumbnail rendering once a source is available.
+ * @param {HTMLImageElement} img Image element to update.
+ * @param {HTMLElement} thumbElement Thumbnail wrapper.
+ * @param {HTMLElement | null} placeholder Placeholder element, if present.
+ * @param {string} src Final image source.
+ */
+function applyLoadedThumbnail(img, thumbElement, placeholder, src) {
+    img.onload = () => {
+        thumbElement.classList.add('loaded');
+
+        if (placeholder) {
+            placeholder.addEventListener('transitionend', () => {
+                placeholder.remove();
+            }, { once: true });
+        }
+    };
+
+    img.src = src;
+}
+
+/**
+ * Generates a static thumbnail data URL for an animated background on demand.
+ * This avoids loading the entire library up front while still giving visible
+ * items a real preview instead of a placeholder.
+ * @param {object} imageData Background metadata.
+ * @returns {Promise<string | null>} A local thumbnail data URL, or null on failure.
+ */
+async function getLocalStaticThumbnail(imageData) {
+    if (!imageData?.isAnimated || !imageData?.fullResUrl) {
+        return null;
+    }
+
+    if (isStaticThumbnailCoolingDown(imageData.filename)) {
+        return null;
+    }
+
+    if (LOCAL_STATIC_THUMBNAIL_CACHE.has(imageData.filename)) {
+        return LOCAL_STATIC_THUMBNAIL_CACHE.get(imageData.filename);
+    }
+
+    if (LOCAL_STATIC_THUMBNAIL_PROMISES.has(imageData.filename)) {
+        return LOCAL_STATIC_THUMBNAIL_PROMISES.get(imageData.filename);
+    }
+
+    const thumbnailPromise = enqueueLimitedTask(
+        staticThumbnailGenerationQueue,
+        staticGenerationState,
+        MAX_CONCURRENT_STATIC_THUMBNAIL_GENERATIONS,
+        processStaticThumbnailGenerationQueue,
+        async () => withThumbnailRetries(`[ProcessThumb] ${imageData.filename}`, async () => {
+            const response = await fetch(imageData.fullResUrl);
+            if (!response.ok) {
+                throw new Error(`Failed to fetch original file. Server responded with ${response.status} ${response.statusText}`);
+            }
+
+            const blob = await response.blob();
+            const file = new File([blob], imageData.filename, { type: blob.type });
+            const fileDataUrl = await getBase64Async(file);
+            const thumbnailDataUrl = await createThumbnail(
+                fileDataUrl,
+                THUMBNAIL_CONFIG.width,
+                THUMBNAIL_CONFIG.height,
+                'image/jpeg',
+            );
+
+            LOCAL_STATIC_THUMBNAIL_CACHE.set(imageData.filename, thumbnailDataUrl);
+            return thumbnailDataUrl;
+        }),
+    );
+
+    LOCAL_STATIC_THUMBNAIL_PROMISES.set(imageData.filename, thumbnailPromise);
+
+    try {
+        const thumbnailDataUrl = await thumbnailPromise;
+        STATIC_THUMBNAIL_FAILURE_COOLDOWNS.delete(imageData.filename);
+        return thumbnailDataUrl;
+    } catch (error) {
+        markStaticThumbnailCooldown(imageData.filename);
+        console.error(`[ProcessThumb] ${imageData.filename}: FAILED to generate local static thumbnail.`, error);
+        return null;
+    } finally {
+        LOCAL_STATIC_THUMBNAIL_PROMISES.delete(imageData.filename);
+    }
+}
+
+/**
+ * Persists a generated static thumbnail to the server without blocking the UI.
+ * Failures stay temporary so the app can retry later instead of poisoning
+ * metadata for a file that may only be unavailable in the current context.
+ * @param {object} imageData Background metadata.
+ * @param {string} thumbnailDataUrl Locally generated static thumbnail.
+ * @returns {Promise<void>}
+ */
+async function persistGeneratedStaticThumbnail(imageData, thumbnailDataUrl) {
+    if (!imageData?.filename || !thumbnailDataUrl) {
+        return;
+    }
+
+    if (STATIC_THUMBNAIL_PERSIST_PROMISES.has(imageData.filename)) {
+        return STATIC_THUMBNAIL_PERSIST_PROMISES.get(imageData.filename);
+    }
+
+    const persistPromise = enqueueLimitedTask(
+        staticThumbnailPersistQueue,
+        staticPersistState,
+        MAX_CONCURRENT_STATIC_THUMBNAIL_PERSISTS,
+        processStaticThumbnailPersistQueue,
+        async () => withThumbnailRetries(`[PersistThumb] ${imageData.filename}`, async () => {
+            const staticThumbnailBlob = await (await fetch(thumbnailDataUrl)).blob();
+            const thumbFormData = new FormData();
+            thumbFormData.append('avatar', staticThumbnailBlob, imageData.filename);
+
+            const uploadUrl = `/api/thumbnails/upload-generated?originalFilename=${encodeURIComponent(imageData.filename)}`;
+            const uploadResponse = await fetch(uploadUrl, {
+                method: 'POST',
+                headers: getHeadersForFormData(),
+                body: thumbFormData,
+            });
+
+            if (!uploadResponse.ok) {
+                throw new Error(`Upload failed. Server responded with ${uploadResponse.status} ${uploadResponse.statusText}`);
+            }
+        }),
+    ).catch(error => {
+        console.warn(`[PersistThumb] ${imageData.filename}: keeping local thumbnail only for now.`, error);
+    }).finally(() => {
+        STATIC_THUMBNAIL_PERSIST_PROMISES.delete(imageData.filename);
+    });
+
+    STATIC_THUMBNAIL_PERSIST_PROMISES.set(imageData.filename, persistPromise);
+    return persistPromise;
+}
+
+/**
+ * Gets the necessary request headers for a FormData upload.
+ * @returns {HeadersInit}
+ */
+function getHeadersForFormData() {
+    const headers = getRequestHeaders();
+    delete headers['Content-Type'];
+    return headers;
 }
 
 /**
@@ -233,8 +710,8 @@ function createThumbnailElement(imageData, calculatedSize, options = {}) {
     selectionOverlay.innerHTML = '<i class="fa-solid fa-check"></i>';
     thumbnail.appendChild(selectionOverlay);
 
-    const useAnimation = document.getElementById('background_thumbnails_animation').checked;
-    const finalUrl = `${imageData.thumbnailUrl}&animated=${useAnimation}`;
+    const useAnimation = document.getElementById('background_thumbnails_animation').checked && !!imageData.isAnimated;
+    const finalUrl = buildThumbnailRequestUrl(imageData.thumbnailUrl, useAnimation);
     const isCached = SERVER_THUMBNAIL_CACHE.has(finalUrl);
 
     // We only create a placeholder if the image is not in client-side cache.
@@ -252,6 +729,7 @@ function createThumbnailElement(imageData, calculatedSize, options = {}) {
     imgElement.dataset.src = imageData.thumbnailUrl;
     imgElement.src = PNG_PIXEL_B64;
     clipper.appendChild(imgElement);
+    thumbnail.dataset.isAnimated = String(!!imageData.isAnimated);
 
     const titleDiv = document.createElement('div');
     titleDiv.className = 'BGSampleTitle';
@@ -284,6 +762,7 @@ function createThumbnailElement(imageData, calculatedSize, options = {}) {
     mobileMenuToggle.innerHTML = '<i class="fa-solid fa-ellipsis-vertical"></i>';
     thumbnail.appendChild(mobileMenuToggle);
 
+    trackThumbnailElement(thumbnail);
     return thumbnail;
 }
 
@@ -299,14 +778,19 @@ class BackgroundSelector {
         this.containerWidth = 0;
         this.imageObserver = null;
         this.resizeObserver = null;
+        this.activeThumbnailLoads = 0;
+        this.thumbnailLoadQueue = [];
         this.isInitialRender = true;
         this.sortOrder = 'alpha';
+        this.imageLookup = new Map();
+        this.renderVersion = 0;
         this.debouncedRender = debounce(() => this.render(false), 150);
         this.setupImageObserver();
         this.setupResizeObserver();
         this.debouncedSearch = debounce((query) => this.search(query), 250);
         this.setupDropToUpload();
         this.setupScrollToTop();
+        window.addEventListener('resize', refreshStaticThumbnailFailureContext, { passive: true });
     }
 
     setupResizeObserver() {
@@ -330,14 +814,15 @@ class BackgroundSelector {
                 if (entry.isIntersecting) {
                     const thumbElement = entry.target;
                     this.imageObserver.unobserve(thumbElement);
-                    this.loadSingleThumbnail(thumbElement);
+                    this.queueThumbnailLoad(thumbElement);
                 }
             });
-        }, { root: null, rootMargin: '500px 0px', threshold: 0.01 });
+        }, { root: null, rootMargin: BACKGROUND_THUMB_ROOT_MARGIN, threshold: 0.01 });
     }
 
     setData(imageDataList) {
         this.images = imageDataList;
+        this.imageLookup = new Map(imageDataList.map(image => [image.filename, image]));
         const currentQuery = $('#bg-filter').val() || '';
         this.search(currentQuery);
     }
@@ -394,21 +879,19 @@ class BackgroundSelector {
             this.container.appendChild(foldersContainer);
         }
 
-        // Clear only the folder container's content.
-        foldersContainer.innerHTML = '';
+        const fragment = document.createDocumentFragment();
 
-        // 1. "Starred" folder is always first.
-        foldersContainer.appendChild(createStarredFolderElement());
+        fragment.appendChild(createStarredFolderElement());
 
-        // 2. Render all the user-created "blank" folders from our data array.
-        this.folderLists.forEach((folder) => { // Pass the whole object
-            foldersContainer.appendChild(createBlankFolderElement(folder));
+        this.folderLists.forEach((folder) => {
+            fragment.appendChild(createBlankFolderElement(folder));
         });
 
-        // 3. The "Add" button is last, but only if we're under the limit.
         if (this.folderLists.length < FOLDER_LIMIT) {
-            foldersContainer.appendChild(createAddFolderElement());
+            fragment.appendChild(createAddFolderElement());
         }
+
+        foldersContainer.replaceChildren(fragment);
     }
 
     render(isInitial = false, newFilename = null) {
@@ -422,8 +905,8 @@ class BackgroundSelector {
 
             const mainContainer = this.container.querySelector('#main-backgrounds-container');
 
-            const renderAndResolve = () => {
-                this._performRender(newFilename);
+            const renderAndResolve = async () => {
+                await this._performRender(newFilename);
                 if (mainContainer) {
                     mainContainer.classList.remove('fading-out');
                 }
@@ -439,8 +922,10 @@ class BackgroundSelector {
         });
     }
 
-    _performRender(newFilename = null) {
+    async _performRender(newFilename = null) {
         this.imageObserver.disconnect();
+        this.thumbnailLoadQueue = [];
+        const renderVersion = ++this.renderVersion;
 
         // Ensure the primary containers exist. This only runs on the very first render.
         let foldersContainer = this.container.querySelector('#folders-container');
@@ -459,7 +944,7 @@ class BackgroundSelector {
         }
 
         // Clear only the main thumbnail container, leaving the folders untouched.
-        mainContainer.innerHTML = '';
+        mainContainer.replaceChildren();
         mainContainer.className = 'thumbnail-container'; // Reset class in case it was modified
 
         if (this.filteredImages.length === 0) {
@@ -480,10 +965,7 @@ class BackgroundSelector {
                 minThumbsPerRow,
             );
 
-            allRows.forEach(rowData => {
-                const rowElement = createRowElement(rowData);
-                mainContainer.appendChild(rowElement);
-            });
+            await this.renderRowsInBatches(mainContainer, allRows, renderVersion);
         } catch (error) {
             console.error('Failed to render background layout:', error);
             toastr.error('A background has corrupted data and could not be displayed. Check console for details.');
@@ -491,13 +973,8 @@ class BackgroundSelector {
             return;
         }
 
-
-        mainContainer.querySelectorAll('.thumbnail').forEach(thumb =>
-            this.imageObserver.observe(thumb),
-        );
-
         // If a new filename was provided, find and highlight it now.
-        if (newFilename) {
+        if (newFilename && renderVersion === this.renderVersion) {
             const newThumb = document.querySelector(`.thumbnail[data-bgfile="${newFilename}"]`);
             if (newThumb) {
                 highlightNewBackground(newThumb);
@@ -507,32 +984,85 @@ class BackgroundSelector {
         setTimeout(() => { this.isInitialRender = false; }, 100);
     }
 
+    async renderRowsInBatches(mainContainer, allRows, renderVersion) {
+        for (let i = 0; i < allRows.length; i += THUMBNAIL_RENDER_BATCH_SIZE) {
+            if (renderVersion !== this.renderVersion) {
+                return;
+            }
+
+            const fragment = document.createDocumentFragment();
+            const batchRows = allRows.slice(i, i + THUMBNAIL_RENDER_BATCH_SIZE);
+
+            batchRows.forEach(rowData => {
+                const rowElement = createRowElement(rowData);
+                fragment.appendChild(rowElement);
+                rowElement.querySelectorAll('.thumbnail').forEach(thumb => this.imageObserver.observe(thumb));
+            });
+
+            mainContainer.appendChild(fragment);
+
+            if (i + THUMBNAIL_RENDER_BATCH_SIZE < allRows.length) {
+                await nextFrame();
+            }
+        }
+    }
+
+    queueThumbnailLoad(thumbElement) {
+        if (!thumbElement || thumbElement.dataset.thumbnailQueued === 'true') {
+            return;
+        }
+
+        thumbElement.dataset.thumbnailQueued = 'true';
+        this.thumbnailLoadQueue.push(thumbElement);
+        this.processThumbnailQueue();
+    }
+
+    processThumbnailQueue() {
+        while (this.activeThumbnailLoads < MAX_CONCURRENT_THUMBNAIL_LOADS && this.thumbnailLoadQueue.length > 0) {
+            const thumbElement = this.thumbnailLoadQueue.shift();
+            if (!thumbElement || !thumbElement.isConnected) {
+                continue;
+            }
+
+            this.activeThumbnailLoads++;
+            void this.loadSingleThumbnail(thumbElement).finally(() => {
+                this.activeThumbnailLoads--;
+                this.processThumbnailQueue();
+            });
+        }
+    }
+
     async loadSingleThumbnail(thumbElement) {
         const img = thumbElement.querySelector('img');
         const placeholder = thumbElement.querySelector('.thumbnail-placeholder');
-        if (!img || !img.dataset.src) return;
+        if (!img || !img.dataset.src) {
+            delete thumbElement.dataset.thumbnailQueued;
+            return;
+        }
 
         const baseUrl = img.dataset.src;
-        const useAnimation = document.getElementById('background_thumbnails_animation').checked;
-        const finalUrl = `${baseUrl}&animated=${useAnimation}`;
+        const shouldAnimate = document.getElementById('background_thumbnails_animation').checked && thumbElement.dataset.isAnimated === 'true';
+        const finalUrl = buildThumbnailRequestUrl(baseUrl, shouldAnimate);
 
-        const src = await getCachedServerThumbnail(finalUrl);
-        delete img.dataset.src;
-
-        img.onload = () => {
-            // we add the 'loaded' class to the parent thumbnail element
-            thumbElement.classList.add('loaded');
-
-            // we check if a placeholder exists
-            if (placeholder) {
-                // we listen for the placeholder's own fade-out transition to finish, then remove it from the DOM
-                placeholder.addEventListener('transitionend', () => {
-                    placeholder.remove();
-                }, { once: true });
+        const { src, hasContent } = await getCachedServerThumbnail(finalUrl);
+        if (!hasContent) {
+            if (!shouldAnimate && thumbElement.dataset.isAnimated === 'true') {
+                const imageData = this.imageLookup.get(thumbElement.dataset.bgfile);
+                const localStaticThumbnail = await getLocalStaticThumbnail(imageData);
+                if (localStaticThumbnail) {
+                    delete img.dataset.src;
+                    applyLoadedThumbnail(img, thumbElement, placeholder, localStaticThumbnail);
+                    void persistGeneratedStaticThumbnail(imageData, localStaticThumbnail);
+                }
             }
-        };
 
-        img.src = src;
+            delete thumbElement.dataset.thumbnailQueued;
+            return;
+        }
+
+        delete img.dataset.src;
+        applyLoadedThumbnail(img, thumbElement, placeholder, src);
+        delete thumbElement.dataset.thumbnailQueued;
     }
 
     setupDropToUpload() {
@@ -619,7 +1149,6 @@ class BackgroundSelector {
     }
 
     reapplySelectionStyles(selectedFiles) {
-        // First, clear the selection class from all thumbnails in the container
         this.container.querySelectorAll('.thumbnail.is-bulk-selected').forEach(thumb => {
             thumb.classList.remove('is-bulk-selected');
         });
@@ -639,6 +1168,10 @@ class BackgroundSelector {
     destroy() {
         if (this.imageObserver) this.imageObserver.disconnect();
         if (this.resizeObserver) this.resizeObserver.disconnect();
+        this.renderVersion++;
+        this.imageLookup.clear();
+        pruneDisconnectedElements(selectedThumbnailElements);
+        pruneDisconnectedElements(lockedThumbnailElements);
         this.folderLists = [];
         const scrollToTopButton = document.getElementById('bg_scroll_top');
         if (scrollToTopButton) {
@@ -647,123 +1180,6 @@ class BackgroundSelector {
             scrollToTopButton.style.pointerEvents = 'none';
         }
     }
-}
-
-/**
- * Checks for animated backgrounds that are missing a static thumbnail and attempts to generate one.
- * @param {Array<object>} imageDataList - The list of all background image data.
- */
-async function ensureStaticThumbnailsExist(imageDataList) {
-    const imagesToProcess = imageDataList.filter(img => {
-        if (!img.isAnimated || img.staticThumbnailFailed) {
-            return false;
-        }
-        const lowerFilename = img.filename.toLowerCase();
-        return lowerFilename.endsWith('.webp');
-    });
-
-    if (imagesToProcess.length === 0) {
-        return;
-    }
-
-    processAndUploadStaticThumbnails(imagesToProcess);
-}
-
-/**
- * Processes a single animated background: generates a static thumbnail and uploads it.
- * @param {object} imageData - The metadata for the image to process.
- * @returns {Promise<void>}
- */
-async function processSingleAnimatedThumbnail(imageData) {
-    const logPrefix = `[ProcessThumb] ${imageData.filename}:`;
-
-    try {
-        // Check if a static thumbnail already exists on the server.
-        const staticThumbUrl = `${imageData.thumbnailUrl}&animated=false`;
-        const checkResponse = await fetch(staticThumbUrl, { method: 'HEAD' });
-        // If it exists (200 OK), our job is done for this image.
-        if (checkResponse.ok) {
-            return;
-        }
-    } catch (error) {
-        console.warn(`${logPrefix} HEAD check failed, proceeding with generation.`, error.message);
-    }
-
-    try {
-        // Fetch the original file using the fullResUrl.
-        const response = await fetch(imageData.fullResUrl);
-        if (!response.ok) {
-            throw new Error(`Failed to fetch original file. Server responded with ${response.status} ${response.statusText}`);
-        }
-        const blob = await response.blob();
-        const file = new File([blob], imageData.filename, { type: blob.type });
-
-        // The createThumbnail utility requires a base64 data URL, not a File object.
-        const fileDataUrl = await getBase64Async(file);
-
-        // Now, create the static thumbnail from the data URL.
-        const thumbnailDataUrl = await createThumbnail(
-            fileDataUrl,
-            THUMBNAIL_CONFIG.width,
-            THUMBNAIL_CONFIG.height,
-            'image/jpeg',
-        );
-
-        const staticThumbnailBlob = await (await fetch(thumbnailDataUrl)).blob();
-        const thumbFormData = new FormData();
-
-        // Append the blob with the original filename, the server will handle the rest.
-        thumbFormData.append('avatar', staticThumbnailBlob, imageData.filename);
-        const uploadUrl = `/api/thumbnails/upload-generated?originalFilename=${encodeURIComponent(imageData.filename)}`;
-
-        const uploadResponse = await fetch(uploadUrl, {
-            method: 'POST',
-            headers: getHeadersForFormData(),
-            body: thumbFormData,
-        });
-
-        if (!uploadResponse.ok) {
-            throw new Error(`Upload failed. Server responded with ${uploadResponse.status} ${uploadResponse.statusText}`);
-        }
-    } catch (error) {
-        console.error(`${logPrefix} FAILED.`, error);
-
-        // Report the failure to the server so we don't try again repeatedly.
-        try {
-            await fetch('/api/backgrounds/mark-thumbnail-fail', {
-                method: 'POST',
-                headers: getRequestHeaders(),
-                body: JSON.stringify({ filename: imageData.filename }),
-            });
-        } catch (reportError) {
-            console.error(`${logPrefix} Could not report failure to the server.`, reportError);
-        }
-    }
-}
-
-/**
- * Orchestrates the client-side thumbnail generation for existing animated WebP files and uploads them.
- * @param {Array<object>} imagesToProcess - The list of image data objects to check.
- * @returns {Promise<void>}
- */
-async function processAndUploadStaticThumbnails(imagesToProcess) {
-    const CHUNK_SIZE = 4; // Process 4 images at a time to avoid browser overload.
-
-    for (let i = 0; i < imagesToProcess.length; i += CHUNK_SIZE) {
-        const chunk = imagesToProcess.slice(i, i + CHUNK_SIZE);
-        const promises = chunk.map(imageData => processSingleAnimatedThumbnail(imageData));
-        await Promise.allSettled(promises);
-    }
-}
-
-/**
- * Gets the necessary request headers for a FormData upload.
- * @returns {HeadersInit}
- */
-function getHeadersForFormData() {
-    const headers = getRequestHeaders();
-    delete headers['Content-Type'];
-    return headers;
 }
 
 /**
@@ -834,7 +1250,6 @@ export async function getBackgrounds() {
             updateStateFromChatMetadata();
             highlightSelectedBackground();
         }
-        ensureStaticThumbnailsExist(imageDataList);
     } catch (error) {
         console.error('Failed to get background data:', error);
         toastr.error('Could not load backgrounds.');
@@ -1085,11 +1500,11 @@ function updateStateFromChatMetadata() {
     }
     const list = chat_metadata[LIST_METADATA_KEY] || [];
     const customBgSet = new Set(list);
-    document.querySelectorAll('#bg_menu_content .thumbnail').forEach(thumb => {
-        const filename = thumb.dataset.bgfile;
-        const isCustom = customBgSet.has(filename);
-        thumb.setAttribute('custom', String(isCustom));
-    });
+    pruneDisconnectedElements(selectedThumbnailElements);
+    pruneDisconnectedElements(lockedThumbnailElements);
+    for (const elements of thumbnailElementsByFile.values()) {
+        pruneDisconnectedElements(elements).forEach(thumb => applyCustomStateToThumbnail(thumb, customBgSet));
+    }
     highlightLockedBackground();
 }
 
@@ -1097,22 +1512,14 @@ function updateStateFromChatMetadata() {
  * Highlights the background that is currently locked for the chat.
  */
 function highlightLockedBackground() {
-    document.querySelectorAll('.thumbnail[data-is-chat-locked="true"]').forEach(thumb => {
+    pruneDisconnectedElements(lockedThumbnailElements).forEach(thumb => {
         thumb.dataset.isChatLocked = 'false';
     });
+    lockedThumbnailElements.clear();
 
-    const lockedBackgroundUrl = chat_metadata[BG_METADATA_KEY];
-
-    if (lockedBackgroundUrl) {
-        // A bit of regex to extract the raw filename
-        const match = lockedBackgroundUrl.match(/backgrounds\/(.+)"\)$/);
-        if (match && match[1]) {
-            const lockedFilename = decodeURIComponent(match[1]);
-            const lockedThumb = document.querySelector(`.thumbnail[data-bgfile="${lockedFilename}"]`);
-            if (lockedThumb) {
-                lockedThumb.dataset.isChatLocked = 'true';
-            }
-        }
+    const lockedFilename = getLockedBackgroundFilename();
+    if (lockedFilename) {
+        getTrackedThumbnailElements(lockedFilename).forEach(thumb => applyLockedStateToThumbnail(thumb, lockedFilename));
     }
 }
 
@@ -1133,15 +1540,18 @@ function createBlankFolderElement(folder, options = { withMenu: true }) {
     clipper.className = 'thumbnail-clipper';
 
     if (folder.thumbnailFile) {
-        const useAnimation = document.getElementById('background_thumbnails_animation').checked;
-        const finalUrl = `${getThumbnailUrl(folder.thumbnailFile)}&animated=${useAnimation}`;
+        const finalUrl = buildThumbnailRequestUrl(getThumbnailUrl(folder.thumbnailFile), false);
 
         const imgElement = new Image();
         imgElement.src = PNG_PIXEL_B64; // Start with a placeholder
         clipper.appendChild(imgElement);
 
         // Asynchronously load the real thumbnail
-        getCachedServerThumbnail(finalUrl).then(src => {
+        getCachedServerThumbnail(finalUrl).then(({ src, hasContent }) => {
+            if (!hasContent) {
+                return;
+            }
+
             imgElement.src = src;
             imgElement.style.opacity = 1;
         });
@@ -1339,19 +1749,14 @@ async function onRenameFolderClick(e) {
  * Highlights the currently selected background thumbnail in the gallery.
  */
 function highlightSelectedBackground() {
-    // Remove the 'selected' class from thumbnails
-    document.querySelectorAll('.thumbnail.selected').forEach(thumb => {
+    pruneDisconnectedElements(selectedThumbnailElements).forEach(thumb => {
         thumb.classList.remove('selected');
     });
+    selectedThumbnailElements.clear();
 
     const selectedFilename = background_settings.name;
     if (selectedFilename) {
-        const selectedThumbs = document.querySelectorAll(`.thumbnail[data-bgfile="${selectedFilename}"]`);
-
-        // Apply the 'selected' class to every thumbnail
-        selectedThumbs.forEach(thumb => {
-            thumb.classList.add('selected');
-        });
+        getTrackedThumbnailElements(selectedFilename).forEach(thumb => applySelectedStateToThumbnail(thumb, selectedFilename));
     }
 }
 
@@ -1406,7 +1811,7 @@ async function onRenameBackgroundClick(e) {
         const updatedImageData = await response.json();
 
         // Find the image object in the single source of truth: the master list.
-        const imageToUpdate = backgroundSelector.images.find(img => img.filename === bgNames.oldBg);
+        const imageToUpdate = backgroundSelector.imageLookup.get(bgNames.oldBg);
 
         // If found, update it in-place.
         if (imageToUpdate) {
@@ -1416,12 +1821,15 @@ async function onRenameBackgroundClick(e) {
                 thumbnailUrl: getThumbnailUrl(updatedImageData.filename),
                 fullResUrl: getBackgroundPath(updatedImageData.filename),
             });
+            backgroundSelector.imageLookup.delete(bgNames.oldBg);
+            backgroundSelector.imageLookup.set(updatedImageData.filename, imageToUpdate);
         }
 
         // Perform a targeted DOM update.
         const thumbnailElements = document.querySelectorAll(`.thumbnail[data-bgfile="${bgNames.oldBg}"]`);
         const newFilenameWithoutExt = updatedImageData.filename.substring(0, updatedImageData.filename.lastIndexOf('.')) || updatedImageData.filename;
         thumbnailElements.forEach(thumb => {
+            untrackThumbnailElement(thumb, bgNames.oldBg);
             const $thumb = $(thumb);
             $thumb.attr('data-bgfile', updatedImageData.filename);
             $thumb.attr('data-url', getBackgroundPath(updatedImageData.filename));
@@ -1431,6 +1839,8 @@ async function onRenameBackgroundClick(e) {
             if (titleDiv) {
                 titleDiv.textContent = newFilenameWithoutExt;
             }
+
+            trackThumbnailElement(thumb);
         });
 
         // If the renamed item was the selected one, update global settings.
@@ -1481,6 +1891,7 @@ async function onDeleteBackgroundClick(e) {
         thumbnailElements[0]?.addEventListener('transitionend', () => {
             thumbnailElements.forEach(thumb => {
                 const row = thumb.parentElement;
+                untrackThumbnailElement(thumb, bgFile);
                 thumb.remove();
                 // If the row becomes empty, remove it to prevent layout gaps.
                 if (row && row.classList.contains('thumbnail-row') && row.children.length === 0) {
@@ -1497,6 +1908,7 @@ async function onDeleteBackgroundClick(e) {
             if (filteredIndexToDelete > -1) {
                 backgroundSelector.filteredImages.splice(filteredIndexToDelete, 1);
             }
+            backgroundSelector.imageLookup.delete(bgFile);
         }, { once: true });
     } catch (error) {
         console.error(error);
@@ -1849,6 +2261,36 @@ function createRowElement(rowData, options = {}) {
 }
 
 /**
+ * Renders thumbnail rows in small batches so popup galleries do not block the UI.
+ * @param {HTMLElement} container Target container for rendered rows.
+ * @param {Array<object>} rows Row layout data.
+ * @param {{ renderVersion: number, getCurrentRenderVersion: () => number, rowOptions?: object }} options Render options.
+ * @returns {Promise<void>}
+ */
+async function renderThumbnailRowsIncrementally(container, rows, options) {
+    const { renderVersion, getCurrentRenderVersion, rowOptions = {} } = options;
+
+    for (let i = 0; i < rows.length; i += THUMBNAIL_RENDER_BATCH_SIZE) {
+        if (renderVersion !== getCurrentRenderVersion()) {
+            return;
+        }
+
+        const fragment = document.createDocumentFragment();
+        const batchRows = rows.slice(i, i + THUMBNAIL_RENDER_BATCH_SIZE);
+
+        batchRows.forEach(rowData => {
+            fragment.appendChild(createRowElement(rowData, rowOptions));
+        });
+
+        container.appendChild(fragment);
+
+        if (i + THUMBNAIL_RENDER_BATCH_SIZE < rows.length) {
+            await nextFrame();
+        }
+    }
+}
+
+/**
  * Opens a modal popup gallery displaying only the starred backgrounds.
  * The layout is calculated dynamically based on the panel's width.
  */
@@ -1860,6 +2302,7 @@ function openStarredPopup() {
     const contentArea = popupFragment.querySelector('.popup-content');
     let isClosing = false;
     let observer;
+    let popupRenderVersion = 0;
     const SHIELD_EVENTS = ['mousedown', 'pointerdown', 'touchstart'];
 
     /**
@@ -1875,7 +2318,8 @@ function openStarredPopup() {
         document.removeEventListener('keydown', handleKeyDown, true);
     };
 
-    const renderContent = () => {
+    const renderContent = async () => {
+        const renderVersion = ++popupRenderVersion;
         const starredImages = backgroundSelector.images.filter(img => img.isStarred);
         contentArea.innerHTML = '';
         if (starredImages.length === 0) {
@@ -1900,7 +2344,10 @@ function openStarredPopup() {
         const minThumbsPerRow = isMobile ? 2 : 1;
         const rows = calculateRowLayout(usableWidth, starredImages, false, 110, minThumbsPerRow);
 
-        rows.forEach(rowData => thumbnailContainer.appendChild(createRowElement(rowData)));
+        await renderThumbnailRowsIncrementally(thumbnailContainer, rows, {
+            renderVersion,
+            getCurrentRenderVersion: () => popupRenderVersion,
+        });
         contentArea.appendChild(thumbnailContainer);
         // Set up IntersectionObserver for lazy-loading thumbnails.
         if (observer) observer.disconnect();
@@ -1908,10 +2355,10 @@ function openStarredPopup() {
             entries.forEach(entry => {
                 if (entry.isIntersecting) {
                     observer.unobserve(entry.target);
-                    backgroundSelector.loadSingleThumbnail(entry.target);
+                    backgroundSelector.queueThumbnailLoad(entry.target);
                 }
             });
-        }, { root: contentArea, rootMargin: '300px 0px' });
+        }, { root: contentArea, rootMargin: POPUP_THUMB_ROOT_MARGIN });
         thumbnailContainer.querySelectorAll('.thumbnail').forEach(thumb => observer.observe(thumb));
         highlightLockedBackground();
     };
@@ -1996,7 +2443,7 @@ function openStarredPopup() {
         // Use requestAnimationFrame to ensure the popup is in the DOM and has layout
         requestAnimationFrame(() => {
             popupOverlay.classList.add('open');
-            renderContent();
+            void renderContent();
         });
     } catch (error) {
         console.error('Error opening starred popup:', error);
@@ -2058,6 +2505,7 @@ function openCustomFolderPopup(folderId) {
     headerTitle.removeAttribute('data-i18n');
     let isClosing = false;
     let observer;
+    let popupRenderVersion = 0;
     const SHIELD_EVENTS = ['mousedown', 'pointerdown', 'touchstart'];
 
     const eventShield = (e) => { if (e.target.closest('.popup-overlay')) e.stopImmediatePropagation(); };
@@ -2070,7 +2518,8 @@ function openCustomFolderPopup(folderId) {
         document.removeEventListener('keydown', handleKeyDown, true);
     };
 
-    const renderContent = () => {
+    const renderContent = async () => {
+        const renderVersion = ++popupRenderVersion;
         const folderImages = backgroundSelector.images.filter(img => Array.isArray(img.folderIds) && img.folderIds.includes(folderId));
         contentArea.innerHTML = '';
         if (folderImages.length === 0) {
@@ -2093,17 +2542,21 @@ function openCustomFolderPopup(folderId) {
         const minThumbsPerRow = isMobile ? 2 : 1;
         const rows = calculateRowLayout(usableWidth, folderImages, false, 110, minThumbsPerRow);
 
-        rows.forEach(rowData => thumbnailContainer.appendChild(createRowElement(rowData, { currentFolderId: folderId })));
+        await renderThumbnailRowsIncrementally(thumbnailContainer, rows, {
+            renderVersion,
+            getCurrentRenderVersion: () => popupRenderVersion,
+            rowOptions: { currentFolderId: folderId },
+        });
         contentArea.appendChild(thumbnailContainer);
         if (observer) observer.disconnect();
         observer = new IntersectionObserver((entries) => {
             entries.forEach(entry => {
                 if (entry.isIntersecting) {
                     observer.unobserve(entry.target);
-                    backgroundSelector.loadSingleThumbnail(entry.target);
+                    backgroundSelector.queueThumbnailLoad(entry.target);
                 }
             });
-        }, { root: contentArea, rootMargin: '300px 0px' });
+        }, { root: contentArea, rootMargin: POPUP_THUMB_ROOT_MARGIN });
         thumbnailContainer.querySelectorAll('.thumbnail').forEach(thumb => observer.observe(thumb));
         highlightLockedBackground();
     };
@@ -2220,7 +2673,7 @@ function openCustomFolderPopup(folderId) {
         document.body.appendChild(popupOverlay);
         requestAnimationFrame(() => {
             popupOverlay.classList.add('open');
-            renderContent();
+            void renderContent();
         });
     } catch (error) {
         console.error('Error opening custom folder popup:', error);
@@ -2240,7 +2693,7 @@ function openCustomFolderPopup(folderId) {
  * @param {Function} renderCallback - A function to call to re-render the UI on success.
  */
 async function onRemoveFromFolderClick(filename, folderId, renderCallback) {
-    const imageToUpdate = backgroundSelector.images.find(img => img.filename === filename);
+    const imageToUpdate = backgroundSelector.imageLookup.get(filename);
     if (!imageToUpdate || !Array.isArray(imageToUpdate.folderIds)) return;
 
     const originalFolderIds = [...imageToUpdate.folderIds];
@@ -2334,7 +2787,7 @@ function openFolderChooserPopup(filename) {
         if (folderChoice) {
             e.stopPropagation();
             const folderId = folderChoice.dataset.folderId;
-            const imageToUpdate = backgroundSelector.images.find(img => img.filename === filename);
+            const imageToUpdate = backgroundSelector.imageLookup.get(filename);
 
             if (imageToUpdate) {
                 if (!Array.isArray(imageToUpdate.folderIds)) {
@@ -2400,17 +2853,17 @@ function openFolderChooserPopup(filename) {
  */
 export async function initBackgrounds() {
     let isSelectionModeActive = false;
-    let selectedBackgrounds = [];
+    let selectedBackgrounds = new Set();
 
     const updateSelectionCount = () => {
-        const count = selectedBackgrounds.length;
+        const count = selectedBackgrounds.size;
         const message = stringFormat(translate('{0} selected'), [count]);
         $('#bg-selection-count').text(message);
     };
 
     const enterSelectionMode = () => {
         isSelectionModeActive = true;
-        selectedBackgrounds = [];
+        selectedBackgrounds = new Set();
         $('#Backgrounds').addClass('selection-mode-active');
         $('#bg_menu_content').addClass('selection-active');
         $('.thumbnail.is-bulk-selected').removeClass('is-bulk-selected');
@@ -2419,7 +2872,7 @@ export async function initBackgrounds() {
 
     const exitSelectionMode = () => {
         isSelectionModeActive = false;
-        selectedBackgrounds = [];
+        selectedBackgrounds = new Set();
         $('#Backgrounds').removeClass('selection-mode-active');
         $('#bg_menu_content').removeClass('selection-active');
         $('.thumbnail.is-bulk-selected').removeClass('is-bulk-selected');
@@ -2430,28 +2883,24 @@ export async function initBackgrounds() {
         if (!bgFile) return;
 
         const $thumb = $(thumbnailElement);
-        const index = selectedBackgrounds.indexOf(bgFile);
-
-        if (index === -1) {
-            // Not selected, so add it
-            selectedBackgrounds.push(bgFile);
+        if (!selectedBackgrounds.has(bgFile)) {
+            selectedBackgrounds.add(bgFile);
             $thumb.addClass('is-bulk-selected');
         } else {
-            // Already selected, so remove it
-            selectedBackgrounds.splice(index, 1);
+            selectedBackgrounds.delete(bgFile);
             $thumb.removeClass('is-bulk-selected');
         }
         updateSelectionCount();
     };
 
     const handleBulkAddToFolder = async (folderId) => {
-        if (selectedBackgrounds.length === 0) {
+        if (selectedBackgrounds.size === 0) {
             toastr.warning(translate('Please select at least one background.'));
             return;
         }
 
-        const filenamesToAdd = selectedBackgrounds.filter(filename => {
-            const image = backgroundSelector.images.find(img => img.filename === filename);
+        const filenamesToAdd = Array.from(selectedBackgrounds).filter(filename => {
+            const image = backgroundSelector.imageLookup.get(filename);
             return image && (!Array.isArray(image.folderIds) || !image.folderIds.includes(folderId));
         });
 
@@ -2474,7 +2923,7 @@ export async function initBackgrounds() {
             if (!response.ok) throw new Error(`Server error: ${response.status}`);
 
             filenamesToAdd.forEach(filename => {
-                const image = backgroundSelector.images.find(img => img.filename === filename);
+                const image = backgroundSelector.imageLookup.get(filename);
                 if (image) {
                     if (!Array.isArray(image.folderIds)) image.folderIds = [];
                     image.folderIds.push(folderId);
@@ -2500,7 +2949,7 @@ export async function initBackgrounds() {
 
         // After re-rendering, if we are in selection mode, re-apply the visual state
         if (isSelectionModeActive) {
-            backgroundSelector.reapplySelectionStyles(selectedBackgrounds);
+            backgroundSelector.reapplySelectionStyles(Array.from(selectedBackgrounds));
         }
     }, 150);
 
@@ -2664,23 +3113,16 @@ export async function initBackgrounds() {
     $('#bg_select_cancel_button').off('click').on('click', exitSelectionMode);
     $('#bg_select_all_button').off('click').on('click', () => {
         const visibleFilenames = backgroundSelector.filteredImages.map(img => img.filename);
-        const allVisibleSelected = visibleFilenames.length > 0 && visibleFilenames.every(file => selectedBackgrounds.includes(file));
+        const allVisibleSelected = visibleFilenames.length > 0 && visibleFilenames.every(file => selectedBackgrounds.has(file));
 
         if (allVisibleSelected) {
-            // Deselect all visible
             visibleFilenames.forEach(file => {
-                const index = selectedBackgrounds.indexOf(file);
-                if (index > -1) {
-                    selectedBackgrounds.splice(index, 1);
-                }
+                selectedBackgrounds.delete(file);
                 document.querySelector(`.thumbnail[data-bgfile="${file}"]`)?.classList.remove('is-bulk-selected');
             });
         } else {
-            // Select all visible
             visibleFilenames.forEach(file => {
-                if (!selectedBackgrounds.includes(file)) {
-                    selectedBackgrounds.push(file);
-                }
+                selectedBackgrounds.add(file);
                 document.querySelector(`.thumbnail[data-bgfile="${file}"]`)?.classList.add('is-bulk-selected');
             });
         }
