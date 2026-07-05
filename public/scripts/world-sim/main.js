@@ -22,6 +22,17 @@ import { stopTimer } from './timer.js';
 import { updateWorldClock } from './ui.js';
 
 /**
+ * World Sim should keep the scoped tool available when the generation was merely stopped
+ * before the tool executed. That lets the user retry/correct the same request.
+ * @param {unknown} error
+ * @returns {boolean}
+ */
+function wasGenerationStopped(error) {
+    const message = String(error?.message || error || '');
+    return error?.name === 'AbortError' || /\babort(?:ed|ing)?\b|\bstopp?(?:ed|ing)?\b/i.test(message);
+}
+
+/**
  * World Sim runs end only when the expected scoped tool executes. If the model answers
  * without calling that tool (or hallucinates some unrelated tool tag), the run would
  * otherwise stay active and make bulk initialize appear stalled.
@@ -89,12 +100,19 @@ export async function runCycle({ ignorePaused = false } = {}) {
             return;
         }
 
-        // Now safe: the selector chat is fully resolved. Fire the updater in its own fresh
-        // chat so it doesn't pay to re-read the selector exchange.
+        // If the selector action already scheduled the updater, don't race it here.
+        if (run.updaterStarted) return;
+
+        // Fallback: if the selector finished before its action scheduled the updater, launch it now.
+        updateRun({ needsUpdaterChain: false, updaterStarted: true });
         activateWorldSimToolScope([WORLD_UPDATE]);
         await fireUpdater(run.characterIds);
         failIfRunStillActive(cycleId, WORLD_UPDATE);
     } catch (error) {
+        if (wasGenerationStopped(error)) {
+            console.warn(`World Sim cycle ${cycleId} interrupted; keeping tool scope active for retry.`, error);
+            return;
+        }
         console.error('World Sim cycle failed:', error);
         clearWorldSimToolScope();
         endRun();
@@ -170,6 +188,10 @@ export async function initializeCharacter(id) {
         await fireInitialize(char.avatar);
         failIfRunStillActive(cycleId, WORLD_INITIALIZE);
     } catch (error) {
+        if (wasGenerationStopped(error)) {
+            console.warn(`World Sim initialize ${cycleId} interrupted; keeping tool scope active for retry.`, error);
+            return;
+        }
         console.error('World Sim initialize failed:', error);
         clearWorldSimToolScope();
         endRun();
@@ -344,6 +366,10 @@ export async function commitRoleplayToWorldState(characterIds, chatMessages, { c
         }
         return true;
     } catch (error) {
+        if (wasGenerationStopped(error)) {
+            console.warn(`World Sim commit ${resolvedCycleId} interrupted; keeping tool scope active for retry.`, error);
+            return false;
+        }
         console.error('World Sim commit failed:', error);
         clearWorldSimToolScope();
         endRun();

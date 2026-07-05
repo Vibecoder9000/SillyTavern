@@ -13,6 +13,7 @@
  * @property {string} cycleId
  * @property {number} [tick]  For commit runs, the tick of the event being replaced.
  * @property {string[]} characterIds  Selected (tick) or target (initialize/commit) character ids.
+ * @property {Record<string, number>} [dice] Per-character dice rolled for a tick run, keyed by character id.
  * @property {object|null} snapshot  Pre-update world snapshot, for revert.
  * @property {object|null} selectorResult
  */

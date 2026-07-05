@@ -27,10 +27,17 @@ import {
     loadCycles,
     getCharacterStateAtTick,
 } from './state.js';
+import { updateRun } from './run-context.js';
 
 // Two characters count as "nearby" when their map coordinates are within this many world
 // units of each other (used for scene context when no shared location string applies).
 const NEARBY_RADIUS = 30;
+const UPDATER_HISTORY_PLAN_ENTRIES = 3;
+const UPDATER_HISTORY_LOCATION_CHARS = 48;
+const UPDATER_HISTORY_ACTIVITY_CHARS = 96;
+const UPDATER_HISTORY_PLAN_CHARS = 120;
+const UPDATER_NEARBY_LOCATION_LIMIT = 24;
+const SELECTOR_HISTORY_PLAN_ENTRIES = 3;
 
 /**
  * Runs a loud (foreground) generation in the active World Sim host chat so the model's
@@ -84,6 +91,7 @@ export async function fireUpdater(characterIds) {
     const config = getConfig();
     const dice = {};
     for (const id of characterIds) dice[id] = Math.floor(Math.random() * config.diceSides) + 1;
+    updateRun({ dice });
     await fireWorldSimGeneration(buildUpdaterPrompt(characterIds, dice));
 }
 
@@ -163,47 +171,212 @@ function round(n) {
     return Math.round(n * 100) / 100;
 }
 
-
 /**
+ * @param {string} text
+ * @param {number} max
  * @returns {string}
  */
-function buildSelectorPrompt() {
+function clipText(text, max) {
+    const value = String(text || '').replace(/\s+/g, ' ').trim();
+    if (!value || !Number.isFinite(max) || max <= 0 || value.length <= max) return value;
+    return value.slice(0, Math.max(1, max - 3)).trimEnd() + '...';
+}
+
+/**
+ * @param {string} a
+ * @param {string} b
+ * @returns {boolean}
+ */
+function sameText(a, b) {
+    return String(a || '').replace(/\s+/g, ' ').trim() === String(b || '').replace(/\s+/g, ' ').trim();
+}
+
+/**
+ * @param {{ label: string, content: string }[]} sections
+ * @returns {string}
+ */
+export function buildPromptWithMeter(sections) {
+    const used = sections
+        .map(section => ({
+            label: String(section?.label || ''),
+            content: String(section?.content || ''),
+        }))
+        .filter(section => section.content.length > 0);
+
+    const meter = used.map(section => `[${section.label}: ${section.content.length} characters]`).join('\n');
+    const body = used.map(section => section.content).join('\n\n');
+    return meter ? `${meter}\n\n${body}` : body;
+}
+
+
+/**
+ * @returns {{ label: string, content: string }[]}
+ */
+export function buildSelectorPromptSections() {
     const roster = getRoster();
     const state = getState();
-    const config = getConfig();
 
     const eligible = Object.values(roster.characters).filter(c => c.included && c.initialized);
+    const characterLines = ['Eligible characters:'];
+    const historyLines = [];
 
-    let prompt = 'Select the next focus character(s) for a world simulation.\n\n';
-    prompt += 'You are choosing who will act next from all included characters. Consider their current location, activity, and plan strings, plus their recent history.\n\n';
-    prompt += 'Eligible characters:\n';
     for (const char of eligible) {
         const strings = state.characters[char.id] || { location: '', activity: '', plan: '' };
-        prompt += `- ${char.name} [id: ${char.id}] (priority: ${char.priority})\n`;
-        prompt += `  location: "${strings.location}"\n`;
-        prompt += `  activity: "${strings.activity}"\n`;
-        prompt += `  plan: "${strings.plan}"\n`;
+        characterLines.push(`id ${char.id}`);
+        if (char.priority) characterLines.push('priority');
+        if (strings.location) characterLines.push(strings.location);
+        if (strings.activity) characterLines.push(`activity ${strings.activity}`);
+        if (strings.plan) characterLines.push(`plan ${strings.plan}`);
+        characterLines.push('');
+
         const history = char.history;
-        const entries = Math.min(config.historyEntriesPerCharacter ?? 3, history.location.length);
-        if (entries > 0) {
-            prompt += `  recent history:\n`;
-            for (let i = history.location.length - entries; i < history.location.length; i++) {
-                prompt += `    tick ${history.location[i]?.tick}: location="${history.location[i]?.text}", activity="${history.activity[i]?.text}", plan="${history.plan[i]?.text}"\n`;
+        const candidates = [];
+        for (let i = 0; i < history.location.length; i++) {
+            const location = String(history.location[i]?.text || '');
+            const activity = String(history.activity[i]?.text || '');
+            const plan = String(history.plan[i]?.text || '');
+            if (!location && !activity && !plan) continue;
+            candidates.push({ location, activity, plan });
+        }
+
+        const filtered = [];
+        let prev = null;
+        for (const item of candidates) {
+            const duplicateOfPrevious = prev
+                && sameText(prev.location, item.location)
+                && sameText(prev.activity, item.activity)
+                && sameText(prev.plan, item.plan);
+            if (!duplicateOfPrevious) filtered.push(item);
+            prev = item;
+        }
+
+        while (filtered.length && sameText(filtered[filtered.length - 1].location, strings.location)
+            && sameText(filtered[filtered.length - 1].activity, strings.activity)
+            && sameText(filtered[filtered.length - 1].plan, strings.plan)) {
+            filtered.pop();
+        }
+
+        const recent = filtered.slice(-SELECTOR_HISTORY_PLAN_ENTRIES);
+        if (recent.length > 0) {
+            historyLines.push(`id ${char.id}`);
+            for (const item of recent) {
+                if (item.location) historyLines.push(item.location);
+                if (item.activity) historyLines.push(`activity ${item.activity}`);
+                if (item.plan) historyLines.push(`plan ${item.plan}`);
+                historyLines.push('');
             }
         }
     }
 
-    prompt += '\nInstructions:\n';
-    prompt += '- Select at least 1 character.\n';
-    prompt += '- Select up to 5 characters.\n';
-    prompt += '- Return the chosen characters in `characterIds` in the same order you want them updated.\n';
-    prompt += '- Base your choice on their plans, recent activity, and natural opportunity.\n';
-    prompt += '- Do not force interactions or meetings.\n';
-    prompt += '- The world is large; most characters are not involved in any given update.\n';
-    prompt += '- Characters with recent long updates are less likely to be selected.\n';
-    prompt += '\nUse the select_characters tool.';
+    return [
+        { label: 'character info', content: characterLines.join('\n').trim() },
+        { label: 'history info', content: historyLines.length ? ['Recent history:', ...historyLines].join('\n') : '' },
+        {
+            label: 'system instructions',
+            content: [
+                'Select the next focus character(s) for a world simulation.',
+                '',
+                'You are choosing who will act next from all included characters. Consider their current location, activity, and plan strings, plus their recent history.',
+                '',
+                'Instructions:',
+                '- Select at least 1 character.',
+                '- Select up to 5 characters.',
+                '- Return the chosen characters in `characterIds` in the same order you want them updated.',
+                '- Base your choice on their plans, recent activity, and natural opportunity.',
+                '- Do not force interactions or meetings.',
+                '- The world is large; most characters are not involved in any given update.',
+                '- Characters with recent long updates are less likely to be selected.',
+                '',
+                'Use the select_characters tool.',
+            ].join('\n'),
+        },
+    ];
+}
 
-    return prompt;
+/**
+ * @returns {string}
+ */
+export function buildSelectorPrompt() {
+    return buildPromptWithMeter(buildSelectorPromptSections());
+}
+
+/**
+ * @param {string[]} characterIds
+ * @param {Record<string, number>} dice
+ * @returns {{ label: string, content: string }[]}
+ */
+export function buildUpdaterPromptSections(characterIds, dice) {
+    const roster = getRoster();
+    const state = getState();
+    const config = getConfig();
+
+    const characterLines = ['Selected:'];
+    const historyLines = [];
+    const worldLines = [];
+
+    for (const id of characterIds) {
+        const char = roster.characters[id];
+        if (!char) continue;
+        const chid = characters.findIndex(c => c.avatar === char.avatar);
+        const fullCard = getCharacterCardFields({ chid, name2Override: char.name });
+        characterLines.push('<character>');
+        characterLines.push(`Name: ${char.name}`);
+        characterLines.push(`Description: ${fullCard.description}`);
+        characterLines.push(`Personality: ${fullCard.personality}`);
+        characterLines.push('</character>');
+
+        const history = char.history;
+        const entries = Math.min(UPDATER_HISTORY_PLAN_ENTRIES, history.location.length);
+        if (entries > 0) {
+            historyLines.push(`${char.name} recent history (${entries} entries):`);
+            for (let i = history.location.length - entries; i < history.location.length; i++) {
+                historyLines.push(`- location: "${clipText(history.location[i]?.text, UPDATER_HISTORY_LOCATION_CHARS)}", activity: "${clipText(history.activity[i]?.text, UPDATER_HISTORY_ACTIVITY_CHARS)}", plan: "${clipText(history.plan[i]?.text, UPDATER_HISTORY_PLAN_CHARS)}"`);
+            }
+        }
+
+        const cur = state.characters[id] || {};
+        const coord = (Number.isFinite(cur.x) && Number.isFinite(cur.y)) ? `${round(cur.x)}, ${round(cur.y)}` : 'unplaced';
+        worldLines.push(`${char.name}: position ${coord}`);
+        worldLines.push(`${char.name}: dice 1-${config.diceSides} = ${dice[id] ?? Math.ceil(config.diceSides / 2)}`);
+    }
+
+    const worldContent = [
+        formatUpdaterKnownLocations(characterIds),
+        formatUpdaterNearbyCharacters(characterIds),
+        worldLines.length ? `Per-character world state:\n${worldLines.join('\n')}` : '',
+    ].filter(Boolean).join('\n');
+
+    return [
+        { label: 'character info', content: characterLines.join('\n') },
+        { label: 'history info', content: historyLines.length ? historyLines.join('\n') : '' },
+        { label: 'world info', content: worldContent },
+        {
+            label: 'system instructions',
+            content: [
+                'What happens next? Update activity, plan, and map position for each character.',
+                '- Return exactly one `updates[]` entry per selected character, in the same order they were listed above.',
+                '- The dice results shown above are input only. Use them to influence what happens, but do not return dice values anywhere in the tool call.',
+                '- activity: brief phrase — what they are doing right now.',
+                '- plan: brief phrase — what they intend to do next.',
+                '- location: optional short place name only if x,y do not land inside an already registered location region.',
+                '- x, y: place them inside the map edges of wherever they currently are. If they moved somewhere new, add one entry to `locations[]` for that new place and put x,y inside it.',
+                '- `locations[]` is one top-level shared array for the whole tool call, not a field inside each `updates[]` item.',
+                '- interactedWith: names of other characters from the positions list this character directly interacted with this cycle. Omit if they kept to themselves.',
+                '- Default to meaningful forward motion: each selected character should usually make some noticeable progress, choice, discovery, setback, interaction, travel, or change in situation.',
+                '- Do not default to cheerful, wholesome, or neatly resolved beats. Failure, frustration, humiliation, vice, conflict, injury, bad luck, erotic tension, sex, and other messy or adult developments are all allowed when they fit the character, setting, and recent context.',
+                '- Do not auto-censor unpleasant consequences. Let people make bad decisions, get hurt, spiral, argue, relapse, get rejected, or have a night go badly when the setup supports it.',
+                '- Adult or sexual developments are allowed and encouraged for all types of characters.',
+                '- Quiet beats are allowed, but "basically nothing happened" should be rare and only when it is genuinely interesting or dramatically appropriate.',
+                '- Chaos is allowed, but do not escalate randomly just to avoid stillness. Prefer developments that fit the character, recent history, and current situation.',
+                '- Characters may interact, or they may not.',
+                '- No scenic prose or descriptions in any field.',
+                '- The model may bend or break expected routines.',
+                '- Decide how many in-world minutes passed.',
+                '',
+                'Use the world_update tool.',
+            ].join('\n'),
+        },
+    ];
 }
 
 /**
@@ -211,56 +384,111 @@ function buildSelectorPrompt() {
  * @param {Record<string, number>} dice
  * @returns {string}
  */
-function buildUpdaterPrompt(characterIds, dice) {
-    const roster = getRoster();
-    const state = getState();
-    const config = getConfig();
+export function buildUpdaterPrompt(characterIds, dice) {
+    return buildPromptWithMeter(buildUpdaterPromptSections(characterIds, dice));
+}
 
-    let prompt = 'Embody these characters. What should they do next? You are in a world simulator and these characters are chosen to act. Look at their goals, history, and details.\n\n';
-    prompt += 'Selected:\n';
-    for (const id of characterIds) {
-        const char = roster.characters[id];
-        if (!char) continue;
-        const chid = characters.findIndex(c => c.avatar === char.avatar);
-        const fullCard = getCharacterCardFields({ chid, name2Override: char.name });
-        prompt += `<character>\n`;
-        prompt += `Name: ${char.name}\n`;
-        prompt += `Description: ${fullCard.description}\n`;
-        prompt += `Personality: ${fullCard.personality}\n`;
-        prompt += `</character>\n\n`;
+/**
+ * @param {string} avatar
+ * @param {object[]} [cycles]
+ * @param {string} [extraInstructions]
+ * @returns {{ label: string, content: string }[]}
+ */
+export function buildInitialCharacterPromptSections(avatar, cycles, extraInstructions = '') {
+    const chid = characters.findIndex(c => c.avatar === avatar);
+    const char = characters[chid];
+    const fullCard = getCharacterCardFields({ chid, name2Override: char?.name });
 
-        const history = char.history;
-        const entries = Math.min(config.historyEntriesPerCharacter ?? 3, history.location.length);
-        if (entries > 0) {
-            prompt += `Recent history (${entries} entries):\n`;
-            for (let i = history.location.length - entries; i < history.location.length; i++) {
-                prompt += `- location: "${history.location[i]?.text}", activity: "${history.activity[i]?.text}", plan: "${history.plan[i]?.text}"\n`;
-            }
-        }
+    const history = formatRecentSummaries(cycles);
+    const world = [
+        formatKnownLocations(),
+        formatCharacterPositions(),
+    ].filter(Boolean).join('\n');
 
-        const cur = state.characters[id] || {};
-        const coord = (Number.isFinite(cur.x) && Number.isFinite(cur.y)) ? `${round(cur.x)}, ${round(cur.y)}` : 'unplaced';
-        prompt += `Position: ${coord}\n`;
-        prompt += `Dice 1-${config.diceSides}: ${dice[id] ?? Math.ceil(config.diceSides / 2)}\n\n`;
+    const systemInstructions = [
+        `This new character is being introduced to the world simulator. Use ${char?.name || 'Unknown'} as the actual character name in every card field and generated summary.`,
+        '',
+        'Character card:',
+        `Name: ${char?.name || 'Unknown'}`,
+        `Description: ${fullCard.description}`,
+        `Personality: ${fullCard.personality}`,
+        `Scenario: ${fullCard.scenario}`,
+        '',
+        'Establish the character\'s starting state and create the concrete map locations they need and the outside map. For instance, someone on a beach should have their beach hut, the beach, some of the ocean (as much as the map space allows), and some of the island. The idea is to fill the world with places. Not too much, but not too little.',
+        'New locations must extend the existing mapped area unless the related-name character rule below applies. Try to balance the amount of locations in each quadrent and avoid expanding the absolute world size unnecessarily. For example if there\'s 10 items in Q2 and 3 in Q3, place in Q3. Don\'t worry too much about balancing it exactly, approximate is fine. Prioritize the neighbors more.',
+        'Normally, place at least one edge of the new location cluster directly against an edge of an existing location.',
+        'Do not create a detached island, distant district, fresh map area, or isolated cluster merely because empty coordinates are available. Avoid randomly creating linear lines with seperated groups or following an axis for no good reason.',
+        'Being unrelated to existing characters is not a reason to place the character far away. Physical map continuity normally takes priority over thematic separation.',
+        'Keep all new nearby and related locations contiguous. Locations may overlap when spatially appropriate. Prioritize closer to 0,0 than farther away. Avoid expanding the map unless there\'s no space.',
+        'A single room should generally occupy about 100 square world units.',
+        'A city should generally occupy about 1000 square world units.',
+        '',
+        'Every entry under Current character positions already exists in the simulator.',
+        'None of those entries is the character currently being initialized, even if its name, description, or recent events closely match the character card.',
+        'Do not duplicate, modify, update, overwrite, or reuse any existing character.',
+        '',
+        'Before choosing a location, check for an existing character from the same name family.',
+        'Names belong to the same name family when their identifying name is the same after ignoring capitalization, punctuation, spacing, titles, unit numbers, model numbers, version labels, parenthetical labels, and descriptive suffixes or prefixes.',
+        'Play it by ear. A name contained in another name (like sera and seraphina) may not be the same character. Rely on existing knowledge to detect if it\'s the same character',
+        'For example, "Cecile" and "Cecile unit 09" are related names and must be treated as duplicate instances.',
+        '"Agnès", "Agnes 2", "Unit Agnès", and "Agnès (alternate)" also belong to the same name family.',
+        'Do not require the complete names to match exactly.',
+        '',
+        'If any existing character belongs to the same name family, the new character must be placed in a separate distant region.',
+        'Do not attach the new locations to that character\'s location or to any location in its immediate cluster.',
+        'Leave substantial map distance between the two instances so they cannot appear to share a home, room, building, or local area.',
+        'The related-name rule overrides the normal map-continuity rule.',
+        'A detached distant cluster is required in this case, even if it creates empty map space. This doesn\'t mean you can make a random gap somewhere far away, it still has to be connected to the rest. It just can\'t be near the duplicate character.',
+        '',
+        'If no related-name character exists, attach the new location cluster directly to the existing map with no empty space between their boundaries.',
+        'At least one new location must share part of a horizontal or vertical edge with an existing location.',
+        'Corner-only contact does not count as connected.',
+        '',
+        'Do not introduce any additional characters, including lore characters, the user, or anyone not listed under Current character positions.',
+        '',
+        'Before calling the tool, state in plain text:',
+        '- The new character\'s identifying or base name.',
+        '- Whether any existing character belongs to the same name family, including partial and suffixed matches.',
+        '- If a related-name character exists, name it and explain how the new character is being placed far from its location cluster.',
+        '- If no related-name character exists, identify the existing location whose boundary the new cluster directly touches and confirm that the gap is zero world units.',
+        '',
+        'Add entries to `locations[]` only for concrete places that need to exist on the map for this character now.',
+        'For each location, provide:',
+        '- name: a short canonical name that will identify the place in future updates',
+        '- description: one sentence describing what kind of place it is',
+        '- left, bottom, right, top: the location\'s map boundaries in world units, using multiples of 10',
+        'Related new locations must share full or partial boundaries with one another.',
+        'If no related-name character exists, at least one new location must also share a full or partial boundary with an existing location.',
+        'If a related-name character does exist, the new cluster must instead be detached and substantially distant from that character\'s entire location cluster.',
+        '',
+        'Return one initialization result with:',
+        '- activity: a brief phrase describing what the character is doing now; do not mention the user',
+        '- plan: a brief phrase describing what the character intends to do next; do not frame it as interaction with the user or mention anyone else',
+        '- summary: one sentence describing how the character entered the world or what they just did',
+        '- x, y: the character\'s exact map coordinates, located inside the boundaries of their starting location',
+    ];
+
+    if (extraInstructions) {
+        systemInstructions.push('', String(extraInstructions).trim());
     }
+    systemInstructions.push('', 'Use the `world_initialize` tool.');
 
-    prompt += formatKnownLocations();
-    prompt += formatCharacterPositions();
-
-    prompt += 'What happens next? Update activity, plan, and map position for each character.\n';
-    prompt += '- Return exactly one `updates[]` entry per selected character, in the same order they were listed above.\n';
-    prompt += '- activity: brief phrase — what they are doing right now.\n';
-    prompt += '- plan: brief phrase — what they intend to do next.\n';
-    prompt += '- x, y: place them inside the map edges of wherever they currently are. If they moved somewhere new, add one entry to `locations[]` for that new place and put x,y inside it.\n';
-    prompt += '- interactedWith: names of other characters from the positions list this character directly interacted with this cycle. Omit if they kept to themselves.\n';
-    prompt += '- A lot can happen, or almost nothing.\n';
-    prompt += '- Characters may interact, or they may not.\n';
-    prompt += '- No scenic prose or descriptions in any field.\n';
-    prompt += '- The model may bend or break expected routines.\n';
-    prompt += '- Decide how many in-world minutes passed.\n';
-    prompt += '\nUse the world_update tool.';
-
-    return prompt;
+    return [
+        {
+            label: 'character info',
+            content: [
+                `This new character is being introduced to the world simulator. Use ${char?.name || 'Unknown'} as the actual character name in every card field and generated summary.`,
+                'Character card:',
+                `Name: ${char?.name || 'Unknown'}`,
+                `Description: ${fullCard.description}`,
+                `Personality: ${fullCard.personality}`,
+                `Scenario: ${fullCard.scenario}`,
+            ].join('\n'),
+        },
+        { label: 'history info', content: history },
+        { label: 'world info', content: world },
+        { label: 'system instructions', content: systemInstructions.join('\n') },
+    ];
 }
 
 /**
@@ -270,78 +498,61 @@ function buildUpdaterPrompt(characterIds, dice) {
  * @returns {string}
  */
 export function buildInitialCharacterPrompt(avatar, cycles, extraInstructions = '') {
-    const chid = characters.findIndex(c => c.avatar === avatar);
-    const char = characters[chid];
-    const fullCard = getCharacterCardFields({ chid, name2Override: char?.name });
-
-    let prompt = `This new character is being introduced to the world simulator. Use ${char?.name || 'Unknown'} as the actual character name in every card field and generated summary.\n\n`;
-    prompt += 'Character card:\n';
-    prompt += `Name: ${char?.name || 'Unknown'}\n`;
-    prompt += `Description: ${fullCard.description}\n`;
-    prompt += `Personality: ${fullCard.personality}\n`;
-    prompt += `Scenario: ${fullCard.scenario}\n`;
-    prompt += '\n';
-    prompt += formatRecentSummaries(cycles);
-    prompt += formatKnownLocations();
-    prompt += formatCharacterPositions();
-prompt += 'Establish the character\'s starting state and create the concrete map locations they need and the outside map. For instance, someone on a beach should have their beach hut, the beach, some of the ocean (as much as the map space allows), and some of the island. The idea is to fill the world with places. Not too much, but not too little. ';
-prompt += 'New locations must extend the existing mapped area unless the related-name character rule below applies. Try to balance the amount of locations in each quadrent and avoid expanding the absolute world size unnecessarily. For example if there\'s 10 items in Q2 and 3 in Q3, place in Q3. Don\'t worry too much about balancing it exactly, approximate is fine. Prioritize the neighbors more.';
-prompt += 'Normally, place at least one edge of the new location cluster directly against an edge of an existing location. ';
-prompt += 'Do not create a detached island, distant district, fresh map area, or isolated cluster merely because empty coordinates are available. Avoid randomly creating linear lines with seperated groups or following an axis for no good reason.';
-prompt += 'Being unrelated to existing characters is not a reason to place the character far away. Physical map continuity normally takes priority over thematic separation. ';
-prompt += 'Keep all new nearby and related locations contiguous. Locations may overlap when spatially appropriate. Prioritize closer to 0,0 than farther away. Avoid expanding the map unless there\'s no space.';
-prompt += 'A single room should generally occupy about 100 square world units. ';
-prompt += 'A city should generally occupy about 1000 square world units.\n\n';
-
-prompt += 'Every entry under Current character positions already exists in the simulator. ';
-prompt += 'None of those entries is the character currently being initialized, even if its name, description, or recent events closely match the character card. ';
-prompt += 'Do not duplicate, modify, update, overwrite, or reuse any existing character.\n\n';
-
-prompt += 'Before choosing a location, check for an existing character from the same name family. ';
-prompt += 'Names belong to the same name family when their identifying name is the same after ignoring capitalization, punctuation, spacing, titles, unit numbers, model numbers, version labels, parenthetical labels, and descriptive suffixes or prefixes. ';
-prompt += 'Play it by ear. A name contained in another name (like sera and seraphina) may not be the same character. Rely on existing knowledge to detect if it\'s the same character';
-prompt += 'For example, "Cecile" and "Cecile unit 09" are related names and must be treated as duplicate instances. ';
-prompt += '"Agnès", "Agnes 2", "Unit Agnès", and "Agnès (alternate)" also belong to the same name family. ';
-prompt += 'Do not require the complete names to match exactly.\n\n';
-
-prompt += 'If any existing character belongs to the same name family, the new character must be placed in a separate distant region. ';
-prompt += 'Do not attach the new locations to that character\'s location or to any location in its immediate cluster. ';
-prompt += 'Leave substantial map distance between the two instances so they cannot appear to share a home, room, building, or local area. ';
-prompt += 'The related-name rule overrides the normal map-continuity rule. ';
-prompt += 'A detached distant cluster is required in this case, even if it creates empty map space. This doesn\'t mean you can make a random gap somewhere far away, it still has to be connected to the rest. It just can\'t be near the duplicate character.\n\n';
-
-prompt += 'If no related-name character exists, attach the new location cluster directly to the existing map with no empty space between their boundaries. ';
-prompt += 'At least one new location must share part of a horizontal or vertical edge with an existing location. ';
-prompt += 'Corner-only contact does not count as connected.\n\n';
-
-prompt += 'Do not introduce any additional characters, including lore characters, the user, or anyone not listed under Current character positions.\n\n';
-
-prompt += 'Before calling the tool, state in plain text:\n';
-prompt += '- The new character\'s identifying or base name.\n';
-prompt += '- Whether any existing character belongs to the same name family, including partial and suffixed matches.\n';
-prompt += '- If a related-name character exists, name it and explain how the new character is being placed far from its location cluster.\n';
-prompt += '- If no related-name character exists, identify the existing location whose boundary the new cluster directly touches and confirm that the gap is zero world units.\n\n';
-
-prompt += 'Add entries to `locations[]` only for concrete places that need to exist on the map for this character now.\n';
-prompt += 'For each location, provide:\n';
-prompt += '- name: a short canonical name that will identify the place in future updates\n';
-prompt += '- description: one sentence describing what kind of place it is\n';
-prompt += '- left, bottom, right, top: the location\'s map boundaries in world units, using multiples of 10\n';
-prompt += 'Related new locations must share full or partial boundaries with one another. ';
-prompt += 'If no related-name character exists, at least one new location must also share a full or partial boundary with an existing location. ';
-prompt += 'If a related-name character does exist, the new cluster must instead be detached and substantially distant from that character\'s entire location cluster.\n\n';
-
-prompt += 'Return one initialization result with:\n';
-prompt += '- activity: a brief phrase describing what the character is doing now; do not mention the user\n';
-prompt += '- plan: a brief phrase describing what the character intends to do next; do not frame it as interaction with the user or mention anyone else\n';
-prompt += '- summary: one sentence describing how the character entered the world or what they just did\n';
-prompt += '- x, y: the character\'s exact map coordinates, located inside the boundaries of their starting location\n\n';
-if (extraInstructions) {
-    prompt += `${String(extraInstructions).trim()}\n`;
+    return buildPromptWithMeter(buildInitialCharacterPromptSections(avatar, cycles, extraInstructions));
 }
-prompt += 'Use the `world_initialize` tool.';
 
-    return prompt;
+/**
+ * @param {string[]} characterIds
+ * @param {string} chatMessages
+ * @returns {{ label: string, content: string }[]}
+ */
+export function buildCommitPromptSections(characterIds, chatMessages) {
+    const roster = getRoster();
+    const state = getState();
+
+    const characterLines = ['Characters:'];
+    for (const id of characterIds) {
+        const strings = state.characters[id] || { location: '', activity: '', plan: '' };
+        const char = roster.characters[id];
+        const coord = (Number.isFinite(strings.x) && Number.isFinite(strings.y)) ? `(${strings.x}, ${strings.y})` : 'unplaced';
+        characterLines.push(`- ${char?.name || id}`);
+        characterLines.push(`  previous location: "${strings.location}"`);
+        characterLines.push(`  previous activity: "${strings.activity}"`);
+        characterLines.push(`  previous plan: "${strings.plan}"`);
+        characterLines.push(`  previous map coordinates: ${coord}`);
+    }
+
+    return [
+        { label: 'character info', content: characterLines.join('\n') },
+        { label: 'history info', content: ['Roleplay transcript:', chatMessages].filter(Boolean).join('\n') },
+        {
+            label: 'world info',
+            content: [
+                formatKnownLocations(),
+                formatCharacterPositions(),
+            ].filter(Boolean).join('\n'),
+        },
+        {
+            label: 'system instructions',
+            content: [
+                'The following roleplay has just occurred. Update the world simulator strings for the involved characters to reflect what happened.',
+                '',
+                'What are the new activity, plan, and map position for each character after this scene?',
+                '- Return exactly one `updates[]` entry per character, in the same order they were listed above.',
+                '- activity: brief phrase — what they are doing right now.',
+                '- plan: brief phrase — what they intend to do next.',
+                '- location: optional short place name only if x,y do not land inside an already registered location region.',
+                '- x, y: place them inside the map edges of wherever they ended up. If the scene introduced a new concrete place, add one entry to `locations[]` for it.',
+                '- `locations[]` is one top-level shared array for the whole tool call, not a field inside each `updates[]` item.',
+                '- interactedWith: names of the other characters each character interacted with during this scene.',
+                '- Preserve the scene\'s real outcome, but prefer updates that leave the characters in a changed or consequential state rather than "nothing really changed."',
+                '- Do not sanitize the result into a pleasant or harmless version. Preserve embarrassment, coercive social pressure, lust, violence, injury, intoxication, cruelty, or other mature consequences if they actually happened in the scene.',
+                '- Adult or sexual outcomes are allowed and encouraged for all types of characters.',
+                '- Do not add random chaos that was not supported by the scene just to make the result feel eventful.',
+                'Use the world_update tool.',
+            ].join('\n'),
+        },
+    ];
 }
 
 /**
@@ -350,36 +561,7 @@ prompt += 'Use the `world_initialize` tool.';
  * @returns {string}
  */
 export function buildCommitPrompt(characterIds, chatMessages) {
-    const roster = getRoster();
-    const state = getState();
-
-    let prompt = 'The following roleplay has just occurred. Update the world simulator strings for the involved characters to reflect what happened.\n\n';
-    prompt += 'Characters:\n';
-    for (const id of characterIds) {
-        const strings = state.characters[id] || { location: '', activity: '', plan: '' };
-        const char = roster.characters[id];
-        const coord = (Number.isFinite(strings.x) && Number.isFinite(strings.y)) ? `(${strings.x}, ${strings.y})` : 'unplaced';
-        prompt += `- ${char?.name || id}\n`;
-        prompt += `  previous location: "${strings.location}"\n`;
-        prompt += `  previous activity: "${strings.activity}"\n`;
-        prompt += `  previous plan: "${strings.plan}"\n`;
-        prompt += `  previous map coordinates: ${coord}\n`;
-    }
-
-    prompt += '\n';
-    prompt += formatKnownLocations();
-    prompt += formatCharacterPositions();
-    prompt += 'Roleplay transcript:\n';
-    prompt += chatMessages;
-    prompt += '\n\nWhat are the new activity, plan, and map position for each character after this scene?\n';
-    prompt += '- Return exactly one `updates[]` entry per character, in the same order they were listed above.\n';
-    prompt += '- activity: brief phrase — what they are doing right now.\n';
-    prompt += '- plan: brief phrase — what they intend to do next.\n';
-    prompt += '- x, y: place them inside the map edges of wherever they ended up. If the scene introduced a new concrete place, add one entry to `locations[]` for it.\n';
-    prompt += '- interactedWith: names of the other characters each character interacted with during this scene.\n';
-    prompt += 'Use the world_update tool.';
-
-    return prompt;
+    return buildPromptWithMeter(buildCommitPromptSections(characterIds, chatMessages));
 }
 
 /**
@@ -431,6 +613,81 @@ function collectRelatedCharacters(characterIds) {
     }
 
     return [...result.values()].map(r => ({ id: r.id, name: r.name, reasons: [...r.reasons] }));
+}
+
+/**
+ * Returns location regions relevant to the current updater prompt: the selected characters'
+ * present regions, plus regions occupied by nearby/recently-related characters, with a small
+ * coordinate fallback for nearby unnamed regions. This keeps the map context local instead
+ * of dumping the full world every tick.
+ * @param {string[]} characterIds
+ * @returns {string}
+ */
+function formatUpdaterKnownLocations(characterIds) {
+    const state = getState();
+    const locations = getLocations().locations || {};
+    const relevantIds = new Set(characterIds);
+    for (const related of collectRelatedCharacters(characterIds)) relevantIds.add(related.id);
+
+    const selectedStates = characterIds.map(id => state.characters[id] || {});
+    const regionIds = new Set();
+
+    for (const id of relevantIds) {
+        const cur = state.characters[id] || {};
+        const byCoords = locationFromCoords(cur.x, cur.y);
+        const name = byCoords || cur.location;
+        if (!name) continue;
+        const key = String(name).toLowerCase();
+        const match = Object.entries(locations).find(([, loc]) => String(loc.name || '').toLowerCase() === key);
+        if (match) regionIds.add(match[0]);
+    }
+
+    const nearbyRegions = Object.entries(locations)
+        .filter(([, loc]) => Number.isFinite(loc.x) && Number.isFinite(loc.y) && Number.isFinite(loc.w) && Number.isFinite(loc.h))
+        .filter(([, loc]) => selectedStates.some(cur => Number.isFinite(cur.x) && Number.isFinite(cur.y)
+            && cur.x >= loc.x - 120 && cur.x <= loc.x + loc.w + 120
+            && cur.y >= loc.y - 120 && cur.y <= loc.y + loc.h + 120))
+        .slice(0, UPDATER_NEARBY_LOCATION_LIMIT);
+
+    for (const [id] of nearbyRegions) regionIds.add(id);
+
+    const entries = [...regionIds]
+        .map(id => locations[id])
+        .filter(loc => loc && Number.isFinite(loc.x) && Number.isFinite(loc.y) && Number.isFinite(loc.w) && Number.isFinite(loc.h));
+
+    if (!entries.length) return '';
+
+    let out = 'Relevant known locations (name / description / map edges):\n';
+    for (const loc of entries) {
+        const desc = loc.description ? ` — ${clipText(loc.description, 120)}` : '';
+        out += `- "${loc.name}"${desc}: left ${round(loc.x)}, bottom ${round(loc.y)}, right ${round(loc.x + loc.w)}, top ${round(loc.y + loc.h)}\n`;
+    }
+    return out + '\n';
+}
+
+/**
+ * Lists only nearby or recently-related non-focal characters for updater context.
+ * The updater does not need the entire world's roster to decide a local next beat.
+ * @param {string[]} characterIds
+ * @returns {string}
+ */
+function formatUpdaterNearbyCharacters(characterIds) {
+    const state = getState();
+    const related = collectRelatedCharacters(characterIds);
+    if (!related.length) return '';
+
+    let out = 'Nearby or recently-related characters:\n';
+    for (const entry of related) {
+        const cur = state.characters[entry.id] || {};
+        const coord = (Number.isFinite(cur.x) && Number.isFinite(cur.y)) ? `(x: ${round(cur.x)}, y: ${round(cur.y)})` : 'unplaced';
+        const location = cur.location || locationFromCoords(cur.x, cur.y) || 'unknown location';
+        const activity = clipText(cur.activity, 100);
+        out += `- ${entry.name}: ${coord} - ${location}`;
+        if (activity) out += ` - ${activity}`;
+        if (entry.reasons?.length) out += ` (${entry.reasons.join(', ')})`;
+        out += '\n';
+    }
+    return out + '\n';
 }
 
 /**

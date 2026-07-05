@@ -97,18 +97,20 @@ export function registerWorldSimTools() {
     ToolManager.registerFunctionTool({
         name: WORLD_UPDATE,
         displayName: 'World Update',
-        description: 'Apply world-state updates to the character or characters already selected by the simulator.',
+        description: 'Apply world-state updates to the already selected characters. Return one `updates[]` item per selected character in order. Use dice results from the prompt to influence the outcome, but do not return dice values. If any new places were introduced, put them in the single top-level `locations[]` array for the whole call.',
         parameters: {
             type: 'object',
             properties: {
                 updates: {
                     type: 'array',
+                    description: 'Exactly one item per selected character, in the same order the characters were provided in the prompt.',
                     items: {
                         type: 'object',
                         properties: {
                             activity: { type: 'string' },
                             plan: { type: 'string' },
                             summary: { type: 'string' },
+                            location: { type: 'string', description: 'Optional short place name. Use this only if x,y do not already fall inside a known registered location region.' },
                             x: { type: 'number', description: 'Map X coordinate where the character currently is. Place inside the bounding box of their current location region.' },
                             y: { type: 'number', description: 'Map Y coordinate where the character currently is. Place inside the bounding box of their current location region.' },
                             interactedWith: {
@@ -126,7 +128,7 @@ export function registerWorldSimTools() {
                 },
                 locations: {
                     type: 'array',
-                    description: 'Named world-map regions to register only when a selected character needs a new concrete place that is not already in the known-locations list.',
+                    description: 'Single shared list of new named world-map regions introduced anywhere in this update call. This is top-level for the whole call, not nested inside each `updates[]` item. Only include places that are new and need to be registered on the map.',
                     items: {
                         type: 'object',
                         properties: {

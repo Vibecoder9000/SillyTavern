@@ -23,6 +23,17 @@ import * as worldSimMap from './map.js';
 import { clearWorldSimToolScope } from './tools.js';
 
 /**
+ * If the follow-up updater generation was stopped before `world_update` executed, keep the
+ * run alive so the user can retry without losing the scoped tool.
+ * @param {unknown} error
+ * @returns {boolean}
+ */
+function wasGenerationStopped(error) {
+    const message = String(error?.message || error || '');
+    return error?.name === 'AbortError' || /\babort(?:ed|ing)?\b|\bstopp?(?:ed|ing)?\b/i.test(message);
+}
+
+/**
  * Handles a `select_characters` tool execution: records the selection only. The updater
  * step is fired by the run driver (runCycle) AFTER this tool execution fully resolves, so
  * the updater's fresh chat isn't created while ST is still executing this tool on the
@@ -42,11 +53,11 @@ export async function onSelectCharacters(args) {
     }
 
     const run = getRun();
-    if (run?.needsUpdaterChain) {
-        // The selector fired as a retry after runCycle already returned past the chaining point.
-        // Chain to the updater here so the tick completes. Deferred so ST finishes processing
-        // this tool action before the updater opens a fresh chat.
-        updateRun({ needsUpdaterChain: false });
+    if (run?.mode === 'tick' && !run?.updaterStarted) {
+        // The selector action is the authoritative handoff point into the updater. Deferring
+        // with setTimeout lets ST finish processing this tool execution before we open the
+        // updater's fresh chat, while also avoiding a race with runCycle() checking characterIds.
+        updateRun({ needsUpdaterChain: false, updaterStarted: true });
         const capturedIds = ids;
         setTimeout(async () => {
             try {
@@ -56,7 +67,12 @@ export async function onSelectCharacters(args) {
                 await fireUpdater(capturedIds);
                 // If the updater didn't call the tool, leave scope/run alive for another retry.
             } catch (error) {
+                if (wasGenerationStopped(error)) {
+                    console.warn('World Sim updater interrupted after selector retry; keeping tool scope active for retry.', error);
+                    return;
+                }
                 console.error('World Sim updater failed after selector retry:', error);
+                updateRun({ updaterStarted: false });
                 clearWorldSimToolScope();
                 endRun();
             }
@@ -271,7 +287,7 @@ async function recordCycle(run, updaterArgs, tick) {
         },
         updater: {
             preset: '',
-            dice: {},
+            dice: run?.dice || {},
             globalMinutesPassed: Number(updaterArgs.globalMinutesPassed) || 0,
             updates,
             summary,
