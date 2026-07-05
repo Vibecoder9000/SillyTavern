@@ -2379,14 +2379,36 @@ async function onBackgroundUploadSelected() {
     }
 
     try {
-        for (const file of files) {
-            const formData = new FormData();
-            formData.append('avatar', file);
-            // This will convert video to webp and upload the static thumb
-            await convertFileIfVideo(formData);
-            await uploadBackground(formData);
+        const imageFiles = files.filter(file => file.type.startsWith('image/'));
+        const videoFiles = files.filter(file => file.type.startsWith('video/'));
+
+        let lastUploadedImageFilename = null;
+        if (imageFiles.length > 0) {
+            lastUploadedImageFilename = await uploadBackgroundBatch(imageFiles);
+            if (lastUploadedImageFilename) {
+                await refreshBackgroundLibrary({ focusFilename: lastUploadedImageFilename, click: true });
+            }
         }
-        await getBackgrounds(true);
+
+        if (videoFiles.length > 0) {
+            if (imageFiles.length > 0) {
+                toastr.info(t`Image backgrounds were added. Video backgrounds will finish processing in the background.`);
+                void uploadBackgroundBatch(videoFiles)
+                    .then(async (lastUploadedVideoFilename) => {
+                        await refreshBackgroundLibrary({ focusFilename: lastUploadedVideoFilename, click: false });
+                    })
+                    .catch(error => {
+                        console.error('Error uploading video backgrounds:', error);
+                        const errorToast = document.querySelector('.toast-error');
+                        if (!errorToast) {
+                            toastr.error('Failed to upload background.');
+                        }
+                    });
+            } else {
+                const lastUploadedVideoFilename = await uploadBackgroundBatch(videoFiles);
+                await refreshBackgroundLibrary({ focusFilename: lastUploadedVideoFilename, click: true });
+            }
+        }
     } catch (error) {
         console.error('Error uploading background:', error);
         // If an error toast wasn't already shown, show a generic one.
@@ -2397,6 +2419,39 @@ async function onBackgroundUploadSelected() {
     } finally {
         form.reset();
     }
+}
+
+/**
+ * Refreshes the background library and optionally focuses one uploaded item.
+ * @param {{ focusFilename?: string | null, click?: boolean }} [options]
+ * @returns {Promise<void>}
+ */
+async function refreshBackgroundLibrary(options = {}) {
+    const { focusFilename = null, click = false } = options;
+    await getBackgrounds();
+
+    if (focusFilename && backgroundSelector) {
+        backgroundSelector.focusBackground(focusFilename, { flash: true, click });
+    }
+}
+
+/**
+ * Uploads a batch of files without refreshing the UI per file.
+ * @param {File[]} files Files to upload in order.
+ * @returns {Promise<string | null>} The last uploaded filename, if any.
+ */
+async function uploadBackgroundBatch(files) {
+    let lastUploadedFilename = null;
+
+    for (const file of files) {
+        const formData = new FormData();
+        formData.append('avatar', file);
+        await convertFileIfVideo(formData);
+        const uploadedImageData = await uploadBackground(formData);
+        lastUploadedFilename = uploadedImageData?.filename ?? lastUploadedFilename;
+    }
+
+    return lastUploadedFilename;
 }
 
 /**
@@ -2460,13 +2515,13 @@ async function convertFileIfVideo(formData) {
 /**
  * Uploads a background image to the server.
  * @param {FormData} formData - The FormData object containing the image file.
- * @returns {Promise<void>}
+ * @returns {Promise<object | null>}
  */
 async function uploadBackground(formData) {
     try {
         if (!formData.has('avatar')) {
             console.log('No file provided. Background upload cancelled.');
-            return;
+            return null;
         }
 
         const response = await fetch('/api/backgrounds/upload', {
@@ -2476,25 +2531,11 @@ async function uploadBackground(formData) {
         });
         if (!response.ok) throw new Error(`Upload failed: ${await response.text()}`);
 
-        const newImageData = await response.json();
-        const newBgFilename = newImageData.filename;
-
-        const newImageClientData = {
-            ...newImageData,
-            id: newImageData.filename,
-            thumbnailUrl: getThumbnailUrl(newImageData.filename),
-            fullResUrl: getBackgroundPath(newImageData.filename),
-            isCustom: false,
-        };
-
-        backgroundSelector.images.push(newImageClientData);
-        backgroundSelector.imageLookup.set(newBgFilename, newImageClientData);
-        backgroundSelector.rebuildFolderImageIndex();
-        backgroundSelector.images.sort((a, b) => a.filename.localeCompare(b.filename, undefined, { numeric: true }));
-        backgroundSelector.search($('#bg-filter').val() || '', newBgFilename);
+        return await response.json();
     } catch (error) {
         console.error('Error uploading background:', error);
         toastr.error(translate('Failed to upload background.'));
+        throw error;
     }
 }
 
