@@ -2791,6 +2791,7 @@ export async function createGenerationParameters(settings, model, type, messages
     const logprobsSupportedSources = [
         chat_completion_sources.OPENAI,
         chat_completion_sources.AZURE_OPENAI,
+        chat_completion_sources.OPENROUTER,
         chat_completion_sources.CUSTOM,
         chat_completion_sources.DEEPSEEK,
         chat_completion_sources.XAI,
@@ -3132,6 +3133,22 @@ export async function createGenerationParameters(settings, model, type, messages
         }
     }
 
+    // Claude Fable models removed sampling parameters and reject them with HTTP 400,
+    // including via OpenAI-compatible proxies. Unanchored to also match prefixed ids
+    // like 'anthropic/claude-fable-5'.
+    if (/claude-fable/.test(model)) {
+        delete generate_data.temperature;
+        delete generate_data.top_p;
+        delete generate_data.top_k;
+        delete generate_data.frequency_penalty;
+        delete generate_data.presence_penalty;
+        // Keep reasoning_effort for the native Claude source, where the backend maps it to
+        // adaptive thinking; proxies may translate it into a thinking budget that Fable rejects.
+        if (settings.chat_completion_source !== chat_completion_sources.CLAUDE) {
+            delete generate_data.reasoning_effort;
+        }
+    }
+
     if (oai_settings.native_tool_calling && Array.isArray(generate_data.stop)) {
         const maxStopSequences = Math.trunc(Number(power_user.tool_max_stop_sequences) || 0);
         const stopSequences = [...new Set(generate_data.stop.filter(stop => typeof stop === 'string' && stop.length > 0))];
@@ -3340,6 +3357,7 @@ function parseChatCompletionLogprobs(data) {
                 : parseOpenAITextLogprobs(data.choices[0]?.logprobs);
         case chat_completion_sources.OPENAI:
         case chat_completion_sources.AZURE_OPENAI:
+        case chat_completion_sources.OPENROUTER:
         case chat_completion_sources.DEEPSEEK:
         case chat_completion_sources.XAI:
         case chat_completion_sources.CUSTOM:
@@ -5355,6 +5373,7 @@ function getZaiMaxContext(model, isUnlocked) {
     }
 
     const contextMap = {
+        'glm-5.2': max_1mil,
         'glm-5.1': max_200k,
         'glm-5-turbo': max_200k,
         'glm-5v-turbo': max_200k,
@@ -5816,7 +5835,7 @@ async function onModelChange() {
     if (oai_settings.chat_completion_source == chat_completion_sources.CLAUDE) {
         if (oai_settings.max_context_unlocked) {
             $('#openai_max_context').attr('max', unlocked_max);
-        } else if (/^claude-(sonnet-4-5|sonnet-4-6|opus-4-6|opus-4-7)/.test(value)) {
+        } else if (/^claude-(sonnet-4-5|sonnet-4-6|opus-4-6|opus-4-7|fable)/.test(value)) {
             $('#openai_max_context').attr('max', max_1mil);
         } else if (/^claude-(3|opus|haiku|sonnet)/.test(value)) {
             $('#openai_max_context').attr('max', max_200k);
@@ -6334,6 +6353,7 @@ export function isImageInliningSupported() {
         'o4-mini',
         // Claude
         'claude-3',
+        'claude-fable',
         'claude-opus-4',
         'claude-sonnet-4',
         'claude-haiku-4',
