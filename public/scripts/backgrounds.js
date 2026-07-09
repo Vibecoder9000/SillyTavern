@@ -2363,6 +2363,67 @@ async function setBackground(bg, url) {
 }
 
 /**
+ * Adds an uploaded background to the in-memory lists without forcing a redraw.
+ * @param {object} uploadedImageData Uploaded background metadata.
+ * @returns {void}
+ */
+function registerUploadedBackground(uploadedImageData) {
+    if (!backgroundSelector || !uploadedImageData?.filename) {
+        return;
+    }
+
+    const normalizedImageData = {
+        ...uploadedImageData,
+        id: uploadedImageData.filename,
+        thumbnailUrl: uploadedImageData.thumbnailUrl ?? getThumbnailUrl(uploadedImageData.filename),
+        fullResUrl: uploadedImageData.fullResUrl ?? getBackgroundPath(uploadedImageData.filename),
+        isStarred: !!uploadedImageData.isStarred,
+        isCustom: false,
+    };
+
+    const existingIndex = backgroundSelector.images.findIndex(img => img.filename === normalizedImageData.filename);
+    if (existingIndex >= 0) {
+        backgroundSelector.images.splice(existingIndex, 1, normalizedImageData);
+    } else {
+        backgroundSelector.images.push(normalizedImageData);
+    }
+
+    backgroundSelector.imageLookup.set(normalizedImageData.filename, normalizedImageData);
+
+    const normalizedName = normalizeBgName(normalizedImageData.filename);
+    if (!backgroundNameMap) {
+        backgroundNameMap = new Map();
+    }
+
+    const candidateImages = backgroundNameMap.get(normalizedName) ?? [];
+    const candidateIndex = candidateImages.findIndex(img => img.filename === normalizedImageData.filename);
+    if (candidateIndex >= 0) {
+        candidateImages.splice(candidateIndex, 1, normalizedImageData);
+    } else {
+        candidateImages.push(normalizedImageData);
+    }
+    backgroundNameMap.set(normalizedName, candidateImages);
+}
+
+/**
+ * Returns the last uploaded filename that would be visible under the current filter.
+ * @param {Array<object>} uploadedBackgrounds Uploaded background metadata.
+ * @returns {string | null}
+ */
+function getVisibleUploadedFilename(uploadedBackgrounds) {
+    const normalizedFilter = String($('#bg-filter').val() || '').toLowerCase().trim();
+
+    for (let i = uploadedBackgrounds.length - 1; i >= 0; i--) {
+        const filename = uploadedBackgrounds[i]?.filename;
+        if (filename && (!normalizedFilter || filename.toLowerCase().includes(normalizedFilter))) {
+            return filename;
+        }
+    }
+
+    return null;
+}
+
+/**
  * Handles the selection of a file for background upload.
  * @returns {Promise<void>}
  */
@@ -2382,11 +2443,11 @@ async function onBackgroundUploadSelected() {
         const imageFiles = files.filter(file => file.type.startsWith('image/'));
         const videoFiles = files.filter(file => file.type.startsWith('video/'));
 
-        let lastUploadedImageFilename = null;
         if (imageFiles.length > 0) {
-            lastUploadedImageFilename = await uploadBackgroundBatch(imageFiles);
-            if (lastUploadedImageFilename) {
-                await refreshBackgroundLibrary({ focusFilename: lastUploadedImageFilename, click: true });
+            const uploadedImages = await uploadBackgroundBatch(imageFiles);
+            const focusFilename = getVisibleUploadedFilename(uploadedImages);
+            if (focusFilename) {
+                await refreshBackgroundLibrary({ focusFilename, click: true });
             }
         }
 
@@ -2394,8 +2455,11 @@ async function onBackgroundUploadSelected() {
             if (imageFiles.length > 0) {
                 toastr.info(t`Image backgrounds were added. Video backgrounds will finish processing in the background.`);
                 void uploadBackgroundBatch(videoFiles)
-                    .then(async (lastUploadedVideoFilename) => {
-                        await refreshBackgroundLibrary({ focusFilename: lastUploadedVideoFilename, click: false });
+                    .then(async (uploadedVideos) => {
+                        const focusFilename = getVisibleUploadedFilename(uploadedVideos);
+                        if (focusFilename) {
+                            await refreshBackgroundLibrary({ focusFilename, click: false });
+                        }
                     })
                     .catch(error => {
                         console.error('Error uploading video backgrounds:', error);
@@ -2405,8 +2469,11 @@ async function onBackgroundUploadSelected() {
                         }
                     });
             } else {
-                const lastUploadedVideoFilename = await uploadBackgroundBatch(videoFiles);
-                await refreshBackgroundLibrary({ focusFilename: lastUploadedVideoFilename, click: true });
+                const uploadedVideos = await uploadBackgroundBatch(videoFiles);
+                const focusFilename = getVisibleUploadedFilename(uploadedVideos);
+                if (focusFilename) {
+                    await refreshBackgroundLibrary({ focusFilename, click: true });
+                }
             }
         }
     } catch (error) {
@@ -2438,20 +2505,23 @@ async function refreshBackgroundLibrary(options = {}) {
 /**
  * Uploads a batch of files without refreshing the UI per file.
  * @param {File[]} files Files to upload in order.
- * @returns {Promise<string | null>} The last uploaded filename, if any.
+ * @returns {Promise<Array<object>>} Uploaded background metadata in upload order.
  */
 async function uploadBackgroundBatch(files) {
-    let lastUploadedFilename = null;
+    const uploadedBackgrounds = [];
 
     for (const file of files) {
         const formData = new FormData();
         formData.append('avatar', file);
         await convertFileIfVideo(formData);
         const uploadedImageData = await uploadBackground(formData);
-        lastUploadedFilename = uploadedImageData?.filename ?? lastUploadedFilename;
+        if (uploadedImageData) {
+            uploadedBackgrounds.push(uploadedImageData);
+            registerUploadedBackground(uploadedImageData);
+        }
     }
 
-    return lastUploadedFilename;
+    return uploadedBackgrounds;
 }
 
 /**
