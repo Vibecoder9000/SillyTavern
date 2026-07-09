@@ -3196,6 +3196,58 @@ function augmentBrowserToolResult(result) {
     return result;
 }
 
+function shouldAutoFetchBrowserDom(toolName, payload, result) {
+    if (!result || typeof result !== 'object') {
+        return false;
+    }
+
+    if (isMissingBrowserArg(result.session_id) || isMissingBrowserArg(result.tab_index)) {
+        return false;
+    }
+
+    switch (toolName) {
+        case 'browser_open':
+        case 'browser_search':
+        case 'browser_go_back':
+            return true;
+        case 'browser_tabs':
+            return String(payload?.action ?? '').trim().toLowerCase() === 'select';
+        case 'browser_click':
+        case 'browser_pixel_click':
+            return result.url_changed === true || Number.isInteger(result.opened_tab_index);
+        case 'browser_type':
+            return payload?.submit === true;
+        default:
+            return false;
+    }
+}
+
+async function withAutoFetchedBrowserDom(toolName, payload, result, signal) {
+    const augmentedResult = augmentBrowserToolResult(result);
+
+    if (typeof augmentedResult === 'string' || !shouldAutoFetchBrowserDom(toolName, payload, augmentedResult)) {
+        return augmentedResult;
+    }
+
+    const domFetchResult = await callBrowserTool('domfetch', {
+        session_id: augmentedResult.session_id,
+        tab_index: augmentedResult.tab_index,
+        mode: 'readable',
+    }, signal);
+
+    if (typeof domFetchResult === 'string') {
+        return {
+            ...augmentedResult,
+            dom_fetch_error: domFetchResult,
+        };
+    }
+
+    return {
+        ...augmentedResult,
+        dom: domFetchResult,
+    };
+}
+
 function getAskUserPanelElements() {
     const sendForm = document.getElementById('send_form');
     const panel = document.getElementById('ask_user_panel');
@@ -4445,7 +4497,7 @@ function registerBuiltinTools() {
             },
             action: async ({ url, session_id, tab_index, new_tab = false }, signal) => {
                 const result = await callBrowserTool('open', { url, session_id, tab_index, new_tab }, signal);
-                return typeof result === 'string' ? result : augmentBrowserToolResult(result);
+                return await withAutoFetchedBrowserDom('browser_open', { url, session_id, tab_index, new_tab }, result, signal);
             },
         },
         {
@@ -4479,7 +4531,7 @@ function registerBuiltinTools() {
             },
             action: async ({ query, engine = 'duckduckgo', session_id, tab_index, new_tab = false }, signal) => {
                 const result = await callBrowserTool('search', { query, engine, session_id, tab_index, new_tab }, signal);
-                return typeof result === 'string' ? result : augmentBrowserToolResult(result);
+                return await withAutoFetchedBrowserDom('browser_search', { query, engine, session_id, tab_index, new_tab }, result, signal);
             },
         },
         {
@@ -4505,7 +4557,7 @@ function registerBuiltinTools() {
             },
             action: async ({ session_id, action, tab_index }, signal) => {
                 const result = await callBrowserTool('tabs', { session_id, action, tab_index }, signal);
-                return typeof result === 'string' ? result : augmentBrowserToolResult(result);
+                return await withAutoFetchedBrowserDom('browser_tabs', { session_id, action, tab_index }, result, signal);
             },
         },
         {
@@ -4544,7 +4596,7 @@ function registerBuiltinTools() {
             },
             action: async ({ session_id, tab_index }, signal) => {
                 const result = await callBrowserTool('back', { session_id, tab_index }, signal);
-                return typeof result === 'string' ? result : augmentBrowserToolResult(result);
+                return await withAutoFetchedBrowserDom('browser_go_back', { session_id, tab_index }, result, signal);
             },
         },
         {
@@ -4594,7 +4646,7 @@ function registerBuiltinTools() {
             },
             action: async ({ session_id, tab_index, element_index, selector, text, text_index, button, x, y }, signal) => {
                 const result = await callBrowserTool('click', { session_id, tab_index, element_index, selector, text, text_index, button, x, y }, signal);
-                return typeof result === 'string' ? result : augmentBrowserToolResult(result);
+                return await withAutoFetchedBrowserDom('browser_click', { session_id, tab_index, element_index, selector, text, text_index, button, x, y }, result, signal);
             },
         },
         {
@@ -4624,7 +4676,7 @@ function registerBuiltinTools() {
             },
             action: async ({ session_id, tab_index, x, y }, signal) => {
                 const result = await callBrowserTool('click', { session_id, tab_index, x, y }, signal);
-                return typeof result === 'string' ? result : augmentBrowserToolResult(result);
+                return await withAutoFetchedBrowserDom('browser_pixel_click', { session_id, tab_index, x, y }, result, signal);
             },
         },
         {
@@ -4708,7 +4760,7 @@ function registerBuiltinTools() {
             },
             action: async ({ session_id, tab_index, element_index, selector, text, submit = false }, signal) => {
                 const result = await callBrowserTool('type', { session_id, tab_index, element_index, selector, text, submit }, signal);
-                return typeof result === 'string' ? result : augmentBrowserToolResult(result);
+                return await withAutoFetchedBrowserDom('browser_type', { session_id, tab_index, element_index, selector, text, submit }, result, signal);
             },
         },
         {
