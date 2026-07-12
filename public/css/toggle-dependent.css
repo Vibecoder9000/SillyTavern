@@ -23,6 +23,7 @@ body.no-hotswap .hotswap~hr,
 body.no-timer .mes_timer,
 body.no-timestamps .timestamp,
 body.no-tokenCount .tokenCounterDisplay,
+body.no-messageCost .messageCostDisplay,
 body.no-mesIDDisplay .mesIDDisplay,
 body.no-modelIcons .icon-svg,
 body.hideChatAvatars .mesAvatarWrapper .avatar {
@@ -39,7 +40,7 @@ body.hideChatAvatars .last_mes:not(.smallSysMes) {
     padding-bottom: 20px !important;
 }
 
-body.hideChatAvatars.no-timer.no-tokenCount.no-mesIDDisplay .swipe_left {
+body.hideChatAvatars.no-timer.no-tokenCount.no-messageCost.no-mesIDDisplay .swipe_left {
     left: 0px;
 }
 

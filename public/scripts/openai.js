@@ -1902,6 +1902,31 @@ function calculateOpenRouterCost() {
     $('#openrouter_max_prompt_cost').text(cost);
 }
 
+/**
+ * Extracts OpenRouter's reported per-message cost from a response payload when present.
+ * @param {object} data Response payload
+ * @returns {number|string|null}
+ */
+function extractOpenRouterMessageCost(data) {
+    const candidates = [
+        data?.usage?.cost,
+        data?.usage?.total_cost,
+        data?.cost,
+        data?.total_cost,
+    ];
+
+    for (const candidate of candidates) {
+        if (typeof candidate === 'number' && Number.isFinite(candidate)) {
+            return candidate;
+        }
+        if (typeof candidate === 'string' && candidate.trim()) {
+            return candidate.trim();
+        }
+    }
+
+    return null;
+}
+
 function getElectronHubModelTemplate(option) {
     const model = model_list.find(x => x.id === option?.element?.value);
 
@@ -3206,7 +3231,7 @@ async function sendOpenAIRequest(type, messages, signal, { jsonSchema = null } =
             let text = '';
             const swipes = [];
             const toolCalls = [];
-            const state = { reasoning: '', images: [] };
+            const state = { reasoning: '', images: [], messageCost: null, toolSignatures: {}, signature: null };
             while (true) {
                 const { done, value } = await reader.read();
                 if (done) return;
@@ -3224,6 +3249,9 @@ async function sendOpenAIRequest(type, messages, signal, { jsonSchema = null } =
                 }
 
                 ToolManager.parseToolCalls(toolCalls, parsed);
+                if (oai_settings.chat_completion_source === chat_completion_sources.OPENROUTER) {
+                    state.messageCost = extractOpenRouterMessageCost(parsed) ?? state.messageCost;
+                }
 
                 yield { text, swipes: swipes, logprobs: parseChatCompletionLogprobs(parsed), toolCalls: toolCalls, state: state };
             }

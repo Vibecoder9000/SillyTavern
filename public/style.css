@@ -691,7 +691,8 @@ input[type='checkbox']:focus-visible {
 
 .mes .mes_timer,
 .mes .mesIDDisplay,
-.mes .tokenCounterDisplay {
+.mes .tokenCounterDisplay,
+.mes .messageCostDisplay {
     cursor: default;
     opacity: 0.7;
     font-size: calc(var(--mainFontSize) * 0.9);

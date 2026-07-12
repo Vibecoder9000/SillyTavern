@@ -205,6 +205,7 @@ export const power_user = {
     hideChatAvatars_enabled: false,
     max_context_unlocked: false,
     message_token_count_enabled: false,
+    message_cost_enabled: false,
     expand_message_actions: false,
     enableZenSliders: false,
     enableLabMode: false,
@@ -514,6 +515,11 @@ function switchIcons() {
 function switchTokenCount() {
     $('body').toggleClass('no-tokenCount', !power_user.message_token_count_enabled);
     $('#messageTokensEnabled').prop('checked', power_user.message_token_count_enabled);
+}
+
+function switchMessageCost() {
+    $('body').toggleClass('no-messageCost', !power_user.message_cost_enabled);
+    $('#messageCostEnabled').prop('checked', power_user.message_cost_enabled);
 }
 
 function switchMesIDDisplay() {
@@ -1453,6 +1459,12 @@ function applyTheme(name) {
             },
         },
         {
+            key: 'message_cost_enabled',
+            action: () => {
+                switchMessageCost();
+            },
+        },
+        {
             key: 'mesIDDisplay_enabled',
             action: () => {
                 switchMesIDDisplay();
@@ -1866,6 +1878,7 @@ export async function loadPowerUserSettings(settings, data) {
     $('#messageTimerEnabled').prop('checked', power_user.timer_enabled);
     $('#messageTimestampsEnabled').prop('checked', power_user.timestamps_enabled);
     $('#messageModelIconEnabled').prop('checked', power_user.timestamp_model_icon);
+    $('#messageCostEnabled').prop('checked', power_user.message_cost_enabled);
     $('#mesIDDisplayEnabled').prop('checked', power_user.mesIDDisplay_enabled);
     $('#hideChatAvatarsEnabled').prop('checked', power_user.hideChatAvatars_enabled);
     $('#prefer_character_prompt').prop('checked', power_user.prefer_character_prompt);
@@ -2733,6 +2746,7 @@ export function getThemeObject(name) {
         mesIDDisplay_enabled: power_user.mesIDDisplay_enabled,
         hideChatAvatars_enabled: power_user.hideChatAvatars_enabled,
         message_token_count_enabled: power_user.message_token_count_enabled,
+        message_cost_enabled: power_user.message_cost_enabled,
         expand_message_actions: power_user.expand_message_actions,
         enableZenSliders: power_user.enableZenSliders,
         enableLabMode: power_user.enableLabMode,
@@ -3881,6 +3895,13 @@ jQuery(() => {
         const value = !!$(this).prop('checked');
         power_user.message_token_count_enabled = value;
         switchTokenCount();
+        saveSettingsDebounced();
+    });
+
+    $('#messageCostEnabled').on('input', function () {
+        const value = !!$(this).prop('checked');
+        power_user.message_cost_enabled = value;
+        switchMessageCost();
         saveSettingsDebounced();
     });
 

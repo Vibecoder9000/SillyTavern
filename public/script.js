@@ -4606,6 +4606,7 @@ export function updateMessageElement(mes, { messageId = chat.length - 1, message
     const messageHTML = getMessageTextHTML(mes, { messageId });
     const bookmarkLink = mes?.extra?.bookmark_link;
     const tokenCount = mes.extra?.token_count;
+    const messageCost = formatMessageCost(mes.extra?.message_cost);
     const { timerValue, timerTitle } = formatGenerationTimer(mes.gen_started, mes.gen_finished, mes.extra?.token_count, mes.extra?.reasoning_duration, mes.extra?.time_to_first_token);
 
     messageElement.attr({
@@ -4626,6 +4627,7 @@ export function updateMessageElement(mes, { messageId = chat.length - 1, message
     messageElement.find('.timestamp').text(timestamp).attr('title', `${mes.extra?.api ? mes.extra.api + ' - ' : ''}${mes.extra?.model ?? ''}`);
     messageElement.find('.mesIDDisplay').text(`#${messageId}`);
     tokenCount && messageElement.find('.tokenCounterDisplay').text(`${tokenCount}t`);
+    messageCost && messageElement.find('.messageCostDisplay').text(messageCost);
     mes.title && messageElement.attr('title', mes.title);
     timerValue && messageElement.find('.mes_timer').attr('title', timerTitle).text(timerValue);
     bookmarkLink && updateBookmarkDisplay(messageElement);
@@ -4735,6 +4737,27 @@ function formatGenerationTimer(gen_started, gen_finished, tokenCount, reasoningD
     }
 
     return { timerValue, timerTitle };
+}
+
+/**
+ * Formats a message cost for display in the chat metadata row.
+ * @param {number|string|null|undefined} cost Message cost
+ * @returns {string}
+ */
+function formatMessageCost(cost) {
+    if (typeof cost === 'number' && Number.isFinite(cost)) {
+        if (cost === 0) {
+            return '0¢';
+        }
+        const cents = Math.abs(cost) * 100;
+        const integerDigits = cents < 1 ? 1 : Math.floor(Math.log10(cents)) + 1;
+        const decimalPlaces = Math.max(0, 4 - integerDigits);
+        const multiplier = Math.pow(10, decimalPlaces);
+        const centsVal = Math.ceil(cents * multiplier) / multiplier;
+        return `${cost < 0 ? '-' : ''}${Number(centsVal.toFixed(decimalPlaces))}¢`;
+    }
+
+    return '';
 }
 
 let requestId = null;
@@ -5537,6 +5560,8 @@ class StreamingProcessor {
         this.messageTimerDom = null;
         /** @type {HTMLElement} */
         this.messageTokenCounterDom = null;
+        /** @type {HTMLElement} */
+        this.messageCostDom = null;
         /** @type {HTMLTextAreaElement} */
         this.sendTextarea = document.querySelector('#send_textarea');
         this.type = type;
@@ -5565,6 +5590,8 @@ class StreamingProcessor {
         this.images = [];
         /** @type {string?} */
         this.reasoningSignature = null;
+        /** @type {number|string|null} */
+        this.messageCost = null;
     }
 
     /**
@@ -5578,6 +5605,7 @@ class StreamingProcessor {
             this.messageTextDom = this.messageDom?.querySelector('.mes_text');
             this.messageTimerDom = this.messageDom?.querySelector('.mes_timer');
             this.messageTokenCounterDom = this.messageDom?.querySelector('.tokenCounterDisplay');
+            this.messageCostDom = this.messageDom?.querySelector('.messageCostDisplay');
         }
         if (continueOnReasoning) {
             await this.reasoningHandler.process(messageId, false, this.promptReasoning);
@@ -5775,6 +5803,14 @@ class StreamingProcessor {
             message.extra.reasoning_signature = this.reasoningSignature;
         }
 
+        if (this.messageCost !== null) {
+            message.extra = message.extra || {};
+            message.extra.message_cost = this.messageCost;
+            if (this.messageCostDom instanceof HTMLElement) {
+                this.messageCostDom.textContent = formatMessageCost(this.messageCost);
+            }
+        }
+
         if (unlockUI) {
             this.markUIGenStopped();
         }
@@ -5931,6 +5967,7 @@ class StreamingProcessor {
                 this.reasoningHandler.updateReasoning(this.messageId, state?.reasoning);
                 this.images = state?.images ?? [];
                 this.reasoningSignature = state?.signature ?? null;
+                this.messageCost = state?.messageCost ?? this.messageCost;
                 await eventSource.emit(event_types.STREAM_TOKEN_RECEIVED, text);
                 await sw.tick(async () => await this.onProgressStreaming(this.messageId, this.continueMessage + text));
             }
@@ -7548,6 +7585,7 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
         let reasoning = extractReasoningFromData(data);
         let imageUrls = extractImagesFromData(data);
         const reasoningSignature = extractReasoningSignatureFromData(data);
+        const messageCost = extractMessageCost(data);
         kobold_horde_model = title;
 
         const swipes = extractMultiSwipes(data, type);
@@ -7589,9 +7627,9 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
         } else {
             // Without streaming we'll be having a full message on continuation. Treat it as a last chunk.
             if (originalType !== 'continue') {
-                ({ type, getMessage } = await saveReply({ type, getMessage, title, swipes, reasoning, imageUrls, reasoningSignature }));
+                ({ type, getMessage } = await saveReply({ type, getMessage, title, swipes, reasoning, imageUrls, reasoningSignature, messageCost }));
             } else {
-                ({ type, getMessage } = await saveReply({ type: 'appendFinal', getMessage, title, swipes, reasoning, imageUrls, reasoningSignature }));
+                ({ type, getMessage } = await saveReply({ type: 'appendFinal', getMessage, title, swipes, reasoning, imageUrls, reasoningSignature, messageCost }));
             }
 
             // This relies on `saveReply` having been called to add the message to the chat, so it must be last.
@@ -8416,6 +8454,38 @@ export function extractMessageFromData(data, activeApi = null) {
 }
 
 /**
+ * Extracts a message cost from provider response data when available.
+ * Currently used for OpenRouter responses.
+ * @param {object} data Response data
+ * @param {string?} chatCompletionSource Chat completion source
+ * @returns {number|string|null}
+ */
+function extractMessageCost(data, chatCompletionSource = null) {
+    const source = chatCompletionSource ?? oai_settings.chat_completion_source;
+    if (main_api !== 'openai' || source !== chat_completion_sources.OPENROUTER || !data || typeof data !== 'object') {
+        return null;
+    }
+
+    const candidates = [
+        data?.usage?.cost,
+        data?.usage?.total_cost,
+        data?.cost,
+        data?.total_cost,
+    ];
+
+    for (const candidate of candidates) {
+        if (typeof candidate === 'number' && Number.isFinite(candidate)) {
+            return candidate;
+        }
+        if (typeof candidate === 'string' && candidate.trim()) {
+            return candidate.trim();
+        }
+    }
+
+    return null;
+}
+
+/**
  * Extracts JSON from the response data.
  * @param {object} data Response data
  * @param {object} [options] Extraction options
@@ -8750,16 +8820,17 @@ async function processImageAttachment(message, { imageUrls }) {
  * @property {string} [reasoning] Message reasoning
  * @property {string[]} [imageUrls] Links to images
  * @property {string?} [reasoningSignature] Encrypted signature of the reasoning text
+ * @property {number|string|null} [messageCost] Message cost reported by the provider
  *
  * @typedef {object} SaveReplyResult
  * @property {string} type Type of generation
  * @property {string} getMessage Generated message
  */
-export async function saveReply({ type, getMessage, fromStreaming = false, title = '', swipes = [], reasoning = '', imageUrls = [], reasoningSignature = null }) {
+export async function saveReply({ type, getMessage, fromStreaming = false, title = '', swipes = [], reasoning = '', imageUrls = [], reasoningSignature = null, messageCost = null }) {
     // Backward compatibility
     if (arguments.length > 1 && typeof arguments[0] !== 'object') {
         console.trace('saveReply called with positional arguments. Please use an object instead.');
-        [type, getMessage, fromStreaming, title, swipes, reasoning, imageUrls, reasoningSignature] = arguments;
+        [type, getMessage, fromStreaming, title, swipes, reasoning, imageUrls, reasoningSignature, messageCost] = arguments;
     }
 
     const lastMessage = chat[chat.length - 1];
@@ -8798,6 +8869,7 @@ export async function saveReply({ type, getMessage, fromStreaming = false, title
             lastMessage.extra.reasoning = reasoning;
             lastMessage.extra.reasoning_duration = null;
             lastMessage.extra.reasoning_signature = reasoningSignature;
+            lastMessage.extra.message_cost = messageCost;
             await processImageAttachment(lastMessage, { imageUrls });
             if (power_user.message_token_count_enabled) {
                 const tokenCountText = (reasoning || '') + lastMessage.mes;
@@ -8823,6 +8895,7 @@ export async function saveReply({ type, getMessage, fromStreaming = false, title
         lastMessage.extra.reasoning = reasoning;
         lastMessage.extra.reasoning_duration = null;
         lastMessage.extra.reasoning_signature = reasoningSignature;
+        lastMessage.extra.message_cost = messageCost;
         await processImageAttachment(lastMessage, { imageUrls });
         if (power_user.message_token_count_enabled) {
             const tokenCountText = (reasoning || '') + lastMessage.mes;
@@ -8844,6 +8917,7 @@ export async function saveReply({ type, getMessage, fromStreaming = false, title
         lastMessage.extra.model = getGeneratingModel();
         lastMessage.extra.reasoning += reasoning;
         lastMessage.extra.reasoning_signature = reasoningSignature;
+        lastMessage.extra.message_cost = messageCost;
         await processImageAttachment(lastMessage, { imageUrls });
         // We don't know if the reasoning duration extended, so we don't update it here on purpose.
         if (power_user.message_token_count_enabled) {
@@ -8867,6 +8941,7 @@ export async function saveReply({ type, getMessage, fromStreaming = false, title
         newMessage.extra.reasoning = reasoning;
         newMessage.extra.reasoning_duration = null;
         newMessage.extra.reasoning_signature = reasoningSignature;
+        newMessage.extra.message_cost = messageCost;
         if (power_user.trim_spaces) {
             getMessage = getMessage.trim();
         }

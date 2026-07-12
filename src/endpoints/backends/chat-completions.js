@@ -2236,6 +2236,12 @@ router.post('/generate', async function (request, response) {
                 },
             };
 
+            if (request.body.stream) {
+                bodyParams['stream_options'] = {
+                    include_usage: true,
+                };
+            }
+
             if (request.body.logprobs > 0) {
                 bodyParams['top_logprobs'] = request.body.logprobs;
                 bodyParams['logprobs'] = true;
