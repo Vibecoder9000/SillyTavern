@@ -1337,6 +1337,20 @@ export async function generateTextGenWithStreaming(generate_data, signal) {
                 state.reasoning += data?.choices?.[0]?.reasoning ?? data?.choices?.[0]?.thinking ?? '';
             }
 
+            const reportingCost = data?.cost?.request_cost_usd;
+            if (typeof reportingCost === 'number' && Number.isFinite(reportingCost)) {
+                state.messageCost = reportingCost;
+            } else if (typeof reportingCost === 'string' && reportingCost.trim()) {
+                state.messageCost = reportingCost.trim();
+            }
+
+            if (state.messageCost !== undefined || data?.energy) {
+                state.providerReport = {
+                    cost: state.messageCost ?? null,
+                    energy: data?.energy && typeof data.energy === 'object' ? structuredClone(data.energy) : null,
+                };
+            }
+
             yield { text, swipes, logprobs, toolCalls, state };
         }
     };

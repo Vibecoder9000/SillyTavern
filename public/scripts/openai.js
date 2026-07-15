@@ -1909,9 +1909,12 @@ function calculateOpenRouterCost() {
  */
 function extractOpenRouterMessageCost(data) {
     const candidates = [
+        data?.cost?.request_cost_usd,
+        data?.cost?.total_cost_usd,
+        data?.cost?.usd,
         data?.usage?.cost,
         data?.usage?.total_cost,
-        data?.cost,
+        typeof data?.cost !== 'object' ? data?.cost : null,
         data?.total_cost,
     ];
 

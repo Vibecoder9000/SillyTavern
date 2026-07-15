@@ -5592,6 +5592,8 @@ class StreamingProcessor {
         this.reasoningSignature = null;
         /** @type {number|string|null} */
         this.messageCost = null;
+        /** @type {{ cost: number|string|null, energy: object|null } | null} */
+        this.providerReport = null;
     }
 
     /**
@@ -5811,6 +5813,11 @@ class StreamingProcessor {
             }
         }
 
+        if (this.providerReport) {
+            message.extra = message.extra || {};
+            message.extra.provider_report = structuredClone(this.providerReport);
+        }
+
         if (unlockUI) {
             this.markUIGenStopped();
         }
@@ -5968,6 +5975,7 @@ class StreamingProcessor {
                 this.images = state?.images ?? [];
                 this.reasoningSignature = state?.signature ?? null;
                 this.messageCost = state?.messageCost ?? this.messageCost;
+                this.providerReport = state?.providerReport ?? this.providerReport;
                 await eventSource.emit(event_types.STREAM_TOKEN_RECEIVED, text);
                 await sw.tick(async () => await this.onProgressStreaming(this.messageId, this.continueMessage + text));
             }
@@ -7585,7 +7593,8 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
         let reasoning = extractReasoningFromData(data);
         let imageUrls = extractImagesFromData(data);
         const reasoningSignature = extractReasoningSignatureFromData(data);
-        const messageCost = extractMessageCost(data);
+        const providerReport = extractProviderReport(data);
+        const messageCost = providerReport?.cost ?? null;
         kobold_horde_model = title;
 
         const swipes = extractMultiSwipes(data, type);
@@ -7627,9 +7636,9 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
         } else {
             // Without streaming we'll be having a full message on continuation. Treat it as a last chunk.
             if (originalType !== 'continue') {
-                ({ type, getMessage } = await saveReply({ type, getMessage, title, swipes, reasoning, imageUrls, reasoningSignature, messageCost }));
+                ({ type, getMessage } = await saveReply({ type, getMessage, title, swipes, reasoning, imageUrls, reasoningSignature, messageCost, providerReport }));
             } else {
-                ({ type, getMessage } = await saveReply({ type: 'appendFinal', getMessage, title, swipes, reasoning, imageUrls, reasoningSignature, messageCost }));
+                ({ type, getMessage } = await saveReply({ type: 'appendFinal', getMessage, title, swipes, reasoning, imageUrls, reasoningSignature, messageCost, providerReport }));
             }
 
             // This relies on `saveReply` having been called to add the message to the chat, so it must be last.
@@ -8454,35 +8463,44 @@ export function extractMessageFromData(data, activeApi = null) {
 }
 
 /**
- * Extracts a message cost from provider response data when available.
- * Currently used for OpenRouter responses.
+ * Extracts provider reporting metadata from a response payload when available.
  * @param {object} data Response data
- * @param {string?} chatCompletionSource Chat completion source
- * @returns {number|string|null}
+ * @returns {{ cost: number|string|null, energy: object|null } | null}
  */
-function extractMessageCost(data, chatCompletionSource = null) {
-    const source = chatCompletionSource ?? oai_settings.chat_completion_source;
-    if (main_api !== 'openai' || source !== chat_completion_sources.OPENROUTER || !data || typeof data !== 'object') {
+function extractProviderReport(data) {
+    if (!data || typeof data !== 'object') {
         return null;
     }
 
-    const candidates = [
+    const costCandidates = [
+        data?.cost?.request_cost_usd,
+        data?.cost?.total_cost_usd,
+        data?.cost?.usd,
         data?.usage?.cost,
         data?.usage?.total_cost,
-        data?.cost,
+        typeof data?.cost !== 'object' ? data?.cost : null,
         data?.total_cost,
     ];
 
-    for (const candidate of candidates) {
+    let cost = null;
+    for (const candidate of costCandidates) {
         if (typeof candidate === 'number' && Number.isFinite(candidate)) {
-            return candidate;
+            cost = candidate;
+            break;
         }
         if (typeof candidate === 'string' && candidate.trim()) {
-            return candidate.trim();
+            cost = candidate.trim();
+            break;
         }
     }
 
-    return null;
+    const energy = data?.energy && typeof data.energy === 'object' ? structuredClone(data.energy) : null;
+
+    if (cost === null && energy === null) {
+        return null;
+    }
+
+    return { cost, energy };
 }
 
 /**
@@ -8821,16 +8839,17 @@ async function processImageAttachment(message, { imageUrls }) {
  * @property {string[]} [imageUrls] Links to images
  * @property {string?} [reasoningSignature] Encrypted signature of the reasoning text
  * @property {number|string|null} [messageCost] Message cost reported by the provider
+ * @property {{ cost: number|string|null, energy: object|null } | null} [providerReport] Provider reporting metadata
  *
  * @typedef {object} SaveReplyResult
  * @property {string} type Type of generation
  * @property {string} getMessage Generated message
  */
-export async function saveReply({ type, getMessage, fromStreaming = false, title = '', swipes = [], reasoning = '', imageUrls = [], reasoningSignature = null, messageCost = null }) {
+export async function saveReply({ type, getMessage, fromStreaming = false, title = '', swipes = [], reasoning = '', imageUrls = [], reasoningSignature = null, messageCost = null, providerReport = null }) {
     // Backward compatibility
     if (arguments.length > 1 && typeof arguments[0] !== 'object') {
         console.trace('saveReply called with positional arguments. Please use an object instead.');
-        [type, getMessage, fromStreaming, title, swipes, reasoning, imageUrls, reasoningSignature, messageCost] = arguments;
+        [type, getMessage, fromStreaming, title, swipes, reasoning, imageUrls, reasoningSignature, messageCost, providerReport] = arguments;
     }
 
     const lastMessage = chat[chat.length - 1];
@@ -8870,6 +8889,7 @@ export async function saveReply({ type, getMessage, fromStreaming = false, title
             lastMessage.extra.reasoning_duration = null;
             lastMessage.extra.reasoning_signature = reasoningSignature;
             lastMessage.extra.message_cost = messageCost;
+            lastMessage.extra.provider_report = providerReport ? structuredClone(providerReport) : null;
             await processImageAttachment(lastMessage, { imageUrls });
             if (power_user.message_token_count_enabled) {
                 const tokenCountText = (reasoning || '') + lastMessage.mes;
@@ -8896,6 +8916,7 @@ export async function saveReply({ type, getMessage, fromStreaming = false, title
         lastMessage.extra.reasoning_duration = null;
         lastMessage.extra.reasoning_signature = reasoningSignature;
         lastMessage.extra.message_cost = messageCost;
+        lastMessage.extra.provider_report = providerReport ? structuredClone(providerReport) : null;
         await processImageAttachment(lastMessage, { imageUrls });
         if (power_user.message_token_count_enabled) {
             const tokenCountText = (reasoning || '') + lastMessage.mes;
@@ -8918,6 +8939,7 @@ export async function saveReply({ type, getMessage, fromStreaming = false, title
         lastMessage.extra.reasoning += reasoning;
         lastMessage.extra.reasoning_signature = reasoningSignature;
         lastMessage.extra.message_cost = messageCost;
+        lastMessage.extra.provider_report = providerReport ? structuredClone(providerReport) : null;
         await processImageAttachment(lastMessage, { imageUrls });
         // We don't know if the reasoning duration extended, so we don't update it here on purpose.
         if (power_user.message_token_count_enabled) {
@@ -8942,6 +8964,7 @@ export async function saveReply({ type, getMessage, fromStreaming = false, title
         newMessage.extra.reasoning_duration = null;
         newMessage.extra.reasoning_signature = reasoningSignature;
         newMessage.extra.message_cost = messageCost;
+        newMessage.extra.provider_report = providerReport ? structuredClone(providerReport) : null;
         if (power_user.trim_spaces) {
             getMessage = getMessage.trim();
         }
