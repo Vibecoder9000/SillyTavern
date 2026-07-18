@@ -289,6 +289,7 @@ import { onboardingExperimentalMacroEngine } from './scripts/macros/engine/Macro
 import { compressRequest, setRequestCompressionConfig } from './scripts/request-compression.js';
 import { initWorldSimUi } from './scripts/world-sim/ui.js';
 import { canJumpToSwipeForMessage, canOpenSwipePickerForMessage, initSwipePicker } from './scripts/swipe-picker.js';
+import { captureJSpaceFromSavedMessage, initJSpace, mergeJSpaceCaptures, prepareJSpaceGenerationCapture, setPendingJSpaceResponse } from './scripts/jspace.js';
 
 // API OBJECT FOR EXTERNAL WIRING
 globalThis.SillyTavern = {
@@ -912,6 +913,7 @@ async function firstLoadInit() {
     initItemizedPrompts();
     initAccessibility();
     initSwipePicker();
+    initJSpace();
     addDebugFunctions();
     doDailyExtensionUpdatesCheck();
     await eventSource.emit(event_types.APP_INITIALIZED);
@@ -5581,6 +5583,7 @@ class StreamingProcessor {
         this.swipes = [];
         /** @type {import('./scripts/logprobs.js').TokenLogprobs[]} */
         this.messageLogprobs = [];
+        this.jspaceCapture = null;
         this.toolCalls = [];
         // Initialize reasoning in its own handler
         this.reasoningHandler = new ReasoningHandler(timeStarted);
@@ -5792,6 +5795,7 @@ class StreamingProcessor {
             message.swipe_info.push(...swipeInfoArray);
         }
 
+        await captureJSpaceFromSavedMessage({ type: this.type, messageId, swipes: this.swipes });
         syncMesToSwipe(messageId);
         saveLogprobsForActiveMessage(this.messageLogprobs.filter(Boolean), this.continueMessage);
 
@@ -5833,6 +5837,7 @@ class StreamingProcessor {
     }
 
     async onFinishStreaming(messageId, text) {
+        setPendingJSpaceResponse(this.jspaceCapture);
         await this.finalizeIntermediaryMessage(messageId, text, { unlockUI: true });
 
         if (oai_settings.native_tool_calling && this.type !== 'impersonate' && this.type !== 'regenerate') {
@@ -5954,7 +5959,7 @@ class StreamingProcessor {
         try {
             const sw = new Stopwatch(1000 / power_user.streaming_fps);
             const timestamps = [];
-            for await (const { text, swipes, logprobs, toolCalls, state } of this.generator()) {
+            for await (const { text, swipes, logprobs, toolCalls, state, jspace } of this.generator()) {
                 const now = Date.now();
                 timestamps.push(now);
                 if (!this.timeToFirstToken) {
@@ -5976,6 +5981,7 @@ class StreamingProcessor {
                 this.reasoningSignature = state?.signature ?? null;
                 this.messageCost = state?.messageCost ?? this.messageCost;
                 this.providerReport = state?.providerReport ?? this.providerReport;
+                this.jspaceCapture = mergeJSpaceCaptures(this.jspaceCapture, jspace);
                 await eventSource.emit(event_types.STREAM_TOKEN_RECEIVED, text);
                 await sw.tick(async () => await this.onProgressStreaming(this.messageId, this.continueMessage + text));
             }
@@ -7479,6 +7485,17 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
             itemizedPrompts.push(additionalPromptStuff);
         }
 
+        if (type !== 'quiet' && !isImpersonate) {
+            prepareJSpaceGenerationCapture({
+                type,
+                mesId: additionalPromptStuff.mesId,
+                promptData: additionalPromptStuff,
+                requestData: generate_data,
+                api: getGeneratingApi(),
+                model: getGeneratingModel(),
+            });
+        }
+
         console.debug(`pushed prompt bits to itemizedPrompts array. Length is now: ${itemizedPrompts.length}`);
 
         if (isStreamingEnabled() && type !== 'quiet') {
@@ -7636,8 +7653,10 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
         } else {
             // Without streaming we'll be having a full message on continuation. Treat it as a last chunk.
             if (originalType !== 'continue') {
+                setPendingJSpaceResponse(data?.jspace);
                 ({ type, getMessage } = await saveReply({ type, getMessage, title, swipes, reasoning, imageUrls, reasoningSignature, messageCost, providerReport }));
             } else {
+                setPendingJSpaceResponse(data?.jspace);
                 ({ type, getMessage } = await saveReply({ type: 'appendFinal', getMessage, title, swipes, reasoning, imageUrls, reasoningSignature, messageCost, providerReport }));
             }
 
@@ -9038,6 +9057,8 @@ export async function saveReply({ type, getMessage, fromStreaming = false, title
         item.swipes.push(...swipes);
         item.swipe_info.push(...swipeInfoArray);
     }
+
+    await captureJSpaceFromSavedMessage({ type, messageId: chat.length - 1, swipes, preservePending: fromStreaming });
 
     statMesProcess(item, type, characters, this_chid, oldMessage);
     return { type, getMessage };

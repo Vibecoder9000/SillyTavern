@@ -15,6 +15,7 @@ import { decodeTextTokens, getTokenizerBestMatch } from './tokenizers.js';
 import { power_user } from './power-user.js';
 import { callGenericPopup, POPUP_TYPE } from './popup.js';
 import { t } from './i18n.js';
+import { saveJSpaceLogprobsForMessage } from './jspace.js';
 
 const TINTS = 4;
 const MAX_MESSAGE_LOGPROBS = 100;
@@ -530,6 +531,12 @@ export function saveLogprobsForActiveMessage(logprobs, continueFrom) {
     };
 
     state.messageLogprobs.set(data.hash, data);
+    void saveJSpaceLogprobsForMessage({
+        messageId: msgId,
+        swipeId: chat[msgId].swipe_id,
+        logprobs,
+        continueFrom,
+    });
 
     // Clean up old logprobs data
     const oldLogprobs = Array.from(state.messageLogprobs.values())

@@ -64,6 +64,29 @@ const {
     FEATHERLESS,
 } = textgen_types;
 
+let llamaCppProps = null;
+
+function getLlamaCppJSpaceRequest(settings) {
+    const backend = llamaCppProps?.jspace_backend;
+    if (settings.type !== LLAMACPP || !backend?.available || !Array.isArray(backend.available_layers) || backend.available_layers.length === 0) {
+        return undefined;
+    }
+
+    return {
+        enabled: true,
+        schema_version: backend.schema_version ?? 1,
+        layers: backend.available_layers,
+        top_n: Math.min(5, backend.max_top_jspace ?? 5),
+        prompt_positions: { last_n: 64 },
+        include_prompt_next_token_probs: true,
+        probabilities: {
+            top_n: 5,
+            include_raw: true,
+            include_post_sampler: true,
+        },
+    };
+}
+
 const LLAMACPP_DEFAULT_ORDER = [
     'penalties',
     'dry',
@@ -745,7 +768,7 @@ async function getStatusTextgen() {
         const wantsContextSize = power_user.context_size_derived;
         const supportsChatTemplate = [textgen_types.KOBOLDCPP, textgen_types.LLAMACPP].includes(textgenerationwebui_settings.type);
 
-        if (supportsChatTemplate && (wantsInstructDerivation || wantsContextDerivation || wantsContextSize)) {
+        if (supportsChatTemplate && (wantsInstructDerivation || wantsContextDerivation || wantsContextSize || textgenerationwebui_settings.type === textgen_types.LLAMACPP)) {
             const model = textgenerationwebui_settings.type === textgen_types.LLAMACPP
                 ? textgenerationwebui_settings.llamacpp_model
                 : undefined;
@@ -763,6 +786,9 @@ async function getStatusTextgen() {
             if (response.ok) {
                 const data = await response.json();
                 if (data) {
+                    if (textgenerationwebui_settings.type === textgen_types.LLAMACPP) {
+                        llamaCppProps = data;
+                    }
                     const { chat_template, chat_template_hash } = data;
                     power_user.chat_template_hash = chat_template_hash;
 
@@ -1351,7 +1377,7 @@ export async function generateTextGenWithStreaming(generate_data, signal) {
                 };
             }
 
-            yield { text, swipes, logprobs, toolCalls, state };
+            yield { text, swipes, logprobs, toolCalls, state, jspace: data?.jspace ?? null };
         }
     };
 }
@@ -1669,6 +1695,7 @@ export function createTextGenGenerationData(settings, model, finalPrompt = null,
         'banned_strings': banned_strings,
         'api_type': settings.type,
         'api_server': getTextGenServer(settings.type),
+        'jspace': getLlamaCppJSpaceRequest(settings),
         'sampler_order': settings.type === textgen_types.KOBOLDCPP ? settings.sampler_order : undefined,
         'xtc_threshold': settings.xtc_threshold,
         'xtc_probability': settings.xtc_probability,

@@ -1,0 +1,494 @@
+#jspace_workspace.jspace-workspace {
+    width: var(--sheldWidth);
+    max-width: calc(100vw - 20px);
+    min-width: 0;
+    height: calc(100dvh - calc(var(--topBarBlockSize) + var(--bottomFormBlockSize)));
+    max-height: calc(100dvh - calc(var(--topBarBlockSize) + var(--bottomFormBlockSize)));
+    padding: 0;
+    overflow: hidden;
+    color: var(--SmartThemeBodyColor);
+    background-color: var(--SmartThemeBlurTintColor);
+    border: 1px solid var(--SmartThemeBorderColor);
+    border-radius: 10px;
+}
+
+.jspace-app {
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    height: 100%;
+    min-height: 0;
+}
+
+.jspace-workspace__header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 12px 14px;
+    border-bottom: 1px solid color-mix(in srgb, var(--SmartThemeBorderColor) 70%, transparent);
+    background: color-mix(in srgb, var(--SmartThemeQuoteColor) 6%, var(--SmartThemeBlurTintColor));
+}
+
+.jspace-workspace__heading {
+    min-width: 0;
+}
+
+.jspace-kicker {
+    font-size: calc(var(--mainFontSize) * 0.7);
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    opacity: 0.65;
+}
+
+.jspace-title {
+    margin: 2px 0 0;
+    overflow: hidden;
+    font-size: calc(var(--mainFontSize) * 1.15);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.jspace-dev-header {
+    flex: 0 0 auto;
+    color: #e74c3c;
+    font-size: calc(var(--mainFontSize) * 0.88);
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-align: center;
+}
+
+.jspace-header-actions {
+    display: flex;
+    gap: 6px;
+}
+
+.jspace-header-actions .menu_button {
+    margin: 0;
+}
+
+.jspace-region-tabs {
+    display: none;
+    gap: 4px;
+    padding: 6px 10px 0;
+    border-bottom: 1px solid color-mix(in srgb, var(--SmartThemeBorderColor) 70%, transparent);
+}
+
+.jspace-region-tab,
+.jspace-tab {
+    padding: 8px 12px;
+    color: inherit;
+    font-size: calc(var(--mainFontSize) * 0.9);
+    cursor: pointer;
+    background: none;
+    border: 0;
+    border-bottom: 2px solid transparent;
+    opacity: 0.65;
+}
+
+.jspace-region-tab.active,
+.jspace-tab.active {
+    border-bottom-color: var(--SmartThemeQuoteColor);
+    opacity: 1;
+}
+
+.jspace-empty-state {
+    display: grid;
+    flex: 1;
+    min-height: 0;
+    padding: 24px;
+    place-items: center;
+    text-align: center;
+    opacity: 0.75;
+}
+
+/* The workspace switches between this state and the three-column view via the hidden attribute. */
+.jspace-empty-state[hidden],
+.jspace-workspace__content[hidden] {
+    display: none;
+}
+
+.jspace-workspace__content {
+    display: grid;
+    flex: 1;
+    grid-template-columns: 42% 33% 25%;
+    min-height: 0;
+}
+
+.jspace-column {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    min-height: 0;
+    border-right: 1px solid color-mix(in srgb, var(--SmartThemeBorderColor) 70%, transparent);
+}
+
+.jspace-column:last-child {
+    border-right: 0;
+}
+
+.jspace-column--right {
+    background-color: color-mix(in srgb, var(--SmartThemeQuoteColor) 3%, transparent);
+}
+
+.jspace-column__header {
+    padding: 10px 14px;
+    font-size: calc(var(--mainFontSize) * 0.92);
+    font-weight: 600;
+    border-bottom: 1px solid color-mix(in srgb, var(--SmartThemeBorderColor) 70%, transparent);
+}
+
+.jspace-column__body,
+.jspace-ask-pane,
+.jspace-tabpane {
+    min-height: 0;
+    overflow: auto;
+}
+
+.jspace-column__body {
+    flex: 1;
+    padding: 12px 14px;
+}
+
+.jspace-source-block,
+.jspace-stat-card,
+.jspace-detail-card,
+.jspace-compare-row,
+.jspace-evidence-row,
+.jspace-search-row {
+    padding: 10px 12px;
+    border: 1px solid var(--SmartThemeBorderColor);
+    border-radius: 8px;
+    background-color: var(--black30a);
+}
+
+.jspace-source-block {
+    margin-bottom: 10px;
+}
+
+.jspace-source-block--assistant {
+    border-color: color-mix(in srgb, var(--SmartThemeQuoteColor) 48%, var(--SmartThemeBorderColor));
+    background-color: color-mix(in srgb, var(--SmartThemeQuoteColor) 9%, var(--black30a));
+}
+
+.jspace-source-label {
+    margin-bottom: 7px;
+    font-size: calc(var(--mainFontSize) * 0.72);
+    font-weight: 700;
+    letter-spacing: 0.07em;
+    opacity: 0.72;
+}
+
+.jspace-source-text {
+    margin: 0;
+    font-family: 'NotoSansMono', monospace;
+    font-size: calc(var(--mainFontSize) * 0.86);
+    line-height: 1.5;
+    white-space: pre-wrap;
+}
+
+.jspace-stat-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+}
+
+.jspace-stat-label,
+.jspace-compare-meta,
+.jspace-evidence-title,
+.jspace-search-title,
+.jspace-detail-heading {
+    font-size: calc(var(--mainFontSize) * 0.76);
+    opacity: 0.7;
+}
+
+.jspace-stat-value,
+.jspace-compare-name {
+    margin-top: 5px;
+    font-size: calc(var(--mainFontSize) * 1.02);
+    font-weight: 600;
+}
+
+.jspace-compare-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-top: 12px;
+}
+
+.jspace-gate,
+.jspace-disabled-note {
+    padding: 11px 12px;
+    border: 1px solid color-mix(in srgb, var(--warning) 55%, var(--SmartThemeBorderColor));
+    border-radius: 8px;
+    color: var(--SmartThemeBodyColor);
+    line-height: 1.5;
+    background-color: color-mix(in srgb, var(--warning) 10%, var(--black30a));
+}
+
+.jspace-gate {
+    margin-top: 12px;
+}
+
+.jspace-ask-pane {
+    flex: 0 0 70%;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 12px 14px;
+    border-bottom: 1px solid color-mix(in srgb, var(--SmartThemeBorderColor) 70%, transparent);
+}
+
+.jspace-analyst-intro,
+.jspace-analyst-status {
+    font-size: calc(var(--mainFontSize) * 0.83);
+    line-height: 1.42;
+    opacity: 0.78;
+}
+
+.jspace-analyst-status {
+    padding: 8px 10px;
+    border: 1px solid color-mix(in srgb, var(--warning) 42%, var(--SmartThemeBorderColor));
+    border-radius: 6px;
+    background: color-mix(in srgb, var(--warning) 7%, transparent);
+    opacity: 1;
+}
+
+.jspace-analyst-label,
+.jspace-analyst-role {
+    font-size: calc(var(--mainFontSize) * 0.74);
+    font-weight: 600;
+    opacity: 0.72;
+}
+
+.jspace-analyst-profile,
+.jspace-analyst-question {
+    box-sizing: border-box;
+    width: 100%;
+    margin: 0;
+}
+
+.jspace-analyst-question {
+    min-height: 58px;
+    resize: vertical;
+}
+
+.jspace-analyst-submit {
+    align-self: flex-end;
+    margin: 0;
+}
+
+.jspace-analyst-messages {
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+    min-height: 48px;
+    gap: 7px;
+    overflow: auto;
+}
+
+.jspace-analyst-message {
+    padding: 8px 10px;
+    overflow-wrap: anywhere;
+    line-height: 1.42;
+    border: 1px solid color-mix(in srgb, var(--SmartThemeBorderColor) 84%, transparent);
+    border-radius: 6px;
+    background: color-mix(in srgb, var(--black30a) 78%, transparent);
+}
+
+.jspace-analyst-message--user {
+    background: color-mix(in srgb, var(--SmartThemeQuoteColor) 7%, transparent);
+}
+
+.jspace-analyst-role {
+    margin-bottom: 4px;
+}
+
+.jspace-evidence-pane {
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+    min-height: 0;
+}
+
+.jspace-tab-row {
+    display: flex;
+    gap: 4px;
+    padding: 6px 10px 0;
+    border-bottom: 1px solid color-mix(in srgb, var(--SmartThemeBorderColor) 70%, transparent);
+}
+
+.jspace-tabpane {
+    display: none;
+    flex: 1;
+    padding: 10px 14px 14px;
+}
+
+.jspace-tabpane.active {
+    display: block;
+}
+
+.jspace-evidence-row,
+.jspace-search-row,
+.jspace-detail-card {
+    margin-bottom: 8px;
+}
+
+.jspace-evidence-body,
+.jspace-search-body {
+    margin-top: 5px;
+    line-height: 1.48;
+}
+
+.jspace-detail-grid {
+    display: grid;
+    grid-template-columns: minmax(90px, 130px) 1fr;
+    gap: 7px 10px;
+    margin: 9px 0 0;
+}
+
+.jspace-detail-grid dt {
+    opacity: 0.7;
+}
+
+.jspace-detail-grid dd {
+    margin: 0;
+    overflow-wrap: anywhere;
+}
+
+.jspace-search-results {
+    margin-top: 10px;
+}
+
+.jspace-empty {
+    line-height: 1.5;
+    opacity: 0.7;
+}
+
+.jspace-launcher {
+    width: 100%;
+}
+
+.jspace-launcher .drawer-toggle {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 100%;
+    height: 100%;
+}
+
+body.layout-plus-plus #jspace_workspace.jspace-workspace {
+    top: 0;
+    left: calc(var(--nav-bar-width) + var(--char-panel-width));
+    width: calc(100vw - var(--nav-bar-width) - var(--char-panel-width));
+    max-width: calc(100vw - var(--nav-bar-width) - var(--char-panel-width));
+    height: calc(100dvh - var(--bottomFormBlockSize));
+    max-height: calc(100dvh - var(--bottomFormBlockSize));
+    border-radius: 0;
+}
+
+.swipe_picker_compare_toggle {
+    align-self: center;
+    margin-right: 4px;
+}
+
+@media (max-width: 1100px) {
+    #jspace_workspace.jspace-workspace {
+        width: min(var(--sheldWidth), calc(100dvw - 12px));
+        max-width: calc(100dvw - 12px);
+        min-height: 0;
+    }
+
+    .jspace-region-tabs {
+        display: flex;
+    }
+
+    .jspace-workspace__content {
+        display: block;
+    }
+
+    .jspace-column {
+        display: none;
+        height: 100%;
+        border-right: 0;
+    }
+
+    .jspace-column.active {
+        display: flex;
+    }
+
+    .jspace-column__body {
+        overscroll-behavior: contain;
+    }
+}
+
+@media (max-width: 600px) {
+    #jspace_workspace.jspace-workspace {
+        top: var(--topBarBlockSize) !important;
+        right: 0 !important;
+        bottom: var(--bottomFormBlockSize) !important;
+        left: 0 !important;
+        width: 100dvw !important;
+        max-width: 100dvw !important;
+        height: auto !important;
+        max-height: none !important;
+        border-right: 0;
+        border-left: 0;
+        border-radius: 0;
+    }
+
+    body.movingUI #jspace_workspace.jspace-workspace {
+        resize: none;
+    }
+
+    .jspace-workspace__header {
+        gap: 8px;
+        padding: 8px 10px;
+    }
+
+    .jspace-kicker {
+        display: none;
+    }
+
+    .jspace-region-tabs {
+        gap: 0;
+        padding: 0;
+    }
+
+    .jspace-region-tab {
+        flex: 1;
+        padding: 8px 4px;
+        text-align: center;
+    }
+
+    .jspace-column__header {
+        padding: 8px 10px;
+    }
+
+    .jspace-column__body,
+    .jspace-ask-pane {
+        padding: 10px;
+    }
+
+    .jspace-ask-pane {
+        flex-basis: 62%;
+    }
+
+    .jspace-tabpane {
+        padding: 8px 10px 10px;
+    }
+
+    .jspace-tab-row {
+        justify-content: space-around;
+        padding: 4px 4px 0;
+    }
+
+    .jspace-tab {
+        flex: 1;
+        padding: 7px 4px;
+    }
+
+    .jspace-stat-grid {
+        grid-template-columns: 1fr;
+    }
+}

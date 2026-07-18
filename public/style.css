@@ -203,7 +203,7 @@ hr {
 #bg1.contain,
 #bg_custom.contain {
     background-size: contain;
-    background-position: center;
+    background-position: right center;
     background-repeat: no-repeat;
 }
 
@@ -217,7 +217,7 @@ hr {
 #bg1.center,
 #bg_custom.center {
     background-size: auto;
-    background-position: center;
+    background-position: right center;
     background-repeat: no-repeat;
 }
 

@@ -22,6 +22,16 @@ declare global {
     type Character = import('./scripts/char-data').v1CharData;
     type ChatMessageExtra = BaseMessageExtra & Partial<ReasoningMessageExtra> & Record<string, any>;
     type Theme = ReturnType<typeof getThemeObject>;
+    type JSpaceSelection = { messageId: number; swipeIds: number[] };
+
+    interface JSpaceCaptureSummary {
+        prompt_positions?: number;
+        completion_positions?: number;
+        layers?: number;
+        top_readouts?: number;
+        logprobs?: boolean;
+        source_sections?: number;
+    }
 
     interface Group {
         id: string;
@@ -177,6 +187,9 @@ declare global {
         getContext(): typeof getContext;
         llm: any;
         libs: typeof libs;
+        jspace?: {
+            openWorkspace(options?: { messageId?: number | null; swipeIds?: number[] | null }): Promise<void>;
+        };
     };
 
     // Jquery plugins

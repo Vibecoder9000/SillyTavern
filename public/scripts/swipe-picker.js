@@ -7,6 +7,7 @@ import { isMobile } from './RossAscends-mods.js';
 import { getTokenCountAsync } from './tokenizers.js';
 import { addLongPressEvent, clamp, copyText, timestampToMoment } from './utils.js';
 import { chat, deleteSwipe, ensureSwipes, isMessageSwipeable, isSwipingAllowed, swipe, syncMesToSwipe } from '/script.js';
+import { getJSpaceStatusForSwipe, openJSpaceComparison } from './jspace.js';
 
 /**
  * Returns whether a swipe picker can be opened for the message.
@@ -82,11 +83,26 @@ async function openSwipePicker(messageId) {
     let swipeIdInput;
     /** @type {number|null} */
     let branchActionSwipeId = null;
+    /** @type {number[] | null} */
+    let compareActionSwipeIds = null;
+    const compareSelection = new Set([selectedSwipeId]);
+    /** @type {HTMLButtonElement | null} */
+    let compareButton = null;
 
     function syncSwipeIdInput() {
         if (swipeIdInput) {
             swipeIdInput.value = String(selectedSwipeId + 1);
         }
+    }
+
+    function updateCompareButton() {
+        if (!(compareButton instanceof HTMLButtonElement)) {
+            return;
+        }
+
+        const count = compareSelection.size;
+        compareButton.textContent = t`Compare selected (${count})`;
+        compareButton.disabled = count === 0;
     }
 
     function setSelectedSwipe(nextSwipeId) {
@@ -142,6 +158,7 @@ async function openSwipePicker(messageId) {
             const tokenCount = swipeInfo?.extra?.token_count ?? await getTokenCountAsync(swipeText, 0);
             const canDeleteSwipe = canDeleteSwipeFromPicker(index);
             const swipeDetails = [];
+            const jspaceStatus = getJSpaceStatusForSwipe(message, index);
 
             if (previewText) {
                 swipeDetails.push(`${previewText.length} ${t`chars`}`);
@@ -149,6 +166,10 @@ async function openSwipePicker(messageId) {
 
             if (tokenCount) {
                 swipeDetails.push(`${tokenCount}t`);
+            }
+
+            if (jspaceStatus) {
+                swipeDetails.push(jspaceStatus);
             }
 
             block.attr({
@@ -259,8 +280,27 @@ async function openSwipePicker(messageId) {
                 toastr.info(t`Copied!`, '', { timeOut: 2000 });
             });
 
+            const compareCheckbox = document.createElement('input');
+            compareCheckbox.type = 'checkbox';
+            compareCheckbox.classList.add('swipe_picker_compare_toggle');
+            compareCheckbox.checked = compareSelection.has(index);
+            compareCheckbox.title = t`Select for comparison`;
+            compareCheckbox.setAttribute('aria-label', t`Select swipe #${index + 1} for comparison`);
+            compareCheckbox.addEventListener('click', (event) => {
+                event.stopPropagation();
+            });
+            compareCheckbox.addEventListener('change', (event) => {
+                event.stopPropagation();
+                if (compareCheckbox.checked) {
+                    compareSelection.add(index);
+                } else {
+                    compareSelection.delete(index);
+                }
+                updateCompareButton();
+            });
+
             // Insert new buttons before the branch button
-            branchButton.before(expandLabel, copyButton);
+            branchButton.before(expandLabel, compareCheckbox, copyButton);
 
             template.find('.select_chat_block_filename').text(`#${index + 1}${index === Number(message.swipe_id ?? 0) ? ` ${t`[Current]`}` : ''}`);
             template.find('.chat_messages_date').text(sendDate);
@@ -380,12 +420,27 @@ async function openSwipePicker(messageId) {
         });
     }
 
+    compareButton = document.createElement('button');
+    compareButton.type = 'button';
+    compareButton.classList.add('menu_button');
+    compareButton.addEventListener('click', async () => {
+        compareActionSwipeIds = [...compareSelection].sort((a, b) => a - b);
+        await popup.completeCancelled();
+    });
+    popup.buttonControls.insertBefore(compareButton, popup.buttonControls.firstChild);
+    updateCompareButton();
+
     await renderSwipeList();
 
     const popupResult = await popup.show();
 
     if (branchActionSwipeId !== null) {
         await branchChat(messageId, { swipeId: branchActionSwipeId });
+        return;
+    }
+
+    if (compareActionSwipeIds !== null) {
+        await openJSpaceComparison(messageId, compareActionSwipeIds);
         return;
     }
 
