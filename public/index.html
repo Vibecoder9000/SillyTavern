@@ -5900,6 +5900,23 @@
                                         <span id="sandbox_location_label">uploads\\&lt;workspace&gt;</span>
                                     </div>
                                 </div>
+                                <div class="tools-field-block">
+                                    <label class="checkbox_label" for="workspace_last_chat_toggle" title="Inject the previous workspace chat snapshot into this chat on every generation.">
+                                        <input id="workspace_last_chat_toggle" type="checkbox" checked />
+                                        <small>Inject workspace last chat</small>
+                                    </label>
+                                </div>
+                                <div class="tools-field-block">
+                                    <label for="workspace_last_chat_max_chars"><small>Last chat snapshot characters:</small></label>
+                                    <input id="workspace_last_chat_max_chars" class="text_pole" type="number" min="0" max="1000000" step="1" value="8000" />
+                                </div>
+                                <div class="tools-field-block">
+                                    <small>Last chat mirror:</small>
+                                    <div class="tools-static-pill tools-static-pill--path">
+                                        <i class="fa-solid fa-file-lines"></i>
+                                        <span id="workspace_last_chat_path"></span>
+                                    </div>
+                                </div>
                             </div>
                         </section>
                         <section class="tools-panel-card tools-panel-card--full mcp-card">

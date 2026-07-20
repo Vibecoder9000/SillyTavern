@@ -79,6 +79,9 @@ import {
     unshallowCharacter,
     chatElement,
     ensureMessageMediaIsArray,
+    syncWorkspaceLastChat,
+    prepareWorkspaceLastChatForNewChat,
+    getCurrentSandboxWorkspace,
 } from '../script.js';
 import { printTagList, createTagMapFromList, applyTagsOnCharacterSelect, tag_map, applyTagsOnGroupSelect, printTagFilters, tag_filter_type } from './tags.js';
 import { FILTER_TYPES, FilterHelper } from './filters.js';
@@ -250,9 +253,10 @@ async function validateGroup(group) {
  * Loads the chat messages for a specific group.
  * @param {string} groupId - The ID of the group to load chat messages for.
  * @param {boolean} reload - Whether to reload the group chat after loading.
+ * @param {object} [initialMetadata] - Metadata for a newly created chat.
  * @returns {Promise<void>} A promise that resolves when the chat messages have been loaded.
  */
-export async function getGroupChat(groupId, reload = false) {
+export async function getGroupChat(groupId, reload = false, initialMetadata) {
     const group = groups.find((x) => x.id === groupId);
     if (!group) {
         console.warn('Group not found', groupId);
@@ -265,7 +269,7 @@ export async function getGroupChat(groupId, reload = false) {
 
     const chat_id = group.chat_id;
     const data = await loadGroupChat(chat_id);
-    const metadata = data?.[0]?.chat_metadata ?? {};
+    const metadata = initialMetadata ?? data?.[0]?.chat_metadata ?? {};
     const freshChat = !metadata.tainted && (!Array.isArray(data) || !data.length);
 
     // Remove chat file header if present
@@ -277,6 +281,7 @@ export async function getGroupChat(groupId, reload = false) {
     if (!metadata.integrity) {
         metadata.integrity = uuidv4();
     }
+    updateChatMetadata(metadata, true);
 
     await loadItemizedPrompts(getCurrentChatId());
 
@@ -309,13 +314,19 @@ export async function getGroupChat(groupId, reload = false) {
         await printMessages();
     }
 
-    updateChatMetadata(metadata, true);
-
     if (reload) {
         select_group_chats(groupId, true);
     }
 
     await eventSource.emit(event_types.CHAT_CHANGED, getCurrentChatId());
+    if (!freshChat) {
+        try {
+            await syncWorkspaceLastChat();
+        } catch (error) {
+            console.warn('Could not rebuild the workspace last-chat mirror after opening the group chat:', error);
+            toastr.warning(t`Workspace last-chat mirror could not be rebuilt.`, t`Workspace last-chat mirror`);
+        }
+    }
     if (freshChat) await eventSource.emit(event_types.GROUP_CHAT_CREATED);
 }
 
@@ -637,9 +648,22 @@ async function saveGroupChat(groupId, shouldSaveGroup, force = false) {
     const saveGroupChatRequest = await compressRequest({
         method: 'POST',
         headers: getRequestHeaders(),
-        body: JSON.stringify({ id: chatId, chat: [chatHeader, ...chat], force: force }),
+        body: JSON.stringify({
+            id: chatId,
+            chat: [chatHeader, ...chat],
+            force: force,
+            sync_workspace_context: true,
+            workspace: getCurrentSandboxWorkspace(),
+        }),
     });
     const response = await fetch('/api/chats/group/save', saveGroupChatRequest);
+
+    if (response.ok) {
+        const resultData = await response.json().catch(() => ({}));
+        if (resultData.workspace_context_error) {
+            toastr.warning(resultData.workspace_context_error, t`Workspace last-chat mirror`);
+        }
+    }
 
     if (!response.ok) {
         const errorData = await response.json();
@@ -2136,21 +2160,24 @@ async function createGroup() {
  * @param {string} groupId Group ID
  * @returns {Promise<void>} Promise that resolves when the new group chat is created
  */
-export async function createNewGroupChat(groupId) {
+export async function createNewGroupChat(groupId, initialMetadata = {}) {
     const group = groups.find(x => x.id === groupId);
 
     if (!group) {
         return;
     }
 
+    if (!initialMetadata || Object.keys(initialMetadata).length === 0) {
+        initialMetadata = await prepareWorkspaceLastChatForNewChat();
+    }
+
     await clearChat({ clearData: true });
     const newChatName = humanizedDateTime();
     group.chats.push(newChatName);
     group.chat_id = newChatName;
-    updateChatMetadata({}, true);
 
     await editGroup(group.id, true, false);
-    await getGroupChat(group.id);
+    await getGroupChat(group.id, false, initialMetadata);
 }
 
 /**

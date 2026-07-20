@@ -292,6 +292,10 @@ export const power_user = {
         max_additions: 1,
     },
 
+    workspace_last_chat: {
+        max_chars: 8000,
+    },
+
     personas: {},
     default_persona: null,
     persona_descriptions: {},

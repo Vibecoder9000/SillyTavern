@@ -183,7 +183,9 @@ hr {
     background-size: cover;
     position: absolute;
     width: 100%;
-    height: 100%;
+    top: 0;
+    bottom: calc(var(--bottomFormBlockSize) + 2px);
+    height: auto;
     transition: background-image var(--animation-duration-3x) ease-in-out;
 }
 

@@ -85,6 +85,9 @@
         "trusted_workers_only": false
     },
     "power_user": {
+        "workspace_last_chat": {
+            "max_chars": 8000
+        },
         "tokenizer": 99,
         "token_padding": 64,
         "collapse_newlines": false,

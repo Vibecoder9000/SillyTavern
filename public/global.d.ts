@@ -70,6 +70,11 @@ declare global {
         integrity?: string;
         scenario?: string;
         persona?: string;
+        workspace_last_chat?: {
+            snapshot: string;
+            enabled: boolean;
+            source_workspace: string;
+        };
         [key: string]: any;
     }
 

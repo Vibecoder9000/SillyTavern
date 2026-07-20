@@ -9,6 +9,7 @@ import express from 'express';
 import sanitize from 'sanitize-filename';
 import { sync as writeFileAtomicSync } from 'write-file-atomic';
 import _ from 'lodash';
+import { syncWorkspaceMirror } from './workspace-last-chat.js';
 
 const upload = multer({
     dest: path.join(globalThis.DATA_ROOT, UPLOADS_DIRECTORY),
@@ -487,7 +488,20 @@ router.post('/save', validateAvatarUrlMiddleware, async function (request, respo
 
         if (Array.isArray(chatData)) {
             await trySaveChat(chatData, chatFilePath, request.body.force, handle, cardName, request.user.directories.backups);
-            return response.send({ ok: true });
+            let workspaceContextError;
+            if (request.body.sync_workspace_context === true) {
+                try {
+                    await syncWorkspaceMirror({
+                        directories: request.user.directories,
+                        workspace: request.body.workspace ?? chatData[0]?.chat_metadata?.sandbox_workspace,
+                        chat: chatData,
+                    });
+                } catch (error) {
+                    console.warn('Chat saved, but workspace last-chat mirror could not be updated:', error);
+                    workspaceContextError = 'Workspace last-chat mirror could not be updated.';
+                }
+            }
+            return response.send({ ok: true, workspace_context_error: workspaceContextError });
         } else {
             return response.status(400).send({ error: 'The request\'s body.chat is not an array.' });
         }
@@ -864,7 +878,20 @@ router.post('/group/save', async function (request, response) {
 
         if (Array.isArray(chatData)) {
             await trySaveChat(chatData, chatFilePath, request.body.force, handle, String(id), request.user.directories.backups);
-            return response.send({ ok: true });
+            let workspaceContextError;
+            if (request.body.sync_workspace_context === true) {
+                try {
+                    await syncWorkspaceMirror({
+                        directories: request.user.directories,
+                        workspace: request.body.workspace ?? chatData[0]?.chat_metadata?.sandbox_workspace,
+                        chat: chatData,
+                    });
+                } catch (error) {
+                    console.warn('Group chat saved, but workspace last-chat mirror could not be updated:', error);
+                    workspaceContextError = 'Workspace last-chat mirror could not be updated.';
+                }
+            }
+            return response.send({ ok: true, workspace_context_error: workspaceContextError });
         } else {
             return response.status(400).send({ error: 'The request\'s body.chat is not an array.' });
         }

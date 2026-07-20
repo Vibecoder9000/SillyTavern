@@ -284,8 +284,7 @@
     }
 
     #bg1 {
-        height: 100vh !important;
-        height: 100dvh !important;
+        height: auto !important;
         width: 100vw !important;
         width: 100dvw !important;
         background-position: center;

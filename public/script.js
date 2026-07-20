@@ -881,6 +881,7 @@ async function firstLoadInit() {
     await initPresetManager();
     await initSystemMessages();
     await getSettings(initLoaderHandle);
+    initWorkspaceLastChatUi();
     await checkOpenRouterAuth();
     initKeyboard();
     initDynamicStyles();
@@ -2885,6 +2886,128 @@ function buildToolExecuteButtonHtml(toolName, messageId, segmentIndex, status) {
     }
 
     return `<div class="${className}" data-tool-name="${toolName}" data-message-id="${messageId}" data-segment-index="${segmentIndex}"${disabled} role="button" tabindex="0"><i class="fa-solid ${icon}"></i><span>${label}</span></div>`;
+}
+
+const WORKSPACE_LAST_CHAT_PROMPT_KEY = 'workspace_last_chat';
+const WORKSPACE_LAST_CHAT_DEFAULT_MAX_CHARS = 8000;
+
+function getWorkspaceLastChatMaxChars() {
+    if (!power_user.workspace_last_chat || typeof power_user.workspace_last_chat !== 'object') {
+        power_user.workspace_last_chat = {};
+    }
+    const maxChars = Number(power_user.workspace_last_chat.max_chars);
+    power_user.workspace_last_chat.max_chars = Number.isFinite(maxChars) && maxChars >= 0
+        ? Math.trunc(maxChars)
+        : WORKSPACE_LAST_CHAT_DEFAULT_MAX_CHARS;
+    return power_user.workspace_last_chat.max_chars;
+}
+
+function buildWorkspaceLastChatData(chatData = chat) {
+    const header = { chat_metadata: { ...chat_metadata }, user_name: 'unused', character_name: 'unused' };
+    return Array.isArray(chatData) && chatData[0]?.chat_metadata ? chatData : [header, ...(Array.isArray(chatData) ? chatData : [])];
+}
+
+/** Syncs the active chat into the workspace mirror. Errors are surfaced to callers so lifecycle code can warn. */
+export async function syncWorkspaceLastChat(chatData = chat, workspace = getCurrentSandboxWorkspace()) {
+    const request = await compressRequest({
+        method: 'POST',
+        headers: getRequestHeaders(),
+        body: JSON.stringify({ workspace, chat: buildWorkspaceLastChatData(chatData) }),
+    });
+    const response = await fetch('/api/workspace-last-chat/sync', request);
+    if (!response.ok) {
+        throw new Error(`Workspace mirror sync failed: ${response.statusText}`);
+    }
+    return await response.json();
+}
+
+/** Captures a compact snapshot from the workspace mirror. */
+export async function captureWorkspaceLastChat(workspace = getCurrentSandboxWorkspace()) {
+    const response = await fetch('/api/workspace-last-chat/snapshot', {
+        method: 'POST',
+        headers: getRequestHeaders(),
+        body: JSON.stringify({ workspace, max_chars: getWorkspaceLastChatMaxChars() }),
+    });
+    if (!response.ok) {
+        throw new Error(`Workspace mirror snapshot failed: ${response.statusText}`);
+    }
+    return await response.json();
+}
+
+/** Flushes the active chat and freezes the previous workspace mirror for a new chat. */
+export async function prepareWorkspaceLastChatForNewChat() {
+    const workspace = getCurrentSandboxWorkspace();
+    await saveChatConditional();
+
+    let snapshot = { snapshot: '', path: '', workspace };
+    try {
+        snapshot = await captureWorkspaceLastChat(workspace);
+    } catch (error) {
+        console.warn('Could not capture the previous workspace chat:', error);
+        toastr.warning(t`Workspace last-chat snapshot could not be captured.`, t`Workspace last-chat mirror`);
+    }
+
+    return {
+        sandbox_workspace: workspace,
+        workspace_last_chat: {
+            snapshot: String(snapshot.snapshot ?? ''),
+            enabled: true,
+            source_workspace: String(snapshot.workspace ?? workspace),
+        },
+    };
+}
+
+function applyWorkspaceLastChatPrompt() {
+    const context = chat_metadata?.workspace_last_chat;
+    const snapshot = context?.enabled === true ? String(context.snapshot ?? '').trim() : '';
+    const value = snapshot ? `<last_chat>\n${snapshot}\n</last_chat>` : '';
+    setExtensionPrompt(WORKSPACE_LAST_CHAT_PROMPT_KEY, value, extension_prompt_types.IN_PROMPT, 0, false, extension_prompt_roles.SYSTEM);
+}
+
+function updateWorkspaceLastChatUi() {
+    const toggle = document.getElementById('workspace_last_chat_toggle');
+    if (toggle instanceof HTMLInputElement) {
+        toggle.checked = chat_metadata?.workspace_last_chat?.enabled === true;
+        toggle.disabled = !chat_metadata?.workspace_last_chat;
+    }
+    const maxChars = document.getElementById('workspace_last_chat_max_chars');
+    if (maxChars instanceof HTMLInputElement) {
+        maxChars.value = String(getWorkspaceLastChatMaxChars());
+    }
+    const pathLabel = document.getElementById('workspace_last_chat_path');
+    if (pathLabel instanceof HTMLElement) {
+        captureWorkspaceLastChat().then(result => {
+            pathLabel.textContent = String(result.path ?? '');
+        }).catch(() => {
+            pathLabel.textContent = '';
+            if (chat_metadata?.workspace_last_chat) {
+                toastr.warning(t`Workspace last-chat mirror could not be read.`, t`Workspace last-chat mirror`);
+            }
+        });
+    }
+}
+
+function initWorkspaceLastChatUi() {
+    getWorkspaceLastChatMaxChars();
+    const toggle = document.getElementById('workspace_last_chat_toggle');
+    toggle?.addEventListener('change', async () => {
+        if (!chat_metadata?.workspace_last_chat) {
+            return;
+        }
+        chat_metadata.workspace_last_chat.enabled = toggle.checked;
+        await saveChatConditional();
+    });
+    const maxChars = document.getElementById('workspace_last_chat_max_chars');
+    maxChars?.addEventListener('change', () => {
+        const value = Number(maxChars.value);
+        power_user.workspace_last_chat.max_chars = Number.isFinite(value)
+            ? Math.max(0, Math.trunc(value))
+            : WORKSPACE_LAST_CHAT_DEFAULT_MAX_CHARS;
+        maxChars.value = String(power_user.workspace_last_chat.max_chars);
+        saveSettingsDebounced();
+    });
+    eventSource.on(event_types.CHAT_CHANGED, updateWorkspaceLastChatUi);
+    updateWorkspaceLastChatUi();
 }
 
 const sdToolWorkflowIntervals = new Map();
@@ -6410,6 +6533,8 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
     // Occurs only if the generation is not aborted due to slash commands execution
     await eventSource.emit(event_types.GENERATION_AFTER_COMMANDS, type, { automatic_trigger, force_name2, quiet_prompt, quietToLoud, skipWIAN, force_chid, signal, quietImage }, dryRun);
 
+    applyWorkspaceLastChatPrompt();
+
     if (main_api == 'kobold' && kai_settings.streaming_kobold && !kai_flags.can_use_streaming) {
         toastr.error(t`Streaming is enabled, but the version of Kobold used does not support token streaming.`, undefined, { timeOut: 10000, preventDuplicates: true });
         unblockGeneration(type);
@@ -9666,6 +9791,10 @@ export async function saveChat({ chatName, withMetadata, mesId, force = false, c
         character_name: 'unused',
     };
 
+    const syncWorkspaceContext = chatData === undefined
+        && mesId === undefined
+        && (chatName === undefined || chatName === fileName);
+
     try {
         const saveChatRequest = await compressRequest({
             method: 'POST',
@@ -9677,11 +9806,17 @@ export async function saveChat({ chatName, withMetadata, mesId, force = false, c
                 chat: [chatHeader, ...trimmedChat],
                 avatar_url: characters[this_chid].avatar,
                 force: force,
+                sync_workspace_context: syncWorkspaceContext,
+                workspace: metadata.sandbox_workspace ?? getCurrentSandboxWorkspace(),
             }),
         });
         const result = await fetch('/api/chats/save', saveChatRequest);
 
         if (result.ok) {
+            const resultData = await result.json().catch(() => ({}));
+            if (resultData.workspace_context_error) {
+                toastr.warning(resultData.workspace_context_error, t`Workspace last-chat mirror`);
+            }
             return;
         }
 
@@ -9866,7 +10001,7 @@ export async function unshallowCharacter(characterId) {
     await getOneCharacter(avatar);
 }
 
-export async function getChat() {
+export async function getChat(initialMetadata) {
     try {
         await unshallowCharacter(this_chid);
 
@@ -9889,13 +10024,13 @@ export async function getChat() {
         if (Array.isArray(data) && data.length > 0) {
             /** @type {ChatHeader} */
             const chatHeader = data.shift();
-            chat_metadata = chatHeader?.chat_metadata ?? {};
+            chat_metadata = initialMetadata ?? chatHeader?.chat_metadata ?? {};
             chat.splice(0, chat.length, ...data);
             chat.forEach(ensureMessageMediaIsArray);
         } else {
             // An empty/corrupted chat file
             chat.splice(0, chat.length);
-            chat_metadata = {};
+            chat_metadata = initialMetadata ?? {};
         }
         if (!chat_metadata.integrity) {
             chat_metadata.integrity = uuidv4();
@@ -9933,6 +10068,14 @@ async function getChatResult() {
     select_selected_character(this_chid);
 
     await eventSource.emit(event_types.CHAT_CHANGED, (getCurrentChatId()));
+    if (!freshChat) {
+        try {
+            await syncWorkspaceLastChat();
+        } catch (error) {
+            console.warn('Could not rebuild the workspace last-chat mirror after opening the chat:', error);
+            toastr.warning(t`Workspace last-chat mirror could not be rebuilt.`, t`Workspace last-chat mirror`);
+        }
+    }
     if (freshChat) await eventSource.emit(event_types.CHAT_CREATED);
 
     if (chat.length === 1) {
@@ -12879,24 +13022,18 @@ export async function doNewChat({ deleteCurrentChat = false } = {}) {
 
     //Fix it; New chat doesn't create while open create character menu
     await waitUntilCondition(() => !isChatSaving, debounce_timeout.extended, 10);
-    await clearChat({ clearData: true });
-
+    const newChatMetadata = await prepareWorkspaceLastChatForNewChat();
     chat_file_for_del = getCurrentChatDetails()?.sessionName;
 
-    // Make it easier to find in backups
-    if (deleteCurrentChat) {
-        await saveChatConditional();
-    }
-
     if (selected_group) {
-        await createNewGroupChat(selected_group);
+        await createNewGroupChat(selected_group, newChatMetadata);
         if (deleteCurrentChat) await deleteGroupChat(selected_group, chat_file_for_del, { jumpToNewChat: false }); // don't jump, new chat was already created and jumped to above
     } else {
+        await clearChat({ clearData: true });
         //RossAscends: added character name to new chat filenames and replaced Date.now() with humanizedDateTime;
-        chat_metadata = {};
         characters[this_chid].chat = `${name2} - ${humanizedDateTime()}`;
         $('#selected_chat_pole').val(characters[this_chid].chat);
-        await getChat();
+        await getChat(newChatMetadata);
         await createOrEditCharacter(new CustomEvent('newChat'));
         if (deleteCurrentChat) await delChat(chat_file_for_del + '.jsonl');
     }
