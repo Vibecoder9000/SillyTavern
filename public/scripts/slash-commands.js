@@ -3005,6 +3005,18 @@ export function initDefaultSlashCommands() {
         helpString: t`Sets the model for the current API. Gets the current model name if no argument is provided.`,
     }));
     SlashCommandParser.addCommandObject(SlashCommand.fromProps({
+        name: 'provider',
+        returns: t`selected OpenRouter model providers`,
+        unnamedArgumentList: [
+            SlashCommandArgument.fromProps({
+                description: t`OpenRouter provider name or JSON-encoded provider list`,
+                typeList: [ARGUMENT_TYPE.STRING],
+            }),
+        ],
+        callback: openRouterProviderCallback,
+        helpString: t`Sets the selected OpenRouter model providers. Gets the selected providers if no value is provided.`,
+    }));
+    SlashCommandParser.addCommandObject(SlashCommand.fromProps({
         name: 'getpromptentry',
         aliases: ['getpromptentries'],
         callback: getPromptEntryCallback,
@@ -6385,6 +6397,51 @@ function modelCallback(args, model) {
         !quiet && toastr.warning(t`No model found with name "${model}"`);
         return '';
     }
+}
+
+/**
+ * Gets or sets the selected OpenRouter model providers.
+ *
+ * Connection profiles pass this value around as a JSON-encoded array so that
+ * an empty provider selection and multiple providers can both be represented.
+ * @param {object} _args Named arguments
+ * @param {string|string[]} provider Provider name or JSON-encoded provider list
+ * @returns {string} JSON-encoded provider list
+ */
+function openRouterProviderCallback(_args, provider) {
+    if (oai_settings.chat_completion_source !== chat_completion_sources.OPENROUTER) {
+        return '';
+    }
+
+    const providersSelect = document.getElementById('openrouter_providers_chat');
+    if (!(providersSelect instanceof HTMLSelectElement)) {
+        return '';
+    }
+
+    if (provider === undefined || provider === null || String(provider).trim() === '') {
+        const currentProviders = $(providersSelect).val();
+        return JSON.stringify(Array.isArray(currentProviders) ? currentProviders : oai_settings.openrouter_providers ?? []);
+    }
+
+    let providers = provider;
+    if (!Array.isArray(providers)) {
+        const providerText = String(providers).trim();
+        try {
+            const parsedProviders = JSON.parse(providerText);
+            providers = Array.isArray(parsedProviders) ? parsedProviders : [providerText];
+        } catch {
+            providers = [providerText];
+        }
+    }
+
+    const availableProviders = Array.from(providersSelect.options, option => option.value);
+    const selectedProviders = providers
+        .map(value => String(value).trim())
+        .filter((value, index, values) => value && values.indexOf(value) === index)
+        .filter(value => availableProviders.length === 0 || availableProviders.includes(value));
+
+    $(providersSelect).val(selectedProviders).trigger('change');
+    return JSON.stringify(selectedProviders);
 }
 
 /**

@@ -42,6 +42,7 @@ const CC_COMMANDS = [
     'api',
     'api-url',
     'model',
+    'provider',
     'proxy',
     'stop-strings',
     'start-reply-with',
@@ -74,6 +75,7 @@ const FANCY_NAMES = {
     'api-url': 'Server URL',
     'preset': 'Settings Preset',
     'model': 'Model',
+    'provider': 'Model Providers',
     'proxy': 'Proxy Preset',
     'sysprompt-state': 'Use System Prompt',
     'sysprompt': 'System Prompt Name',
@@ -164,6 +166,7 @@ const profilesProvider = () => [
  * @property {string} [api] API
  * @property {string} [preset] Settings Preset
  * @property {string} [model] Model
+ * @property {string} [provider] JSON-encoded OpenRouter provider list
  * @property {string} [proxy] Proxy Preset
  * @property {string} [instruct] Instruct Template
  * @property {string} [context] Context Template
@@ -376,6 +379,18 @@ function makeFancyProfile(profile) {
             if (label) {
                 acc[value] = label;
                 return acc;
+            }
+        }
+
+        if (key === 'provider') {
+            try {
+                const providers = JSON.parse(profile[key]);
+                if (Array.isArray(providers)) {
+                    acc[value] = providers.join(', ');
+                    return acc;
+                }
+            } catch {
+                // Keep displaying legacy/non-JSON values as-is.
             }
         }
 
