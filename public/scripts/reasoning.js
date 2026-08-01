@@ -541,6 +541,7 @@ export class ReasoningHandler {
      */
     updateDom(messageId) {
         this.#checkDomElements(messageId);
+        const shouldKeepOpen = this.messageReasoningDetailsDom.open || this.messageDom.dataset.reasoningOpen === 'true';
 
         // Main CSS class to show this message includes reasoning
         this.messageDom.classList.toggle('reasoning', this.state !== ReasoningState.None);
@@ -568,7 +569,11 @@ export class ReasoningHandler {
         // Make sure that hidden reasoning headers are collapsed by default, to not show a useless edit button
         if (this.state === ReasoningState.Hidden) {
             this.messageReasoningDetailsDom.open = false;
+        } else if (shouldKeepOpen) {
+            this.messageReasoningDetailsDom.open = true;
         }
+
+        setDatasetProperty(this.messageDom, 'reasoningOpen', this.messageReasoningDetailsDom.open ? 'true' : null);
 
         // Update the reasoning duration in the UI
         this.#updateReasoningTimeUI();
@@ -592,6 +597,14 @@ export class ReasoningHandler {
         }
         if (this.messageReasoningDetailsDom === null) {
             this.messageReasoningDetailsDom = this.messageDom.querySelector('.mes_reasoning_details');
+            if (this.messageReasoningDetailsDom && this.messageReasoningDetailsDom.dataset.reasoningToggleBound !== 'true') {
+                const detailsElement = this.messageReasoningDetailsDom;
+                const messageElement = this.messageDom;
+                detailsElement.addEventListener('toggle', function () {
+                    setDatasetProperty(messageElement, 'reasoningOpen', detailsElement.open ? 'true' : null);
+                });
+                detailsElement.dataset.reasoningToggleBound = 'true';
+            }
         }
         if (this.messageReasoningContentDom === null) {
             this.messageReasoningContentDom = this.messageDom.querySelector('.mes_reasoning');
@@ -1448,6 +1461,43 @@ export function parseReasoningFromString(str, { strict = true } = {}, template =
         console.error('[Reasoning] Error parsing reasoning block', error);
         return null;
     }
+}
+
+/**
+ * Separates a reasoning block while it is still streaming. Unlike
+ * parseReasoningFromString, this also returns the text received after an opening
+ * prefix and before the closing suffix arrives.
+ * @param {string} str Current cumulative streamed text
+ * @param {ReasoningTemplate} template Optional reasoning template to use instead of power_user.reasoning
+ * @returns {{reasoning: string, content: string, isThinking: boolean}|null}
+ */
+export function parseReasoningStream(str, template = null) {
+    // Mirrors parseReasoningFromString: an explicit template is honoured on its own
+    // terms, and only the implicit one is gated on the auto-parse setting.
+    if (!template && !power_user.reasoning.auto_parse) return null;
+    template = template ?? power_user.reasoning;
+    if (!template.prefix || !template.suffix) return null;
+
+    const text = String(str ?? '');
+    const trimmedStart = text.trimStart();
+    if (!trimmedStart.startsWith(template.prefix)) {
+        // The opening tag arrives a few characters at a time. Without this, a partial
+        // prefix renders as ordinary message text and then vanishes once it completes.
+        const isPartialPrefix = Boolean(trimmedStart) && template.prefix.startsWith(trimmedStart);
+        return isPartialPrefix ? { reasoning: '', content: '', isThinking: true } : null;
+    }
+
+    const afterPrefix = trimmedStart.slice(template.prefix.length);
+    const suffixIndex = afterPrefix.indexOf(template.suffix);
+    if (suffixIndex < 0) {
+        return { reasoning: afterPrefix, content: '', isThinking: true };
+    }
+
+    return {
+        reasoning: trimSpaces(afterPrefix.slice(0, suffixIndex)),
+        content: trimSpaces(afterPrefix.slice(suffixIndex + template.suffix.length)),
+        isThinking: false,
+    };
 }
 
 /**

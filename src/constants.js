@@ -46,6 +46,7 @@ export const USER_DIRECTORY_TEMPLATE = Object.freeze({
     sysprompt: 'sysprompt',
     reasoning: 'reasoning',
     workspaceContext: 'workspace-context',
+    characterDesigner: 'character-designer',
     uploads: 'uploads',
 });
 

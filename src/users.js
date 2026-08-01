@@ -105,6 +105,7 @@ const STORAGE_KEYS = {
  * @property {string} sysprompt - The directory where the system prompt data is stored
  * @property {string} reasoning - The directory where the reasoning templates are stored
  * @property {string} workspaceContext - The directory where workspace last-chat mirrors are stored
+ * @property {string} characterDesigner - The directory where Character Designer workspaces are stored
  * @property {string} uploads - The directory where the sandbox uploads are stored
  */
 

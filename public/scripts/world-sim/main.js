@@ -16,7 +16,7 @@ import { characters, getRequestHeaders, hiddenGroupIds, printCharacters, setActi
 import { humanizedDateTime } from '../RossAscends-mods.js';
 import { fireSelector, fireUpdater, fireInitialize, fireCommit, seedSceneOpening } from './llm.js';
 import { activateWorldSimToolScope, clearWorldSimToolScope, SELECT_CHARACTERS, WORLD_INITIALIZE, WORLD_UPDATE } from './tools.js';
-import { openWorldCharacterChat } from './world-character.js';
+import { isGenerationInProgress, openWorldCharacterChat } from './world-character.js';
 import { beginRun, getRun, updateRun, endRun, generateCycleId } from './run-context.js';
 import { stopTimer } from './timer.js';
 import { updateWorldClock } from './ui.js';
@@ -208,6 +208,8 @@ export async function initializeCharacter(id) {
  * @returns {Promise<void>}
  */
 export async function startRoleplayChat(characterIds, { cycleId = null, tick = null } = {}) {
+    if (isGenerationInProgress()) return;
+
     const { openGroupById, getGroups, groups } = await import('../group-chats.js');
 
     console.log('[world-sim] Open Scene requested for:', characterIds.join(', '), '| cycle:', cycleId);
@@ -217,8 +219,7 @@ export async function startRoleplayChat(characterIds, { cycleId = null, tick = n
         const group = groups.find(g => g.id === existingScene.groupId);
         if (group) {
             console.log('[world-sim] Reopening existing scene chat (keeping transcript), group:', group.id);
-            setActiveGroup(group.id);
-            await openGroupById(group.id);
+            if (await openGroupById(group.id)) setActiveGroup(group.id);
             return;
         }
         // Backing group is gone (deleted outside World Sim); drop the stale scene and recreate.
@@ -277,8 +278,8 @@ export async function startRoleplayChat(characterIds, { cycleId = null, tick = n
     // openGroupChat here would skip group selection and corrupt the chat's identity on save.
     console.log('[world-sim] Created new scene group:', data.id, '— opening it.');
     await getGroups();
+    if (!await openGroupById(data.id)) return;
     setActiveGroup(data.id);
-    await openGroupById(data.id);
     printCharacters();
 
     // Seed the freshly-created scene with the focused event's world context and auto-fire the
@@ -310,8 +311,7 @@ export async function openScene(sceneId) {
         toastr.error('This scene\'s chat no longer exists.', 'World Sim');
         return;
     }
-    setActiveGroup(group.id);
-    await openGroupById(group.id);
+    if (await openGroupById(group.id)) setActiveGroup(group.id);
 }
 
 /**

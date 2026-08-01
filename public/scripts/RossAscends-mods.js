@@ -1227,11 +1227,6 @@ export function initRossMods() {
                 return;
             }
 
-            if ($('#logprobsViewer').is(':visible')) {
-                $('#logprobsViewerClose').trigger('click');
-                return;
-            }
-
             if ($('#cfgConfig').is(':visible')) {
                 $('#CFGClose').trigger('click');
                 return;

@@ -6298,6 +6298,52 @@
                 </div>
             </div>
         </div>
+        <div id="character-card-editor-button" class="drawer">
+            <div class="drawer-toggle drawer-header" title="Character card editor" data-i18n="[title]Character card editor">
+                <div class="drawer-icon fa-solid fa-file-pen fa-fw closedIcon"></div>
+            </div>
+            <section id="character-card-editor" class="drawer-content closedDrawer" aria-label="Character card editor">
+                <header class="cc-editor-header">
+                    <h3 id="cc-editor-name" class="margin0"></h3>
+                    <div class="cc-editor-header-actions">
+                        <div class="cc-editor-snap-actions" aria-label="Proposed edit navigation">
+                            <button id="cc-editor-previous-edit" class="menu_button menu_button_icon" type="button" title="Previous proposed edit" aria-label="Previous proposed edit" disabled><i class="fa-solid fa-chevron-up"></i></button>
+                            <button id="cc-editor-next-edit" class="menu_button menu_button_icon" type="button" title="Next proposed edit" aria-label="Next proposed edit" disabled><i class="fa-solid fa-chevron-down"></i></button>
+                        </div>
+                        <label class="cc-editor-mode" title="Character Designer questioning mode">Mode <select id="cc-editor-questioning-mode"><option value="Adaptive">Adaptive</option><option value="Interview">Interview</option><option value="Autonomous">Autonomous</option></select></label>
+                        <button id="cc-editor-custom-instructions-button" class="menu_button cc-editor-bulk-action cc-editor-custom-button" type="button" title="Editor custom instructions" aria-haspopup="dialog" aria-expanded="false" disabled><i class="fa-solid fa-file-lines"></i><span>Instructions</span></button>
+                        <button id="cc-editor-reject-all" class="menu_button cc-editor-bulk-action cc-editor-reject-all" type="button" title="Reject all pending changes" disabled><i class="fa-solid fa-xmark"></i><span>Reject all</span></button>
+                        <button id="cc-editor-accept-all" class="menu_button cc-editor-bulk-action cc-editor-accept-all" type="button" title="Accept all pending changes" disabled><i class="fa-solid fa-check"></i><span>Accept all</span></button>
+                        <button id="cc-editor-history" class="menu_button menu_button_icon" type="button" title="Editor conversation history" data-i18n="[title]Editor conversation history"><i class="fa-solid fa-clock-rotate-left"></i></button>
+                        <button id="cc-editor-new-chat" class="menu_button menu_button_icon" type="button" title="New editor conversation" data-i18n="[title]New editor conversation"><i class="fa-solid fa-plus"></i></button>
+                    </div>
+                </header>
+                <div class="cc-editor-mobile-tabs" aria-label="Editor pane selector">
+                    <button type="button" data-pane="card" class="selected">Card</button>
+                    <button type="button" data-pane="chat">Chat</button>
+                </div>
+                <div class="cc-editor-workspace">
+                    <section id="cc-editor-card" class="cc-editor-card" aria-label="Card fields"></section>
+                    <div id="cc-editor-divider" class="cc-editor-divider" role="separator" aria-orientation="vertical" title="Drag to resize panes"></div>
+                    <section id="cc-editor-chat" class="cc-editor-chat" aria-label="Editor conversation">
+                        <div class="cc-editor-message-pane">
+                            <div id="cc-editor-messages" class="cc-editor-messages"></div>
+                            <div class="cc-editor-message-navigation" aria-label="Message navigation">
+                                <button id="cc-editor-previous-message" type="button" title="Previous message" aria-label="Previous message"><i class="fa-solid fa-chevron-up"></i></button>
+                                <button id="cc-editor-next-message" type="button" title="Next message" aria-label="Next message"><i class="fa-solid fa-chevron-down"></i></button>
+                            </div>
+                        </div>
+                        <div id="cc-editor-draft-attachments" class="cc-editor-draft-attachments"></div>
+                        <div class="cc-editor-composer">
+                            <input id="cc-editor-image-input" type="file" accept="image/*" multiple hidden>
+                            <button id="cc-editor-attach" class="menu_button menu_button_icon" type="button" title="Attach images" aria-label="Attach images"><i class="fa-solid fa-paperclip"></i></button>
+                            <textarea id="cc-editor-composer" rows="1" autocomplete="off" placeholder="Message…" data-i18n="[placeholder]Message…"></textarea>
+                            <button id="cc-editor-send" class="menu_button menu_button_icon" type="button" title="Send" data-i18n="[title]Send"><i class="fa-solid fa-paper-plane"></i></button>
+                        </div>
+                    </section>
+                </div>
+            </section>
+        </div>
         <div id="rightNavHolder" class="drawer">
             <div id="unimportantYes" class="drawer-toggle drawer-header">
                 <div id="rightNavDrawerIcon" class="drawer-icon fa-solid fa-address-card fa-fw closedIcon" title="Character Management" data-i18n="[title]Character Management">

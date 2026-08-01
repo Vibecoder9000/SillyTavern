@@ -11,7 +11,7 @@ import {
     eventSource,
     getCurrentChatId,
     printCharactersDebounced,
-    setCharacterId,
+    selectCharacterById,
     setEditedMessageId,
     chat,
     getFirstDisplayedMessageId,
@@ -20,7 +20,6 @@ import {
     saveChatConditional,
     setAnimationDuration,
     ANIMATION_DURATION_DEFAULT,
-    setActiveGroup,
     setActiveCharacter,
     entitiesFilter,
     doNewChat,
@@ -35,7 +34,6 @@ import { event_types } from './events.js';
 import { isMobile, initMovingUI, favsToHotswap } from './RossAscends-mods.js';
 import {
     groups,
-    resetSelectedGroup,
 } from './group-chats.js';
 import {
     instruct_presets,
@@ -2969,17 +2967,13 @@ async function doRandomChat(_, tagName) {
         return randomIndex.toString();
     }
 
-    resetSelectedGroup();
     const characterId = getRandomCharacterId();
     if (!characterId) {
         toastr.error('No characters found');
         return;
     }
-    setCharacterId(characterId);
-    setActiveCharacter(characters[characterId]?.avatar);
-    setActiveGroup(null);
-    await delay(1);
-    await reloadCurrentChat();
+    if (!await selectCharacterById(characterId)) return '';
+    setActiveCharacter(characters[characterId]);
     return characters[characterId]?.name;
 }
 

@@ -290,6 +290,9 @@ import { compressRequest, setRequestCompressionConfig } from './scripts/request-
 import { initWorldSimUi } from './scripts/world-sim/ui.js';
 import { canJumpToSwipeForMessage, canOpenSwipePickerForMessage, initSwipePicker } from './scripts/swipe-picker.js';
 import { captureJSpaceFromSavedMessage, initJSpace, mergeJSpaceCaptures, prepareJSpaceGenerationCapture, setPendingJSpaceResponse } from './scripts/jspace.js';
+import { initCharacterCardEditor, isCharacterDesignerGenerating } from './scripts/character-card-editor.js';
+
+export { isCharacterDesignerGenerating };
 
 // API OBJECT FOR EXTERNAL WIRING
 globalThis.SillyTavern = {
@@ -723,7 +726,7 @@ let chat_file_for_del = '';
 export let online_status = 'no_connection';
 
 export let is_send_press = false; //Send generation
-export const isGenerating = () => (is_send_press || is_group_generating);
+export const isGenerating = () => (is_send_press || is_group_generating || isCharacterDesignerGenerating());
 
 let this_del_mes = -1;
 
@@ -915,6 +918,7 @@ async function firstLoadInit() {
     initAccessibility();
     initSwipePicker();
     initJSpace();
+    void initCharacterCardEditor();
     addDebugFunctions();
     doDailyExtensionUpdatesCheck();
     await eventSource.emit(event_types.APP_INITIALIZED);
@@ -1004,42 +1008,47 @@ export function resultCheckStatus() {
  * @param {number} id The ID of the character to switch to.
  * @param {object} [options] Options for the switch.
  * @param {boolean} [options.switchMenu=true] Whether to switch the right menu to the character edit menu if the character is already selected.
- * @returns {Promise<void>} A promise that resolves when the character is switched.
+ * @returns {Promise<boolean>} Whether the requested character is selected.
  */
 export async function selectCharacterById(id, { switchMenu = true } = {}) {
     if (characters[id] === undefined) {
-        return;
+        return false;
     }
 
     if (isChatSaving) {
         toastr.info(t`Please wait until the chat is saved before switching characters.`, t`Your chat is still saving...`);
-        return;
+        return false;
     }
 
     if (selected_group && is_group_generating) {
-        return;
+        return false;
+    }
+
+    if ((selected_group || String(this_chid) !== String(id)) && isCharacterDesignerGenerating()) {
+        toastr.info(t`Please wait until the Character Designer response finishes before switching characters.`, t`Character Designer is still generating...`);
+        return false;
     }
 
     if (selected_group || String(this_chid) !== String(id)) {
         //if clicked on a different character from what was currently selected
-        if (!is_send_press) {
-            setCharacterId(undefined);
-            setCharacterName('');
-            resetSelectedGroup();
-            await clearChat({ clearData: true });
-            cancelTtsPlay();
-            this_edit_mes_id = undefined;
-            selected_button = 'character_edit';
-            setCharacterId(id);
-            chat_metadata = {};
-            await getChat();
-        }
+        if (is_send_press) return false;
+        setCharacterId(undefined);
+        setCharacterName('');
+        resetSelectedGroup();
+        await clearChat({ clearData: true });
+        cancelTtsPlay();
+        this_edit_mes_id = undefined;
+        selected_button = 'character_edit';
+        setCharacterId(id);
+        chat_metadata = {};
+        await getChat();
     } else {
         //if clicked on character that was already selected
         switchMenu && (selected_button = 'character_edit');
         await unshallowCharacter(this_chid);
         select_selected_character(this_chid, { switchMenu });
     }
+    return true;
 }
 
 function getBackBlock() {
@@ -6132,9 +6141,10 @@ class StreamingProcessor {
  * @param {boolean} quietToLoud true to generate a message in system mode, false to generate a message in character mode
  * @param {string} [systemPrompt] System prompt to use.
  * @param {string} [prefill] Prefill for the prompt.
+ * @param {boolean} [substituteMacros=true] Whether to substitute SillyTavern macros in the prompt.
  * @returns {string | object[]} Prompt ready for use in generation. If using TC, this will be a string. If using CC, this will be an array of chat-style messages.
  */
-export function createRawPrompt(prompt, api, instructOverride, quietToLoud, systemPrompt, prefill) {
+export function createRawPrompt(prompt, api, instructOverride, quietToLoud, systemPrompt, prefill, substituteMacros = true) {
     const isInstruct = power_user.instruct.enabled && api !== 'openai' && api !== 'novel' && !instructOverride;
 
     // If the prompt was given as a string, convert to a message-style object assuming user role
@@ -6146,7 +6156,7 @@ export function createRawPrompt(prompt, api, instructOverride, quietToLoud, syst
     }
 
     // Substitute the prefill if provided
-    prefill = substituteParams(prefill ?? '');
+    prefill = substituteMacros ? substituteParams(prefill ?? '') : (prefill ?? '');
 
     // Format each message in the prompt, accounting for the provided roles
     for (const message of prompt) {
@@ -6155,17 +6165,29 @@ export function createRawPrompt(prompt, api, instructOverride, quietToLoud, syst
         if (message.role === 'assistant') name = message.name ?? name2;
         if (message.role === 'system') name = message.name ?? '';
         const prefix = isInstruct || api === 'openai' ? '' : (name ? `${name}: ` : '');
-        message.content = prefix + substituteParams(message.content ?? '');
+        if (Array.isArray(message.content)) {
+            message.content = message.content.map(part => {
+                if (part?.type !== 'text') return part;
+                const text = substituteMacros ? substituteParams(part.text ?? '') : (part.text ?? '');
+                return { ...part, text: prefix + text };
+            });
+        } else {
+            const content = substituteMacros ? substituteParams(message.content ?? '') : (message.content ?? '');
+            message.content = prefix + content;
+        }
         if (isInstruct) {  // instruct formatting for text completion
             const isUser = message.role === 'user';
             const isNarrator = message.role === 'system';
-            message.content = formatInstructModeChat(name, message.content, isUser, isNarrator, '', name1, name2, false);
+            const textContent = Array.isArray(message.content)
+                ? message.content.filter(part => part?.type === 'text').map(part => part.text).join('\n')
+                : message.content;
+            message.content = formatInstructModeChat(name, textContent, isUser, isNarrator, '', name1, name2, false);
         }
     }
 
     // prepend system prompt, if provided
     if (systemPrompt) {
-        systemPrompt = substituteParams(systemPrompt);
+        systemPrompt = substituteMacros ? substituteParams(systemPrompt) : systemPrompt;
         systemPrompt = isInstruct ? formatInstructModeStoryString(systemPrompt) : systemPrompt.trim();
         if (isInstruct && systemPrompt.length > 0 && !systemPrompt.endsWith('\n')) {
             if (power_user.instruct.wrap && !power_user.instruct.story_string_suffix) {
@@ -6202,25 +6224,38 @@ export function createRawPrompt(prompt, api, instructOverride, quietToLoud, syst
  * @prop {boolean} [trimNames] Whether to allow trimming "{{user}}:" and "{{char}}:" from the response.
  * @prop {string} [prefill] An optional prefill for the prompt.
  * @prop {JsonSchema} [jsonSchema] JSON schema to use for the structured generation. Usually requires a special instruction.
+ * @prop {boolean} [stream] Stream a raw OpenAI response. Returns an async-generator factory when supported. Ignored when `jsonSchema` is set, or when the model cannot stream.
+ * @prop {AbortSignal} [signal] Optional signal used to stop this generation.
+ * @prop {boolean} [substituteMacros=true] Whether to substitute SillyTavern macros in the prompt.
  */
 
 /**
  * Generates a raw data object using the provided prompt.
  * This used to be part of `generateRaw`, but separating it out allows extensions to access other data such as reasoning message.
+ *
+ * When `stream` is set and the API supports it, this resolves to an async-generator
+ * factory instead of response data. Teardown (abort forwarding, the stop-event hook
+ * and any customized response length) is deferred to that generator, so the factory
+ * **must** be called and iterated to completion, or disposed of by breaking out of a
+ * `for await`. Dropping it without iterating leaks those listeners.
  * @param {GenerateRawParams} params Parameters for generating a message
  * @returns {Promise<object | string>} Raw API response data, or a JSON string extracted from the response when `jsonSchema` is provided.
  */
-export async function generateRawData({ prompt = '', api = null, instructOverride = false, quietToLoud = false, systemPrompt = '', responseLength = null, prefill = '', jsonSchema = null } = {}) {
+export async function generateRawData({ prompt = '', api = null, instructOverride = false, quietToLoud = false, systemPrompt = '', responseLength = null, prefill = '', jsonSchema = null, stream = false, signal = null, substituteMacros = true } = {}) {
     if (!api) {
         api = main_api;
     }
 
     const abortController = new AbortController();
+    const forwardAbort = () => abortController.abort(signal?.reason || new Error('Generation stopped'));
+    if (signal?.aborted) forwardAbort();
+    else signal?.addEventListener('abort', forwardAbort, { once: true });
     const responseLengthCustomized = typeof responseLength === 'number' && responseLength > 0;
     let eventHook = () => { };
+    let cleanupDeferred = false;
 
     // construct final prompt from the input. Can either be a string or an array of chat-style messages.
-    prompt = createRawPrompt(prompt, api, instructOverride, quietToLoud, systemPrompt, prefill);
+    prompt = createRawPrompt(prompt, api, instructOverride, quietToLoud, systemPrompt, prefill, substituteMacros);
 
     // Allow extensions to stop generation before it happens
     const eventAbortController = new AbortController();
@@ -6229,6 +6264,14 @@ export async function generateRawData({ prompt = '', api = null, instructOverrid
         eventAbortController.abort(new Error('Cancelled by extension'));
     };
     eventSource.on(event_types.GENERATION_STOPPED, abortHook);
+    const cleanup = () => {
+        signal?.removeEventListener('abort', forwardAbort);
+        eventSource.removeListener(event_types.GENERATION_STOPPED, abortHook);
+        if (responseLengthCustomized && TempResponseLength.isCustomized()) {
+            TempResponseLength.restore(api);
+            TempResponseLength.removeEventHook(api, eventHook);
+        }
+    };
 
     try {
         if (responseLengthCustomized) {
@@ -6287,7 +6330,8 @@ export async function generateRawData({ prompt = '', api = null, instructOverrid
         if (api === 'koboldhorde') {
             data = await generateHorde(prompt.toString(), generateData, abortController.signal, false);
         } else if (api === 'openai') {
-            data = await sendOpenAIRequest('quiet', generateData, abortController.signal, { jsonSchema });
+            // A JSON schema result is extracted from a complete response, so it cannot be streamed.
+            data = await sendOpenAIRequest('quiet', generateData, abortController.signal, { jsonSchema, forceStreaming: stream && !jsonSchema });
         } else {
             const generateUrl = getGenerateUrl(api);
             const response = await fetch(generateUrl, {
@@ -6316,13 +6360,21 @@ export async function generateRawData({ prompt = '', api = null, instructOverrid
             return extractJsonFromData(data, { mainApi: api, returnInvalidJson: jsonSchema.returnInvalid });
         }
 
+        if (typeof data === 'function') {
+            const streamFactory = data;
+            cleanupDeferred = true;
+            return async function* rawStreamData() {
+                try {
+                    yield* streamFactory();
+                } finally {
+                    cleanup();
+                }
+            };
+        }
+
         return data;
     } finally {
-        eventSource.removeListener(event_types.GENERATION_STOPPED, abortHook);
-        if (responseLengthCustomized && TempResponseLength.isCustomized()) {
-            TempResponseLength.restore(api);
-            TempResponseLength.removeEventHook(api, eventHook);
-        }
+        if (!cleanupDeferred) cleanup();
     }
 }
 
@@ -13137,7 +13189,7 @@ export async function renameChat(oldFileName, newName) {
  * @returns {Promise<boolean>} True if the chat was successfully closed, false otherwise.
  */
 export async function closeCurrentChat() {
-    if (is_send_press == false) {
+    if (!isGenerating()) {
         await waitUntilCondition(() => !isChatSaving, debounce_timeout.extended, 10);
         await clearChat({ clearData: true });
         resetSelectedGroup();
@@ -13617,6 +13669,7 @@ jQuery(async function () {
     }
 
     const chatElementScroll = document.getElementById('chat');
+
     const chatScrollHandler = function () {
         if (power_user.waifuMode) {
             scrollLock = true;
@@ -13634,6 +13687,7 @@ jQuery(async function () {
         if (!scrollLock && !scrollIsAtBottom) {
             scrollLock = true;
         }
+
     };
     chatElementScroll.addEventListener('scroll', chatScrollHandler, { passive: true });
 

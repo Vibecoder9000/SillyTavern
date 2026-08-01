@@ -283,6 +283,11 @@
         width: 100dvw;
     }
 
+    #top-settings-holder .drawer-icon {
+        font-size: calc(var(--topBarIconSize) * 0.8);
+        padding: 1px 2px;
+    }
+
     #bg1 {
         height: auto !important;
         width: 100vw !important;

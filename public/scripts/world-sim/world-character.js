@@ -85,8 +85,7 @@ export async function openWorldCharacterChat() {
         }
     }
 
-    await selectCharacterById(id);
-    return true;
+    return selectCharacterById(id);
 }
 
 export { WORLD_CHARACTER_NAME, WORLD_CHARACTER_AVATAR };

@@ -5091,14 +5091,14 @@ async function goToCharacterCallback(_, name) {
     const character = findChar({ name: name });
     if (character) {
         const chid = getCharIndex(character);
-        await openChat(String(chid));
+        if (!await openChat(String(chid))) return '';
         setActiveCharacter(character.avatar);
         setActiveGroup(null);
         return character.name;
     }
     const group = groups.find(it => equalsIgnoreCaseAndAccents(it.name, name));
     if (group) {
-        await openGroupById(group.id);
+        if (!await openGroupById(group.id)) return '';
         setActiveCharacter(null);
         setActiveGroup(group.id);
         return group.name;
@@ -5108,10 +5108,7 @@ async function goToCharacterCallback(_, name) {
 }
 
 async function openChat(chid) {
-    resetSelectedGroup();
-    setCharacterId(chid);
-    await delay(1);
-    await reloadCurrentChat();
+    return selectCharacterById(chid);
 }
 
 /**

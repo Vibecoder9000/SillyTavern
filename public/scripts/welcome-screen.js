@@ -483,7 +483,7 @@ async function openRecentCharacterChat(avatarId, fileName) {
     }
 
     try {
-        await selectCharacterById(characterId);
+        if (!await selectCharacterById(characterId)) return;
         setActiveCharacter(avatarId);
         saveSettingsDebounced();
         const currentChatId = getCurrentChatId();
@@ -511,7 +511,7 @@ async function openRecentGroupChat(groupId, fileName) {
     }
 
     try {
-        await openGroupById(groupId);
+        if (!await openGroupById(groupId)) return;
         setActiveGroup(groupId);
         saveSettingsDebounced();
         const currentChatId = getCurrentChatId();
@@ -837,7 +837,7 @@ export async function openPermanentAssistantChat({ tryCreate = true, created = f
     }
 
     try {
-        await selectCharacterById(characterId);
+        if (!await selectCharacterById(characterId)) return;
         if (!created) {
             await doNewChat({ deleteCurrentChat: false });
         }

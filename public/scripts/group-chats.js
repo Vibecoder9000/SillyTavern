@@ -38,6 +38,7 @@ import {
     setCharacterName,
     setEditedMessageId,
     is_send_press,
+    isCharacterDesignerGenerating,
     resetChatState,
     setSendButtonState,
     getCharacters,
@@ -2046,6 +2047,16 @@ export async function openGroupById(groupId) {
 
     if (!groups.find(x => x.id === groupId)) {
         console.log('Group not found', groupId);
+        return false;
+    }
+
+    if (selected_group === groupId) {
+        select_group_chats(groupId, false);
+        return true;
+    }
+
+    if (isCharacterDesignerGenerating()) {
+        toastr.info(t`Please wait until the Character Designer response finishes before switching characters.`, t`Character Designer is still generating...`);
         return false;
     }
 

@@ -23,6 +23,7 @@ import { invalidateThumbnail, generateThumbnail } from './thumbnails.js';
 import { importRisuSprites } from './sprites.js';
 import { getUserDirectories } from '../users.js';
 import { getChatInfo } from './chats.js';
+import { assertCharacterDesignerWorkspaceRenameAvailable, deleteCharacterDesignerWorkspace, renameCharacterDesignerWorkspace } from './character-designer.js';
 import { ByafParser } from '../byaf.js';
 import { CharXParser, persistCharXAssets } from '../charx.js';
 import cacheBuster from '../middleware/cacheBuster.js';
@@ -1095,6 +1096,10 @@ router.post('/rename', validateAvatarUrlMiddleware, async function (request, res
     const newChatsPath = path.join(request.user.directories.chats, newInternalName);
 
     try {
+        // Fail before writing the new card or moving chats if a stale workspace
+        // would prevent this rename from completing.
+        assertCharacterDesignerWorkspaceRenameAvailable(request.user.directories, oldAvatarName, newAvatarName);
+
         // Read old file, replace name int it
         const rawOldData = await readCharacterData(oldAvatarPath);
         if (rawOldData === undefined) throw new Error('Failed to read character file');
@@ -1115,6 +1120,8 @@ router.post('/rename', validateAvatarUrlMiddleware, async function (request, res
             fs.cpSync(oldChatsPath, newChatsPath, { recursive: true });
             fs.rmSync(oldChatsPath, { recursive: true, force: true });
         }
+
+        await renameCharacterDesignerWorkspace(request.user.directories, oldAvatarName, newAvatarName);
 
         // Remove the old character file
         fs.unlinkSync(oldAvatarPath);
@@ -1169,7 +1176,7 @@ router.post('/edit', upload.single('avatar'), validateAvatarUrlMiddleware, async
     }
 });
 
-router.post('/edit-avatar', validateAvatarUrlMiddleware, async function (request, response) {
+router.post('/edit-avatar', upload.single('avatar'), validateAvatarUrlMiddleware, async function (request, response) {
     try {
         if (!request.file) {
             return response.status(400).send('Error: no file uploaded');
@@ -1474,6 +1481,13 @@ router.post('/delete', validateAvatarUrlMiddleware, async function (request, res
             console.error(err);
             return response.sendStatus(500);
         }
+    }
+
+    try {
+        await deleteCharacterDesignerWorkspace(request.user.directories, request.body.avatar_url);
+    } catch (err) {
+        console.error(err);
+        return response.sendStatus(500);
     }
 
     return response.sendStatus(200);

@@ -3443,7 +3443,7 @@ function normalizeAskUserQuestion(question, questionIndex) {
     };
 }
 
-function normalizeAskUserPayload(payload) {
+export function normalizeAskUserPayload(payload) {
     if (typeof payload !== 'object' || payload === null) {
         throw new Error('ask_user payload must be an object.');
     }
@@ -5129,6 +5129,10 @@ export class ToolManager {
      * @type {Map<string, ToolDefinition>}
      */
     static #tools = new Map();
+    // XML scopes are deliberately separate from #tools.  They are for surfaces
+    // which use the native XML syntax but must never leak tools into chat,
+    // provider registration, MCP, or the native-tool allowlist.
+    static #xmlScopes = new Map();
 
     static #INPUT_DELTA_KEY = '__input_json_delta';
     static #nativeToolStateCache = null;
@@ -5276,8 +5280,8 @@ export class ToolManager {
         return this.#getCurrentNativeToolState().definitions.get(name) || null;
     }
 
-    static #getNativeToolTagNames(additionalNames = []) {
-        const tagNames = new Set(this.#getCurrentNativeToolState().tagNames);
+    static #getNativeToolTagNames(additionalNames = [], definitions = null) {
+        const tagNames = new Set(definitions ? Array.from(definitions.keys()) : this.#getCurrentNativeToolState().tagNames);
         for (const name of additionalNames) {
             if (typeof name === 'string' && name.trim() && this.#isNativeToolAllowed(name)) {
                 tagNames.add(name.trim());
@@ -5286,9 +5290,9 @@ export class ToolManager {
         return Array.from(tagNames);
     }
 
-    static #findNextNativeToolTag(text, startIndex = 0, additionalNames = []) {
+    static #findNextNativeToolTag(text, startIndex = 0, additionalNames = [], definitions = null) {
         const source = String(text ?? '');
-        const tagNames = this.#getNativeToolTagNames(additionalNames);
+        const tagNames = this.#getNativeToolTagNames(additionalNames, definitions);
         if (tagNames.length === 0) {
             return null;
         }
@@ -5452,6 +5456,67 @@ export class ToolManager {
         this.#tools.delete(name);
         this.invalidateNativeToolState();
         console.log(`[ToolManager] Unregistered function tool: ${name}`);
+    }
+
+    /**
+     * Register a tool that is available only to an explicitly named XML scope.
+     * Scoped tools are not exposed through ToolManager.tools.
+     * @param {string} scope
+     * @param {ToolRegistration} registration
+     */
+    static registerXmlScopeTool(scope, registration) {
+        const scopeName = String(scope ?? '').trim();
+        if (!scopeName) throw new Error('An XML tool scope name is required.');
+        const name = String(registration?.name ?? '').trim();
+        if (!name) throw new Error('An XML scoped tool name is required.');
+        const tools = this.#xmlScopes.get(scopeName) || new Map();
+        tools.set(name, createToolDefinition(registration));
+        this.#xmlScopes.set(scopeName, tools);
+    }
+
+    static getXmlScopeDefinitions(scope) {
+        const tools = this.#xmlScopes.get(String(scope ?? '').trim());
+        return tools ? Array.from(tools.values()).map(tool => tool.toFunctionOpenAI()) : [];
+    }
+
+    static getXmlScopePrompt(scope) {
+        const tools = this.#xmlScopes.get(String(scope ?? '').trim());
+        return tools
+            ? Array.from(tools.values()).map(tool => formatNativeToolDefinitionText(
+                tool.name,
+                tool.toFunctionOpenAI().function.description,
+                tool.parameters,
+                tool.displayName,
+            )).join('\n\n')
+            : '';
+    }
+
+    static async invokeXmlScopeTool(scope, name, parameters, signalOrOptions) {
+        const tool = this.#xmlScopes.get(String(scope ?? '').trim())?.get(String(name ?? '').trim());
+        if (!tool) return new Error(`No tool named "${name}" is registered in XML scope "${scope}".`);
+        try {
+            const options = signalOrOptions instanceof AbortSignal ? { signal: signalOrOptions } : (signalOrOptions || {});
+            const result = await tool.invoke(this.#parseParameters(parameters), options.signal, options);
+            return typeof result === 'string' ? result : JSON.stringify(result);
+        } catch (error) {
+            return error instanceof Error ? error : new Error(String(error));
+        }
+    }
+
+    static findAndParseXmlScopeCalls(scope, text) {
+        const tools = this.#xmlScopes.get(String(scope ?? '').trim());
+        const parsed = this.findAndParseNativeToolCalls(text, { xmlScopeDefinitions: tools, parseThinkingBlocks: true });
+        for (const segment of parsed.segments) {
+            const name = segment.tool_call?.tool;
+            const schema = name ? tools?.get(name)?.toFunctionOpenAI().function.parameters : null;
+            const required = Array.isArray(schema?.required) ? schema.required : [];
+            const missing = required.filter(key => !Object.hasOwn(segment.tool_call?.args || {}, key));
+            if (!missing.length) continue;
+            segment.parse_error = { code: 'missing_required_argument', tool_name: name, message: `Missing required XML tag${missing.length === 1 ? '' : 's'}: ${missing.join(', ')}.` };
+            segment.tool_call = null;
+            parsed.hasErrors = true;
+        }
+        return parsed;
     }
 
     /**
@@ -5782,7 +5847,7 @@ export class ToolManager {
      * @param {{ preferredToolName?: string | null }} [options={}] Parse options.
      * @returns {object|null} The parsed tool call and reasoning, or null if not found.
      */
-    static #parseNativeToolTag(text, tagMatch) {
+    static #parseNativeToolTag(text, tagMatch, definitions = null) {
         if (!tagMatch) {
             return null;
         }
@@ -5790,7 +5855,7 @@ export class ToolManager {
         const source = String(text ?? '');
         const { toolName, startIndex: toolTagIndex, openTag } = tagMatch;
         const effectiveToolName = String(tagMatch.wrappedToolName || toolName).trim();
-        const nativeToolDefinition = this.#getNativeToolDefinition(effectiveToolName);
+        const nativeToolDefinition = definitions?.get(effectiveToolName) || this.#getNativeToolDefinition(effectiveToolName);
         const forcedContinue = nativeToolDefinition?.forceContinue;
         const closeTag = String(tagMatch.closeTag || `</${toolName}>`);
         const toolCloseTagIndex = findNativeXmlCloseTagIndex(source, toolName, toolTagIndex + openTag.length);
@@ -5850,7 +5915,7 @@ export class ToolManager {
                         parse_error: null,
                     };
                 } catch {
-                    const nestedMatches = this.findAndParseNativeToolCalls(trimmedContent, { preferredToolNames: [effectiveToolName] });
+                    const nestedMatches = this.findAndParseNativeToolCalls(trimmedContent, { preferredToolNames: [effectiveToolName], xmlScopeDefinitions: definitions });
                     const nestedToolSegment = nestedMatches?.segments?.find(segment => segment.type === 'tool' && segment.tool_call);
                     if (nestedToolSegment?.tool_call) {
                         return {
@@ -5939,9 +6004,9 @@ export class ToolManager {
         ])];
     }
 
-    static findAndParseNativeToolCalls(text, { preferredToolNames = [] } = {}) {
+    static findAndParseNativeToolCalls(text, { preferredToolNames = [], xmlScopeDefinitions = null, parseThinkingBlocks = oai_settings.parse_tools_in_thinking_blocks } = {}) {
         const source = String(text ?? '');
-        const scanSource = oai_settings.parse_tools_in_thinking_blocks ? source : maskNativeToolThinkingBlocks(source);
+        const scanSource = parseThinkingBlocks ? source : maskNativeToolThinkingBlocks(source);
         const segments = [];
         let searchIndex = 0;
         let hasToolCalls = false;
@@ -5949,7 +6014,7 @@ export class ToolManager {
         let shouldContinue = false;
 
         while (searchIndex < scanSource.length) {
-            const tagMatch = this.#findNextNativeToolTag(scanSource, searchIndex, preferredToolNames);
+            const tagMatch = this.#findNextNativeToolTag(scanSource, searchIndex, preferredToolNames, xmlScopeDefinitions);
             if (!tagMatch) {
                 if (searchIndex < scanSource.length || segments.length === 0) {
                     segments.push({ type: 'text', text: source.slice(searchIndex) });
@@ -5964,7 +6029,7 @@ export class ToolManager {
                 });
             }
 
-            const parsedSegment = this.#parseNativeToolTag(source, tagMatch);
+            const parsedSegment = this.#parseNativeToolTag(source, tagMatch, xmlScopeDefinitions);
             if (!parsedSegment) {
                 searchIndex = tagMatch.startIndex + tagMatch.openTag.length;
                 continue;
