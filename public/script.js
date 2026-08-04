@@ -2873,6 +2873,30 @@ function getNativeToolExecutionState(message, segmentIndex) {
     return 'pending';
 }
 
+function isBrowserNativeToolName(toolName) {
+    const name = String(toolName ?? '').trim();
+    return name.startsWith('browser_') || name === 'dom_fetch' || name === 'execute_js';
+}
+
+function getBrowserStateFromToolResult(toolResult) {
+    try {
+        const parsed = typeof toolResult === 'string' ? JSON.parse(toolResult) : toolResult;
+        if (!parsed || typeof parsed !== 'object' || !String(parsed.session_id ?? '').trim()) {
+            return null;
+        }
+
+        const tabIndex = Number(parsed.tab_index);
+        return {
+            session_id: String(parsed.session_id),
+            tab_index: Number.isInteger(tabIndex) ? tabIndex : 0,
+            url: String(parsed.url ?? ''),
+            title: String(parsed.title ?? ''),
+        };
+    } catch {
+        return null;
+    }
+}
+
 function buildToolExecuteButtonHtml(toolName, messageId, segmentIndex, status) {
     let label = 'Execute';
     let icon = 'fa-play';
@@ -2885,7 +2909,7 @@ function buildToolExecuteButtonHtml(toolName, messageId, segmentIndex, status) {
         className += ' executing';
         disabled = ' disabled';
     } else if (status === 'done') {
-        label = 'Done';
+        label = 'Execute';
         icon = 'fa-check';
         className += ' done';
     } else if (status === 'failed') {
@@ -2895,6 +2919,19 @@ function buildToolExecuteButtonHtml(toolName, messageId, segmentIndex, status) {
     }
 
     return `<div class="${className}" data-tool-name="${toolName}" data-message-id="${messageId}" data-segment-index="${segmentIndex}"${disabled} role="button" tabindex="0"><i class="fa-solid ${icon}"></i><span>${label}</span></div>`;
+}
+
+function buildToolContinueButtonHtml(toolName, messageId, segmentIndex, message) {
+    if (!isBrowserNativeToolName(toolName) || toolName === 'browser_close') {
+        return '';
+    }
+
+    const browserState = message?.extra?.native_tool_execution?.[segmentIndex]?.browser_state;
+    if (!String(browserState?.session_id ?? '').trim()) {
+        return '';
+    }
+
+    return `<div class="tool-continue-button menu_button menu_button_icon" data-tool-name="${toolName}" data-message-id="${messageId}" data-segment-index="${segmentIndex}" role="button" tabindex="0" title="Capture the browser's current state without executing this tool"><i class="fa-solid fa-forward"></i><span>Continue</span></div>`;
 }
 
 const WORKSPACE_LAST_CHAT_PROMPT_KEY = 'workspace_last_chat';
@@ -3184,7 +3221,7 @@ function renderNativeToolSegmentHtml(message, messageId, segment, segmentIndex, 
     html += '<div class="tool-call-header">';
     html += `<h4><i class="fa-solid fa-cogs"></i> ${escapeHtml(detectedToolName)}</h4>`;
     if (canExecuteTool && !isManualSdTool) {
-        html += `<div class="tool-call-header-actions">${buildToolExecuteButtonHtml(toolName, messageId, segmentIndex, executionState)}</div>`;
+        html += `<div class="tool-call-header-actions">${buildToolExecuteButtonHtml(toolName, messageId, segmentIndex, executionState)}${buildToolContinueButtonHtml(detectedToolName, messageId, segmentIndex, message)}</div>`;
     }
     html += '</div>';
     if (parseErrorMessage) {
@@ -3601,7 +3638,7 @@ function hydrateToolResultMedia(mes) {
  * @param {string|object} toolResult Tool result payload
  * @returns {Promise<ChatMessage|null>}
  */
-async function createSpecialToolResultMessage(toolResult) {
+async function createSpecialToolResultMessage(toolResult, options = {}) {
     try {
         let parsed = toolResult;
         if (typeof toolResult === 'string') {
@@ -3617,7 +3654,7 @@ async function createSpecialToolResultMessage(toolResult) {
         }
 
         const rawToolResult = typeof toolResult === 'string' ? toolResult : JSON.stringify(toolResult);
-        const cappedToolResult = await capToolOutput(rawToolResult);
+        const cappedToolResult = options.isBrowserObservation ? rawToolResult : await capToolOutput(rawToolResult);
         return {
             name: systemUserName,
             is_user: false,
@@ -3629,6 +3666,14 @@ async function createSpecialToolResultMessage(toolResult) {
                 media: attachments,
                 media_index: 0,
                 inline_image: true,
+                ...(options.isBrowserObservation ? {
+                    browser_observation: {
+                        source_message_id: options.sourceMessageId,
+                        segment_index: options.segmentIndex,
+                        tool_name: options.toolName,
+                        ...getBrowserStateFromToolResult(toolResult),
+                    },
+                } : {}),
             },
         };
     } catch (error) {
@@ -3698,14 +3743,26 @@ function createPythonToolResultMessage(toolInfo) {
  * @param {string|object} toolResult
  * @returns {Promise<ChatMessage>}
  */
-async function createTextToolResultMessage(toolResult) {
-    const cappedToolResult = await capToolOutput(String(toolResult));
+async function createTextToolResultMessage(toolResult, options = {}) {
+    const rawToolResult = String(toolResult);
+    const cappedToolResult = options.isBrowserObservation ? rawToolResult : await capToolOutput(rawToolResult);
     return {
         name: systemUserName,
         is_user: false,
         is_system: true,
         mes: formatNativeToolResultText(cappedToolResult),
-        extra: { is_tool_result: true, tool_result_content: cappedToolResult },
+        extra: {
+            is_tool_result: true,
+            tool_result_content: cappedToolResult,
+            ...(options.isBrowserObservation ? {
+                browser_observation: {
+                    source_message_id: options.sourceMessageId,
+                    segment_index: options.segmentIndex,
+                    tool_name: options.toolName,
+                    ...getBrowserStateFromToolResult(toolResult),
+                },
+            } : {}),
+        },
     };
 }
 
@@ -3714,9 +3771,15 @@ async function createTextToolResultMessage(toolResult) {
  * @param {string|object} toolResult
  * @returns {Promise<ChatMessage>}
  */
-async function createCompletedToolResultMessage(toolResult) {
-    const specialMessage = await createSpecialToolResultMessage(toolResult);
-    return specialMessage || createTextToolResultMessage(toolResult);
+async function createCompletedToolResultMessage(toolResult, options = {}) {
+    const specialMessage = await createSpecialToolResultMessage(toolResult, options);
+    return specialMessage || createTextToolResultMessage(toolResult, options);
+}
+
+function getStaleBrowserObservationNotice(message) {
+    const url = String(message?.extra?.browser_observation?.url ?? '').trim();
+    const location = url ? ` for ${url}` : '';
+    return `[The full browser observation${location} was removed from model context because it is no longer the latest conversation message and may describe stale browser state. It originally contained page text, interactive elements, viewport details, and any screenshot that was available.]`;
 }
 
 function getNativeToolSegmentEntries(message) {
@@ -3844,6 +3907,14 @@ async function executeNativeToolSegment(messageId, segmentIndex, { signal } = {}
 
     const failed = toolResult instanceof Error;
     const shouldContinue = shouldContinueAfterNativeTool(toolInfo);
+    const isBrowserObservation = isBrowserNativeToolName(toolInfo?.tool);
+    const browserState = !failed && isBrowserObservation ? getBrowserStateFromToolResult(toolResult) : null;
+    const resultMessageOptions = {
+        isBrowserObservation,
+        sourceMessageId: messageId,
+        segmentIndex,
+        toolName: toolInfo?.tool,
+    };
     let stopped = false;
 
     if (liveCommandToolKind) {
@@ -3854,24 +3925,71 @@ async function executeNativeToolSegment(messageId, segmentIndex, { signal } = {}
             stopped = true;
         }
         if (failed && liveCommandMessageId === null) {
-            const errorMessage = await createCompletedToolResultMessage(toolResult.toString());
+            const errorMessage = await createCompletedToolResultMessage(toolResult.toString(), resultMessageOptions);
             chat.push(errorMessage);
             addOneMessage(errorMessage);
         }
     } else {
         const resultPayload = failed ? toolResult.toString() : toolResult;
-        const resultMessage = await createCompletedToolResultMessage(resultPayload);
+        const resultMessage = await createCompletedToolResultMessage(resultPayload, resultMessageOptions);
         chat.push(resultMessage);
         addOneMessage(resultMessage);
     }
 
-    setNativeToolExecutionState(message, segmentIndex, failed ? 'failed' : 'done');
+    setNativeToolExecutionState(message, segmentIndex, failed ? 'failed' : 'done', browserState ? { browser_state: browserState } : {});
     updateMessageBlock(messageId, message);
 
     return {
         executed: true,
         shouldContinue,
         stopped,
+        failed,
+    };
+}
+
+async function continueNativeBrowserToolSegment(messageId, segmentIndex, { signal } = {}) {
+    const message = chat[messageId];
+    const segment = getNativeToolSegments(message)[segmentIndex];
+    const toolInfo = segment?.tool_call;
+    const browserState = message?.extra?.native_tool_execution?.[segmentIndex]?.browser_state;
+    if (!toolInfo || !isBrowserNativeToolName(toolInfo.tool)) {
+        throw new Error('Continue is only available for browser tools.');
+    }
+    if (!String(browserState?.session_id ?? '').trim()) {
+        throw new Error('No browser session is available for this tool result.');
+    }
+
+    const toolResult = await ToolManager.invokeFunctionTool('browser_screenshot', {
+        session_id: browserState.session_id,
+        tab_index: browserState.tab_index,
+        full_page: false,
+    }, { signal });
+    const failed = toolResult instanceof Error;
+    const resultPayload = failed ? toolResult.toString() : toolResult;
+    const resultMessage = await createCompletedToolResultMessage(resultPayload, {
+        isBrowserObservation: true,
+        sourceMessageId: messageId,
+        segmentIndex,
+        toolName: toolInfo.tool,
+    });
+    if (resultMessage.extra?.browser_observation) {
+        resultMessage.extra.browser_observation.captured_by_continue = true;
+    }
+    chat.push(resultMessage);
+    addOneMessage(resultMessage);
+
+    const updatedBrowserState = !failed ? getBrowserStateFromToolResult(toolResult) : null;
+    if (updatedBrowserState) {
+        setNativeToolExecutionState(message, segmentIndex, 'done', {
+            browser_state: updatedBrowserState,
+        });
+        updateMessageBlock(messageId, message);
+    }
+
+    return {
+        executed: true,
+        shouldContinue: shouldContinueAfterNativeTool(toolInfo),
+        stopped: false,
         failed,
     };
 }
@@ -6766,6 +6884,20 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
     }
 
     coreChat = await Promise.all(coreChat.map(async (/** @type {ChatMessage} */ chatItem, index) => {
+        if (chatItem?.extra?.browser_observation && chatItem !== chat.at(-1)) {
+            const notice = getStaleBrowserObservationNotice(chatItem);
+            return {
+                ...chatItem,
+                mes: formatNativeToolResultText(notice),
+                extra: {
+                    ...chatItem.extra,
+                    tool_result_content: notice,
+                    media: [],
+                },
+                index,
+            };
+        }
+
         let message = chatItem.mes;
         let regexType = chatItem.is_user ? regex_placement.USER_INPUT : regex_placement.AI_OUTPUT;
         let options = { isPrompt: true, depth: (coreChat.length - index - (isContinue ? 2 : 1)) };
@@ -15074,6 +15206,47 @@ jQuery(async function () {
         } catch (error) {
             console.error('[Manual Tool Execution] Error:', error);
             toastr.error('Failed to execute tool: ' + String(error));
+        }
+    });
+
+    $(document).on('click', '.tool-continue-button', async function (e) {
+        e.stopPropagation();
+        e.preventDefault();
+        const button = $(this);
+        const messageId = parseInt(button.data('message-id'));
+        const segmentIndexRaw = Number(button.data('segment-index'));
+        const segmentIndex = Number.isInteger(segmentIndexRaw) ? segmentIndexRaw : 0;
+        const message = chat[messageId];
+
+        if (!message?.extra?.is_tool_call || button.hasClass('continuing')) {
+            return;
+        }
+
+        const originalHtml = button.html();
+        button.addClass('continuing').attr('aria-disabled', 'true');
+        button.html('<i class="fa-solid fa-spinner fa-spin"></i><span>Continuing...</span>');
+
+        try {
+            const executionResult = await continueNativeBrowserToolSegment(messageId, segmentIndex, {});
+            await saveChatConditional();
+            const executionSummary = getNativeToolExecutionSummary(message);
+            if (
+                power_user.tool_auto_continue &&
+                !executionResult.failed &&
+                executionSummary.allDone &&
+                executionSummary.anyContinue &&
+                !executionSummary.hasFailure
+            ) {
+                const currentDepth = Number.isFinite(Number(message.extra?.depth))
+                    ? Number(message.extra.depth)
+                    : 0;
+                Generate('normal', { depth: currentDepth + 1 });
+            }
+        } catch (error) {
+            console.error('[Manual Browser Continue] Error:', error);
+            toastr.error('Failed to continue browser state: ' + String(error));
+        } finally {
+            button.removeClass('continuing').removeAttr('aria-disabled').html(originalHtml);
         }
     });
 

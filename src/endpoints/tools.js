@@ -18,8 +18,8 @@ const BROWSER_DEFAULT_WAIT_TIMEOUT_MS = 10_000;
 const BROWSER_MAX_WAIT_TIMEOUT_MS = 30_000;
 const DEFAULT_PYTHON_TIMEOUT_MS = 120_000;
 const MAX_PYTHON_TIMEOUT_MS = 900_000;
-const DOM_FETCH_DEFAULT_MAX_CHARS = 12_000;
-const DOM_FETCH_MAX_CHARS = 30_000;
+const DOM_FETCH_DEFAULT_MAX_CHARS = 30_000;
+const DOM_FETCH_MAX_CHARS = 100_000;
 const EXECUTE_JS_TIMEOUT_MS = 5_000;
 const EXECUTE_JS_RESULT_MAX_CHARS = 20_000;
 const DEFAULT_BROWSER_VIEWPORT = { width: 1440, height: 900 };
@@ -27,7 +27,7 @@ const DEFAULT_BROWSER_USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv
 const BROWSER_HEADLESS = String(process.env.ST_BROWSER_HEADLESS ?? '').trim() === '1';
 const BROWSER_DOWNLOAD_TIMEOUT_MS = 30_000;
 const BROWSER_LIST_DEFAULT_LIMIT = 20;
-const BROWSER_LIST_MAX_LIMIT = 50;
+const BROWSER_LIST_MAX_LIMIT = 200;
 const BROWSER_CLICKABLE_ELEMENTS_LIMIT = 10;
 const BROWSER_ACTION_HISTORY_LIMIT = 12;
 const BROWSER_LOOP_DETECTION_WINDOW_MS = 30_000;
@@ -2712,7 +2712,7 @@ async function detectPageInterstitial(page) {
 /**
  * Collects DOM content from the active page.
  * @param {import('playwright').Page} page
- * @param {{ mode?: string, selector?: string, max_chars?: number }} options
+ * @param {{ mode?: string, selector?: string, max_chars?: number, limit?: number, offset?: number }} options
  * @returns {Promise<any>}
  */
 async function collectDomFetch(page, options = {}) {
@@ -2790,31 +2790,88 @@ async function collectDomFetch(page, options = {}) {
 
             return segments.join(' > ');
         };
+        const getElementText = (element) => {
+            const labelledBy = String(element.getAttribute('aria-labelledby') || '')
+                .split(/\s+/)
+                .filter(Boolean)
+                .map(id => globalThis.document.getElementById(id)?.innerText || '')
+                .join(' ');
+            const labels = 'labels' in element
+                ? Array.from(element.labels || []).map(label => label.innerText || '').join(' ')
+                : '';
+            const isPassword = element.tagName.toLowerCase() === 'input'
+                && String(element.getAttribute('type') || '').toLowerCase() === 'password';
+            return normalizeText(
+                element.getAttribute('aria-label')
+                || labelledBy
+                || labels
+                || element.getAttribute('alt')
+                || element.innerText
+                || element.textContent
+                || element.getAttribute('title')
+                || element.getAttribute('placeholder')
+                || (!isPassword ? element.value : '')
+                || '',
+            );
+        };
+        const getElementRole = (element) => {
+            const explicitRole = element.getAttribute('role');
+            if (explicitRole) {
+                return explicitRole;
+            }
+
+            const tag = element.tagName.toLowerCase();
+            if (tag === 'a') return 'link';
+            if (tag === 'button') return 'button';
+            if (tag === 'textarea') return 'textbox';
+            if (tag === 'select') return 'combobox';
+            if (tag === 'input') {
+                const type = String(element.getAttribute('type') || 'text').toLowerCase();
+                if (type === 'checkbox') return 'checkbox';
+                if (type === 'radio') return 'radio';
+                if (['button', 'submit', 'reset'].includes(type)) return 'button';
+                return 'textbox';
+            }
+            return tag;
+        };
         const collectInteractiveItems = (root, interactiveMode) => {
             const selectorList = interactiveMode
-                ? 'a[href], button, input:not([type="hidden"]), textarea, select, [role="button"], [tabindex]'
+                ? 'a[href], button, input:not([type="hidden"]), textarea, select, [contenteditable="true"], [role="button"], [role="link"], [role="checkbox"], [role="radio"], [role="textbox"], [role="combobox"], [role="menuitem"], [role="option"], [role="tab"], [role="switch"], [role="slider"], [role="spinbutton"], [tabindex]'
                 : 'a[href]';
             const candidates = Array.from(root.querySelectorAll(selectorList));
             const filtered = candidates.filter(element => {
                 const rect = element.getBoundingClientRect();
-                const text = normalizeText(element.innerText || element.textContent || element.getAttribute('aria-label') || element.getAttribute('title') || element.value || '');
                 const viewportWidth = globalThis.innerWidth || globalThis.document.documentElement?.clientWidth || 0;
                 const viewportHeight = globalThis.innerHeight || globalThis.document.documentElement?.clientHeight || 0;
                 const intersectsViewport = rect.bottom > 0
                     && rect.right > 0
                     && rect.top < viewportHeight
                     && rect.left < viewportWidth;
-                return rect.width > 0 && rect.height > 0 && intersectsViewport && text;
+                return rect.width > 0 && rect.height > 0 && intersectsViewport;
             });
 
-            return filtered.slice(offset, offset + limit).map((element, index) => ({
-                index: offset + index,
-                tag: element.tagName.toLowerCase(),
-                kind: interactiveMode ? (element.tagName.toLowerCase() === 'a' ? 'link' : 'interactive') : 'link',
-                text: normalizeText(element.innerText || element.textContent || element.getAttribute('aria-label') || element.getAttribute('title') || element.value || ''),
-                href: element instanceof HTMLAnchorElement ? element.href : undefined,
-                selector: getCssPath(element),
-            })).filter(item => item.selector);
+            return filtered.slice(offset, offset + limit).map((element, index) => {
+                const role = getElementRole(element);
+                const item = {
+                    index: offset + index,
+                    tag: element.tagName.toLowerCase(),
+                    kind: interactiveMode ? role : 'link',
+                    role,
+                    text: getElementText(element),
+                    href: element instanceof HTMLAnchorElement ? element.href : undefined,
+                    selector: getCssPath(element),
+                };
+                const isPassword = element.tagName.toLowerCase() === 'input'
+                    && String(element.getAttribute('type') || '').toLowerCase() === 'password';
+                if (!isPassword && 'value' in element && element.value) item.value = String(element.value);
+                if (element.getAttribute('placeholder')) item.placeholder = element.getAttribute('placeholder');
+                if ('disabled' in element) item.disabled = Boolean(element.disabled);
+                if ('checked' in element) item.checked = Boolean(element.checked);
+                if ('selected' in element) item.selected = Boolean(element.selected);
+                if (element.hasAttribute('aria-expanded')) item.expanded = element.getAttribute('aria-expanded') === 'true';
+                if (element.hasAttribute('aria-selected')) item.selected = element.getAttribute('aria-selected') === 'true';
+                return item;
+            }).filter(item => item.selector);
         };
 
         const root = getRoot();
@@ -2890,6 +2947,35 @@ async function collectDomFetch(page, options = {}) {
                 best = candidate;
                 bestText = candidateText;
             }
+        }
+
+        if (mode === 'snapshot') {
+            const interactiveRoot = selector ? root : globalThis.document;
+            const items = collectInteractiveItems(interactiveRoot, true);
+            return {
+                mode: 'snapshot',
+                url: globalThis.location.href,
+                title: globalThis.document.title,
+                selector,
+                text: clampText(bestText),
+                viewport: {
+                    width: globalThis.innerWidth,
+                    height: globalThis.innerHeight,
+                    scroll_x: globalThis.scrollX,
+                    scroll_y: globalThis.scrollY,
+                    document_width: globalThis.document.documentElement?.scrollWidth || 0,
+                    document_height: globalThis.document.documentElement?.scrollHeight || 0,
+                },
+                focused_element: globalThis.document.activeElement && globalThis.document.activeElement !== globalThis.document.body
+                    ? {
+                        role: getElementRole(globalThis.document.activeElement),
+                        text: getElementText(globalThis.document.activeElement),
+                        selector: getCssPath(globalThis.document.activeElement),
+                    }
+                    : null,
+                items,
+                descriptors: items.map(({ index, selector: itemSelector, kind, text, href }) => ({ index, selector: itemSelector, kind, text, href })),
+            };
         }
 
         return {
@@ -4555,11 +4641,11 @@ router.post('/browser/type', async (req, res) => {
             await locator.scrollIntoViewIfNeeded().catch(() => undefined);
             await locator.click({ timeout: BROWSER_DEFAULT_WAIT_TIMEOUT_MS, force: true });
             await locator.fill('');
-            await locator.type(text, { delay: 40 + Math.floor(Math.random() * 50) });
+            await locator.type(text, { delay: 2 + Math.floor(Math.random() * 7) });
             if (submit) {
                 await locator.press('Enter');
             }
-            await page.waitForLoadState('networkidle', { timeout: BROWSER_DEFAULT_WAIT_TIMEOUT_MS }).catch(() => undefined);
+            await page.waitForLoadState('networkidle', { timeout: submit ? 2_000 : 250 }).catch(() => undefined);
             const interstitial = await detectPageInterstitial(page);
             const screenshot = await saveBrowserScreenshot(userHandle, session.workspace, session.character, page, req.body.screenshot_filepath, false);
 

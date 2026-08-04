@@ -3117,8 +3117,8 @@ async function callBrowserTool(action, payload = {}, signal) {
         }
 
         const body = { ...payload, ...sandbox };
-        const sendRequest = async (body) => {
-            const response = await fetch(`/api/extensions/tools/browser/${action}`, {
+        const sendRequest = async (body, requestAction = action) => {
+            const response = await fetch(`/api/extensions/tools/browser/${requestAction}`, {
                 method: 'POST',
                 headers: getRequestHeaders(),
                 body: JSON.stringify(body),
@@ -3130,7 +3130,47 @@ async function callBrowserTool(action, payload = {}, signal) {
 
         let { response, result } = await sendRequest(body);
         if (!response.ok) {
-            return `Error: ${result?.error || 'An unknown browser error occurred.'}`;
+            const error = result?.error || 'An unknown browser error occurred.';
+            const canCaptureState = action !== 'close'
+                && action !== 'screenshot'
+                && action !== 'domfetch'
+                && !isMissingBrowserArg(payload.session_id)
+                && !isMissingBrowserArg(payload.tab_index);
+            if (!canCaptureState) {
+                return `Error: ${error}`;
+            }
+
+            const statePayload = {
+                session_id: payload.session_id,
+                tab_index: payload.tab_index,
+                ...sandbox,
+            };
+            const screenshotResponse = await sendRequest(statePayload, 'screenshot');
+            const domResponse = await sendRequest({
+                ...statePayload,
+                mode: 'snapshot',
+                max_chars: 100000,
+                limit: 200,
+            }, 'domfetch');
+            const screenshotResult = screenshotResponse.response.ok ? screenshotResponse.result : null;
+            const domResult = domResponse.response.ok ? domResponse.result : null;
+            return {
+                action_error: String(error),
+                session_id: String(screenshotResult?.session_id ?? domResult?.session_id ?? payload.session_id),
+                tab_index: Number(screenshotResult?.tab_index ?? domResult?.tab_index ?? payload.tab_index),
+                url: String(screenshotResult?.url ?? domResult?.url ?? ''),
+                title: String(screenshotResult?.title ?? domResult?.title ?? ''),
+                tabs: screenshotResult?.tabs ?? domResult?.tabs,
+                ...(screenshotResult?.filepath ? {
+                    screenshot: {
+                        type: 'image_display',
+                        filepath: screenshotResult.filepath,
+                        title: 'Current browser state after failed action',
+                        ...sandbox,
+                    },
+                } : {}),
+                ...(domResult ? { dom: domResult } : {}),
+            };
         }
 
         return result;
@@ -3201,6 +3241,10 @@ function shouldAutoFetchBrowserDom(toolName, payload, result) {
         return false;
     }
 
+    if (result.action_error) {
+        return false;
+    }
+
     if (isMissingBrowserArg(result.session_id) || isMissingBrowserArg(result.tab_index)) {
         return false;
     }
@@ -3209,14 +3253,17 @@ function shouldAutoFetchBrowserDom(toolName, payload, result) {
         case 'browser_open':
         case 'browser_search':
         case 'browser_go_back':
+        case 'browser_click':
+        case 'browser_pixel_click':
+        case 'browser_hover':
+        case 'browser_type':
+        case 'browser_key':
+        case 'browser_wait':
+        case 'execute_js':
+        case 'browser_screenshot':
             return true;
         case 'browser_tabs':
             return String(payload?.action ?? '').trim().toLowerCase() === 'select';
-        case 'browser_click':
-        case 'browser_pixel_click':
-            return result.url_changed === true || Number.isInteger(result.opened_tab_index);
-        case 'browser_type':
-            return payload?.submit === true;
         default:
             return false;
     }
@@ -3232,7 +3279,9 @@ async function withAutoFetchedBrowserDom(toolName, payload, result, signal) {
     const domFetchResult = await callBrowserTool('domfetch', {
         session_id: augmentedResult.session_id,
         tab_index: augmentedResult.tab_index,
-        mode: 'readable',
+        mode: 'snapshot',
+        max_chars: 100000,
+        limit: 200,
     }, signal);
 
     if (typeof domFetchResult === 'string') {
@@ -4722,7 +4771,7 @@ function registerBuiltinTools() {
             },
             action: async ({ session_id, tab_index, element_index, selector, text, text_index, x, y }, signal) => {
                 const result = await callBrowserTool('hover', { session_id, tab_index, element_index, selector, text, text_index, x, y }, signal);
-                return typeof result === 'string' ? result : augmentBrowserToolResult(result);
+                return await withAutoFetchedBrowserDom('browser_hover', { session_id, tab_index, element_index, selector, text, text_index, x, y }, result, signal);
             },
         },
         {
@@ -4795,7 +4844,7 @@ function registerBuiltinTools() {
             },
             action: async ({ session_id, tab_index, key, keys, delay_ms }, signal) => {
                 const result = await callBrowserTool('key', { session_id, tab_index, key, keys, delay_ms }, signal);
-                return typeof result === 'string' ? result : augmentBrowserToolResult(result);
+                return await withAutoFetchedBrowserDom('browser_key', { session_id, tab_index, key, keys, delay_ms }, result, signal);
             },
         },
         {
@@ -4828,7 +4877,8 @@ function registerBuiltinTools() {
                 required: ['session_id', 'tab_index'],
             },
             action: async ({ session_id, tab_index, text, selector, timeout_ms }, signal) => {
-                return await callBrowserTool('wait', { session_id, tab_index, text, selector, timeout_ms }, signal);
+                const result = await callBrowserTool('wait', { session_id, tab_index, text, selector, timeout_ms }, signal);
+                return await withAutoFetchedBrowserDom('browser_wait', { session_id, tab_index, text, selector, timeout_ms }, result, signal);
             },
         },
         {
@@ -4902,7 +4952,7 @@ function registerBuiltinTools() {
             },
             action: async ({ session_id, tab_index, code, selector, arg }, signal) => {
                 const result = await callBrowserTool('executejs', { session_id, tab_index, code, selector, arg }, signal);
-                return typeof result === 'string' ? result : augmentBrowserToolResult(result);
+                return await withAutoFetchedBrowserDom('execute_js', { session_id, tab_index, code, selector, arg }, result, signal);
             },
         },
         {
@@ -4936,10 +4986,10 @@ function registerBuiltinTools() {
                     return result;
                 }
 
-                return {
+                return await withAutoFetchedBrowserDom('browser_screenshot', { session_id, tab_index, filepath, full_page }, {
                     ...result,
                     ...getSandboxRequestContext(),
-                };
+                }, signal);
             },
         },
         {
