@@ -91,6 +91,7 @@ import { POPUP_TYPE, Popup, callGenericPopup } from './popup.js';
 import { t } from './i18n.js';
 import { accountStorage } from './util/AccountStorage.js';
 import { compressRequest } from './request-compression.js';
+import { shouldHideXmlToolExchanges } from './group-tool-visibility.js';
 
 export {
     selected_group,
@@ -122,6 +123,7 @@ let group_generation_id = null;
 let fav_grp_checked = false;
 let openGroupId = null;
 let newGroupMembers = [];
+const GROUP_XML_TOOL_EXCHANGES_HIDDEN_CLASS = 'group-xml-tool-exchanges-hidden';
 
 export const group_activation_strategy = {
     NATURAL: 0,
@@ -233,6 +235,18 @@ async function validateGroup(group) {
             dirty = true;
         }
         return character;
+    });
+
+    group.hide_xml_tool_exchanges = !!group.hide_xml_tool_exchanges;
+    const visibleMembers = Array.isArray(group.xml_tool_exchange_visible_members)
+        ? group.xml_tool_exchange_visible_members
+        : [];
+    group.xml_tool_exchange_visible_members = visibleMembers.filter((member, index, values) => {
+        const isValid = group.members.includes(member) && values.indexOf(member) === index;
+        if (!isValid) {
+            dirty = true;
+        }
+        return isValid;
     });
 
     // Remove duplicate chat ids
@@ -719,6 +733,11 @@ export async function renameGroupMember(oldAvatar, newAvatar, newName) {
 
             // Replace group member avatar id and save the changes
             group.members[memberIndex] = newAvatar;
+            if (Array.isArray(group.xml_tool_exchange_visible_members)) {
+                group.xml_tool_exchange_visible_members = group.xml_tool_exchange_visible_members
+                    .map(avatar => avatar === oldAvatar ? newAvatar : avatar)
+                    .filter(onlyUnique);
+            }
             await editGroup(group.id, true, false);
             console.log(`Renamed character ${newName} in group: ${group.name}`);
 
@@ -1078,6 +1097,7 @@ async function generateGroupWrapper(byAutoMode, type = null, params = {}) {
             deactivateSendButtons();
             setCharacterId(chId);
             setCharacterName(characters[chId].name);
+            updateActiveGroupXmlToolVisibility(group, chId, type === 'impersonate');
             if (power_user.show_group_chat_queue) {
                 printGroupMembers();
             }
@@ -1100,6 +1120,7 @@ async function generateGroupWrapper(byAutoMode, type = null, params = {}) {
             }
         }
     } finally {
+        updateActiveGroupXmlToolVisibility(null, null, false);
         is_group_generating = false;
         setSendButtonState(false);
         setCharacterId(undefined);
@@ -1459,6 +1480,11 @@ async function modifyGroupMember(groupId, groupMember, isDelete) {
         membersArray.unshift(id);
     }
 
+    if (thisGroup && Array.isArray(thisGroup.xml_tool_exchange_visible_members)) {
+        thisGroup.xml_tool_exchange_visible_members = thisGroup.xml_tool_exchange_visible_members
+            .filter(avatar => membersArray.includes(avatar));
+    }
+
     if (openGroupId) {
         await unshallowGroupMembers(openGroupId);
         await editGroup(openGroupId, false, false);
@@ -1467,6 +1493,7 @@ async function modifyGroupMember(groupId, groupMember, isDelete) {
 
     printGroupCandidates();
     printGroupMembers();
+    renderGroupXmlToolVisibilityMembers(thisGroup);
 
     // Refresh the tag filters for both lists to reflect any new tags
     printTagFilters(tag_filter_type.group_candidates_list);
@@ -1821,6 +1848,87 @@ function toggleHiddenControls(group, generationMode = null) {
 }
 
 /**
+ * Updates the group member allowlist dropdown without firing its persistence handler.
+ * @param {Group|null|undefined} group Group being edited, or null while creating a group
+ * @param {string[]|null} [selectedMembers=null] Explicit selection override
+ */
+function renderGroupXmlToolVisibilityMembers(group, selectedMembers = null) {
+    const select = $('#rm_group_xml_tool_exchange_visible_members');
+    const memberAvatars = group?.members ?? newGroupMembers;
+    const previousSelection = selectedMembers ?? (group
+        ? group.xml_tool_exchange_visible_members
+        : select.val());
+    const validSelection = Array.isArray(previousSelection)
+        ? previousSelection.filter(avatar => memberAvatars.includes(avatar))
+        : [];
+
+    select.empty();
+    for (const avatar of memberAvatars) {
+        const character = characters.find(item => item.avatar === avatar);
+        if (!character) {
+            continue;
+        }
+        $('<option></option>').val(avatar).text(character.name).appendTo(select);
+    }
+
+    select.val(validSelection).trigger('change.select2');
+}
+
+/**
+ * Shows or hides the XML tool visibility allowlist.
+ * @param {boolean} enabled Whether restricted visibility is enabled
+ */
+function toggleGroupXmlToolVisibilityControls(enabled) {
+    $('#rm_group_xml_tool_exchange_visible_members_block').toggle(enabled);
+}
+
+/**
+ * Applies chat opacity feedback for the active group generator.
+ * @param {Group|null} group Active group
+ * @param {number|string|null} characterId Active character ID
+ * @param {boolean} isUserPersona Whether the active generator is the user persona
+ */
+function updateActiveGroupXmlToolVisibility(group, characterId, isUserPersona = false) {
+    const avatar = characterId !== null && characterId !== undefined
+        ? characters[characterId]?.avatar
+        : null;
+    document.body.classList.toggle(
+        GROUP_XML_TOOL_EXCHANGES_HIDDEN_CLASS,
+        shouldHideXmlToolExchanges(group, avatar, { isUserPersona }),
+    );
+}
+
+async function onGroupHideXmlToolExchangesInput() {
+    const enabled = !!$(this).prop('checked');
+    toggleGroupXmlToolVisibilityControls(enabled);
+
+    if (openGroupId) {
+        const group = groups.find(item => item.id == openGroupId);
+        if (group) {
+            group.hide_xml_tool_exchanges = enabled;
+            await editGroup(openGroupId, false, false);
+        }
+    }
+}
+
+async function onGroupXmlToolVisibleMembersChange() {
+    if (!openGroupId) {
+        return;
+    }
+
+    const group = groups.find(item => item.id == openGroupId);
+    if (!group) {
+        return;
+    }
+
+    const selectedMembers = $(this).val();
+    group.xml_tool_exchange_visible_members = Array.isArray(selectedMembers)
+        ? selectedMembers.map(String).filter(avatar => group.members.includes(avatar))
+        : [];
+    await editGroup(openGroupId, false, false);
+}
+
+/**
  * Opens a group creation/editing right menu.
  * @param {string|null} groupId ID of the group to select or null if creating a new group
  * @param {boolean} skipAnimation If true, skips the animation when selecting the group
@@ -1861,6 +1969,10 @@ function select_group_chats(groupId, skipAnimation) {
     $('#rm_group_allow_self_responses').prop('checked', group && group.allow_self_responses);
     $('#rm_group_hidemutedsprites').prop('checked', group && group.hideMutedSprites);
     $('#rm_group_automode_delay').val(group?.auto_mode_delay ?? DEFAULT_AUTO_MODE_DELAY);
+    const hideXmlToolExchanges = !!group?.hide_xml_tool_exchanges;
+    $('#rm_group_hide_xml_tool_exchanges').prop('checked', hideXmlToolExchanges);
+    renderGroupXmlToolVisibilityMembers(group, group?.xml_tool_exchange_visible_members ?? []);
+    toggleGroupXmlToolVisibilityControls(hideXmlToolExchanges);
 
     $('#rm_group_generation_mode_join_prefix').val(group?.generation_mode_join_prefix ?? '').attr('setting', 'generation_mode_join_prefix');
     $('#rm_group_generation_mode_join_suffix').val(group?.generation_mode_join_suffix ?? '').attr('setting', 'generation_mode_join_suffix');
@@ -2124,6 +2236,8 @@ async function createGroup() {
     let activationStrategy = Number($('#rm_group_activation_strategy').find(':selected').val()) ?? group_activation_strategy.NATURAL;
     let generationMode = Number($('#rm_group_generation_mode').find(':selected').val()) ?? group_generation_mode.SWAP;
     let autoModeDelay = Number($('#rm_group_automode_delay').val()) ?? DEFAULT_AUTO_MODE_DELAY;
+    const hideXmlToolExchanges = !!$('#rm_group_hide_xml_tool_exchanges').prop('checked');
+    const xmlToolExchangeVisibleMembers = $('#rm_group_xml_tool_exchange_visible_members').val();
     const members = newGroupMembers;
     const memberNames = characters.filter(x => members.includes(x.avatar)).map(x => x.name).join(', ');
 
@@ -2149,6 +2263,10 @@ async function createGroup() {
         chat_id: chatName,
         chats: chats,
         auto_mode_delay: autoModeDelay,
+        hide_xml_tool_exchanges: hideXmlToolExchanges,
+        xml_tool_exchange_visible_members: Array.isArray(xmlToolExchangeVisibleMembers)
+            ? xmlToolExchangeVisibleMembers.map(String).filter(avatar => members.includes(avatar))
+            : [],
     };
 
     const createGroupResponse = await fetch('/api/groups/create', {
@@ -2555,6 +2673,14 @@ jQuery(() => {
     $('#rm_group_filter').on('input', filterGroupMembers);
     $('#rm_group_members_filter').on('input', filterGroupMemberList);
     $('#rm_group_submit').on('click', createGroup);
+    $('#rm_group_xml_tool_exchange_visible_members').select2({
+        width: '100%',
+        closeOnSelect: false,
+        placeholder: t`Select characters`,
+        dropdownParent: $('#rm_group_chats_block'),
+    });
+    $('#rm_group_hide_xml_tool_exchanges').on('input', onGroupHideXmlToolExchangesInput);
+    $('#rm_group_xml_tool_exchange_visible_members').on('change', onGroupXmlToolVisibleMembersChange);
     $('#rm_group_scenario').on('click', setCharacterSettingsOverrides);
     $('#rm_group_automode').on('input', function () {
         const value = $(this).prop('checked');

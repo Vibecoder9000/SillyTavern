@@ -1246,8 +1246,8 @@ export function getPromptRole(role) {
  * @param {object[]} options.messageExamples - Array containing all message examples.
  * @returns {Promise<void>}
  */
-async function populateChatCompletion(prompts, chatCompletion, { bias, quietPrompt, quietImage, type, cyclePrompt, messages, messageExamples }) {
-    const nativeToolPrompt = oai_settings.native_tool_calling
+async function populateChatCompletion(prompts, chatCompletion, { bias, quietPrompt, quietImage, type, cyclePrompt, messages, messageExamples, includeNativeToolPrompt = true }) {
+    const nativeToolPrompt = oai_settings.native_tool_calling && includeNativeToolPrompt
         ? await ToolManager.getNativeToolPrompt()
         : null;
     // Native tool instructions normally ride along with the 'main' prompt's content. That only
@@ -1626,6 +1626,7 @@ async function preparePromptsForChatCompletion({ scenario, charPersonality, name
  * @param {object} content.extensionPrompts - An array of additional prompts.
  * @param {object[]} content.messages - An array of messages to be used as chat history.
  * @param {string[]} content.messageExamples - An array of messages to be used as dialogue examples.
+ * @param {boolean} [content.includeNativeToolPrompt=true] Whether XML tool instructions should be included.
  * @param dryRun - Whether this is a live call or not.
  * @returns {Promise<(any[]|boolean)[]>} An array where the first element is the prepared chat and the second element is a boolean flag.
  */
@@ -1646,6 +1647,7 @@ export async function prepareOpenAIMessages({
     jailbreakPromptOverride,
     messages,
     messageExamples,
+    includeNativeToolPrompt = true,
 }, dryRun) {
     // Without a character selected, there is no way to accurately calculate tokens
     if (!promptManager.activeCharacter && dryRun) return [null, false];
@@ -1674,7 +1676,7 @@ export async function prepareOpenAIMessages({
         });
 
         // Fill the chat completion with as much context as the budget allows
-        await populateChatCompletion(prompts, chatCompletion, { bias, quietPrompt, quietImage, type, cyclePrompt, messages, messageExamples });
+        await populateChatCompletion(prompts, chatCompletion, { bias, quietPrompt, quietImage, type, cyclePrompt, messages, messageExamples, includeNativeToolPrompt });
     } catch (error) {
         if (error instanceof TokenBudgetExceededError) {
             toastr.error(t`Mandatory prompts exceed the context size.`);

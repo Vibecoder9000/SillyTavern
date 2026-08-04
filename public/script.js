@@ -263,6 +263,7 @@ import { AbortReason } from './scripts/util/AbortReason.js';
 import { initSystemPrompts } from './scripts/sysprompt.js';
 import { registerExtensionSlashCommands as initExtensionSlashCommands } from './scripts/extensions-slashcommands.js';
 import { ToolManager, initToolCalling, stopActivePythonRun, stopActiveShellRun } from './scripts/tool-calling.js';
+import { filterXmlToolExchanges, isXmlToolExchangeMessage, shouldHideXmlToolExchanges } from './scripts/group-tool-visibility.js';
 import { addShowdownPatch } from './scripts/util/showdown-patch.js';
 import { applyBrowserFixes } from './scripts/browser-fixes.js';
 import { initServerHistory } from './scripts/server-history.js';
@@ -2152,6 +2153,7 @@ export function updateMessageBlock(messageId, message, { rerenderMessage = true 
     hydrateToolResultMedia(message);
     ensureMessageMediaIsArray(message);
     const messageElement = chatElement.find(`[mesid="${messageId}"]`);
+    messageElement.toggleClass('xml-tool-exchange-message', isXmlToolExchangeMessage(message));
     if (rerenderMessage) {
         if (message.extra?.is_tool_call) {
             messageElement.find('.mes_text').html(getToolCallMessageHtml(message, messageId));
@@ -4873,6 +4875,7 @@ export function updateMessageElement(mes, { messageId = chat.length - 1, message
         // ...(type ?? { type }),
         'type': mes.extra?.type ?? '',
     });
+    messageElement.toggleClass('xml-tool-exchange-message', isXmlToolExchangeMessage(mes));
 
     messageElement.find('.avatar img').attr('src', avatarImg);
     messageElement.find('.ch_name .name_text').text(mes.name);
@@ -6878,10 +6881,14 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
     // Collect messages with usable content
     const canUseTools = ToolManager.isToolCallingSupported();
     const canPerformToolCalls = !dryRun && ToolManager.canPerformToolCalls(type) && depth < ToolManager.RECURSE_LIMIT;
+    const xmlToolVisibilityGroup = selected_group ? groups.find(group => group.id === selected_group) : null;
+    const activeCharacterAvatar = this_chid !== undefined ? characters[this_chid]?.avatar : null;
+    const hideXmlToolExchanges = shouldHideXmlToolExchanges(xmlToolVisibilityGroup, activeCharacterAvatar, { isUserPersona: isImpersonate });
     let coreChat = chat.filter(x => !x.is_system || (canUseTools && Array.isArray(x.extra?.tool_invocations)) || x.extra?.is_tool_result);
     if (type === 'swipe') {
         coreChat.pop();
     }
+    coreChat = filterXmlToolExchanges(coreChat, xmlToolVisibilityGroup, activeCharacterAvatar, { isUserPersona: isImpersonate });
 
     coreChat = await Promise.all(coreChat.map(async (/** @type {ChatMessage} */ chatItem, index) => {
         if (chatItem?.extra?.browser_observation && chatItem !== chat.at(-1)) {
@@ -7082,7 +7089,7 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
     // Add persona description to prompt
     addPersonaDescriptionExtensionPrompt();
 
-    const nativeToolPrompt = main_api !== 'openai' && oai_settings.native_tool_calling
+    const nativeToolPrompt = main_api !== 'openai' && oai_settings.native_tool_calling && !hideXmlToolExchanges
         ? await ToolManager.getNativeToolPrompt()
         : null;
 
@@ -7713,6 +7720,7 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
                 jailbreakPromptOverride: jailbreak,
                 messages: oaiMessages,
                 messageExamples: oaiMessageExamples,
+                includeNativeToolPrompt: !hideXmlToolExchanges,
             }, dryRun);
             generate_data = { prompt: prompt };
 
@@ -10979,6 +10987,7 @@ async function messageEditDone(div) {
     const mesElement = div.closest('.mes');
     mesElement.toggleClass('tool-call-message', !!mes.extra?.is_tool_call);
     mesElement.toggleClass('tool-result-message', !!mes.extra?.is_tool_result);
+    mesElement.toggleClass('xml-tool-exchange-message', isXmlToolExchangeMessage(mes));
 
     // Re-render tool call/result messages with their special formatting
     if (mes.extra?.is_tool_result) {

@@ -48,6 +48,8 @@ declare global {
         allow_self_responses?: boolean;
         avatar_url?: string;
         hideMutedSprites?: boolean;
+        hide_xml_tool_exchanges?: boolean;
+        xml_tool_exchange_visible_members?: string[];
         fav?: boolean;
         date_last_chat?: MessageTimestamp;
     }

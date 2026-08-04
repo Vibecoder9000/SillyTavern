@@ -1778,6 +1778,12 @@ body.hide-tool-messages .tool-result-message {
     display: none;
 }
 
+body.group-xml-tool-exchanges-hidden .xml-tool-exchange-message.tool-call-message .tool-call-box,
+body.group-xml-tool-exchanges-hidden .xml-tool-exchange-message.tool-result-message .mes_text {
+    opacity: 0.55;
+    transition: opacity 0.15s ease-in-out;
+}
+
 /* Manual Tool Execution Button */
 .tool-execute-button,
 .tool-stop-command-button {
