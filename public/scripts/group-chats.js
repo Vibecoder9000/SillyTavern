@@ -1696,6 +1696,7 @@ function printGroupMembers() {
                 for (const i of data) {
                     $('.rm_group_members').append(getGroupCharacterBlock(i.item));
                 }
+                renderGroupMemberSpeakPopout();
                 localizePagination($(that));
             },
         });
@@ -1826,6 +1827,7 @@ function toggleHiddenControls(group, generationMode = null) {
  */
 function select_group_chats(groupId, skipAnimation) {
     openGroupId = groupId;
+    renderGroupMemberSpeakPopout();
     newGroupMembers = [];
     const group = openGroupId && groups.find((x) => x.id == openGroupId);
     const groupName = group?.name ?? '';
@@ -2019,9 +2021,7 @@ async function onGroupActionClick(event) {
 
     if (action === 'speak') {
         const chid = Number(member.attr('data-chid'));
-        if (Number.isInteger(chid)) {
-            Generate('normal', { force_chid: chid });
-        }
+        triggerGroupMemberSpeak(chid);
     }
 
     await eventSource.emit(event_types.GROUP_UPDATED);
@@ -2486,6 +2486,61 @@ function doCurMemberListPopout() {
     }
 }
 
+function triggerGroupMemberSpeak(chid) {
+    if (Number.isInteger(chid)) {
+        Generate('normal', { force_chid: chid });
+    }
+}
+
+function renderGroupMemberSpeakPopout() {
+    const popout = $('#groupMemberSpeakPopout');
+    if (!popout.length) {
+        return;
+    }
+
+    const groupMembers = getGroupMembers(openGroupId).filter(Boolean);
+    popout.attr('data-group-id', openGroupId || '').empty();
+
+    for (const character of groupMembers) {
+        const chid = characters.indexOf(character);
+        if (!Number.isInteger(chid) || chid < 0) {
+            continue;
+        }
+
+        const memberButton = $('<div class="group_member_speak_popout_avatar interactable" tabindex="0" role="button"></div>')
+            .attr('title', character.name)
+            .attr('data-chid', chid);
+        $('<img alt="">')
+            .attr('src', character.avatar && character.avatar !== 'none' ? getThumbnailUrl('avatar', character.avatar) : default_avatar)
+            .attr('alt', character.name)
+            .appendTo(memberButton);
+        memberButton.on('click keydown', function (event) {
+            if (event.type === 'keydown' && event.key !== 'Enter' && event.key !== ' ') {
+                return;
+            }
+
+            event.preventDefault();
+            event.stopPropagation();
+            triggerGroupMemberSpeak(Number($(this).attr('data-chid')));
+        });
+        popout.append(memberButton);
+    }
+}
+
+function toggleGroupMemberSpeakPopout() {
+    let popout = $('#groupMemberSpeakPopout');
+    if (!popout.length) {
+        popout = $('<div id="groupMemberSpeakPopout" aria-label="Trigger a message from a group member"></div>')
+            .hide()
+            .appendTo('body');
+        renderGroupMemberSpeakPopout();
+    } else if (popout.attr('data-group-id') !== (openGroupId || '')) {
+        renderGroupMemberSpeakPopout();
+    }
+
+    popout.stop(true, true).fadeToggle(animation_duration);
+}
+
 jQuery(() => {
     if (!CSS.supports('field-sizing', 'content')) {
         $(document).on('input', '#rm_group_chats_block .autoSetHeight', function () {
@@ -2513,6 +2568,7 @@ jQuery(() => {
     });
     $('#send_textarea').on('keyup', onSendTextareaInput);
     $('#groupCurrentMemberPopoutButton').on('click', doCurMemberListPopout);
+    $('#groupMemberSpeakPopoutButton').on('click', toggleGroupMemberSpeakPopout);
     $('#rm_group_chat_name').on('input', onGroupNameInput);
     $('#rm_group_delete').off().on('click', onDeleteGroupClick);
     $('#group_favorite_button').on('click', onFavoriteGroupClick);

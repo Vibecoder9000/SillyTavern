@@ -6624,6 +6624,51 @@ body:not(.movingUI) .drawer-content.maximized {
 
 }
 
+#groupMemberSpeakPopout {
+    position: fixed;
+    top: 0;
+    right: 0;
+    z-index: 4001;
+    display: flex;
+    flex-wrap: wrap;
+    align-content: flex-start;
+    max-width: 100vw;
+    max-height: 100vh;
+    overflow: auto;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    box-shadow: none;
+}
+
+#groupMemberSpeakPopout .group_member_speak_popout_avatar {
+    display: block;
+    width: calc(var(--avatar-base-width) * var(--big-avatar-width-factor));
+    height: calc(var(--avatar-base-height) * var(--big-avatar-height-factor));
+    margin: 0;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    cursor: pointer;
+}
+
+#groupMemberSpeakPopout .group_member_speak_popout_avatar img {
+    display: block;
+    width: 100%;
+    height: 100%;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    border-radius: calc(var(--avatar-base-border-radius) * var(--big-avatar-border-factor));
+    object-fit: cover;
+    object-position: center;
+}
+
+body.layout-plus-plus #groupMemberSpeakPopout {
+    right: calc(var(--settings-panel-width) + var(--authors-note-panel-width) + var(--stcdxcodex));
+}
+
 
 
 .timestamp {
