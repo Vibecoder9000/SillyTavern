@@ -95,6 +95,7 @@ let resizeStart = null;
 let autoSizeFrame = 0;
 const pendingAutoSizes = new Map();
 const autoSizeCache = new WeakMap();
+const observedFieldWidths = new WeakMap();
 let lineNumberTimer = 0;
 const pendingLineNumberUpdates = new Set();
 let openRenderFrame = 0;
@@ -874,29 +875,36 @@ function ensureConversation() {
 }
 function effectiveValue(id) { return state.pending[id]?.after ?? state.values[id]; }
 function liveValue(id) { return state.values[id]; }
-function autoSize(element, manual = false) {
+function autoSize(element, manual = false, shrink = true) {
     if (!(element instanceof HTMLTextAreaElement)) return;
-    pendingAutoSizes.set(element, manual);
+    const pending = pendingAutoSizes.get(element);
+    pendingAutoSizes.set(element, {
+        manual: manual || pending?.manual || false,
+        shrink: shrink || pending?.shrink || false,
+    });
     if (autoSizeFrame) return;
     autoSizeFrame = requestAnimationFrame(() => {
         autoSizeFrame = 0;
         const queued = [...pendingAutoSizes]
             .filter(([textarea]) => textarea.isConnected)
-            .filter(([textarea, isManual]) => {
-                const key = `${textarea.value}\0${textarea.clientWidth}\0${isManual}\0${window.innerHeight}`;
+            .map(([textarea, options]) => {
+                const width = textarea.clientWidth;
+                const key = `${textarea.value}\0${width}\0${options.manual}\0${window.innerHeight}`;
                 const cached = autoSizeCache.get(textarea);
                 // morphdom keeps the textarea node but removes its runtime inline
                 // height when the freshly rendered markup has no style attribute.
                 // A value/width-only cache hit would then leave it at the CSS
                 // one-line minimum until the user types or changes sections.
-                return cached?.key !== key
+                const changed = cached?.key !== key
                     || cached.height !== textarea.style.height
                     || cached.overflowY !== textarea.style.overflowY;
-            });
+                return changed ? { textarea, ...options, key } : null;
+            })
+            .filter(Boolean);
         pendingAutoSizes.clear();
         if (!queued.length) return;
         const scrollers = new Map();
-        for (const [textarea] of queued) {
+        for (const { textarea } of queued) {
             // A card textarea can have two independently scrolling ancestors: its
             // capped code-field wrapper and the complete card pane. Resizing after a
             // newline briefly collapses the textarea and can reset either ancestor.
@@ -907,28 +915,37 @@ function autoSize(element, manual = false) {
                 if (scroller && !scrollers.has(scroller)) scrollers.set(scroller, scroller.scrollTop);
             }
         }
-        // Reset all heights before measuring. Keeping reads and writes in separate
-        // phases prevents one textarea's height from invalidating every later read.
-        queued.forEach(([textarea]) => { textarea.style.height = 'auto'; textarea.style.overflowY = 'hidden'; });
-        const measurements = queued.map(([textarea, isManual]) => {
+        // A full measurement is needed on render, resize, and blur so a field can
+        // shrink. While typing, keep the existing height and only grow when content
+        // actually overflows it; most keystrokes then perform no style writes.
+        queued.filter(({ shrink }) => shrink).forEach(({ textarea }) => {
+            textarea.style.height = 'auto';
+            textarea.style.overflowY = 'hidden';
+        });
+        const measurements = queued.map(({ textarea, manual, shrink, key }) => {
             // The field wrapper caps and scrolls the complete editor (gutter and
             // text together). Keep the textarea itself at its full content height.
             const logicalCap = textarea.classList.contains('cc-field-input')
                 ? Number.POSITIVE_INFINITY
-                : isManual ? Math.floor(window.innerHeight * .95) : MAX_FIELD_HEIGHT();
+                : manual ? Math.floor(window.innerHeight * .95) : MAX_FIELD_HEIGHT();
             // Some controls (notably the composer) have a smaller CSS max-height
             // than the general editor cap. Use the rendered cap so overflow is
             // enabled as soon as CSS stops the textarea from growing.
-            const cssCap = Number.parseFloat(getComputedStyle(textarea).maxHeight);
+            const cssCap = textarea.classList.contains('cc-field-input')
+                ? Number.POSITIVE_INFINITY
+                : Number.parseFloat(getComputedStyle(textarea).maxHeight);
             const cap = Number.isFinite(cssCap) ? Math.min(logicalCap, cssCap) : logicalCap;
-            const key = `${textarea.value}\0${textarea.clientWidth}\0${isManual}\0${window.innerHeight}`;
-            return { textarea, cap, key, scrollHeight: textarea.scrollHeight };
+            return { textarea, cap, key, shrink, scrollHeight: textarea.scrollHeight, currentHeight: textarea.clientHeight };
         });
-        measurements.forEach(({ textarea, cap, key, scrollHeight }) => {
+        measurements.forEach(({ textarea, cap, key, shrink, scrollHeight, currentHeight }) => {
             // Preserve the composer's intended one-line height.
             const minimumHeight = textarea.id === 'cc-editor-composer' ? 36 : 28;
-            textarea.style.height = `${Math.min(Math.max(scrollHeight, minimumHeight), cap)}px`;
-            textarea.style.overflowY = scrollHeight > cap ? 'auto' : 'hidden';
+            const measuredHeight = Math.min(Math.max(scrollHeight, minimumHeight), cap);
+            const height = shrink ? measuredHeight : Math.max(currentHeight, measuredHeight);
+            const overflowY = scrollHeight > cap ? 'auto' : 'hidden';
+            const heightStyle = `${height}px`;
+            if (textarea.style.height !== heightStyle) textarea.style.height = heightStyle;
+            if (textarea.style.overflowY !== overflowY) textarea.style.overflowY = overflowY;
             autoSizeCache.set(textarea, {
                 key,
                 height: textarea.style.height,
@@ -1636,7 +1653,7 @@ function bindLorebookControls(card) {
             setLoreProperty(entry, input.dataset.loreProperty, value);
             updateLorebookProposalAfter();
             writeLorebookToCard(); persist();
-            if (input.classList.contains('cc-lore-content')) { autoSize(input); scheduleLineNumberUpdate(input); updateLorebookTokenCountDebounced(); }
+            if (input.classList.contains('cc-lore-content')) { autoSize(input, false, false); scheduleLineNumberUpdate(input); updateLorebookTokenCountDebounced(); }
         });
         input.addEventListener('blur', () => {
             const after = loreEntry(input.dataset.loreEntry)?.[input.dataset.loreProperty];
@@ -1843,9 +1860,13 @@ function renderCard() {
     fieldLineNumberObserver?.disconnect();
     fieldLineNumberObserver ||= new ResizeObserver(entries => {
         for (const entry of entries) {
+            const width = entry.contentRect.width;
+            const previousWidth = observedFieldWidths.get(entry.target);
+            observedFieldWidths.set(entry.target, width);
+            // Autosizing changes height. Only width changes affect wrapping, line
+            // geometry, and scrollHeight, so ignore our own resize notification.
+            if (previousWidth === undefined || previousWidth === width) continue;
             scheduleLineNumberUpdate(entry.target);
-            // Width changes alter textarea scrollHeight even when the value is
-            // unchanged. The guarded cache makes the height-only callback a no-op.
             if (entry.target instanceof HTMLTextAreaElement) autoSize(entry.target);
         }
     });
@@ -1902,6 +1923,7 @@ function renderCard() {
                     if (appendPendingCardChangeNotice(activeConversation())) renderChat();
                 }
             }
+            if (input instanceof HTMLTextAreaElement) autoSize(input);
             persist();
             if (hadPending) renderCard();
         });
@@ -1941,7 +1963,7 @@ function onFieldInput(input) {
         state.pending[id].after = inputValue; syncToolCall(state.pending[id]);
     }
     else { state.values[id] = inputValue; setCardValue(id, inputValue); saveCharacterDebounced(); }
-    scheduleLineNumberUpdate(input); autoSize(input); persist();
+    scheduleLineNumberUpdate(input); autoSize(input, false, false); persist();
 }
 async function collectionAction(button) {
     const row = button.closest('.cc-collection-row');
@@ -2894,7 +2916,9 @@ function render() {
     renderCard(); renderChat();
     renderPendingActions();
     renderCustomInstructions();
-    const composer = $('#cc-editor-composer'); composer.value = state.draft || ''; autoSize(composer);
+    const composer = $('#cc-editor-composer');
+    composer.value = state.draft || '';
+    composer.style.height = '';
 }
 function snapshotSection(label, value) {
     const text = String(value ?? '');
@@ -3748,7 +3772,7 @@ async function send() {
     state.draftAttachments = [];
     composer.value = '';
     composer.scrollTop = 0;
-    autoSize(composer);
+    composer.style.height = '';
     renderChat();
     persist();
     await generateAssistant(conversation);
@@ -3971,7 +3995,7 @@ export async function initCharacterCardEditor() {
         attachmentTargetMessageId = null;
         void uploadImageAttachments(event.target.files, targetMessageId);
     });
-    $('#cc-editor-composer')?.addEventListener('input', event => { if (!state) return; state.draft = event.target.value; autoSize(event.target); persist(); });
+    $('#cc-editor-composer')?.addEventListener('input', event => { if (!state) return; state.draft = event.target.value; persist(); });
     $('#cc-editor-composer')?.addEventListener('paste', event => {
         const files = Array.from(event.clipboardData?.files || []).filter(file => file.type.startsWith('image/'));
         if (!files.length) return;

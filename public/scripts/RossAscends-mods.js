@@ -59,10 +59,13 @@ var SelectedCharacterTab = document.getElementById('rm_button_selected_ch');
 
 var connection_made = false;
 var retry_delay = 500;
-let counterNonce = Date.now();
+let counterNonce = 0;
+let fullTokenCountPending = false;
 
 const observerConfig = { childList: true, subtree: true };
-const countTokensDebounced = debounce(RA_CountCharTokens, debounce_timeout.relaxed);
+const pendingTokenCounterIds = new Set();
+const tokenCounterInputIds = new Set(Array.from(document.querySelectorAll('[data-token-counter]'), element => element.dataset.tokenCounter));
+const countTokensDebounced = debounce(countPendingCharacterTokens, debounce_timeout.relaxed);
 const countTokensShortDebounced = debounce(RA_CountCharTokens, debounce_timeout.short);
 const checkStatusDebounced = debounce(RA_checkOnlineStatus, debounce_timeout.short);
 
@@ -200,58 +203,104 @@ $('#rm_button_create').on('click', function () {                 //when "+New Ch
     $(SelectedCharacterTab).children('h2').html('');        // empty nav's 3rd panel tab
 });
 //when any input is made to the create/edit character form textareas
-$('#rm_ch_create_block').on('input', function () { countTokensDebounced(); });
+$('#rm_ch_create_block').on('input', queueCharacterTokenCount);
 //when any input is made to the advanced editing popup textareas
-$('#character_popup').on('input', function () { countTokensDebounced(); });
+$('#character_popup').on('input', queueCharacterTokenCount);
+
+/**
+ * Queues a token recount only for an editor input that has a token counter.
+ * @param {JQuery.TriggeredEvent} event Input event.
+ */
+function queueCharacterTokenCount(event) {
+    const inputId = event.target instanceof HTMLElement ? event.target.id : '';
+    if (!inputId || !tokenCounterInputIds.has(inputId)) {
+        return;
+    }
+
+    pendingTokenCounterIds.add(inputId);
+    countTokensDebounced();
+}
+
+/**
+ * Flushes all token-counter inputs changed during the debounce window.
+ */
+function countPendingCharacterTokens() {
+    const inputIds = new Set(pendingTokenCounterIds);
+    pendingTokenCounterIds.clear();
+    return RA_CountCharTokens(inputIds);
+}
+
 //function:
-export async function RA_CountCharTokens() {
-    counterNonce = Date.now();
+/**
+ * Recounts character editor tokens.
+ * @param {Set<string>} [inputIds] Input IDs to update. Omit to perform a full recount.
+ */
+export async function RA_CountCharTokens(inputIds) {
+    counterNonce++;
     const counterNonceLocal = counterNonce;
-    let total_tokens = 0;
-    let permanent_tokens = 0;
+    const tokenCounters = Array.from(document.querySelectorAll('[data-token-counter]'));
+    // A targeted update can arrive before the initial full count has completed.
+    // In that case, fill every counter so the aggregate does not briefly show a partial total.
+    const requiresFullCount = !inputIds
+        || fullTokenCountPending
+        || tokenCounters.some(tokenCounter => !Number.isFinite(Number(tokenCounter.textContent)));
+    const countersToUpdate = requiresFullCount
+        ? tokenCounters
+        : tokenCounters.filter(tokenCounter => inputIds.has(tokenCounter.dataset.tokenCounter));
+    fullTokenCountPending ||= requiresFullCount;
 
-    const tokenCounters = document.querySelectorAll('[data-token-counter]');
-    for (const tokenCounter of tokenCounters) {
-        if (counterNonceLocal !== counterNonce) {
-            return;
-        }
-
+    const updates = await Promise.all(countersToUpdate.map(async tokenCounter => {
         const counter = $(tokenCounter);
         const input = $(document.getElementById(counter.data('token-counter')));
-        const isPermanent = counter.data('token-permanent') === true;
-        const value = String(input.val());
 
         if (input.length === 0) {
-            counter.text('Invalid input reference');
-            continue;
+            return { counter, input, valueHash: null, tokens: null };
         }
 
+        const value = String(input.val());
         if (!value) {
-            input.data('last-value-hash', '');
-            counter.text(0);
-            continue;
+            return { counter, input, valueHash: '', tokens: 0 };
         }
 
         const valueHash = getStringHash(value);
 
         if (input.data('last-value-hash') === valueHash) {
-            total_tokens += Number(counter.text());
-            permanent_tokens += isPermanent ? Number(counter.text()) : 0;
-        } else {
-            // We substitute macro for existing characters, but not for the character being created
-            const valueToCount = menu_type === 'create' ? value : substituteParams(value);
-            const tokens = await getTokenCountAsync(valueToCount);
-
-            if (counterNonceLocal !== counterNonce) {
-                return;
-            }
-
-            counter.text(tokens);
-            total_tokens += tokens;
-            permanent_tokens += isPermanent ? tokens : 0;
-            input.data('last-value-hash', valueHash);
+            return { counter, input, valueHash, tokens: Number(counter.text()) };
         }
+
+        // We substitute macros for existing characters, but not for the character being created.
+        const valueToCount = menu_type === 'create' ? value : substituteParams(value);
+        const tokens = await getTokenCountAsync(valueToCount);
+        return { counter, input, valueHash, tokens };
+    }));
+
+    if (counterNonceLocal !== counterNonce) {
+        return;
     }
+
+    for (const { counter, input, valueHash, tokens } of updates) {
+        if (tokens === null) {
+            counter.text('Invalid input reference');
+            continue;
+        }
+
+        counter.text(tokens);
+        input.data('last-value-hash', valueHash);
+    }
+
+    // Unchanged counters already contain their current value, so totals remain cheap to derive.
+    let total_tokens = 0;
+    let permanent_tokens = 0;
+    for (const tokenCounter of tokenCounters) {
+        const tokens = Number(tokenCounter.textContent);
+        if (!Number.isFinite(tokens)) {
+            continue;
+        }
+
+        total_tokens += tokens;
+        permanent_tokens += tokenCounter.dataset.tokenPermanent === 'true' ? tokens : 0;
+    }
+    fullTokenCountPending = false;
 
     // Warn if total tokens exceeds the limit of half the max context
     const tokenLimit = Math.max(((main_api !== 'openai' ? max_context : oai_settings.openai_max_context) / 2), 1024);

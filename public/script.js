@@ -14042,10 +14042,14 @@ jQuery(async function () {
         });
     });
 
-    $('#creator_notes_textarea').on('input', function () {
+    const updateCreatorNotesPreviewDebounced = debounce(function () {
         const notes = String($('#creator_notes_textarea').val());
         const avatar = menu_type === 'create' ? '' : characters[this_chid]?.avatar;
         $('#creator_notes_spoiler').html(formatCreatorNotes(notes, avatar));
+    }, debounce_timeout.short);
+
+    $('#creator_notes_textarea').on('input', function () {
+        updateCreatorNotesPreviewDebounced();
     });
 
     $('#favorite_button').on('click', function () {
