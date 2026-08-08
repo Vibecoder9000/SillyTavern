@@ -1035,7 +1035,7 @@ export async function selectCharacterById(id, { switchMenu = true } = {}) {
         if (is_send_press) return false;
         setCharacterId(undefined);
         setCharacterName('');
-        resetSelectedGroup();
+        resetSelectedGroup({ hideMemberSpeakPopout: true });
         await clearChat({ clearData: true });
         cancelTtsPlay();
         this_edit_mes_id = undefined;
@@ -2999,7 +2999,7 @@ export async function prepareWorkspaceLastChatForNewChat() {
         sandbox_workspace: workspace,
         workspace_last_chat: {
             snapshot: String(snapshot.snapshot ?? ''),
-            enabled: true,
+            enabled: false,
             source_workspace: String(snapshot.workspace ?? workspace),
         },
     };

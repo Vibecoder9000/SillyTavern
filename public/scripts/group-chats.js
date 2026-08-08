@@ -634,7 +634,10 @@ async function getFirstCharacterMessage(character) {
     return mes;
 }
 
-function resetSelectedGroup() {
+function resetSelectedGroup({ hideMemberSpeakPopout = false } = {}) {
+    if (hideMemberSpeakPopout) {
+        hideGroupMemberSpeakPopout();
+    }
     selected_group = null;
     is_group_generating = false;
 }
@@ -2179,7 +2182,7 @@ export async function openGroupById(groupId) {
             groupChatQueueOrder = new Map();
             setCharacterId(undefined);
             setCharacterName('');
-            resetSelectedGroup();
+            resetSelectedGroup({ hideMemberSpeakPopout: true });
             await clearChat({ clearData: true });
             cancelTtsPlay();
             selected_group = groupId;
@@ -2625,6 +2628,7 @@ function renderGroupMemberSpeakPopout() {
             continue;
         }
 
+        const memberSlot = $('<div class="group_member_speak_popout_avatar_slot"></div>');
         const memberButton = $('<div class="group_member_speak_popout_avatar interactable" tabindex="0" role="button"></div>')
             .attr('title', character.name)
             .attr('data-chid', chid);
@@ -2641,22 +2645,32 @@ function renderGroupMemberSpeakPopout() {
             event.stopPropagation();
             triggerGroupMemberSpeak(Number($(this).attr('data-chid')));
         });
-        popout.append(memberButton);
+        memberSlot.append(memberButton).appendTo(popout);
     }
 }
 
-function toggleGroupMemberSpeakPopout() {
+function hideGroupMemberSpeakPopout() {
+    $('#groupMemberSpeakPopout').stop(true, true).hide();
+}
+
+function toggleGroupMemberSpeakPopout(event) {
+    event.preventDefault();
+    event.stopPropagation();
+
     let popout = $('#groupMemberSpeakPopout');
     if (!popout.length) {
         popout = $('<div id="groupMemberSpeakPopout" aria-label="Trigger a message from a group member"></div>')
             .hide()
             .appendTo('body');
-        renderGroupMemberSpeakPopout();
-    } else if (popout.attr('data-group-id') !== (openGroupId || '')) {
-        renderGroupMemberSpeakPopout();
     }
 
-    popout.stop(true, true).fadeToggle(animation_duration);
+    if (popout.is(':visible')) {
+        popout.stop(true, true).fadeOut(animation_duration);
+        return;
+    }
+
+    renderGroupMemberSpeakPopout();
+    popout.stop(true, true).fadeIn(animation_duration).css('display', 'flex');
 }
 
 jQuery(() => {

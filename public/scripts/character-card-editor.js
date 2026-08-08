@@ -5,26 +5,29 @@ import { parseReasoningStream } from './reasoning.js';
 import { accountStorage } from './util/AccountStorage.js';
 import { getTokenCountAsync } from './tokenizers.js';
 import { cancelDebounce, debounce, escapeHtml, getBase64Async, getFileExtension, getStringHash, saveBase64AsFile, uuidv4 } from './utils.js';
-import { DiffMatchPatch, morphdom } from '../lib.js';
+import { morphdom } from '../lib.js';
 import { ToolManager } from './tool-calling.js';
 import { resolveDeleteCardSpan, resolveInsertCardText, resolveReplaceCardText } from './character-card-edit.js';
+import { computeCharacterCardDiff } from './character-card-diff.js';
 import { loadCharacterDesignerPrompts, renderCharacterDesignerPrompt } from './character-designer-prompt.js';
 import { normalizeCharacterDesignerFieldLabel, resolveCharacterDesignerFieldAlias } from './character-designer-fields.js';
 
 const WORKSPACE_PREFIX = 'st-character-card-editor:';
 const CHARACTER_DESIGNER_XML_SCOPE = 'character-designer';
 const CHARACTER_DESIGNER_MODE_KEY = 'st-character-designer:questioning-mode';
+const CHARACTER_DESIGNER_INSTRUCTIONS_KEY = 'st-character-designer:custom-instructions';
 const MAX_HISTORY = 80;
 const MAX_CHECKPOINTS = 24;
 const MAX_HISTORY_BYTES = 32 * 1024 * 1024;
 const MAX_CHECKPOINT_BYTES = 8 * 1024 * 1024;
-const DIFF_TIMEOUT_SECONDS = .05;
 const TOOL_PARSE_CACHE_LIMIT = 64;
 const MAX_TOOL_RETRIES = 7;
 const MAX_TOOL_CONTEXT_CHANGED_LINES = 12;
 const UNCHANGED_READ_RESULT_SUFFIX = ' unchanged; use its value from original_card.';
 const MAX_CARD_CHANGE_CONTEXT_LENGTH = 4000;
 const CARD_CHANGE_TRUNCATION_SUFFIX = '... truncated';
+const PARTIAL_RESPONSE_CONTINUATION = 'partial-response';
+const CONTINUATION_USER_PLACEHOLDER = ' ';
 const MAX_FIELD_HEIGHT = () => Math.floor(window.innerHeight * .75);
 const FIELDS = Object.freeze([
     { id: 'description', label: 'Description', path: 'description', section: 'permanent' },
@@ -42,10 +45,10 @@ const FIELDS = Object.freeze([
     { id: 'version', label: 'Version', path: 'character_version', section: 'metadata' },
 ]);
 const CARD_SECTIONS = Object.freeze([
-    { id: 'permanent', label: 'Permanent (Always)' },
-    { id: 'temporary', label: 'Temporary (Usually)' },
-    { id: 'lorebook', label: 'Lorebook (Sometimes)' },
-    { id: 'metadata', label: 'Metadata (Never)' },
+    { id: 'permanent', label: 'Permanent (Always)', shortLabel: 'Permanent', frequencyLabel: 'Always' },
+    { id: 'temporary', label: 'Temporary (Usually)', shortLabel: 'Temporary', frequencyLabel: 'Usually' },
+    { id: 'lorebook', label: 'Lorebook (Sometimes)', shortLabel: 'Lorebook', frequencyLabel: 'Sometimes' },
+    { id: 'metadata', label: 'Metadata (Never)', shortLabel: 'Metadata', frequencyLabel: 'Never' },
 ].map(section => ({
     ...section,
     fields: FIELDS.filter(field => field.section === section.id).map(field => field.id),
@@ -126,7 +129,6 @@ const boundChatContainers = new WeakSet();
 const boundReasoningScrollers = new WeakSet();
 const REASONING_OPEN_OVERRIDE = Object.freeze({ OPEN: 'open', CLOSED: 'closed' });
 let controlsPositionFrame = 0;
-const INLINE_PENDING_GAP_MAX = 8;
 // One shared accept/reject pair follows the hunk under the pointer. Showing a pair
 // per hunk buries the field's text once a proposal touches more than a few spots.
 let activeHunk = null;
@@ -146,7 +148,6 @@ const messageEdit = {
     toolResultId: null,
     toolResultDraft: '',
 };
-let customInstructionsFocusSnapshot = null;
 let activeCustomInstructionsPopup = null;
 let editorLayoutObserver = null;
 let fieldLineNumberObserver = null;
@@ -619,6 +620,7 @@ function createState(saved = null) {
         conversation.baseline.__loreEntryIds = deepCopy(savedBaseline?.__loreEntryIds ?? next.loreEntryIds);
         conversation.knownCard.__lorebook = deepCopy(savedKnownCard?.__lorebook ?? next.lorebook);
         conversation.knownCard.__loreEntryIds = deepCopy(savedKnownCard?.__loreEntryIds ?? next.loreEntryIds);
+        delete conversation.pendingCardState;
     }
     delete next.baseline;
     next.activeConversation ||= next.conversations[0]?.id || null;
@@ -643,7 +645,9 @@ function createState(saved = null) {
         section.id,
         Math.max(0, Number(next.cardSectionScrollTops?.[section.id]) || 0),
     ]));
-    next.customInstructions = String(next.customInstructions || '');
+    // Custom instructions are account-global, not part of an avatar-keyed workspace.
+    // Deliberately discard the obsolete workspace property without migrating it.
+    delete next.customInstructions;
     next.draftAttachments = normalizeImageAttachments(next.draftAttachments);
     return next;
 }
@@ -675,20 +679,57 @@ function trimCheckpoints(checkpoints) {
 let workspaceSavePromise = Promise.resolve();
 let workspaceSaveRunning = false;
 let pendingWorkspaceSave = null;
+const WORKSPACE_SAVE_RETRY_DELAYS = Object.freeze([500, 1500, 5000, 15000, 30000]);
+function workspaceSaveRetryDelay(failureCount) {
+    return WORKSPACE_SAVE_RETRY_DELAYS[Math.min(failureCount - 1, WORKSPACE_SAVE_RETRY_DELAYS.length - 1)];
+}
+function waitForWorkspaceSaveRetry(milliseconds) {
+    return new Promise(resolve => setTimeout(resolve, milliseconds));
+}
+async function saveWorkspaceWithRetry(initialSave) {
+    let save = initialSave;
+    let failureCount = 0;
+    while (true) {
+        try {
+            const response = await fetch('/api/character-designer/save', {
+                method: 'POST',
+                headers: getRequestHeaders(),
+                body: JSON.stringify({ avatar_url: save.avatarUrl, workspace: save.workspace }),
+            });
+            if (!response.ok) {
+                const error = new Error(`Character Designer workspace save failed (${response.status})`);
+                // Validation and authorization failures will not heal with retries.
+                error.retryable = response.status >= 500 || response.status === 408 || response.status === 429;
+                throw error;
+            }
+            persistWarningShown = false;
+            return;
+        } catch (error) {
+            if (error?.retryable === false) throw error;
+            failureCount++;
+            console.error('Character card editor: could not persist the workspace; retrying.', error);
+            if (!persistWarningShown) {
+                persistWarningShown = true;
+                toastr.error('Editor changes could not be saved yet. The Character Designer will keep retrying.', 'Character card editor');
+            }
+            await waitForWorkspaceSaveRetry(workspaceSaveRetryDelay(failureCount));
+            // A newer snapshot for the same character supersedes the failed one.
+            // Saves for another character must remain queued until this one lands.
+            if (pendingWorkspaceSave?.avatarUrl === save.avatarUrl) {
+                save = pendingWorkspaceSave;
+                pendingWorkspaceSave = null;
+            }
+        }
+    }
+}
 function startWorkspaceSaveLoop() {
     if (workspaceSaveRunning || !pendingWorkspaceSave) return;
     workspaceSaveRunning = true;
     workspaceSavePromise = (async () => {
         while (pendingWorkspaceSave) {
-            const { avatarUrl, workspace } = pendingWorkspaceSave;
+            const save = pendingWorkspaceSave;
             pendingWorkspaceSave = null;
-            const response = await fetch('/api/character-designer/save', {
-                method: 'POST',
-                headers: getRequestHeaders(),
-                body: JSON.stringify({ avatar_url: avatarUrl, workspace }),
-            });
-            if (!response.ok) throw new Error(`Character Designer workspace save failed (${response.status})`);
-            persistWarningShown = false;
+            await saveWorkspaceWithRetry(save);
         }
     })().catch(error => {
         console.error('Character card editor: could not persist the workspace.', error);
@@ -710,7 +751,7 @@ function persistWorkspace() {
     return workspaceSavePromise;
 }
 const persist = debounce(persistWorkspace, 500);
-function snapshot() { return deepCopy({ values: state.values, lorebook: state.lorebook, loreEntryIds: state.loreEntryIds, lorebookProposal: state.lorebookProposal, expandedLoreEntries: state.expandedLoreEntries, pending: state.pending, conversations: state.conversations, activeConversation: state.activeConversation, draft: state.draft, draftAttachments: state.draftAttachments, heights: state.heights, cardWidth: state.cardWidth, customInstructions: state.customInstructions }); }
+function snapshot() { return deepCopy({ values: state.values, lorebook: state.lorebook, loreEntryIds: state.loreEntryIds, lorebookProposal: state.lorebookProposal, expandedLoreEntries: state.expandedLoreEntries, pending: state.pending, conversations: state.conversations, activeConversation: state.activeConversation, draft: state.draft, draftAttachments: state.draftAttachments, heights: state.heights, cardWidth: state.cardWidth }); }
 function snapshotSize(value) {
     if (!value || typeof value !== 'object') return 0;
     if (!historySizeCache.has(value)) historySizeCache.set(value, serializedSize(value));
@@ -729,7 +770,6 @@ function record(value = snapshot()) {
     return value;
 }
 function compactSignature(value) { return String(getStringHash(JSON.stringify(value))); }
-function snapshotSignature(value) { return compactSignature([value.values, value.lorebook, value.loreEntryIds, value.lorebookProposal, value.pending, value.conversations, value.customInstructions]); }
 // A checkpoint only ever restores card state, so it deliberately drops the conversation
 // history. Keeping it would store MAX_CHECKPOINTS copies of every message and reasoning
 // trace beside the live workspace file.
@@ -772,7 +812,7 @@ function workspaceMatchesCard() {
         && JSON.stringify(state.lorebook) === JSON.stringify(liveCharacterBook());
 }
 function restoreSnapshot(next) { Object.assign(state, deepCopy(next)); writeWorkspaceToCard(); render(); persist(); }
-function customInstructionsValue() { return String(state?.customInstructions || ''); }
+function customInstructionsValue() { return accountStorage.getItem(CHARACTER_DESIGNER_INSTRUCTIONS_KEY) || ''; }
 function isCustomInstructionsOpen() { return Boolean(activeCustomInstructionsPopup); }
 async function closeCustomInstructionsPopup({ restoreFocus = false } = {}) {
     const button = $('#cc-editor-custom-instructions-button');
@@ -786,14 +826,22 @@ async function openCustomInstructionsPopup() {
     if (!state) return;
     const button = $('#cc-editor-custom-instructions-button');
     if (!button) return;
-    customInstructionsFocusSnapshot ||= snapshot();
     const content = document.createElement('div');
     content.className = 'cc-editor-custom-instructions-popup';
     content.innerHTML = `<h3>Custom Instructions</h3><p>Applied to every editor reply. Use this for rules like "don't make edits until I say so."</p><textarea id="cc-editor-custom-instructions-input" class="text_pole" rows="12" placeholder="Optional instructions for the editor model..."></textarea>`;
     const input = content.querySelector('#cc-editor-custom-instructions-input');
     input.value = customInstructionsValue();
     input.addEventListener('input', event => commitCustomInstructions(event.target.value));
-    const popup = new Popup(content, POPUP_TYPE.DISPLAY, '', {
+    let popup;
+    const closeOnOutsidePointer = event => {
+        const bounds = popup.dlg.getBoundingClientRect();
+        const outside = event.clientX < bounds.left
+            || event.clientX > bounds.right
+            || event.clientY < bounds.top
+            || event.clientY > bounds.bottom;
+        if (outside) void closeCustomInstructionsPopup();
+    };
+    popup = new Popup(content, POPUP_TYPE.DISPLAY, '', {
         wider: true,
         leftAlign: true,
         allowVerticalScrolling: true,
@@ -806,26 +854,20 @@ async function openCustomInstructionsPopup() {
             });
         },
         onClose: () => {
+            document.removeEventListener('pointerdown', closeOnOutsidePointer, true);
             button.setAttribute('aria-expanded', 'false');
-            if (customInstructionsFocusSnapshot) {
-                const before = customInstructionsFocusSnapshot;
-                customInstructionsFocusSnapshot = null;
-                if (snapshotSignature(before) !== snapshotSignature(snapshot())) {
-                    pushHistory(undo, before);
-                    redo = [];
-                }
-            }
             activeCustomInstructionsPopup = null;
             renderCustomInstructions();
         },
     });
-    // DISPLAY popups do not close from their backdrop by default. Treat a click
-    // on the native dialog backdrop target like the close button.
-    popup.dlg.addEventListener('click', event => {
-        if (event.target === popup.dlg) void closeCustomInstructionsPopup();
-    });
     activeCustomInstructionsPopup = popup;
-    await popup.show();
+    const popupResult = popup.show();
+    document.addEventListener('pointerdown', closeOnOutsidePointer, true);
+    try {
+        await popupResult;
+    } finally {
+        document.removeEventListener('pointerdown', closeOnOutsidePointer, true);
+    }
 }
 async function toggleCustomInstructionsPopup() {
     if (isCustomInstructionsOpen()) await closeCustomInstructionsPopup({ restoreFocus: true });
@@ -841,9 +883,8 @@ function renderCustomInstructions() {
 }
 function commitCustomInstructions(value) {
     if (!state) return;
-    state.customInstructions = String(value ?? '');
+    accountStorage.setItem(CHARACTER_DESIGNER_INSTRUCTIONS_KEY, String(value ?? ''));
     renderCustomInstructions();
-    persist();
 }
 function fieldLabel(id, index = null) {
     const label = fieldById.get(id)?.label || id;
@@ -1084,9 +1125,10 @@ function scheduleLineNumberUpdate(input, { immediate = false } = {}) {
 function diffIsPending(diff) {
     const current = state.pending[diff.field];
     if (!current) return false;
-    const unresolved = pendingDiffParts(current).filter(part => part.type === 'hunk');
+    const unresolved = pendingDiffParts(current).filter(part => part.type === 'hunk').flatMap(hunkChanges);
     return pendingDiffParts(diff)
         .filter(part => part.type === 'hunk')
+        .flatMap(hunkChanges)
         .some(proposed => unresolved.some(part => part.removed === proposed.removed && part.added === proposed.added));
 }
 function diffHtml(pending) {
@@ -1167,8 +1209,6 @@ function streamedToolText(text, toolParse = null) {
 function streamedProse(text, toolParse = null) {
     const source = String(text || '');
     const scopedTools = toolParse || parseCharacterDesignerToolCalls(source);
-    const firstCall = scopedTools.calls[0];
-    if (firstCall) return source.slice(0, firstCall.start).trim();
     return scopedTools.parsed.segments
         .filter(segment => segment.type === 'text')
         .map(segment => segment.text)
@@ -1187,101 +1227,19 @@ function collectionControl(id) {
         const body = pending && beforeValue !== value
             ? `<div class="cc-field-body cc-code-field has-pending" data-field="${id}" data-index="${index}">${lineNumberGutter(value)}${pendingFieldControl({ field: id, before: beforeValue, after: value }, { index })}</div>`
             : `<div class="cc-field-body cc-code-field">${lineNumberGutter(value)}<textarea class="text_pole cc-field-input" data-field="${id}" data-index="${index}" rows="1" wrap="soft">${escapeHtml(value)}</textarea></div>`;
-        return `<div class="cc-collection-row"><div class="cc-collection-row-header"><span>${fieldLabel(id, index)}</span><div class="cc-collection-controls"><button class="cc-delete menu_button menu_button_icon" data-collection-action="delete" title="Delete ${singular.toLowerCase()}" type="button"><i class="fa-solid fa-trash-can"></i></button></div></div>${body}</div>`;
+        return `<div class="cc-collection-row"><div class="cc-collection-row-header"><span>${fieldLabel(id, index)}</span><div class="cc-collection-controls"><button class="cc-delete menu_button menu_button_icon" data-collection-action="delete" title="Delete ${singular.toLowerCase()}" type="button"><i class="fa-solid fa-trash-can"></i></button>${fieldTokenCounterHtml(id, index)}</div></div>${body}</div>`;
     }).join('')}</div>`;
 }
 function valueFromText(id, text) {
     if (!isCollection(id)) return text;
     return id === 'examples' ? splitExamples(text) : [text];
 }
-function isInlinePendingGap(text) {
-    return typeof text === 'string' && text.length > 0 && text.length <= INLINE_PENDING_GAP_MAX && !/\s/.test(text);
-}
-function createUiDiffer() {
-    const dmp = new DiffMatchPatch();
-    // A render must never monopolize the main thread for diff-match-patch's
-    // one-second default deadline. Its timeout fallback is still a valid (coarser)
-    // diff, and the result is cached below for the lifetime of the values.
-    dmp.Diff_Timeout = DIFF_TIMEOUT_SECONDS;
-    return dmp;
-}
 function pendingDiffParts(pending) {
     const beforeText = asText(pending.before);
     const afterText = asText(pending.after);
     const cached = pending && typeof pending === 'object' ? pendingDiffCache.get(pending) : null;
     if (cached?.before === beforeText && cached?.after === afterText) return cached.parts;
-    const dmp = createUiDiffer();
-    const diffs = dmp.diff_main(beforeText, afterText);
-    // Collapse incidental character matches inside a replacement so the UI
-    // presents meaningful word/phrase changes instead of fragmented letters.
-    dmp.diff_cleanupSemantic(diffs);
-    const rawParts = [];
-    let beforePosition = 0;
-    let afterPosition = 0;
-    let hunk = null;
-    const finishHunk = () => {
-        if (!hunk) return;
-        hunk.beforeEnd = beforePosition;
-        hunk.afterEnd = afterPosition;
-        rawParts.push(hunk);
-        hunk = null;
-    };
-    for (const [operation, text] of diffs) {
-        if (operation === 0) {
-            finishHunk();
-            rawParts.push({ type: 'equal', text });
-            beforePosition += text.length;
-            afterPosition += text.length;
-            continue;
-        }
-        hunk ||= { type: 'hunk', beforeStart: beforePosition, afterStart: afterPosition, removed: '', added: '' };
-        if (operation < 0) { hunk.removed += text; beforePosition += text.length; }
-        else { hunk.added += text; afterPosition += text.length; }
-    }
-    finishHunk();
-    const parts = [];
-    let mergedHunk = null;
-    let pendingGap = null;
-    let hunkIndex = 0;
-    const pushMergedHunk = () => {
-        if (!mergedHunk) return;
-        parts.push({
-            type: 'hunk',
-            beforeStart: mergedHunk.beforeStart,
-            afterStart: mergedHunk.afterStart,
-            beforeEnd: mergedHunk.beforeEnd,
-            afterEnd: mergedHunk.afterEnd,
-            removed: beforeText.slice(mergedHunk.beforeStart, mergedHunk.beforeEnd),
-            added: afterText.slice(mergedHunk.afterStart, mergedHunk.afterEnd),
-            index: hunkIndex++,
-        });
-        mergedHunk = null;
-    };
-    for (const part of rawParts) {
-        if (part.type === 'equal') {
-            if (mergedHunk && isInlinePendingGap(part.text)) {
-                pendingGap = part;
-                continue;
-            }
-            pushMergedHunk();
-            if (pendingGap) {
-                parts.push(pendingGap);
-                pendingGap = null;
-            }
-            parts.push(part);
-            continue;
-        }
-        if (!mergedHunk) {
-            mergedHunk = { ...part };
-            pendingGap = null;
-            continue;
-        }
-        mergedHunk.beforeEnd = part.beforeEnd;
-        mergedHunk.afterEnd = part.afterEnd;
-        pendingGap = null;
-    }
-    pushMergedHunk();
-    if (pendingGap) parts.push(pendingGap);
+    const parts = computeCharacterCardDiff(beforeText, afterText);
     if (pending && typeof pending === 'object') pendingDiffCache.set(pending, { before: beforeText, after: afterText, parts });
     return parts;
 }
@@ -1329,7 +1287,7 @@ function cardChangesText(sections) {
     const details = sections.flatMap(section => {
         const hunks = pendingDiffParts(section).filter(part => part.type === 'hunk');
         const changes = hunks.length
-            ? hunks.map(part => changeContent(part.removed, part.added))
+            ? hunks.flatMap(hunk => hunkChanges(hunk).map(change => changeContent(change.removed, change.added)))
             : [changeContent(section.before, section.after)];
         return changes.filter(Boolean).map(change => `**${section.label}**\n${change}`);
     });
@@ -1351,13 +1309,13 @@ function cardChangesContext(sections) {
         if (!hunks.length) {
             return [changeXml(section, 0, 0, section.before, section.after)];
         }
-        return hunks.map(part => changeXml(
+        return hunks.flatMap(hunk => hunkChanges(hunk).map(change => changeXml(
             section,
-            lineAt(section.before, part.beforeStart),
-            lineAt(section.after, part.afterStart),
-            part.removed,
-            part.added,
-        ));
+            lineAt(section.before, change.beforeStart),
+            lineAt(section.after, change.afterStart),
+            change.removed,
+            change.added,
+        )));
     });
     return truncateCardChangeContext(`<card_changes>\n${changes.join('\n')}\n</card_changes>`);
 }
@@ -1367,16 +1325,34 @@ function truncateCardChangeContext(context) {
     const suffix = Array.from(CARD_CHANGE_TRUNCATION_SUFFIX);
     return `${characters.slice(0, MAX_CARD_CHANGE_CONTEXT_LENGTH - suffix.length).join('')}${CARD_CHANGE_TRUNCATION_SUFFIX}`;
 }
-function detectConversationCardChanges(conversation = activeConversation()) {
-    if (!conversation?.knownCard) return [];
-    const current = currentCardValues();
-    const sections = changedCardSections(conversation.knownCard, current);
-    if (sections.length) conversation.pendingCardState = current;
-    else delete conversation.pendingCardState;
-    return sections;
+function hunkChanges(hunk) {
+    return (hunk?.segments || []).filter(segment => segment.type === 'change');
 }
-function appendPendingCardChangeNotice(conversation) {
-    const sections = detectConversationCardChanges(conversation);
+function hunkChangeContent(hunk) {
+    return hunkChanges(hunk).map(change => changeContent(change.removed, change.added)).join('\n\n');
+}
+function pendingChangeHtml(change) {
+    const removed = change.removed ? ` data-removed="${escapeHtml(change.removed)}"` : '';
+    return `<span class="cc-pending-change"${removed}><span class="cc-add cc-pending-add">${escapeHtml(change.added)}</span></span>`;
+}
+function pendingDiffContentHtml(pending) {
+    return pendingDiffParts(pending).map(part => {
+        if (part.type === 'equal') return escapeHtml(part.text);
+        const content = part.segments.map(segment => segment.type === 'equal' ? escapeHtml(segment.text) : pendingChangeHtml(segment)).join('');
+        return `<span class="cc-pending-hunk" data-hunk="${part.index}">${content}</span>`;
+    }).join('');
+}
+function appendCardChangeNoticeForSend(conversation) {
+    if (!conversation?.knownCard) return false;
+    const current = currentCardValues();
+    // With no transcript there is no prior model context to correct. Treat the
+    // card at the first send as the conversation's starting point instead.
+    if (!conversation.messages.length) {
+        conversation.baseline = deepCopy(current);
+        conversation.knownCard = deepCopy(current);
+        return false;
+    }
+    const sections = changedCardSections(conversation.knownCard, current);
     if (!sections.length) return false;
     conversation.messages.push({
         id: uuidv4(),
@@ -1385,8 +1361,7 @@ function appendPendingCardChangeNotice(conversation) {
         text: cardChangesText(sections),
         cardChangeContext: cardChangesContext(sections),
     });
-    conversation.knownCard = deepCopy(conversation.pendingCardState);
-    delete conversation.pendingCardState;
+    conversation.knownCard = deepCopy(current);
     return true;
 }
 function updateKnownCardFields(conversation, fields) {
@@ -1394,18 +1369,10 @@ function updateKnownCardFields(conversation, fields) {
     for (const id of new Set(fields.filter(id => fieldById.has(id)))) {
         conversation.knownCard[id] = deepCopy(liveValue(id));
     }
-    detectConversationCardChanges(conversation);
 }
 function pendingFieldControl(pending, { index = null } = {}) {
     const dataIndex = index === null ? '' : ` data-index="${index}"`;
-    const content = pendingDiffParts(pending).map(part => {
-        // Equal text needs no element of its own. Large edits can contain hundreds
-        // of equal runs, and wrapping every one makes each style invalidation walk
-        // a much larger tree while the proposal is pending.
-        if (part.type === 'equal') return escapeHtml(part.text);
-        const removed = part.removed ? ` data-removed="${escapeHtml(part.removed)}"` : '';
-        return `<span class="cc-pending-change cc-pending-hunk" data-hunk="${part.index}"${removed}><span class="cc-add cc-pending-add">${escapeHtml(part.added)}</span></span>`;
-    }).join('');
+    const content = pendingDiffContentHtml(pending);
     return `<div class="text_pole cc-field-input cc-pending-field" data-field="${pending.field}"${dataIndex} contenteditable="plaintext-only" spellcheck="true">${content}</div>`;
 }
 function lorePropertyText(property, value) {
@@ -1424,11 +1391,7 @@ function lorePendingChange(entryId, property) {
     return before === after ? null : { field: property, before, after };
 }
 function lorePendingControl(entryId, property, pending, { editable = true, className = '', tag = 'div' } = {}) {
-    const content = pendingDiffParts(pending).map(part => {
-        if (part.type === 'equal') return escapeHtml(part.text);
-        const removed = part.removed ? ` data-removed="${escapeHtml(part.removed)}"` : '';
-        return `<span class="cc-pending-change cc-pending-hunk" data-hunk="${part.index}"${removed}><span class="cc-add cc-pending-add">${escapeHtml(part.added)}</span></span>`;
-    }).join('');
+    const content = pendingDiffContentHtml(pending);
     const editableAttributes = editable ? ' contenteditable="plaintext-only" spellcheck="true"' : '';
     return `<${tag} class="text_pole cc-pending-field cc-lore-pending-field ${className}" data-lore-entry="${escapeHtml(entryId)}" data-lore-property="${property}"${editableAttributes}>${content}</${tag}>`;
 }
@@ -1562,25 +1525,64 @@ function loreInput(entryId, property, value, type = 'text') {
 function lorebookTokenSource() {
     return (state.lorebook?.entries || []).map(entry => String(entry.content || '')).filter(Boolean).join('\n');
 }
-async function updateLorebookTokenCount() {
-    if (!state.lorebook) return;
-    const source = lorebookTokenSource();
-    const sourceHash = getStringHash(source);
-    const count = source ? await getTokenCountAsync(source) : 0;
-    if (!state.lorebook || getStringHash(lorebookTokenSource()) !== sourceHash) return;
-    const counter = $('#cc-lore-token-count');
-    if (!counter) return;
-    counter.textContent = `${count.toLocaleString()} ${count === 1 ? 'token' : 'tokens'}`;
+function tokenCountText(count) {
+    return `${count.toLocaleString()} ${count === 1 ? 'token' : 'tokens'}`;
 }
-const updateLorebookTokenCountDebounced = debounce(() => void updateLorebookTokenCount(), 300);
+function fieldTokenCounterHtml(id, index = null) {
+    const indexAttribute = index === null ? '' : ` data-token-index="${index}"`;
+    return `<small class="cc-token-count cc-field-token-count" data-token-field="${id}"${indexAttribute} title="Token count using the current tokenizer.">… tokens</small>`;
+}
+function fieldTokenSources() {
+    return FIELDS.flatMap(field => {
+        if (field.section === 'metadata' || field.type === 'number') return [];
+        const value = effectiveValue(field.id);
+        if (!isCollection(field.id)) return [{ id: field.id, index: null, section: field.section, source: asText(value) }];
+        const values = Array.isArray(value) ? value : [];
+        const beforeValues = Array.isArray(state.pending[field.id]?.before) ? state.pending[field.id].before : [];
+        const count = Math.max(values.length, beforeValues.length, field.id === 'greetings' ? 1 : 0);
+        return Array.from({ length: count }, (_, index) => ({
+            id: field.id,
+            index,
+            section: field.section,
+            source: collectionItemValue(values, index),
+        }));
+    });
+}
+function cardTokenCountSignature(sources, loreSource) {
+    return String(getStringHash(JSON.stringify([sources.map(item => [item.id, item.index, item.source]), loreSource])));
+}
+function setTokenCountText(selector, count) {
+    document.querySelectorAll(selector).forEach(counter => { counter.textContent = tokenCountText(count); });
+}
+async function updateCardTokenCounts() {
+    if (!state) return;
+    const sources = fieldTokenSources();
+    const loreSource = lorebookTokenSource();
+    const signature = cardTokenCountSignature(sources, loreSource);
+    const counts = await Promise.all(sources.map(item => item.source ? getTokenCountAsync(item.source) : 0));
+    const loreCount = loreSource ? await getTokenCountAsync(loreSource) : 0;
+    if (!state || cardTokenCountSignature(fieldTokenSources(), lorebookTokenSource()) !== signature) return;
+    const sectionCounts = { permanent: 0, temporary: 0, lorebook: loreCount };
+    sources.forEach((item, sourceIndex) => {
+        const count = counts[sourceIndex];
+        sectionCounts[item.section] += count;
+        const indexSelector = item.index === null ? ':not([data-token-index])' : `[data-token-index="${item.index}"]`;
+        setTokenCountText(`[data-token-field="${item.id}"]${indexSelector}`, count);
+    });
+    for (const section of ['permanent', 'temporary', 'lorebook']) {
+        setTokenCountText(`[data-token-section="${section}"]`, sectionCounts[section]);
+    }
+    setTokenCountText('#cc-lore-token-count', loreCount);
+}
+const updateCardTokenCountsDebounced = debounce(() => void updateCardTokenCounts(), 300);
 function lorebookSectionHtml() {
     if (!state.lorebook) return `<section class="cc-field cc-lorebook" id="cc-field-lorebook">
-        <div class="cc-field-label"><span title="Character Book entries add context to the prompt when their keys match recent chat text.">Character Book</span><div class="cc-lore-header-actions"><button class="menu_button menu_button_icon" data-lore-action="create" type="button" title="Embed a Character Book in this card and open its first entry."><i class="fa-solid fa-book-medical"></i><span>Create Book</span></button></div></div>
-        <div class="cc-lore-empty">No character book</div>
+        <div class="cc-field-label"><span title="Character Book entries add context to the prompt when their keys match recent chat text.">Character Book</span></div>
+        <button class="cc-add-collection-footer menu_button menu_button_icon" data-lore-action="create" type="button" title="Embed a Character Book in this card and open its first entry."><i class="fa-solid fa-book-medical"></i><span>Create Book</span></button>
     </section>`;
     const entries = state.lorebook.entries || [];
     return `<section class="cc-field cc-lorebook" id="cc-field-lorebook">
-        <div class="cc-field-label"><span class="cc-lore-heading" title="Character Book entries add context to the prompt when their keys match recent chat text.">Character Book <small id="cc-lore-token-count" title="Combined token count for all entry content using the current tokenizer.">… tokens</small></span><div class="cc-lore-header-actions">
+        <div class="cc-field-label"><span class="cc-lore-heading" title="Character Book entries add context to the prompt when their keys match recent chat text.">Character Book <small id="cc-lore-token-count" class="cc-token-count" title="Combined token count for all entry content using the current tokenizer.">… tokens</small></span><div class="cc-lore-header-actions">
             <button class="menu_button menu_button_icon" data-lore-action="add" type="button" title="Add another matching rule to this Character Book."><i class="fa-solid fa-plus"></i><span>Add Entry</span></button>
             <button class="menu_button menu_button_icon cc-lore-delete-book" data-lore-action="delete-book" type="button" title="Remove this Character Book and all of its entries from the card." aria-label="Remove Character Book"><i class="fa-solid fa-trash-can"></i></button>
         </div></div>
@@ -1647,13 +1649,18 @@ function bindLorebookControls(card) {
         });
         input.addEventListener('input', () => {
             const entry = loreEntry(input.dataset.loreEntry); if (!entry) return;
+            const previousValue = entry[input.dataset.loreProperty];
             const value = input instanceof HTMLInputElement
                 ? (input.type === 'checkbox' ? input.checked : input.value)
                 : fieldEditorValue(input);
             setLoreProperty(entry, input.dataset.loreProperty, value);
             updateLorebookProposalAfter();
             writeLorebookToCard(); persist();
-            if (input.classList.contains('cc-lore-content')) { autoSize(input, false, false); scheduleLineNumberUpdate(input); updateLorebookTokenCountDebounced(); }
+            if (input.classList.contains('cc-lore-content')) {
+                autoSize(input, false, String(value).length < String(previousValue ?? '').length);
+                scheduleLineNumberUpdate(input);
+                updateCardTokenCountsDebounced();
+            }
         });
         input.addEventListener('blur', () => {
             const after = loreEntry(input.dataset.loreEntry)?.[input.dataset.loreProperty];
@@ -1665,7 +1672,6 @@ function bindLorebookControls(card) {
         });
         input.addEventListener('change', () => { if (!input.classList.contains('cc-lore-content')) renderCard(); });
     });
-    void updateLorebookTokenCount();
 }
 function resolveLorebookProposal(action, { renderAfter = true } = {}) {
     const proposal = state.lorebookProposal;
@@ -1693,7 +1699,7 @@ function resolveLorePending(entryId, property, hunkIndex, action) {
     const before = record();
     const removed = property === 'constant' ? pending.before : hunk.removed;
     const added = property === 'constant' ? pending.after : hunk.added;
-    checkpoint(`${loreEntryLabel(state.lorebook.entries[afterIndex], afterIndex)} ${lorePropertyLabel(property)} AI proposal`, before, changeContent(removed, added));
+    checkpoint(`${loreEntryLabel(state.lorebook.entries[afterIndex], afterIndex)} ${lorePropertyLabel(property)} AI proposal`, before, property === 'constant' ? changeContent(removed, added) : hunkChangeContent(hunk));
     const applyText = (entry, text) => {
         if (property === 'constant') entry[property] = /^(?:yes|true)$/i.test(text.trim());
         else setLoreProperty(entry, property, text);
@@ -1767,11 +1773,23 @@ async function lorebookAction(button) {
     writeLorebookToCard(); renderCard(); persist();
 }
 function cardFieldHtml(id) {
-    const { label, type } = fieldById.get(id);
-    return `<div class="cc-field" id="cc-field-${id}"><div class="cc-field-label"><span>${label}</span>${isCollection(id) ? `<button class="cc-add-collection menu_button menu_button_icon" data-add-collection="${id}" type="button" title="Add ${id === 'examples' ? 'example' : 'greeting'}"><i class="fa-solid fa-plus"></i><span>Add</span></button>` : ''}</div>${fieldControl(id, effectiveValue(id), type)}</div>`;
+    const { label, type, section } = fieldById.get(id);
+    if (id === 'depth') return '';
+    if (id === 'characterNote') {
+        return `<div class="cc-field" id="cc-field-${id}"><div class="cc-field-label"><span>${label}</span><div class="cc-field-label-actions"><label class="cc-character-note-depth" id="cc-field-depth"><span>Depth</span>${fieldControl('depth', effectiveValue('depth'), 'number')}</label>${fieldTokenCounterHtml(id)}</div></div>${fieldControl(id, effectiveValue(id), type)}</div>`;
+    }
+    if (isCollection(id)) {
+        const singular = id === 'examples' ? 'example' : 'greeting';
+        return `<div class="cc-field cc-collection-field" id="cc-field-${id}">${fieldControl(id, effectiveValue(id), type)}<button class="cc-add-collection cc-add-collection-footer menu_button menu_button_icon" data-add-collection="${id}" type="button" title="Add ${singular}"><i class="fa-solid fa-plus"></i><span>Add ${singular}</span></button></div>`;
+    }
+    const counter = section === 'metadata' ? '' : fieldTokenCounterHtml(id);
+    return `<div class="cc-field" id="cc-field-${id}"><div class="cc-field-label"><span>${label}</span>${counter}</div>${fieldControl(id, effectiveValue(id), type)}</div>`;
 }
 function cardSectionTabsHtml(activeSection) {
-    return `<div class="cc-card-section-tabs" role="tablist" aria-label="Character card sections">${CARD_SECTIONS.map(section => `<button id="cc-card-tab-${section.id}" role="tab" type="button" data-card-section="${section.id}" aria-selected="${section.id === activeSection}" aria-controls="cc-card-panel-${section.id}" tabindex="${section.id === activeSection ? '0' : '-1'}" title="${section.label} card fields">${section.label}</button>`).join('')}</div>`;
+    return `<div class="cc-card-section-tabs" role="tablist" aria-label="Character card sections">${CARD_SECTIONS.map(section => {
+        const counter = section.id === 'metadata' ? '' : `<small class="cc-token-count cc-tab-token-count" data-token-section="${section.id}">… tokens</small>`;
+        return `<button id="cc-card-tab-${section.id}" role="tab" type="button" data-card-section="${section.id}" aria-selected="${section.id === activeSection}" aria-controls="cc-card-panel-${section.id}" tabindex="${section.id === activeSection ? '0' : '-1'}" title="${section.label} card fields"><span>${section.shortLabel}<span class="cc-card-section-frequency"> (${section.frequencyLabel})</span></span>${counter}</button>`;
+    }).join('')}</div>`;
 }
 function cardSectionPanelHtml(activeSection) {
     return CARD_SECTIONS.map(section => {
@@ -1920,7 +1938,6 @@ function renderCard() {
                     const before = edit.snapshot;
                     pushHistory(undo, before); redo = [];
                     checkpoint(`${fieldLabel(edit.id, edit.index)} manual edit`, before, changeContent(edit.beforeValue, currentValue));
-                    if (appendPendingCardChangeNotice(activeConversation())) renderChat();
                 }
             }
             if (input instanceof HTMLTextAreaElement) autoSize(input);
@@ -1936,9 +1953,10 @@ function renderCard() {
     card.querySelectorAll('[data-add-collection]').forEach(button => {
         if (button.dataset.addCollectionBound === 'true') return;
         button.dataset.addCollectionBound = 'true';
-        button.addEventListener('click', () => { const id = button.dataset.addCollection; record(); checkpoint(fieldLabel(id), snapshot(), asText(state.values[id])); state.values[id].push(''); setCardValue(id, state.values[id]); saveCharacterDebounced(); appendPendingCardChangeNotice(activeConversation()); renderCard(); renderChat(); persist(); });
+        button.addEventListener('click', () => { const id = button.dataset.addCollection; record(); checkpoint(fieldLabel(id), snapshot(), asText(state.values[id])); state.values[id].push(''); setCardValue(id, state.values[id]); saveCharacterDebounced(); renderCard(); persist(); });
     });
     bindLorebookControls(card);
+    void updateCardTokenCounts();
     restoreScrollPositions();
     requestAnimationFrame(() => {
         if (card.isConnected) restoreScrollPositions();
@@ -1954,6 +1972,9 @@ function onFieldInput(input) {
         ? input.value
         : input.innerText.replaceAll('\r\n', '\n');
     inputValue = normalizeFieldStateValue(id, inputValue);
+    const previousValue = isCollection(id)
+        ? collectionItemValue(effectiveValue(id), input.dataset.index)
+        : asText(effectiveValue(id));
     if (isCollection(id)) {
         const values = [...effectiveValue(id)]; values[Number(input.dataset.index)] = inputValue;
         state.values[id] = values; setCardValue(id, values); saveCharacterDebounced();
@@ -1963,7 +1984,10 @@ function onFieldInput(input) {
         state.pending[id].after = inputValue; syncToolCall(state.pending[id]);
     }
     else { state.values[id] = inputValue; setCardValue(id, inputValue); saveCharacterDebounced(); }
-    scheduleLineNumberUpdate(input); autoSize(input, false, false); persist();
+    scheduleLineNumberUpdate(input);
+    autoSize(input, false, String(inputValue).length < previousValue.length);
+    updateCardTokenCountsDebounced();
+    persist();
 }
 async function collectionAction(button) {
     const row = button.closest('.cc-collection-row');
@@ -1985,9 +2009,7 @@ async function collectionAction(button) {
     state.values[id] = values;
     setCardValue(id, values);
     saveCharacterDebounced();
-    const noticed = appendPendingCardChangeNotice(activeConversation());
     renderCard();
-    if (noticed) renderChat();
     persist();
 }
 function resolvePending(id, hunkIndex, action, index = null) {
@@ -2000,7 +2022,7 @@ function resolvePending(id, hunkIndex, action, index = null) {
     // pieces from several tool records after semantic cleanup or overlapping edits;
     // requiring it to match exactly one historical record makes a valid revert fail.
     const before = record();
-    checkpoint(`${fieldLabel(id, index)} AI proposal`, before, changeContent(hunk.removed, hunk.added));
+    checkpoint(`${fieldLabel(id, index)} AI proposal`, before, hunkChangeContent(hunk));
     if (index === null) {
         if (action === 'accept') {
             const before = asText(pending.before);
@@ -2177,10 +2199,10 @@ function editResultSummary(diffs) {
             loreSummaries.push(lorebookChangeSummary(diff));
             continue;
         }
-        const dmp = createUiDiffer();
-        for (const [operation, text] of dmp.diff_main(asText(diff.before), asText(diff.after))) {
-            if (operation > 0) added += characterCount(text);
-            if (operation < 0) removed += characterCount(text);
+        const changes = pendingDiffParts(diff).filter(part => part.type === 'hunk').flatMap(hunkChanges);
+        for (const change of changes) {
+            added += characterCount(change.added);
+            removed += characterCount(change.removed);
         }
     }
     const parts = [];
@@ -2452,9 +2474,7 @@ function messageBubbleHtml(message) {
     const errors = [...(message.errors || []), ...(message.error ? [message.error] : [])];
     const toolCall = !message.streaming ? toolCallSummaryHtml(message) : '';
     if (!(message.streaming || displayText || message.attachments?.length || canEditAttachments || message.reasoning || message.toolStream || message.toolXml || message.diffs?.length || errors.length)) return '';
-    const canResume = activeConversation()?.pendingContinuation && activeConversation()?.messages.at(-1)?.id === message.id;
-    const resume = canResume ? '<button class="cc-flow-continue menu_button" type="button"><i class="fa-solid fa-arrow-right"></i><span>Continue</span></button>' : '';
-    return `<article class="cc-message ${message.role === 'user' ? 'cc-user-message' : ''} ${canEdit ? 'cc-message-has-edit' : ''} ${canEditAttachments ? 'cc-message-has-attachment-action' : ''} ${canFork ? 'cc-message-has-fork-action' : ''}" data-message-id="${message.id}">${actions}${reasoning}<div class="cc-message-text">${formattedMessageText(displayText, message.role)}</div>${attachments}${toolStream}${toolCall}${(message.diffs || []).map(diffHtml).join('')}${resume}</article>`;
+    return `<article class="cc-message ${message.role === 'user' ? 'cc-user-message' : ''} ${canEdit ? 'cc-message-has-edit' : ''} ${canEditAttachments ? 'cc-message-has-attachment-action' : ''} ${canFork ? 'cc-message-has-fork-action' : ''}" data-message-id="${message.id}">${actions}${reasoning}<div class="cc-message-text">${formattedMessageText(displayText, message.role)}</div>${attachments}${toolStream}${toolCall}${(message.diffs || []).map(diffHtml).join('')}</article>`;
 }
 function messageHtml(message) {
     if (messageEdit.id === message.id) {
@@ -2495,7 +2515,10 @@ function patchReasoning(article, anchor, message, reasoning, changed) {
     // Streaming may continue after the user explicitly opens or closes reasoning, so
     // always resolve the open state from the message model instead of the live DOM.
     setReasoningDetailsOpen(details, resolveReasoningOpen(message));
-    if (body && message.streaming && shouldFollow && details.open) {
+    // The assistant message remains "streaming" while its main response is being
+    // written. Only move the reasoning scroller when reasoning itself changed;
+    // otherwise every response repaint overrides the user's reading position.
+    if (body && changed && message.streaming && shouldFollow && details.open) {
         requestAnimationFrame(() => scrollReasoningIntoView(body));
     } else if (body) {
         requestAnimationFrame(() => updateReasoningFades(body));
@@ -2656,8 +2679,6 @@ function bindChatEvents(messages) {
             removeMessageAttachment(button);
         } else if (button.matches('.cc-message-attachment-add')) {
             openAttachmentPicker(message?.dataset.messageId);
-        } else if (button.matches('.cc-flow-continue')) {
-            resumeConversationFlow();
         }
     });
     messages.addEventListener('input', event => {
@@ -2687,6 +2708,7 @@ function chatNodeKey(node) {
 }
 function renderChat() {
     const messages = $('#cc-editor-messages'); const conversation = activeConversation();
+    const scrollTop = messages.scrollTop;
     const keepAtBottom = messages.scrollHeight - messages.scrollTop - messages.clientHeight < 48;
     const streamScrollMessage = (conversation?.messages || []).findLast(message => streamMessageAutoFollow.has(message));
     if (streamScrollMessage && !keepAtBottom) streamMessageAutoFollow.set(streamScrollMessage, false);
@@ -2705,10 +2727,19 @@ function renderChat() {
         }
     });
     if (streamScrollMessage) {
-        followStreamingMessage(messages, streamScrollMessage);
+        if (streamMessageAutoFollow.get(streamScrollMessage) === true) {
+            followStreamingMessage(messages, streamScrollMessage);
+        } else {
+            // Finishing a response replaces its streaming-only markup with actions,
+            // tool results and diffs. Those changes can make the browser choose a
+            // different scroll anchor, so preserve the reading position explicitly.
+            messages.scrollTop = scrollTop;
+        }
         if (!streamScrollMessage.streaming) streamMessageAutoFollow.delete(streamScrollMessage);
     } else if (keepAtBottom) {
         messages.scrollTop = messages.scrollHeight;
+    } else {
+        messages.scrollTop = scrollTop;
     }
     updateMessageNavigationButtons();
     $('#cc-editor-composer').disabled = false;
@@ -2890,7 +2921,6 @@ function renderPendingActions() {
 // The shared drawer handler opens this panel whether or not a character is selected,
 // so there has to be something coherent to show when there is no card to edit.
 function renderNoCharacter() {
-    customInstructionsFocusSnapshot = null;
     void closeCustomInstructionsPopup();
     $('#cc-editor-name').textContent = 'No character selected';
     $('#cc-editor-card').innerHTML = '<div class="cc-editor-empty">Select a character to edit its card.</div>';
@@ -3513,18 +3543,47 @@ function toolFailureResult(error) {
     const code = error?.code ? `\n<code>${xmlText(error.code)}</code>` : '';
     return `<result>\n<tool>${xmlText(tool)}</tool>\n<status>error</status>${field}${code}\n<error>${xmlText(detail)}</error>\n<instruction>This call was not applied. Other valid calls in the response were kept. ${contextInstruction} Exact anchors must occur once; use rewrite_card_field only for a genuine whole-field rewrite.</instruction>\n</result>${currentContext ? `\n${currentContext}` : ''}`;
 }
-async function promptHistory(conversation, excludeId) {
+function isPartialResponseContinuation(continuation) {
+    return continuation?.kind === PARTIAL_RESPONSE_CONTINUATION && typeof continuation.messageId === 'string';
+}
+function conversationContinuation(conversation) {
+    if (conversation?.pendingContinuation) return conversation.pendingContinuation;
+    const message = conversation?.messages?.at(-1);
+    const reasoningOnly = message?.role === 'assistant'
+        && !message.streaming
+        && Boolean(message.reasoning)
+        && !message.text
+        && !message.diffs?.length
+        && !message.toolResultDisplay;
+    return reasoningOnly ? { kind: PARTIAL_RESPONSE_CONTINUATION, messageId: message.id } : null;
+}
+async function promptHistory(conversation, excludeId, continuation = null) {
     const prompt = [];
     const resultRole = ['assistant', 'user', 'system'].includes(oai_settings.tool_result_role) ? oai_settings.tool_result_role : 'system';
+    const continuationMessageId = isPartialResponseContinuation(continuation) ? continuation.messageId : null;
+    let includedContinuationMessage = false;
     for (const message of conversation.messages) {
         if (message.id === excludeId) continue;
+        // A failed stream may contain an incomplete or merely proposed XML tool call.
+        // Keep its visible prose and reasoning in normal assistant content, but never
+        // present that XML as a completed assistant action for the model to recreate.
+        const continuingPartialAssistant = message.role === 'assistant' && message.id === continuationMessageId;
+        const interruptedAssistant = message.role === 'assistant' && (message.historyWithoutToolCalls || continuingPartialAssistant);
         const text = message.role === 'assistant'
-            ? rawMessageText(message)
+            ? (continuingPartialAssistant
+                ? [message.reasoning, message.text].filter(Boolean).join('\n\n')
+                : (interruptedAssistant ? message.text || '' : rawMessageText(message)))
             : [message.text, message.cardChangeContext].filter(Boolean).join('\n');
         const content = await promptContentWithImages(message, text);
-        prompt.push({ role: message.role, content });
-        if (message.role === 'assistant' && message.toolResultDisplay) prompt.push({ role: resultRole, content: message.toolResultDisplay });
+        const historyMessage = { role: message.role, content };
+        includedContinuationMessage ||= continuingPartialAssistant;
+        prompt.push(historyMessage);
+        if (message.role === 'assistant' && message.toolResultDisplay && !interruptedAssistant) prompt.push({ role: resultRole, content: message.toolResultDisplay });
     }
+    // Chat-completion providers generally expect a user turn after the partial
+    // assistant message. A single space asks for continuation without inventing
+    // instructions or adding a visible fake message to the saved conversation.
+    if (includedContinuationMessage) prompt.push({ role: 'user', content: CONTINUATION_USER_PLACEHOLDER });
     return prompt;
 }
 function serializeToolFailure(error) {
@@ -3576,7 +3635,7 @@ function applyCardToolCalls(calls, generationValues, conversation, messageId, { 
     ]);
     return { edits, parsedReads, readResults, failures, contextResults: [...edits.map(editContextResult), ...readResults.results] };
 }
-async function generateAssistant(conversation, retriesRemaining = MAX_TOOL_RETRIES) {
+async function generateAssistant(conversation, retriesRemaining = MAX_TOOL_RETRIES, continuation = null) {
     delete conversation.pendingContinuation;
     const generationValues = copyFieldValues();
     const generationBook = deepCopy(state.lorebook);
@@ -3592,8 +3651,8 @@ async function generateAssistant(conversation, retriesRemaining = MAX_TOOL_RETRI
     let streamedReasoning = '';
     let continueGeneration = false;
     try {
-        const prompt = await promptHistory(conversation, pendingMessage.id);
-        const data = await generateRawData({ prompt, systemPrompt: buildCharacterDesignerPrompt({ customInstructions: state.customInstructions, originalCard: conversation.baseline, metadata: characterDesignerMetadata(conversation) }), quietToLoud: true, stream: true, signal: activeGenerationController.signal, substituteMacros: false });
+        const prompt = await promptHistory(conversation, pendingMessage.id, continuation);
+        const data = await generateRawData({ prompt, systemPrompt: buildCharacterDesignerPrompt({ customInstructions: customInstructionsValue(), originalCard: conversation.baseline, metadata: characterDesignerMetadata(conversation) }), quietToLoud: true, stream: true, signal: activeGenerationController.signal, substituteMacros: false });
         if (typeof data === 'function') {
             for await (const chunk of data()) {
                 response = chunk.text || response;
@@ -3664,6 +3723,12 @@ async function generateAssistant(conversation, retriesRemaining = MAX_TOOL_RETRI
             pendingMessage.toolResult = [pendingMessage.toolResult, failureResults].filter(Boolean).join('\n');
             pendingMessage.toolResultDisplay = [pendingMessage.toolResultDisplay, failureResults].filter(Boolean).join('\n');
         }
+        // Some providers close a timed-out stream cleanly after emitting only
+        // reasoning. Treat that as partial, not as a successful empty response.
+        if (pendingMessage.reasoning && !pendingMessage.text && !pendingMessage.toolXml && !pendingMessage.toolResultDisplay) {
+            pendingMessage.historyWithoutToolCalls = true;
+            conversation.pendingContinuation = { kind: PARTIAL_RESPONSE_CONTINUATION, messageId: pendingMessage.id };
+        }
         pendingMessage.toolStream = '';
     } catch (error) {
         if (error?.name === 'AbortError' || activeGenerationController?.signal.aborted) {
@@ -3701,10 +3766,12 @@ async function generateAssistant(conversation, retriesRemaining = MAX_TOOL_RETRI
             }
         } else {
             const parsedReasoning = parseReasoningStream(response);
-            pendingMessage.raw = parsedReasoning?.content ?? response;
-            pendingMessage.reasoning = streamedReasoning || pendingMessage.reasoning || parsedReasoning?.reasoning || '';
             const errorResponse = parsedReasoning?.content ?? response;
-            const rawTool = streamedToolText(errorResponse, parseCharacterDesignerToolCalls(errorResponse)) || pendingMessage.toolStream || '';
+            const parsedTools = parseCharacterDesignerToolCalls(errorResponse);
+            pendingMessage.raw = errorResponse;
+            pendingMessage.text = streamedProse(errorResponse, parsedTools);
+            pendingMessage.reasoning = streamedReasoning || pendingMessage.reasoning || parsedReasoning?.reasoning || '';
+            const rawTool = streamedToolText(errorResponse, parsedTools) || pendingMessage.toolStream || '';
             pendingMessage.toolXml = rawTool;
             pendingMessage.error = { ...serializeToolFailure(error), rawTool };
             if (error?.toolFailure) {
@@ -3712,6 +3779,9 @@ async function generateAssistant(conversation, retriesRemaining = MAX_TOOL_RETRI
                 updateKnownCardFields(conversation, [error?.proposal?.field]);
                 continueGeneration = retriesRemaining > 0;
                 conversation.pendingContinuation = retriesRemaining === 0;
+            } else {
+                pendingMessage.historyWithoutToolCalls = true;
+                conversation.pendingContinuation = { kind: PARTIAL_RESPONSE_CONTINUATION, messageId: pendingMessage.id };
             }
         }
     } finally {
@@ -3739,15 +3809,6 @@ function stopGeneration() {
 export function isCharacterDesignerGenerating() {
     return Boolean(activeGenerationController);
 }
-function resumeConversationFlow() {
-    if (!state || activeGenerationController) return;
-    const conversation = activeConversation();
-    if (!conversation?.pendingContinuation) return;
-    delete conversation.pendingContinuation;
-    abortedByUser = false;
-    persist();
-    void generateAssistant(conversation);
-}
 async function send() {
     // Deliberately not a stop toggle: the composer's Enter key routes here, and Enter
     // silently killing a response in progress is not what typing a follow-up means.
@@ -3759,13 +3820,14 @@ async function send() {
     if (composer.disabled) return;
     const hasDraft = Boolean(text || attachments.length);
     const conversation = hasDraft ? ensureConversation() : activeConversation();
-    // An empty submit after a stalled user turn should retry that turn without
-    // adding a duplicate user bubble. Empty submits in every other state remain
-    // no-ops.
-    if (!conversation || (!hasDraft && conversation.messages.at(-1)?.role !== 'user' && !conversation.pendingContinuation)) return;
+    const continuation = !hasDraft ? conversationContinuation(conversation) : null;
+    // An empty submit retries a stalled user turn or resumes a failed partial
+    // response without adding a duplicate/fake bubble to the visible transcript.
+    // Empty submits in every other state remain no-ops.
+    if (!conversation || (!hasDraft && conversation.messages.at(-1)?.role !== 'user' && !continuation)) return;
     abortedByUser = false;
     record();
-    appendPendingCardChangeNotice(conversation);
+    appendCardChangeNoticeForSend(conversation);
     delete conversation.pendingContinuation;
     if (hasDraft) conversation.messages.push({ id: uuidv4(), role: 'user', text, attachments });
     state.draft = '';
@@ -3775,7 +3837,7 @@ async function send() {
     composer.style.height = '';
     renderChat();
     persist();
-    await generateAssistant(conversation);
+    await generateAssistant(conversation, MAX_TOOL_RETRIES, continuation);
 }
 function rerollLastAssistant() {
     if (!state || activeGenerationController) return false;
@@ -3825,7 +3887,6 @@ function forkConversationAtMessage(messageId) {
         messages: source.messages.slice(0, messageIndex + 1),
     });
     delete conversation.pendingContinuation;
-    delete conversation.pendingCardState;
     state.conversations.unshift(conversation);
     state.activeConversation = conversation.id;
     render();
@@ -3850,7 +3911,7 @@ function showHistory() {
     const content = document.createElement('div'); content.className = 'cc-editor-history-popup';
     const backups = state.checkpoints.map(item => {
         const legacyPending = Object.values(item.state?.pending || {});
-        const legacyHunks = legacyPending.flatMap(pending => pendingDiffParts(pending).filter(part => part.type === 'hunk').map(part => ({ field: pending.field, content: changeContent(part.removed, part.added) })));
+        const legacyHunks = legacyPending.flatMap(pending => pendingDiffParts(pending).filter(part => part.type === 'hunk').map(part => ({ field: pending.field, content: hunkChangeContent(part) })));
         const legacyContent = legacyHunks.map(part => legacyHunks.every(other => other.field === part.field) ? part.content : `${fieldLabel(part.field)}\n${part.content}`).join('\n\n');
         const savedContent = item.content || legacyContent || Object.entries(item.state?.values || {}).map(([id, value]) => `${fieldLabel(id)}:\n${asText(value)}`).join('\n\n');
         let label = String(item.label || 'Card snapshot').replace(/^Before\s+/i, '');
@@ -3867,7 +3928,6 @@ function showHistory() {
     const popup = new Popup(content, POPUP_TYPE.DISPLAY, '', { wider: true, animation: 'fast' });
     content.querySelectorAll('[data-conversation]').forEach(button => button.addEventListener('click', async () => {
         state.activeConversation = button.dataset.conversation;
-        appendPendingCardChangeNotice(activeConversation());
         renderChat();
         persist();
         await popup.complete(POPUP_RESULT.CANCELLED);
@@ -3959,11 +4019,10 @@ export async function initCharacterCardEditor() {
             return;
         }
         workspaceAvatarUrl = avatarUrl;
-        state = createState(savedWorkspace); undo = []; redo = []; focusedEdit = null; snappedEditKey = null; customInstructionsFocusSnapshot = null;
+        state = createState(savedWorkspace); undo = []; redo = []; focusedEdit = null; snappedEditKey = null;
         if (state.lorebookProposal && JSON.stringify(state.lorebook) !== JSON.stringify(liveCharacterBook())) {
             writeLorebookToCard();
         }
-        appendPendingCardChangeNotice(activeConversation());
         persist();
         render();
         const revealWhenOpen = () => {
@@ -4127,8 +4186,6 @@ async function refreshExternalCardState() {
         return;
     }
     focusedEdit = null;
-    customInstructionsFocusSnapshot = null;
-    appendPendingCardChangeNotice(activeConversation());
     render();
     persist();
 }

@@ -4933,7 +4933,6 @@
                             <label class="world-sim-field world-sim-field-inline" title="How many past updates per character are fed to the AI for context">
                                 <span>History Entries</span>
                                 <input id="world-sim-history-entries" type="number" class="text_pole" min="1">
-                                <em>n</em>
                             </label>
                         </div>
                         <div id="world-sim-locations-list" class="world-sim-locations-list"></div>
@@ -5389,6 +5388,10 @@
                             <label class="checkbox_label" for="restore_user_input" title="Restore unsaved user input on page refresh." data-i18n="[title]Restore unsaved user input on page refresh">
                                 <input id="restore_user_input" type="checkbox" />
                                 <small data-i18n="Restore User Input">Restore User Input</small>
+                            </label>
+                            <label class="checkbox_label" for="llamacpp_jspace_analyzer">
+                                <input id="llamacpp_jspace_analyzer" type="checkbox" />
+                                <small>Llamacpp J-Space Analyzer</small>
                             </label>
                             <div class="flex-container alignItemsCenter">
                                 <label id="movingUIModeCheckBlock" for="movingUImode" class="checkbox_label" title="Allow repositioning certain UI elements by dragging them. PC only, no effect on mobile." data-i18n="[title]Allow repositioning certain UI elements by dragging them. PC only, no effect on mobile">
@@ -5902,7 +5905,7 @@
                                 </div>
                                 <div class="tools-field-block">
                                     <label class="checkbox_label" for="workspace_last_chat_toggle" title="Inject the previous workspace chat snapshot into this chat on every generation.">
-                                        <input id="workspace_last_chat_toggle" type="checkbox" checked />
+                                        <input id="workspace_last_chat_toggle" type="checkbox" />
                                         <small>Inject workspace last chat</small>
                                     </label>
                                 </div>
@@ -6310,7 +6313,7 @@
                             <button id="cc-editor-previous-edit" class="menu_button menu_button_icon" type="button" title="Previous proposed edit" aria-label="Previous proposed edit" disabled><i class="fa-solid fa-chevron-up"></i></button>
                             <button id="cc-editor-next-edit" class="menu_button menu_button_icon" type="button" title="Next proposed edit" aria-label="Next proposed edit" disabled><i class="fa-solid fa-chevron-down"></i></button>
                         </div>
-                        <label class="cc-editor-mode" title="Character Designer questioning mode">Mode <select id="cc-editor-questioning-mode"><option value="Adaptive">Adaptive</option><option value="Interview">Interview</option><option value="Autonomous">Autonomous</option></select></label>
+                        <label class="cc-editor-mode" title="Character Designer questioning mode"><span class="cc-editor-mode-label">Mode</span><select id="cc-editor-questioning-mode"><option value="Adaptive">Adaptive</option><option value="Interview">Interview</option><option value="Autonomous">Autonomous</option></select></label>
                         <button id="cc-editor-custom-instructions-button" class="menu_button cc-editor-bulk-action cc-editor-custom-button" type="button" title="Editor custom instructions" aria-haspopup="dialog" aria-expanded="false" disabled><i class="fa-solid fa-file-lines"></i><span>Instructions</span></button>
                         <button id="cc-editor-reject-all" class="menu_button cc-editor-bulk-action cc-editor-reject-all" type="button" title="Reject all pending changes" disabled><i class="fa-solid fa-xmark"></i><span>Reject all</span></button>
                         <button id="cc-editor-accept-all" class="menu_button cc-editor-bulk-action cc-editor-accept-all" type="button" title="Accept all pending changes" disabled><i class="fa-solid fa-check"></i><span>Accept all</span></button>

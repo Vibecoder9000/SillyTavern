@@ -1,3 +1,11 @@
+#jspace_workspace_button {
+    display: none;
+}
+
+body.llamacpp-jspace-analyzer-enabled #jspace_workspace_button {
+    display: flex;
+}
+
 #jspace_workspace.jspace-workspace {
     width: var(--sheldWidth);
     max-width: calc(100vw - 20px);

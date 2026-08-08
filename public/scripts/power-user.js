@@ -339,6 +339,7 @@ export const power_user = {
         },
     },
     restore_user_input: true,
+    llamacpp_jspace_analyzer: false,
     reduced_motion: false,
     compact_input_area: true,
     show_swipe_num_all_messages: false,
@@ -566,6 +567,12 @@ function switchCompactInputArea() {
 function switchSwipeNumAllMessages() {
     $('#show_swipe_num_all_messages').prop('checked', power_user.show_swipe_num_all_messages);
     $('body').toggleClass('swipeAllMessages', !!power_user.show_swipe_num_all_messages);
+}
+
+function switchLlamacppJSpaceAnalyzer() {
+    const enabled = !!power_user.llamacpp_jspace_analyzer;
+    $('body').toggleClass('llamacpp-jspace-analyzer-enabled', enabled);
+    $('#llamacpp_jspace_analyzer').prop('checked', enabled);
 }
 
 function isLayoutPlusPlusMobileViewport() {
@@ -1628,6 +1635,7 @@ export function applyPowerUserSettings() {
     applyShadowWidth();
     applyCustomCSS();
     switchMovingUI();
+    switchLlamacppJSpaceAnalyzer();
     applyNoShadows();
     switchHotswap();
     switchTimer();
@@ -1734,6 +1742,7 @@ export async function loadPowerUserSettings(settings, data) {
     power_user.tool_max_stop_sequences = Number.isFinite(Number(power_user.tool_max_stop_sequences))
         ? Math.min(Math.max(Math.trunc(Number(power_user.tool_max_stop_sequences)), 0), 64)
         : 0;
+    power_user.llamacpp_jspace_analyzer = !!power_user.llamacpp_jspace_analyzer;
 
     if (power_user.stscript === undefined) {
         power_user.stscript = defaultStscript;
@@ -1913,6 +1922,7 @@ export async function loadPowerUserSettings(settings, data) {
     document.querySelector('#stscript_autocomplete_width_right')?.dispatchEvent(new Event('input', { bubbles: true }));
 
     $('#restore_user_input').prop('checked', power_user.restore_user_input);
+    $('#llamacpp_jspace_analyzer').prop('checked', power_user.llamacpp_jspace_analyzer);
 
     $('#chat_truncation').val(power_user.chat_truncation);
     $('#chat_truncation_counter').val(power_user.chat_truncation);
@@ -4206,6 +4216,12 @@ jQuery(() => {
 
     $('#restore_user_input').on('input', function () {
         power_user.restore_user_input = !!$(this).prop('checked');
+        saveSettingsDebounced();
+    });
+
+    $('#llamacpp_jspace_analyzer').on('input', function () {
+        power_user.llamacpp_jspace_analyzer = !!$(this).prop('checked');
+        switchLlamacppJSpaceAnalyzer();
         saveSettingsDebounced();
     });
 

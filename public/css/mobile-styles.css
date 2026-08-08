@@ -501,7 +501,9 @@
 
     .popup-overlay {
         display: block;
+        height: 100dvh;
         padding-top: 50px;
+        padding-bottom: env(safe-area-inset-bottom, 0px);
         box-sizing: border-box;
     }
 
@@ -510,8 +512,8 @@
         max-width: 100%;
         margin: 0;
 
-        min-height: calc(100vh - 50px);
-        min-height: calc(10dvh - 50px);
+        min-height: calc(100vh - 50px - env(safe-area-inset-bottom, 0px));
+        min-height: calc(100dvh - 50px - env(safe-area-inset-bottom, 0px));
         max-height: 100%;
 
         border-radius: 0;
