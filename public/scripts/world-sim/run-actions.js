@@ -4,45 +4,41 @@
 // run forward (selector -> updater). See [[world-sim-run-pipeline]].
 
 import {
-    getState,
     getLocations,
+    getRoster,
     getRosterCharacter,
     setCharacterStrings,
     pushCharacterHistory,
-    updateState,
-    appendCycle,
-    saveSnapshot,
     saveWorldSimState,
     ensureLocationRegion,
-    locationFromCoords,
+    captureCurrentWorldSnapshot,
+    hydrateCurrentWorldSnapshot,
+    commitWorldRevision,
+    findRosterIdByName,
 } from './state.js';
 import { getRun, updateRun, endRun } from './run-context.js';
 import { applyWorldUpdate } from './llm.js';
-import { renderAll, updateWorldClock } from './ui.js';
+import { renderAll } from './ui.js';
 import * as worldSimMap from './map.js';
 import { clearWorldSimToolScope } from './tools.js';
 
 /**
- * If the follow-up updater generation was stopped before `world_update` executed, keep the
- * run alive so the user can retry without losing the scoped tool.
- * @param {unknown} error
- * @returns {boolean}
- */
-function wasGenerationStopped(error) {
-    const message = String(error?.message || error || '');
-    return error?.name === 'AbortError' || /\babort(?:ed|ing)?\b|\bstopp?(?:ed|ing)?\b/i.test(message);
-}
-
-/**
- * Handles a `select_characters` tool execution: records the selection only. The updater
- * step is fired by the run driver (runCycle) AFTER this tool execution fully resolves, so
- * the updater's fresh chat isn't created while ST is still executing this tool on the
- * selector chat. See [[world-sim-run-pipeline]].
+ * Handles a `select_characters` tool execution. The run driver prepares card summaries
+ * and starts the updater only after the selector generation fully resolves.
  * @param {object} args
  * @returns {Promise<string>} Tool result text shown in chat.
  */
 export async function onSelectCharacters(args) {
-    const ids = Array.isArray(args.characterIds) ? args.characterIds.slice(0, 5) : [];
+    const roster = getRoster();
+    const run = getRun();
+    const excluded = new Set(Array.isArray(run?.excludedCharacterIds) ? run.excludedCharacterIds : []);
+    const required = [...new Set(Array.isArray(run?.includedCharacterIds) ? run.includedCharacterIds : [])]
+        .filter(id => !excluded.has(id));
+    const selected = [...new Set(Array.isArray(args.characterIds) ? args.characterIds : [])]
+        .filter(id => !excluded.has(id));
+    const ids = [...new Set([...required, ...selected])]
+        .filter(id => roster.characters[id]?.included && (run?.baseSnapshot?.characters?.[id]?.initialized ?? roster.characters[id]?.initialized))
+        .slice(0, 10);
 
     updateRun({ characterIds: ids, selectorResult: { characterIds: ids } });
 
@@ -50,33 +46,6 @@ export async function onSelectCharacters(args) {
         clearWorldSimToolScope();
         endRun();
         return 'No characters selected; nothing to update.';
-    }
-
-    const run = getRun();
-    if (run?.mode === 'tick' && !run?.updaterStarted) {
-        // The selector action is the authoritative handoff point into the updater. Deferring
-        // with setTimeout lets ST finish processing this tool execution before we open the
-        // updater's fresh chat, while also avoiding a race with runCycle() checking characterIds.
-        updateRun({ needsUpdaterChain: false, updaterStarted: true });
-        const capturedIds = ids;
-        setTimeout(async () => {
-            try {
-                const { activateWorldSimToolScope, WORLD_UPDATE } = await import('./tools.js');
-                const { fireUpdater } = await import('./llm.js');
-                activateWorldSimToolScope([WORLD_UPDATE]);
-                await fireUpdater(capturedIds);
-                // If the updater didn't call the tool, leave scope/run alive for another retry.
-            } catch (error) {
-                if (wasGenerationStopped(error)) {
-                    console.warn('World Sim updater interrupted after selector retry; keeping tool scope active for retry.', error);
-                    return;
-                }
-                console.error('World Sim updater failed after selector retry:', error);
-                updateRun({ updaterStarted: false });
-                clearWorldSimToolScope();
-                endRun();
-            }
-        }, 0);
     }
 
     return `Selected: ${ids.join(', ')}`;
@@ -91,10 +60,14 @@ export async function onSelectCharacters(args) {
 export async function onWorldInitialize(args) {
     const run = getRun();
     const update = normalizeInitialization(run, args);
+    if (!run?.baseSnapshot || !run?.baseRevisionId || !run?.expectedHeadId) throw new Error('Missing initialization revision context');
+    const liveSnapshot = captureCurrentWorldSnapshot();
+    hydrateCurrentWorldSnapshot(run.baseSnapshot);
     applyInitialize(run, update, args);
 
     const charId = run?.characterIds?.[0] || update.characterId;
-    const missing = ['activity', 'plan', 'summary', 'x', 'y']
+    const characterName = getRosterCharacter(charId)?.name || charId || 'character';
+    const missing = ['activity', 'plan', 'summary', 'location', 'x', 'y']
         .filter(k => args?.[k] === undefined || args?.[k] === null || args?.[k] === '');
     if (missing.length) {
         console.warn(`[world-sim] Initialized ${charId} with MISSING fields: ${missing.join(', ')}`);
@@ -102,50 +75,100 @@ export async function onWorldInitialize(args) {
         console.log(`[world-sim] Initialized ${charId} successfully (no missing fields).`);
     }
 
+    const resultSnapshot = captureCurrentWorldSnapshot();
+    hydrateCurrentWorldSnapshot(liveSnapshot);
+    try {
+        await commitWorldRevision({
+            source: 'initialize',
+            summary: `Initialized ${characterName}`,
+            parentId: run.baseRevisionId,
+            expectedHeadId: run.expectedHeadId,
+            snapshot: resultSnapshot,
+            generation: { cycleId: run.cycleId },
+            eventBatch: {
+                event: {
+                    kind: 'initialize',
+                    characterIds: [charId],
+                    summaries: { [charId]: String(characterName) },
+                },
+            },
+        });
+    } catch (error) {
+        clearWorldSimToolScope();
+        endRun({ status: 'failed', reason: error.message, error });
+        throw error;
+    }
+    const liveCharacter = getRosterCharacter(charId);
+    if (liveCharacter) liveCharacter.included = true;
     await saveWorldSimState();
     await renderAll();
-    updateWorldClock();
     if (charId) worldSimMap.selectCharacterOnMap(charId, { focus: false });
-    await recordCycle(run, {
-        updates: [update],
-        globalMinutesPassed: 0,
-    }, getState().tick);
     clearWorldSimToolScope();
-    endRun();
+    endRun({ status: 'complete', mode: 'initialize', characterIds: charId ? [charId] : [] });
 
     return 'Initialized 1 character.';
 }
 
 /**
- * Handles a `world_update` tool execution: applies the update to world state, advances
- * the clock when appropriate, records the cycle, refreshes the UI, and ends the run.
+ * Handles a `world_update` tool execution: applies the update to world state, records the
+ * revision, refreshes the UI, and ends the run.
  * @param {object} args
  * @returns {Promise<string>} Tool result text shown in chat.
  */
 export async function onWorldUpdate(args) {
     const run = getRun();
-    const mode = run?.mode || 'tick';
+    if (!run?.baseSnapshot || !run?.baseRevisionId || !run?.expectedHeadId) throw new Error('Missing world revision context');
+    const mode = run?.mode || 'continue';
     const updates = normalizeWorldUpdates(run, args);
+    if (mode === 'commit') {
+        const committedIds = new Set(updates.map(update => update.characterId));
+        const missingInitialIds = (run.characterIds || []).filter(id => !committedIds.has(id));
+        if (!updates.length || missingInitialIds.length) {
+            throw new Error(`Scene commit omitted required character updates${missingInitialIds.length ? `: ${missingInitialIds.join(', ')}` : ''}`);
+        }
+    }
     const normalizedArgs = { ...args, updates };
 
-    applyLocationRegistrations(normalizedArgs);
-    const tick = getState().tick;
-    if (run?.snapshot) await saveSnapshot(run.cycleId, run.snapshot);
-    applyWorldUpdate({ updates, globalMinutesPassed: mode === 'commit' ? 0 : normalizedArgs.globalMinutesPassed }, tick);
-    if (mode === 'tick') {
-        updateState({ tick: tick + 1, lastRunAt: new Date().toISOString() });
-        await recordCycle(run, normalizedArgs, tick);
-    } else if (mode === 'commit') {
-        // Re-record the zoomed event under its ORIGINAL cycleId + tick so it supersedes the
-        // coarse version on load (loadCycles keeps the last line per cycleId). No tick advance.
-        await recordCycle(run, normalizedArgs, Number.isFinite(run?.tick) ? run.tick : tick);
+    const liveSnapshot = captureCurrentWorldSnapshot();
+    hydrateCurrentWorldSnapshot(run.baseSnapshot);
+    applyLocationRegistrations(normalizedArgs, { onlyNew: mode === 'commit' });
+    applyWorldUpdate({ updates });
+    const resultSnapshot = captureCurrentWorldSnapshot();
+    hydrateCurrentWorldSnapshot(liveSnapshot);
+    const summary = updates.map(update => String(update?.summary || '').trim()).filter(Boolean).join(' ');
+    try {
+        await commitWorldRevision({
+            source: mode === 'branch' ? 'guided-branch' : mode === 'guided' ? 'guided' : mode === 'commit' ? 'scene' : 'fast-forward',
+            summary,
+            parentId: run.baseRevisionId,
+            expectedHeadId: run.expectedHeadId,
+            allowHistoricalParent: mode === 'branch' || mode === 'commit',
+            snapshot: resultSnapshot,
+            generation: { cycleId: run.cycleId, dice: run.dice || {}, guidance: run.guidance || undefined },
+            eventBatch: {
+                event: {
+                    kind: 'event',
+                    characterIds: updates.map(update => update.characterId).filter(Boolean),
+                    summaries: Object.fromEntries(updates
+                        .filter(update => update.characterId)
+                        .map(update => [update.characterId, String(update.summary || '')])),
+                    generation: run.guidance ? {
+                        guidance: run.guidance,
+                        includedCharacterIds: run.includedCharacterIds || [],
+                        excludedCharacterIds: run.excludedCharacterIds || [],
+                        exactCharacterSelection: !!run.exactCharacterSelection,
+                    } : undefined,
+                },
+            },
+        });
+    } catch (error) {
+        clearWorldSimToolScope();
+        endRun({ status: 'failed', reason: error.message, error });
+        throw error;
     }
-
-    await saveWorldSimState();
     await renderAll();
-    updateWorldClock();
     clearWorldSimToolScope();
-    endRun();
+    endRun({ status: 'complete', mode, characterIds: updates.map(update => update.characterId).filter(Boolean) });
 
     return `Updated ${updates.length} character(s).`;
 }
@@ -160,6 +183,25 @@ export async function onWorldUpdate(args) {
 function normalizeWorldUpdates(run, args) {
     const rawUpdates = Array.isArray(args.updates) ? args.updates : [];
     const runIds = Array.isArray(run?.characterIds) ? run.characterIds : [];
+
+    if (run?.mode === 'commit') {
+        const roster = getRoster();
+        const seen = new Set();
+        return rawUpdates.slice(0, 10).map((update, index) => {
+            const requestedId = String(update?.characterId || '');
+            const resolvedId = roster.characters[requestedId]
+                ? requestedId
+                : findRosterIdByName(requestedId) || runIds[index] || null;
+            const isInitialized = resolvedId
+                && roster.characters[resolvedId]?.included
+                && (run?.baseSnapshot?.characters?.[resolvedId]?.initialized ?? roster.characters[resolvedId]?.initialized);
+            if (!isInitialized || seen.has(resolvedId)) return null;
+            seen.add(resolvedId);
+            const worldUpdate = { ...(update || {}) };
+            delete worldUpdate.interactedWith;
+            return { ...worldUpdate, characterId: resolvedId };
+        }).filter(Boolean);
+    }
 
     return rawUpdates.slice(0, runIds.length).map((update, index) => ({
         ...update,
@@ -185,7 +227,7 @@ function normalizeInitialization(run, args) {
  * Registers the `locations` array from a world-sim tool call, if present.
  * @param {object} args
  */
-function applyLocationRegistrations(args) {
+function applyLocationRegistrations(args, { onlyNew = false } = {}) {
     const list = Array.isArray(args.locations) ? args.locations : [];
     const createdIds = [];
     for (const loc of list) {
@@ -196,12 +238,13 @@ function applyLocationRegistrations(args) {
         const top = Number(loc.top);
         const id = String(loc.name).toLowerCase().replace(/[^a-z0-9]+/g, '-');
         const existedBefore = !!getLocations().locations?.[id];
+        if (onlyNew && existedBefore) continue;
         const hasEdges = [left, bottom, right, top].every(Number.isFinite) && right > left && top > bottom;
         ensureLocationRegion(String(loc.name), hasEdges ? {
-            x: left,
-            y: bottom,
-            w: right - left,
-            h: top - bottom,
+            left,
+            right,
+            bottom,
+            top,
             description: loc.description,
         } : { description: loc.description });
         if (!existedBefore && getLocations().locations?.[id]) createdIds.push(id);
@@ -227,8 +270,7 @@ function applyInitialize(run, update, args) {
     const coords = {};
     if (Number.isFinite(Number(update.x))) coords.x = Number(update.x);
     if (Number.isFinite(Number(update.y))) coords.y = Number(update.y);
-    // Derive location from coords (most reliable); fall back to the model's text if no region matches.
-    const location = locationFromCoords(coords.x, coords.y) || String(update.location || '');
+    const location = String(update.location || '');
     if (location) {
         const id = String(location).toLowerCase().replace(/[^a-z0-9]+/g, '-');
         const existedBefore = !!getLocations().locations?.[id];
@@ -245,57 +287,14 @@ function applyInitialize(run, update, args) {
         summary: String(update.summary || ''),
         ...coords,
     });
-    const tick = getState().tick;
-    pushCharacterHistory(targetId, 'location', location, tick);
-    pushCharacterHistory(targetId, 'activity', String(update.activity || ''), tick);
-    pushCharacterHistory(targetId, 'plan', String(update.plan || ''), tick);
-    pushCharacterHistory(targetId, 'summary', String(update.summary || ''), tick);
+    pushCharacterHistory(targetId, 'location', location);
+    pushCharacterHistory(targetId, 'activity', String(update.activity || ''));
+    pushCharacterHistory(targetId, 'plan', String(update.plan || ''));
+    pushCharacterHistory(targetId, 'summary', String(update.summary || ''));
 
     const char = getRosterCharacter(targetId);
     if (char) {
         char.initialized = true;
         char.included = true;
     }
-}
-
-/**
- * @param {object|null} run
- * @param {object} updaterArgs
- * @param {number} tick The tick number at which this cycle ran (before any increment).
- */
-async function recordCycle(run, updaterArgs, tick) {
-    const state = getState();
-    const selector = run?.selectorResult || { characterIds: run?.characterIds || [] };
-    const updates = Array.isArray(updaterArgs.updates) ? updaterArgs.updates : [];
-    const summary = updates
-        .map(update => String(update?.summary || '').trim())
-        .filter(Boolean)
-        .join(' ');
-    await appendCycle({
-        cycleId: run?.cycleId,
-        tick: tick ?? state.tick,
-        inWorldMinutes: state.inWorldMinutes || 0,
-        selector: {
-            preset: '',
-            characterIds: selector.characterIds || [],
-            reason: '',
-            ok: true,
-            error: null,
-            chatId: run?.cycleId,
-            promptTokens: 0,
-            completionTokens: 0,
-        },
-        updater: {
-            preset: '',
-            dice: run?.dice || {},
-            globalMinutesPassed: Number(updaterArgs.globalMinutesPassed) || 0,
-            updates,
-            summary,
-            ok: true,
-            error: null,
-            chatId: run?.cycleId,
-            promptTokens: 0,
-            completionTokens: 0,
-        },
-    });
 }

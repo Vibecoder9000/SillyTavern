@@ -3940,6 +3940,11 @@ async function executeNativeToolSegment(messageId, segmentIndex, { signal } = {}
 
     setNativeToolExecutionState(message, segmentIndex, failed ? 'failed' : 'done', browserState ? { browser_state: browserState } : {});
     updateMessageBlock(messageId, message);
+    await eventSource.emit(event_types.TOOL_CALLS_RENDERED, [{
+        name: toolInfo.tool,
+        result: failed ? toolResult.toString() : toolResult,
+        error: failed,
+    }]);
 
     return {
         executed: true,
@@ -5452,11 +5457,11 @@ function cleanGroupMessage(getMessage) {
     return getMessage;
 }
 
-function addPersonaDescriptionExtensionPrompt() {
+function addPersonaDescriptionExtensionPrompt(includePersona = true) {
     const INJECT_TAG = 'PERSONA_DESCRIPTION';
     setExtensionPrompt(INJECT_TAG, '', extension_prompt_types.IN_PROMPT, 0);
 
-    if (!power_user.persona_description || power_user.persona_description_position === persona_description_positions.NONE) {
+    if (!includePersona || !power_user.persona_description || power_user.persona_description_position === persona_description_positions.NONE) {
         return;
     }
 
@@ -6663,6 +6668,7 @@ function removeLastMessage() {
  * @property {string} [quietName] Name to use for the quiet prompt (defaults to "System:")
  * @property {number} [depth] Recursion depth for the generation. Used to prevent infinite loops in tool calls.
  * @property {JsonSchema} [jsonSchema] JSON schema to use for the structured generation. Usually requires a special instruction.
+ * @property {boolean} [skipPersona] Exclude the active user persona from the generated prompt.
  */
 
 /**
@@ -6673,7 +6679,7 @@ function removeLastMessage() {
  * @param {boolean} dryRun Whether to actually generate a message or just assemble the prompt
  * @returns {Promise<any>} Returns a promise that resolves when the text is done generating.
  */
-export async function Generate(type, { automatic_trigger, force_name2, quiet_prompt, quietToLoud, skipWIAN, force_chid, signal, quietImage, quietName, jsonSchema = null, depth = 0, nativeToolAutoContinue = null } = {}, dryRun = false) {
+export async function Generate(type, { automatic_trigger, force_name2, quiet_prompt, quietToLoud, skipWIAN, skipPersona = false, force_chid, signal, quietImage, quietName, jsonSchema = null, depth = 0, nativeToolAutoContinue = null } = {}, dryRun = false) {
     console.log('Generate entered');
     setGenerationProgress(0);
     generation_started = new Date();
@@ -6856,6 +6862,10 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
         charDepthPrompt,
         creatorNotes,
     } = getCharacterCardFields();
+
+    if (skipPersona) {
+        persona = '';
+    }
 
     // Depth prompt (character-specific A/N)
     removeDepthPrompts();
@@ -7087,7 +7097,7 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
     }
 
     // Add persona description to prompt
-    addPersonaDescriptionExtensionPrompt();
+    addPersonaDescriptionExtensionPrompt(!skipPersona);
 
     const nativeToolPrompt = main_api !== 'openai' && oai_settings.native_tool_calling && !hideXmlToolExchanges
         ? await ToolManager.getNativeToolPrompt()

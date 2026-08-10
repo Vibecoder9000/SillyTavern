@@ -7,6 +7,7 @@ import {
     is_send_press,
     isGenerating,
 } from '../../script.js';
+import { withoutAutoPersonaSelection } from '../personas.js';
 
 // The World Sim host character. Auto-created on demand and kept dead simple
 // (no dedup/persistence machinery) — modelled on ST's built-in Assistant.
@@ -59,7 +60,7 @@ async function createWorldCharacter() {
 /**
  * Whether a generation is currently in flight. A world-sim run must not start while
  * one is running, so switching chats doesn't abandon/lose that generation. (Clobbering
- * an idle chat is merely mildly annoying — the user can just disable auto-tick.)
+ * an idle chat is merely mildly annoying, but an active generation would be lost.)
  * @returns {boolean}
  */
 export function isGenerationInProgress() {
@@ -85,7 +86,9 @@ export async function openWorldCharacterChat() {
         }
     }
 
-    return selectCharacterById(id);
+    // This is an implementation chat, not a scene in which the user participates.
+    // Switching to it must not select or auto-lock a different user persona.
+    return withoutAutoPersonaSelection(() => selectCharacterById(id));
 }
 
 export { WORLD_CHARACTER_NAME, WORLD_CHARACTER_AVATAR };

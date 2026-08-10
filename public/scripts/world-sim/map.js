@@ -1,5 +1,6 @@
-import { getRoster, getState, getLocations, setCharacterStrings, saveWorldSimState, locationFromCoords } from './state.js';
+import { getRoster, getState, getLocations, setCharacterStrings, saveCurrentWorldSnapshot, saveLocationBounds, locationFromCoords } from './state.js';
 import { getThumbnailUrl } from '../../script.js';
+import { promptWorldSimText } from './popups.js';
 
 const SVGNS = 'http://www.w3.org/2000/svg';
 const PIN_PX = 18;          // pin radius in screen pixels (kept constant across zoom)
@@ -40,6 +41,7 @@ let selectedLocIds = new Set();
 let justInitializedLocIds = new Set();
 let selectedCharId = null;
 let saveQueued = false;
+let mapSaveChain = Promise.resolve();
 let panCompositedMode = false;
 let renderQueued = false;
 let pendingViewBoxRender = false;
@@ -124,7 +126,7 @@ export function initWorldSimMap(container) {
     listEl = document.getElementById('world-sim-locations-list');
     if (listEl) {
         listEl.addEventListener('click', onListClick);
-        listEl.addEventListener('input', onListInput);
+        listEl.addEventListener('change', onListInput);
     }
 
     if ('ResizeObserver' in window) {
@@ -388,13 +390,13 @@ function onListInput(e) {
     const nameInput = e.target.closest('[data-loc-edit]');
     if (nameInput) {
         const loc = getLocations().locations[nameInput.getAttribute('data-loc-edit')];
-        if (loc) { loc.name = nameInput.value; queueSave(); refreshMap({ locations: true }); }
+        if (loc) { loc.name = nameInput.value; queueSave('Edited location text'); refreshMap({ locations: true }); }
         return;
     }
     const descInput = e.target.closest('[data-loc-desc]');
     if (descInput) {
         const loc = getLocations().locations[descInput.getAttribute('data-loc-desc')];
-        if (loc) { loc.description = descInput.value; queueSave(); }
+        if (loc) { loc.description = descInput.value; queueSave('Edited location text'); }
     }
 }
 
@@ -406,11 +408,13 @@ function onListInput(e) {
 function focusLocation(id) {
     const loc = getLocations().locations[id];
     if (!isFiniteRect(loc)) return;
-    const pad = Math.max(loc.w, loc.h) * 0.6 + 2;
-    const targetSpan = clamp(Math.max(loc.w, loc.h) + pad * 2, MIN_SPAN, MAX_SPAN);
+    const width = loc.right - loc.left;
+    const height = loc.top - loc.bottom;
+    const pad = Math.max(width, height) * 0.6 + 2;
+    const targetSpan = clamp(Math.max(width, height) + pad * 2, MIN_SPAN, MAX_SPAN);
     const span = Math.max(targetSpan, view.w / 2);
-    const cx = loc.x + loc.w / 2;
-    const cy = -(loc.y + loc.h / 2); // world y inverted into svg space
+    const cx = (loc.left + loc.right) / 2;
+    const cy = -(loc.bottom + loc.top) / 2; // world y inverted into svg space
     view = { x: cx - span / 2, y: cy - span / 2, w: span, h: span };
 }
 
@@ -495,19 +499,21 @@ function drawLocations(scale, displayFlags = DEFAULT_DISPLAY_FLAGS, labelLayout 
             const aSelected = selectedLocIds.has(a[0]) ? 1 : 0;
             const bSelected = selectedLocIds.has(b[0]) ? 1 : 0;
             if (aSelected !== bSelected) return bSelected - aSelected;
-            return (b[1].w * b[1].h) - (a[1].w * a[1].h);
+            return locationArea(b[1]) - locationArea(a[1]);
         });
 
     for (const [id, loc] of entries) {
         totalLocations++;
-        if (selectedLoc !== id && !rectIntersectsBounds(loc.x, loc.y, loc.w, loc.h, bounds)) continue;
+        if (selectedLoc !== id && !locationIntersectsBounds(loc, bounds)) continue;
         locations++;
-        const sx = loc.x;
-        const sy = -(loc.y + loc.h); // svg top edge
+        const width = loc.right - loc.left;
+        const height = loc.top - loc.bottom;
+        const sx = loc.left;
+        const sy = -loc.top; // svg top edge
         const selected = selectedLocIds.has(id);
         const justInitialized = justInitializedLocIds.has(id);
         const rect = el('rect', {
-            x: sx, y: sy, width: loc.w, height: loc.h,
+            x: sx, y: sy, width, height,
             rx: 0.15,
             class: 'ws-loc'
                 + (selected ? ' selected' : '')
@@ -520,7 +526,7 @@ function drawLocations(scale, displayFlags = DEFAULT_DISPLAY_FLAGS, labelLayout 
             const placed = placeLabel(labelLayout, {
                 text,
                 fontPx: LABEL_PX + 1,
-                anchorXWorld: sx + loc.w / 2,
+                anchorXWorld: sx + width / 2,
                 anchorYWorld: sy + 0.04 + LABEL_PX * scale,
                 selected,
             });
@@ -535,7 +541,7 @@ function drawLocations(scale, displayFlags = DEFAULT_DISPLAY_FLAGS, labelLayout 
         if (selected && displayFlags.showHandles) {
             const hr = PIN_PX * 0.5 * scale;
             // resize handle (upper-right corner in world = top-right in svg)
-            boxesFragment.appendChild(el('rect', { x: sx + loc.w - hr, y: sy - hr, width: hr * 2, height: hr * 2, class: 'ws-handle resize', 'data-handle': id }));
+            boxesFragment.appendChild(el('rect', { x: loc.right - hr, y: sy - hr, width: hr * 2, height: hr * 2, class: 'ws-handle resize', 'data-handle': id }));
             handles++;
             // delete handle (top-left)
             const del = el('g', { class: 'ws-handle delete', 'data-del': id });
@@ -680,7 +686,7 @@ function onPointerDown(e) {
         let bestId = locIds[0], bestArea = Infinity;
         for (const id of locIds) {
             const loc = locs[id];
-            const area = loc ? (loc.w || 0) * (loc.h || 0) : Infinity;
+            const area = isFiniteRect(loc) ? locationArea(loc) : Infinity;
             if (area < bestArea) { bestArea = area; bestId = id; }
         }
         setSelectedLocationIds([bestId], bestId);
@@ -712,7 +718,7 @@ function startDrag(e, info) {
     };
     if (info.type === 'loc') {
         const loc = getLocations().locations[info.id];
-        drag.orig = { x: loc.x, y: loc.y };
+        drag.orig = { left: loc.left, right: loc.right, bottom: loc.bottom, top: loc.top };
     }
     window.addEventListener('pointermove', onPointerMove);
     window.addEventListener('pointerup', onPointerUp);
@@ -750,13 +756,17 @@ function applyDragFrame() {
         refreshMap({ grid: false, locations: false, pins: true, viewBox: false, immediate: true });
     } else if (drag.type === 'loc') {
         const loc = getLocations().locations[drag.id];
-        loc.x = round(drag.orig.x + (w.x - drag.startWorld.x));
-        loc.y = round(drag.orig.y + (w.y - drag.startWorld.y));
+        const dx = w.x - drag.startWorld.x;
+        const dy = w.y - drag.startWorld.y;
+        loc.left = round(drag.orig.left + dx);
+        loc.right = round(drag.orig.right + dx);
+        loc.bottom = round(drag.orig.bottom + dy);
+        loc.top = round(drag.orig.top + dy);
         refreshMap({ grid: false, locations: true, pins: false, viewBox: false, immediate: true });
     } else if (drag.type === 'resize') {
         const loc = getLocations().locations[drag.id];
-        loc.w = Math.max(10, round(w.x - loc.x));
-        loc.h = Math.max(10, round(w.y - loc.y));
+        loc.right = Math.max(loc.left + 10, round(w.x));
+        loc.top = Math.max(loc.bottom + 10, round(w.y));
         refreshMap({ grid: false, locations: true, pins: false, viewBox: false, immediate: true });
     }
 }
@@ -787,19 +797,27 @@ function onPointerUp() {
     } else if (finishedDragType === 'loc') {
         const loc = getLocations().locations[drag.id];
         if (loc) {
-            loc.x = snap(loc.x);
-            loc.y = snap(loc.y);
+            const width = loc.right - loc.left;
+            const height = loc.top - loc.bottom;
+            loc.left = snap(loc.left);
+            loc.right = loc.left + width;
+            loc.bottom = snap(loc.bottom);
+            loc.top = loc.bottom + height;
             refreshMap({ grid: false, locations: true, pins: false, viewBox: false });
         }
     } else if (finishedDragType === 'resize') {
         const loc = getLocations().locations[drag.id];
         if (loc) {
-            loc.w = Math.max(10, snap(loc.w));
-            loc.h = Math.max(10, snap(loc.h));
+            loc.right = Math.max(loc.left + 10, snap(loc.right));
+            loc.top = Math.max(loc.bottom + 10, snap(loc.top));
             refreshMap({ grid: false, locations: true, pins: false, viewBox: false });
         }
     }
-    if (drag && drag.type !== 'pan') queueSave();
+    if (drag?.type === 'pin') queueSave('Moved character on map');
+    if ((drag?.type === 'loc' || drag?.type === 'resize')) {
+        const loc = getLocations().locations[drag.id];
+        if (isFiniteRect(loc)) queueLocationBoundsSave(drag.id, getLocationBounds(loc));
+    }
     drag = null;
 }
 
@@ -838,7 +856,7 @@ function onToolbarClick(e) {
     if (action === 'zoom-in') zoomCenter(1 / 1.3);
     else if (action === 'zoom-out') zoomCenter(1.3);
     else if (action === 'recenter') { fitToContent(); refreshMap(); }
-    else if (action === 'add-location') addLocation();
+    else if (action === 'add-location') void addLocation();
 }
 
 /**
@@ -857,10 +875,10 @@ export function fitToContent() {
 
     let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
     for (const loc of locs) {
-        minX = Math.min(minX, loc.x);
-        maxX = Math.max(maxX, loc.x + loc.w);
-        minY = Math.min(minY, loc.y);
-        maxY = Math.max(maxY, loc.y + loc.h);
+        minX = Math.min(minX, loc.left);
+        maxX = Math.max(maxX, loc.right);
+        minY = Math.min(minY, loc.bottom);
+        maxY = Math.max(maxY, loc.top);
     }
     for (const s of placedChars) {
         minX = Math.min(minX, s.x);
@@ -932,8 +950,8 @@ export function selectCharacterOnMap(characterId, { focus = true } = {}) {
     }
 
     const strings = getState().characters?.[characterId] || {};
-    const locationName = locationFromCoords(strings.x, strings.y) || strings.location || '';
-    const primaryLocationId = findLocationIdAtCoords(strings.x, strings.y) || findLocationIdByName(locationName);
+    const locationName = strings.location || locationFromCoords(strings.x, strings.y) || '';
+    const primaryLocationId = findLocationIdByName(locationName) || findLocationIdAtCoords(strings.x, strings.y);
     setSelectedLocationIds(primaryLocationId ? [primaryLocationId] : [], primaryLocationId);
 
     if (focus) {
@@ -950,8 +968,17 @@ function zoomCenter(factor) {
     zoomAt({ clientX: rect.left + rect.width / 2, clientY: rect.top + rect.height / 2 }, factor);
 }
 
-function addLocation() {
-    const name = prompt('Location name:', '');
+async function addLocation() {
+    const result = await promptWorldSimText({
+        title: 'Add a location',
+        message: 'Create a location at the center of the current map view.',
+        confirmLabel: 'Add location',
+        icon: 'fa-location-dot',
+        placeholder: 'Location name',
+        maxLength: 120,
+        required: true,
+    });
+    const name = result?.trim();
     if (!name) return;
     const locs = getLocations();
     let id = name.toLowerCase().replace(/[^a-z0-9]+/g, '-') || `loc-${Date.now()}`;
@@ -959,9 +986,14 @@ function addLocation() {
     const size = Math.max(2, round(view.w / 5));
     const cxWorld = round(view.x + view.w / 2);
     const cyWorld = round(-(view.y + view.h / 2));
-    locs.locations[id] = { name, description: '', x: cxWorld - size / 2, y: cyWorld - size / 2, w: size, h: size, adjacent: [] };
+    locs.locations[id] = {
+        name, description: '',
+        left: cxWorld - size / 2, right: cxWorld + size / 2,
+        bottom: cyWorld - size / 2, top: cyWorld + size / 2,
+        adjacent: [],
+    };
     setSelectedLocationIds([id], id);
-    queueSave();
+    queueSave('Added location');
     refreshMap({ locations: true, list: true, pins: false, grid: false });
 }
 
@@ -973,7 +1005,7 @@ function deleteLocation(id) {
         selectedLocIds = new Set();
     }
     justInitializedLocIds.delete(id);
-    queueSave();
+    queueSave('Deleted location');
     refreshMap({ locations: true, list: true, pins: false, grid: false });
 }
 
@@ -995,7 +1027,7 @@ function findLocationIdAtCoords(x, y) {
 
     for (const [id, loc] of Object.entries(getLocations().locations || {})) {
         if (!isFiniteRect(loc)) continue;
-        if (x >= loc.x && x <= loc.x + loc.w && y >= loc.y && y <= loc.y + loc.h) {
+        if (x >= loc.left && x <= loc.right && y >= loc.bottom && y <= loc.top) {
             return id;
         }
     }
@@ -1035,10 +1067,10 @@ function findConnectedLocationIds(seedId) {
 function rectsTouchOrOverlap(a, b) {
     if (!isFiniteRect(a) || !isFiniteRect(b)) return false;
     return !(
-        a.x + a.w < b.x ||
-        b.x + b.w < a.x ||
-        a.y + a.h < b.y ||
-        b.y + b.h < a.y
+        a.right < b.left ||
+        b.right < a.left ||
+        a.top < b.bottom ||
+        b.top < a.bottom
     );
 }
 
@@ -1262,7 +1294,18 @@ function screenToWorldPoint(screenX, screenY, viewport) {
 }
 
 function isFiniteRect(loc) {
-    return loc && Number.isFinite(loc.x) && Number.isFinite(loc.y) && Number.isFinite(loc.w) && Number.isFinite(loc.h);
+    return loc
+        && [loc.left, loc.right, loc.bottom, loc.top].every(Number.isFinite)
+        && loc.right > loc.left
+        && loc.top > loc.bottom;
+}
+
+function getLocationBounds(loc) {
+    return { left: loc.left, right: loc.right, bottom: loc.bottom, top: loc.top };
+}
+
+function locationArea(loc) {
+    return (loc.right - loc.left) * (loc.top - loc.bottom);
 }
 
 function getCullingBounds(scale, padPx) {
@@ -1275,10 +1318,10 @@ function getCullingBounds(scale, padPx) {
     };
 }
 
-function rectIntersectsBounds(x, y, w, h, bounds) {
-    const top = -(y + h);
-    const bottom = -y;
-    return x <= bounds.right && x + w >= bounds.left && top <= bounds.bottom && bottom >= bounds.top;
+function locationIntersectsBounds(loc, bounds) {
+    const svgTop = -loc.top;
+    const svgBottom = -loc.bottom;
+    return loc.left <= bounds.right && loc.right >= bounds.left && svgTop <= bounds.bottom && svgBottom >= bounds.top;
 }
 
 function pointInBounds(x, ySvg, bounds) {
@@ -1299,7 +1342,7 @@ function countVisibleLocations(bounds) {
     let count = 0;
     for (const loc of Object.values(getLocations().locations || {})) {
         if (!isFiniteRect(loc)) continue;
-        if (rectIntersectsBounds(loc.x, loc.y, loc.w, loc.h, bounds)) count++;
+        if (locationIntersectsBounds(loc, bounds)) count++;
     }
     return count;
 }
@@ -1505,5 +1548,22 @@ function blend(prev, next) {
 function queueSave() {
     if (saveQueued) return;
     saveQueued = true;
-    setTimeout(() => { saveQueued = false; saveWorldSimState().catch(console.error); }, 250);
+    setTimeout(() => {
+        saveQueued = false;
+        mapSaveChain = mapSaveChain
+            .then(() => saveCurrentWorldSnapshot())
+            .catch(error => {
+                console.error(error);
+                toastr.error(error.message, 'World Sim');
+            });
+    }, 0);
+}
+
+function queueLocationBoundsSave(locationId, bounds) {
+    mapSaveChain = mapSaveChain
+        .then(() => saveLocationBounds(locationId, bounds))
+        .catch(error => {
+            console.error(error);
+            toastr.error(error.message, 'World Sim');
+        });
 }

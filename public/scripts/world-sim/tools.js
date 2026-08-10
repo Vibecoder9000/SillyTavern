@@ -37,8 +37,9 @@ export function registerWorldSimTools() {
             properties: {
                 characterIds: {
                     type: 'array',
+                    maxItems: 10,
                     items: { type: 'string' },
-                    description: 'IDs of selected characters.',
+                    description: 'IDs of up to 10 selected characters.',
                 },
             },
             required: ['characterIds'],
@@ -62,7 +63,8 @@ export function registerWorldSimTools() {
             properties: {
                 activity: { type: 'string' },
                 plan: { type: 'string' },
-                summary: { type: 'string' },
+                summary: { type: 'string', description: 'Short event summary for the History node. Do not include a participant list; the UI appends it.' },
+                location: { type: 'string', description: 'Short canonical place name defining what the character can currently perceive and do.' },
                 x: { type: 'number', description: 'Map X coordinate where the character currently is. Place inside the bounding box of their starting location region.' },
                 y: { type: 'number', description: 'Map Y coordinate where the character currently is. Place inside the bounding box of their starting location region.' },
                 locations: {
@@ -72,7 +74,7 @@ export function registerWorldSimTools() {
                         type: 'object',
                         properties: {
                             name: { type: 'string', description: 'Short canonical name used to identify this location in future updates.' },
-                            description: { type: 'string', description: 'One sentence describing what kind of place this is.' },
+                            description: { type: 'string', description: 'One sentence describing what characters can perceive and do in this place.' },
                             left: { type: 'number', description: 'Left edge.' },
                             bottom: { type: 'number', description: 'Bottom edge.' },
                             right: { type: 'number', description: 'Right edge.' },
@@ -82,7 +84,7 @@ export function registerWorldSimTools() {
                     },
                 },
             },
-            required: ['activity', 'plan', 'summary', 'x', 'y'],
+            required: ['activity', 'plan', 'summary', 'location', 'x', 'y'],
         },
         action: async (args) => {
             const { onWorldInitialize } = await import('./run-actions.js');
@@ -97,34 +99,32 @@ export function registerWorldSimTools() {
     ToolManager.registerFunctionTool({
         name: WORLD_UPDATE,
         displayName: 'World Update',
-        description: 'Apply world-state updates to the already selected characters. Return one `updates[]` item per selected character in order. Use dice results from the prompt to influence the outcome, but do not return dice values. If any new places were introduced, put them in the single top-level `locations[]` array for the whole call.',
+        description: 'Apply world-state updates. Ordinary runs return one `updates[]` item per selected character in order. Scene commits identify every involved existing character with `characterId`. Use dice results from the prompt to influence ordinary runs, but do not return dice values. Put genuinely new places in the single top-level `locations[]` array.',
         parameters: {
             type: 'object',
             properties: {
                 updates: {
                     type: 'array',
-                    description: 'Exactly one item per selected character, in the same order the characters were provided in the prompt.',
+                    description: 'Ordinary run: exactly one item per selected character in prompt order. Scene commit: exactly one item per involved existing character, identified by characterId.',
                     items: {
                         type: 'object',
                         properties: {
+                            characterId: { type: 'string', description: 'Stable existing World Sim character ID. Required when committing a scene; omitted for ordinary selected-character updates.' },
                             activity: { type: 'string' },
                             plan: { type: 'string' },
-                            summary: { type: 'string' },
-                            location: { type: 'string', description: 'Optional short place name. Use this only if x,y do not already fall inside a known registered location region.' },
+                            summary: { type: 'string', description: 'Short event summary for this character\'s History node. Do not include a participant list; the UI appends it.' },
+                            location: { type: 'string', description: 'Short canonical place name defining what the character can currently perceive and do.' },
                             x: { type: 'number', description: 'Map X coordinate where the character currently is. Place inside the bounding box of their current location region.' },
                             y: { type: 'number', description: 'Map Y coordinate where the character currently is. Place inside the bounding box of their current location region.' },
                             interactedWith: {
                                 type: 'array',
+                                maxItems: 10,
                                 items: { type: 'string' },
-                                description: 'Names of other existing characters this character directly interacted with this cycle (talked to, met, traveled with, fought, etc). Use exact names from the character positions list. Omit or leave empty if none.',
+                                description: 'Stable IDs of up to 10 other existing characters this character directly interacted with this cycle (talked to, met, traveled with, fought, etc). Omit or leave empty if none.',
                             },
                         },
-                        required: ['activity', 'plan', 'summary', 'x', 'y'],
+                        required: ['activity', 'plan', 'summary', 'location', 'x', 'y'],
                     },
-                },
-                globalMinutesPassed: {
-                    type: 'integer',
-                    description: 'Total in-world minutes that passed this cycle. Only provide this for normal tick updates.',
                 },
                 locations: {
                     type: 'array',
@@ -133,7 +133,7 @@ export function registerWorldSimTools() {
                         type: 'object',
                         properties: {
                             name: { type: 'string', description: 'Short canonical name used to identify this location in future updates.' },
-                            description: { type: 'string', description: 'One sentence describing what kind of place this is.' },
+                            description: { type: 'string', description: 'One sentence describing what characters can perceive and do in this place.' },
                             left: { type: 'number', description: 'Left edge.' },
                             bottom: { type: 'number', description: 'Bottom edge.' },
                             right: { type: 'number', description: 'Right edge.' },

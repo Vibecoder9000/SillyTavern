@@ -1,15 +1,29 @@
 import { getRequestHeaders } from '../../script.js';
+import {
+    captureWorldSnapshot,
+    commitRevision,
+    diffWorldSnapshots,
+    editRevision,
+    getHeadRevisionId,
+    getHeadSnapshot,
+    getRevisionIndex,
+    hydrateWorldSnapshot,
+    initializeRevisions,
+    loadRevisionSnapshot,
+    propagateLocationBounds,
+    saveCurrentSnapshot,
+} from './revisions.js';
+import { getEventHistory, initializeEventHistory } from './event-history.js';
 
 const API_URL = '/api/world-sim';
 
 /**
  * @typedef {object} WorldSimConfig
- * @property {number} tickIntervalMinutes
- * @property {number} autoPauseIdleMinutes
  * @property {number} historyEntriesPerCharacter
  * @property {number} targetWordsPerEntry
  * @property {number} diceSides
  * @property {string} defaultLocation
+ * @property {boolean} summaryPaused
  */
 
 /**
@@ -47,7 +61,6 @@ const API_URL = '/api/world-sim';
 
 /**
  * @typedef {object} WorldSimHistoryEntry
- * @property {number} tick
  * @property {string} text
  */
 
@@ -60,30 +73,16 @@ const API_URL = '/api/world-sim';
  * @typedef {object} WorldSimLocation
  * @property {string} name
  * @property {string} [description]
- * @property {number} [x]
- * @property {number} [y]
- * @property {number} [w]
- * @property {number} [h] Internal rectangle height. The LLM-facing prompts/tools use left/bottom/right/top edges instead.
+ * @property {number} [left]
+ * @property {number} [right]
+ * @property {number} [bottom]
+ * @property {number} [top]
  * @property {string[]} adjacent
  */
 
 /**
  * @typedef {object} WorldSimState
- * @property {number} tick
- * @property {number} inWorldMinutes
- * @property {string|null} lastRunAt
- * @property {string|null} nextTickAt
- * @property {boolean} paused
- * @property {boolean} idlePaused
  * @property {Record<string, WorldSimStrings>} characters
- */
-
-/**
- * @typedef {object} WorldSimCycle
- * @property {string} cycleId
- * @property {number} tick
- * @property {object} selector
- * @property {object} updater
  */
 
 /** @type {WorldSimConfig} */
@@ -94,6 +93,8 @@ let roster = { characters: {} };
 let locations = { locations: {} };
 /** @type {WorldSimState} */
 let state = {};
+/** @type {WorldSimScene[]} */
+let conversations = [];
 let hasLoadedWorldSimState = false;
 
 /**
@@ -109,8 +110,12 @@ export async function loadWorldSimState() {
     const data = await response.json();
     config = data.config;
     roster = data.roster;
-    locations = data.locations;
-    state = data.state;
+    locations = { locations: {} };
+    state = { characters: {} };
+    conversations = Array.isArray(data.conversations) ? data.conversations : [];
+    initializeRevisions(data.revisionIndex, data.headSnapshot);
+    initializeEventHistory(data.eventHistory);
+    if (data.headSnapshot) hydrateWorldSnapshot(data.headSnapshot, roster, locations, state);
     hasLoadedWorldSimState = true;
 }
 
@@ -125,7 +130,7 @@ export async function saveWorldSimState() {
     const response = await fetch(`${API_URL}/save`, {
         method: 'POST',
         headers: getRequestHeaders(),
-        body: JSON.stringify({ config, roster, locations, state }),
+        body: JSON.stringify({ config, roster: capturePersistentRoster(), conversations }),
     });
     if (!response.ok) throw new Error('Failed to save world-sim state');
 }
@@ -143,8 +148,12 @@ export async function resetWorldSimState() {
     const data = await response.json();
     config = data.config;
     roster = data.roster;
-    locations = data.locations;
-    state = data.state;
+    locations = { locations: {} };
+    state = { characters: {} };
+    conversations = Array.isArray(data.conversations) ? data.conversations : [];
+    initializeRevisions(data.revisionIndex, data.headSnapshot);
+    initializeEventHistory(data.eventHistory);
+    if (data.headSnapshot) hydrateWorldSnapshot(data.headSnapshot, roster, locations, state);
     hasLoadedWorldSimState = true;
 }
 
@@ -200,32 +209,44 @@ export function updateLocations(updates) {
 /**
  * Creates (or fills in geometry/description for) a named location region.
  * @param {string} name
- * @param {{x:number,y:number,w:number,h:number,description?:string}} [box]
+ * @param {{left:number,right:number,bottom:number,top:number,description?:string}} [box]
  * @returns {WorldSimLocation|undefined}
  */
 export function ensureLocationRegion(name, box) {
     if (!name) return undefined;
     const id = String(name).toLowerCase().replace(/[^a-z0-9]+/g, '-');
     if (!id) return undefined;
-    const hasBox = box && ['x', 'y', 'w', 'h'].every(k => Number.isFinite(Number(box[k])));
+    const hasBox = box
+        && ['left', 'right', 'bottom', 'top'].every(k => Number.isFinite(Number(box[k])))
+        && Number(box.right) > Number(box.left)
+        && Number(box.top) > Number(box.bottom);
     const description = (box && typeof box.description === 'string' && box.description) || undefined;
     const existing = locations.locations[id];
     if (existing) {
-        if (hasBox && !Number.isFinite(existing.x)) {
-            Object.assign(existing, { x: Number(box.x), y: Number(box.y), w: Math.max(1, Number(box.w)), h: Math.max(1, Number(box.h)) });
+        if (hasBox && !Number.isFinite(existing.left)) {
+            Object.assign(existing, {
+                left: Number(box.left), right: Number(box.right),
+                bottom: Number(box.bottom), top: Number(box.top),
+            });
         }
         if (description && !existing.description) existing.description = description;
         return existing;
     }
     locations.locations[id] = hasBox
-        ? { name, description, x: Number(box.x), y: Number(box.y), w: Math.max(1, Number(box.w)), h: Math.max(1, Number(box.h)), adjacent: [] }
+        ? {
+            name, description,
+            left: Number(box.left), right: Number(box.right),
+            bottom: Number(box.bottom), top: Number(box.top),
+            adjacent: [],
+        }
         : { name, description, adjacent: [] };
     return locations.locations[id];
 }
 
 /**
  * Returns the name of the first location region that contains the given world coordinates,
- * or null if none match. Used to derive a character's location from their map position.
+ * or null if none match. This is a map hit-test helper; semantic character location is
+ * stored independently in the character state.
  * @param {number} x
  * @param {number} y
  * @returns {string|null}
@@ -233,8 +254,8 @@ export function ensureLocationRegion(name, box) {
 export function locationFromCoords(x, y) {
     if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
     for (const loc of Object.values(locations.locations)) {
-        if (!Number.isFinite(loc.x)) continue;
-        if (x >= loc.x && x <= loc.x + loc.w && y >= loc.y && y <= loc.y + loc.h) {
+        if (![loc.left, loc.right, loc.bottom, loc.top].every(Number.isFinite)) continue;
+        if (x >= loc.left && x <= loc.right && y >= loc.bottom && y <= loc.top) {
             return loc.name;
         }
     }
@@ -273,6 +294,86 @@ export function setCharacterStrings(characterId, strings) {
     Object.assign(state.characters[characterId], strings);
 }
 
+export { getEventHistory, getHeadRevisionId, getRevisionIndex, loadRevisionSnapshot };
+
+export function captureCurrentWorldSnapshot() {
+    return captureWorldSnapshot(roster, locations, state);
+}
+
+export function hydrateCurrentWorldSnapshot(snapshot) {
+    hydrateWorldSnapshot(snapshot, roster, locations, state);
+}
+
+export async function saveCurrentWorldSnapshot() {
+    await saveCurrentSnapshot(captureCurrentWorldSnapshot());
+    await saveWorldSimState();
+}
+
+export async function saveLocationBounds(locationId, bounds, revisionId = getHeadRevisionId()) {
+    const revision = getRevisionIndex()?.revisions?.[revisionId];
+    if (!revision) throw new Error('World revision history is not initialized');
+    const result = await propagateLocationBounds({
+        revisionId,
+        expectedSnapshotFilename: revision.snapshotFilename,
+        locationId,
+        bounds,
+    });
+    return result;
+}
+
+export async function commitWorldRevision({
+    source = 'manual',
+    summary = 'World state changed',
+    generation,
+    parentId = getHeadRevisionId(),
+    expectedHeadId = getHeadRevisionId(),
+    allowHistoricalParent = false,
+    snapshot = captureCurrentWorldSnapshot(),
+    eventBatch,
+} = {}) {
+    if (!parentId || !expectedHeadId) throw new Error('World revision history is not initialized');
+    const before = parentId === getHeadRevisionId() ? getHeadSnapshot() : await loadRevisionSnapshot(parentId);
+    const changes = diffWorldSnapshots(before, snapshot);
+    let revision;
+    try {
+        revision = await commitRevision({
+            parentId,
+            expectedHeadId,
+            snapshot,
+            allowHistoricalParent,
+            metadata: {
+                source,
+                summary,
+                ...changes,
+                generation,
+            },
+            eventBatch,
+        });
+    } catch (error) {
+        if (error.headId) {
+            const authoritative = await loadRevisionSnapshot(error.headId);
+            hydrateCurrentWorldSnapshot(authoritative);
+            await saveWorldSimState();
+        }
+        throw error;
+    }
+    hydrateCurrentWorldSnapshot(snapshot);
+    await saveWorldSimState();
+    return revision;
+}
+
+/**
+ * Replaces one revision's contents without changing its identity or activating a historical node.
+ * @param {{revisionId:string, expectedSnapshotFilename:string, snapshot:object, summary?:string}} edit
+ * @returns {Promise<object>}
+ */
+export async function editWorldRevision(edit) {
+    const wasHead = edit.revisionId === getHeadRevisionId();
+    const revision = await editRevision(edit);
+    if (wasHead) hydrateCurrentWorldSnapshot(edit.snapshot);
+    return revision;
+}
+
 /**
  * @returns {WorldSimHistory}
  */
@@ -291,7 +392,6 @@ export function resetCharacterWorldSimState(characterId) {
     if (!char) return false;
 
     delete state.characters[characterId];
-    char.strings = { location: '', activity: '', plan: '', summary: '' };
     char.history = createEmptyCharacterHistory();
     char.initialized = false;
     return true;
@@ -301,12 +401,11 @@ export function resetCharacterWorldSimState(characterId) {
  * @param {string} characterId
  * @param {keyof WorldSimStrings} key
  * @param {string} text
- * @param {number} tick
  */
-export function pushCharacterHistory(characterId, key, text, tick) {
+export function pushCharacterHistory(characterId, key, text) {
     const char = roster.characters[characterId];
     if (!char) return;
-    char.history[key].push({ tick, text });
+    char.history[key].push({ text });
     const limit = config.historyEntriesPerCharacter ?? 5;
     if (char.history[key].length > limit) {
         char.history[key].shift();
@@ -326,47 +425,19 @@ export function updateCharacterHistoryEntry(characterId, key, index, text) {
 }
 
 /**
- * Resolves a character's location/activity/plan/summary AS OF a given tick, so a zoomed-in
- * scene reflects the event it focuses on rather than the latest world state. Falls back to
- * the current live state for any field whose tick-stamped history has rolled off (history is
- * a capped window) or when no tick is supplied.
+ * Returns a character's current compact world state.
  * @param {string} characterId
- * @param {number|null} [tick]
  * @returns {{ location: string, activity: string, plan: string, summary: string, x: number|undefined, y: number|undefined }}
  */
-export function getCharacterStateAtTick(characterId, tick = null) {
+export function getCharacterWorldState(characterId) {
     const cur = state.characters[characterId] || {};
-    const base = {
+    return {
         location: cur.location || '',
         activity: cur.activity || '',
         plan: cur.plan || '',
         summary: cur.summary || '',
         x: cur.x,
         y: cur.y,
-    };
-    const char = roster.characters[characterId];
-    if (!char || !Number.isFinite(tick)) return base;
-
-    const at = (key) => {
-        const arr = char.history?.[key] || [];
-        for (let i = arr.length - 1; i >= 0; i--) {
-            if (arr[i]?.tick === tick) return arr[i].text;
-        }
-        return undefined;
-    };
-    const location = at('location');
-    const activity = at('activity');
-    const plan = at('plan');
-    const summary = at('summary');
-    // If nothing at this tick survives in the window, the live state is our best guess.
-    if ([location, activity, plan, summary].every(v => v === undefined)) return base;
-    return {
-        location: location ?? base.location,
-        activity: activity ?? base.activity,
-        plan: plan ?? base.plan,
-        summary: summary ?? base.summary,
-        x: base.x,
-        y: base.y,
     };
 }
 
@@ -386,37 +457,34 @@ export function findRosterIdByName(name) {
 }
 
 /**
- * Records that two characters interacted on a given tick. Stored on the live state entry
+ * Records that two characters interacted. Stored on the live state entry
  * (not roster history) so it survives in snapshots and is queryable for scene context.
  * The caller mirrors the pair, recording on both participants.
  * @param {string} characterId
  * @param {string} withId
- * @param {number} tick
  * @param {string} [note]
  */
-export function pushCharacterInteraction(characterId, withId, tick, note = '') {
+export function pushCharacterInteraction(characterId, withId, note = '') {
     const cur = state.characters[characterId];
     if (!cur || !withId || withId === characterId) return;
     if (!Array.isArray(cur.interactions)) cur.interactions = [];
-    cur.interactions.push({ tick, withId, note: String(note || '') });
+    cur.interactions.push({ withId, note: String(note || '') });
     const limit = (config.historyEntriesPerCharacter ?? 5) * 4;
     while (cur.interactions.length > limit) cur.interactions.shift();
 }
 
 /**
- * Returns the unique ids of characters this character interacted with on or after
- * `tick - withinTicks`. Empty when nothing is tracked.
+ * Returns unique ids from this character's most recent stored interactions.
  * @param {string} characterId
- * @param {number} [withinTicks]
+ * @param {number} [limit]
  * @returns {string[]}
  */
-export function getRecentInteractionPartnerIds(characterId, withinTicks = 3) {
+export function getRecentInteractionPartnerIds(characterId, limit = 3) {
     const cur = state.characters[characterId];
     if (!cur || !Array.isArray(cur.interactions)) return [];
-    const minTick = (state.tick || 0) - withinTicks;
     const ids = new Set();
-    for (const it of cur.interactions) {
-        if (it.tick >= minTick && it.withId) ids.add(it.withId);
+    for (const it of cur.interactions.slice(-Math.max(1, limit))) {
+        if (it.withId) ids.add(it.withId);
     }
     return [...ids];
 }
@@ -425,8 +493,8 @@ export function getRecentInteractionPartnerIds(characterId, withinTicks = 3) {
  * @typedef {object} WorldSimScene
  * @property {string} sceneId      Stable id (we reuse the ST group id).
  * @property {string} groupId      The backing ST group's id.
- * @property {string|null} cycleId The tick this scene zooms into, if any.
- * @property {number|null} tick
+ * @property {string|null} cycleId The originating generation id, if any.
+ * @property {string|null} [baseRevisionId] The event state from which this scene was opened.
  * @property {string[]} characterIds
  * @property {string} title
  * @property {string} createdAt
@@ -434,14 +502,13 @@ export function getRecentInteractionPartnerIds(characterId, withinTicks = 3) {
  */
 
 /**
- * Scenes are roleplay group chats that "zoom in" on a tick. They are tracked here so the
+ * Scenes are roleplay group chats that expand the current compact world state. They are tracked here so the
  * Conversations tab can list them and so their backing groups can be hidden from the main
  * character grid (see hiddenGroupIds in script.js).
  * @returns {WorldSimScene[]}
  */
 export function getScenes() {
-    if (!Array.isArray(state.scenes)) state.scenes = [];
-    return state.scenes;
+    return conversations;
 }
 
 /**
@@ -491,41 +558,6 @@ export function removeScene(sceneId) {
 }
 
 /**
- * @param {WorldSimCycle} cycle
- * @returns {Promise<void>}
- */
-export async function appendCycle(cycle) {
-    const response = await fetch(`${API_URL}/cycles`, {
-        method: 'POST',
-        headers: getRequestHeaders(),
-        body: JSON.stringify({ append: cycle }),
-    });
-    if (!response.ok) throw new Error('Failed to append cycle');
-}
-
-/**
- * @returns {Promise<WorldSimCycle[]>}
- */
-export async function loadCycles() {
-    const response = await fetch(`${API_URL}/cycles`, {
-        method: 'POST',
-        headers: getRequestHeaders(),
-    });
-    if (!response.ok) return [];
-    const raw = await response.json();
-    // cycles.jsonl is append-only. A committed scene re-appends its event under the SAME
-    // cycleId, so a later line supersedes the earlier one ("replace the event"). Keep the
-    // last line per cycleId, then order by in-world tick.
-    const byId = new Map();
-    let fallback = 0;
-    for (const c of Array.isArray(raw) ? raw : []) {
-        if (!c) continue;
-        byId.set(c.cycleId || `__noid_${fallback++}`, c);
-    }
-    return [...byId.values()].sort((a, b) => (a.tick ?? 0) - (b.tick ?? 0));
-}
-
-/**
  * @param {'selector-chats'|'updater-chats'} folder
  * @param {string} id
  * @param {object[]} messages
@@ -556,34 +588,6 @@ export async function loadChat(folder, id) {
 }
 
 /**
- * @param {string} cycleId
- * @param {object} snapshot
- * @returns {Promise<void>}
- */
-export async function saveSnapshot(cycleId, snapshot) {
-    const response = await fetch(`${API_URL}/snapshot/save`, {
-        method: 'POST',
-        headers: getRequestHeaders(),
-        body: JSON.stringify({ cycleId, snapshot }),
-    });
-    if (!response.ok) throw new Error('Failed to save snapshot');
-}
-
-/**
- * @param {string} cycleId
- * @returns {Promise<object>}
- */
-export async function loadSnapshot(cycleId) {
-    const response = await fetch(`${API_URL}/snapshot/load`, {
-        method: 'POST',
-        headers: getRequestHeaders(),
-        body: JSON.stringify({ cycleId }),
-    });
-    if (!response.ok) return {};
-    return await response.json();
-}
-
-/**
  * @param {'selector-chats'|'updater-chats'} folder
  * @returns {Promise<string[]>}
  */
@@ -595,4 +599,16 @@ export async function listChats(folder) {
     });
     if (!response.ok) return [];
     return await response.json();
+}
+
+function capturePersistentRoster() {
+    const result = { ...roster, characters: {} };
+    for (const [id, rawCharacter] of Object.entries(roster.characters || {})) {
+        const character = {};
+        for (const key of ['id', 'name', 'avatar', 'included', 'priority', 'cardContext']) {
+            if (Object.hasOwn(rawCharacter, key)) character[key] = rawCharacter[key];
+        }
+        result.characters[id] = character;
+    }
+    return result;
 }

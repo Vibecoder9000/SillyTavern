@@ -6,88 +6,129 @@ import {
     loadWorldSimState,
     resetWorldSimState,
     resetCharacterWorldSimState,
+    saveCurrentWorldSnapshot,
     saveWorldSimState,
     getRosterCharacter,
     setCharacterStrings,
     updateConfig,
-    loadCycles,
-    loadSnapshot,
     getScenes,
+    commitWorldRevision,
+    getEventHistory,
+    getRevisionIndex,
+    loadRevisionSnapshot,
 } from './state.js';
 import { characters, getThumbnailUrl, printCharacters } from '../../script.js';
 import { power_user } from '../power-user.js';
 import { getRun } from './run-context.js';
 
-import { startTimer, stopTimer, isTimerRunning, startCountdown } from './timer.js';
-import { runCycle, addCharacterToRoster, avatarToId, initializeCharacter, startRoleplayChat, revertCycle, openScene, deleteScene, commitScene, syncHiddenScenes } from './main.js';
+import { runCycle, runGuidedCycle, addCharacterToRoster, avatarToId, initializeCharacter, startRoleplayChat, openScene, deleteScene, commitScene, syncHiddenScenes, branchFromRevision } from './main.js';
 import { registerWorldSimTools } from './tools.js';
 import { initWorldSimMap, refreshMap, selectCharacterOnMap } from './map.js';
+import { CARD_CONTEXT_TOKEN_LIMIT, ensureCharacterCardContext, getCardContextStatus, saveEditedCardContext } from './card-summary.js';
+import { WORLD_CHARACTER_AVATAR } from './world-character.js';
+import { getTokenCountAsync } from '../tokenizers.js';
+import { Popup, POPUP_TYPE } from '../popup.js';
+import { renderHistoryTimeline } from './history-timeline.js';
+import { confirmWorldSimAction } from './popups.js';
 
 let manualRunActive = false;
+let guidedRunActive = false;
+let fastForwardStopRequested = false;
 let bulkInitActive = false;
+let bulkInitStopRequested = false;
+let summaryBatchActive = false;
+let summaryBatchStopRequested = false;
+let summaryBatchStatus = '';
+let activeSummaryEditor = null;
 let bulkInitQueue = null;
 let bulkInitPollTimer = null;
 let filterIncludedOnly = false;
 let searchTerm = '';
 let selectedCharacterId = null;
 const expandedChars = new Set();
-const expandedTicks = new Set();
 
 export async function initWorldSimUi() {
     registerWorldSimTools();
     await loadWorldSimState();
+    if (getConfig().summaryPaused) {
+        updateConfig({ summaryPaused: false });
+        await saveWorldSimState();
+    }
     syncHiddenScenes();
     printCharacters();
     bindEvents();
     await renderAll();
     initWorldSimMap(document.getElementById('world-sim-map'));
-    startCountdown(updateCountdown);
 }
 
 function bindEvents() {
     // --- Actions ---
-    $(document).on('change', '#world-sim-autorun', (e) => {
-        e.stopPropagation();
-        if ($(e.currentTarget).prop('checked')) {
-            startTimer();
-        } else {
-            stopTimer();
-        }
-        updateStatusBar();
-    });
-
     $(document).on('click', '#world-sim-run-now', async (e) => {
         e.stopPropagation();
-        const count = Number($('#world-sim-run-count').val()) || 1;
+        if (manualRunActive) {
+            fastForwardStopRequested = true;
+            updateStatusBar();
+            return;
+        }
+
+        const count = Math.min(100, Math.max(1, Number($('#world-sim-run-count').val()) || 1));
         const roster = getRoster();
         const eligible = Object.values(roster.characters || {}).filter(c => c.included && c.initialized).length;
         if (!eligible) {
             toastr.warning('Include and initialize at least one character first.', 'World Sim');
             return;
         }
+        if (summaryBatchActive || bulkInitActive) {
+            toastr.warning('Finish or pause the current setup operation first.', 'World Sim');
+            return;
+        }
+
         manualRunActive = true;
+        fastForwardStopRequested = false;
         updateStatusBar();
         try {
             for (let i = 0; i < count; i++) {
-                await runCycle({ ignorePaused: true });
+                summaryBatchStatus = `Event ${i + 1} of ${count}`;
+                updateStatusBar();
+                const result = await runCycle({
+                    onSummaryProgress: message => {
+                        summaryBatchStatus = `Event ${i + 1} of ${count} · ${message}`;
+                        updateStatusBar();
+                    },
+                });
                 await renderHistory();
                 updateStatusBar();
+                if (result?.status !== 'complete') {
+                    const message = result?.reason || 'Fast Forward paused before the event completed.';
+                    if (result?.status === 'failed') toastr.error(message, 'World Sim');
+                    else if (result?.status !== 'cancelled') toastr.warning(message, 'World Sim');
+                    break;
+                }
+                if (fastForwardStopRequested) break;
             }
         } finally {
             manualRunActive = false;
+            fastForwardStopRequested = false;
+            summaryBatchStatus = '';
             updateStatusBar();
         }
+    });
+
+    $(document).on('click', '#world-sim-run-guided', async (e) => {
+        e.stopPropagation();
+        await openGuidedRunPanel();
     });
 
     $(document).on('click', '#world-sim-include-all', async (e) => {
         e.stopPropagation();
         const nextIncluded = !areAllCharactersIncluded();
-        for (const char of characters.filter(c => c?.avatar)) {
+        for (const char of characters.filter(c => c?.avatar && c.avatar !== WORLD_CHARACTER_AVATAR)) {
             const entry = ensureRosterEntry(char.avatar);
             if (entry) entry.included = nextIncluded;
         }
         await saveWorldSimState();
         renderRoster();
+        renderSettings();
         refreshMap();
         updateStatusBar();
         toastr.success(nextIncluded ? 'Included all characters in World Sim.' : 'Discluded all characters from World Sim.', 'World Sim');
@@ -95,7 +136,13 @@ function bindEvents() {
 
     $(document).on('click', '#world-sim-init-all', async (e) => {
         e.stopPropagation();
-        if (bulkInitActive) return;
+        if (bulkInitActive) {
+            bulkInitStopRequested = true;
+            updateSetupProgress(bulkInitQueue?.currentIndex ?? 0, bulkInitQueue?.total ?? 0);
+            updateStatusBar();
+            return;
+        }
+        if (summaryBatchActive || manualRunActive) return;
 
         const targets = getBulkInitializeTargets();
         if (!targets.length) {
@@ -103,25 +150,41 @@ function bindEvents() {
             return;
         }
 
-        const confirmed = confirm(`Initialize ${targets.length} character${targets.length === 1 ? '' : 's'} and include them in World Sim?`);
+        const confirmed = await confirmWorldSimAction({
+            title: `Initialize ${targets.length} character${targets.length === 1 ? '' : 's'}?`,
+            message: 'World Sim will prepare each character and include them in the simulation.',
+            detail: 'This can take a while. You can pause the queue after the current character finishes.',
+            confirmLabel: 'Initialize',
+            icon: 'fa-wand-magic-sparkles',
+        });
         if (!confirmed) return;
         await startBulkInitializeQueue(targets);
     });
 
     $(document).on('click', '#world-sim-reset-all', async (e) => {
         e.stopPropagation();
-        const confirmed = confirm('Delete all World Sim data, locations, history, scenes, and initialization progress? This cannot be undone.');
+        if (bulkInitActive || summaryBatchActive || manualRunActive) {
+            toastr.warning('Stop the active World Sim operation before resetting.', 'World Sim');
+            return;
+        }
+        const confirmed = await confirmWorldSimAction({
+            title: 'Reset all World Sim data?',
+            message: 'This deletes every location, event, scene, character state, and initialization result.',
+            detail: 'This cannot be undone.',
+            confirmLabel: 'Delete everything',
+            icon: 'fa-trash-can',
+            danger: true,
+        });
         if (!confirmed) return;
 
         finishBulkInitializeQueue();
-        stopTimer();
         for (const scene of [...getScenes()]) {
             await deleteScene(scene.sceneId);
         }
         await resetWorldSimState();
         selectedCharacterId = null;
         expandedChars.clear();
-        expandedTicks.clear();
+        if (activeSummaryEditor) await activeSummaryEditor.popup.completeCancelled();
         selectCharacterOnMap(null);
         renderSettings();
         await renderAll();
@@ -143,7 +206,7 @@ function bindEvents() {
 
     // --- Roster row expand ---
     $(document).on('click', '.world-sim-char-row', function (e) {
-        if ($(e.target).closest('.world-sim-toggle, .world-sim-star').length) return;
+        if ($(e.target).closest('.world-sim-toggle, .world-sim-star, .world-sim-summary-toggle').length) return;
         const $card = $(this).closest('.world-sim-char');
         const avatar = $card.data('avatar');
         const id = String($card.data('id') || '');
@@ -182,6 +245,32 @@ function bindEvents() {
         renderRoster();
     });
 
+    $(document).on('click', '.world-sim-summary-toggle', async function (e) {
+        e.stopPropagation();
+        const $card = $(this).closest('.world-sim-char');
+        const entry = ensureRosterEntry(String($card.data('avatar') || ''));
+        const id = String(entry?.id || '');
+        if (!id) return;
+        const needsSummary = !getCardContextStatus(id).context;
+        if (needsSummary && (manualRunActive || summaryBatchActive || bulkInitActive)) {
+            toastr.warning('Finish the current World Sim operation first.', 'World Sim');
+            return;
+        }
+        await openSummaryEditor(id, entry.name || 'Character', this, needsSummary);
+    });
+
+    $(document).on('click', '#world-sim-summary-all', async function (e) {
+        e.stopPropagation();
+        if (summaryBatchActive) {
+            summaryBatchStopRequested = true;
+            renderSettings();
+            updateStatusBar();
+            return;
+        }
+        if (manualRunActive || bulkInitActive) return;
+        await summarizeAllCharacters();
+    });
+
     // --- Detail field edits ---
     $(document).on('change', '.world-sim-detail-field [data-field]', async function () {
         const avatar = $(this).closest('.world-sim-char').data('avatar');
@@ -196,11 +285,12 @@ function bindEvents() {
         } else {
             setCharacterStrings(id, { [field]: String(value) });
         }
-        await saveWorldSimState();
+        await saveCurrentWorldSnapshot();
     });
 
     $(document).on('click', '.world-sim-init-char', async function (e) {
         e.stopPropagation();
+        if (summaryBatchActive || manualRunActive) return;
         const avatar = $(this).closest('.world-sim-char').data('avatar');
         const char = ensureRosterEntry(avatar);
         if (!char) return;
@@ -219,7 +309,15 @@ function bindEvents() {
         const char = ensureRosterEntry(avatar);
         if (!char) return;
 
-        const confirmed = confirm(`Reset World Sim state for ${char.name || 'this character'}? This will clear their initialization, fields, and personal World Sim history.`);
+        const characterName = char.name || 'this character';
+        const confirmed = await confirmWorldSimAction({
+            title: `Reset ${characterName}?`,
+            message: 'This clears their initialization, current state, and personal World Sim history.',
+            detail: 'Other characters and shared world history will be kept.',
+            confirmLabel: 'Reset character',
+            icon: 'fa-arrow-rotate-left',
+            danger: true,
+        });
         if (!confirmed) return;
 
         const reset = resetCharacterWorldSimState(char.id);
@@ -230,25 +328,31 @@ function bindEvents() {
             selectCharacterOnMap(null);
         }
 
-        await saveWorldSimState();
+        await commitWorldRevision({
+            source: 'character-reset',
+            summary: `Reset ${char.name || 'character'}`,
+            eventBatch: { resetCharacterIds: [char.id] },
+        });
+        await renderHistory();
         renderRoster();
         refreshMap();
         updateStatusBar();
         toastr.success(`${char.name || 'Character'} reset.`, 'World Sim');
     });
 
-    // --- Mobile section tabs (Characters / Map / History / Actions) ---
+    // --- Mobile section tabs (Characters / Map / History / Settings / Actions) ---
     $(document).on('click', '.world-sim-mtab', function () {
         const tab = $(this).data('mtab');
         $('.world-sim-mtab').removeClass('active');
         $(this).addClass('active');
         $('.world-sim-app').attr('data-mtab', tab);
-        if (tab === 'map' || tab === 'history' || tab === 'conversations') {
+        if (tab === 'map' || tab === 'history' || tab === 'conversations' || tab === 'settings') {
             $('.world-sim-tab').removeClass('active').filter(`[data-tab="${tab}"]`).addClass('active');
             $('.world-sim-tabpane').removeClass('active');
             $(`#world-sim-${tab}-tab`).addClass('active');
         }
         if (tab === 'map') refreshMap();
+        if (tab === 'history') void renderHistory();
         if (tab === 'conversations') renderConversations();
     });
 
@@ -260,30 +364,18 @@ function bindEvents() {
         $('.world-sim-tabpane').removeClass('active');
         $(`#world-sim-${tab}-tab`).addClass('active');
         if (tab === 'map') refreshMap();
+        if (tab === 'history') void renderHistory();
         if (tab === 'conversations') renderConversations();
     });
 
-    // --- History rows ---
-    $(document).on('click', '.world-sim-tick-head', async function () {
-        const $tick = $(this).closest('.world-sim-tick');
-        const cycleId = $tick.data('cycle');
-        if (expandedTicks.has(cycleId)) {
-            expandedTicks.delete(cycleId);
-            $tick.removeClass('open');
-        } else {
-            expandedTicks.add(cycleId);
-            $tick.addClass('open');
-            await fillTickBody($tick);
-        }
-    });
 
     $(document).on('click', '.world-sim-open-scene', async function (e) {
         e.stopPropagation();
         const ids = String($(this).data('ids') || '').split(',').filter(Boolean);
         if (!ids.length) return;
         const cycleId = String($(this).data('cycle') || '') || null;
-        const tick = Number.isFinite(Number($(this).data('tick'))) ? Number($(this).data('tick')) : null;
-        await startRoleplayChat(ids, { cycleId, tick });
+        const baseRevisionId = String($(this).data('revision') || '') || null;
+        await startRoleplayChat(ids, { cycleId, baseRevisionId });
         renderConversations();
     });
 
@@ -307,29 +399,22 @@ function bindEvents() {
     $(document).on('click', '.world-sim-scene-delete', async function (e) {
         e.stopPropagation();
         const sceneId = String($(this).data('scene'));
-        const confirmed = confirm('Delete this scene and its chat? This cannot be undone.');
+        const confirmed = await confirmWorldSimAction({
+            title: 'Delete this scene?',
+            message: 'The scene and its linked roleplay chat will both be deleted.',
+            detail: 'This cannot be undone.',
+            confirmLabel: 'Delete scene',
+            icon: 'fa-comment-slash',
+            danger: true,
+        });
         if (!confirmed) return;
         await deleteScene(sceneId);
         renderConversations();
     });
 
-    $(document).on('click', '.world-sim-undo', async function (e) {
-        e.stopPropagation();
-        const cycleId = String($(this).data('cycle'));
-        const ok = await revertCycle(cycleId);
-        if (ok) {
-            $(this).closest('.world-sim-tick').addClass('reverted');
-            updateStatusBar();
-            renderRoster();
-            toastr.success('Reverted to the state before this tick.', 'World Sim');
-        }
-    });
-
     // --- Settings ---
-    $(document).on('change', '.world-sim-actions-pane input[type="number"]:not(#world-sim-run-count)', async () => {
+    $(document).on('change', '#world-sim-history-entries', async () => {
         updateConfig({
-            tickIntervalMinutes: Number($('#world-sim-tick-interval').val()) || getConfig().tickIntervalMinutes,
-            autoPauseIdleMinutes: Number($('#world-sim-auto-pause').val()) || getConfig().autoPauseIdleMinutes,
             historyEntriesPerCharacter: Number($('#world-sim-history-entries').val()) || getConfig().historyEntriesPerCharacter,
         });
         await saveWorldSimState();
@@ -360,7 +445,6 @@ async function renderAll() {
     await renderHistory();
     renderConversations();
     updateStatusBar();
-    updateWorldClock();
     refreshMap();
 }
 
@@ -389,6 +473,7 @@ function renderRoster() {
         const id = entry?.id || avatarToId(item.avatar);
         const included = !!entry?.included;
         const priority = !!entry?.priority;
+        const summaryStatus = entry ? getCardContextStatus(id) : { state: 'missing', label: 'No context' };
         const strings = state.characters[id] || { location: '', activity: '', plan: '', x: '', y: '' };
         const avatarUrl = getThumbnailUrl('avatar', item.avatar);
 
@@ -406,17 +491,24 @@ function renderRoster() {
                     <input type="checkbox" class="world-sim-include-char">
                     <span class="track"></span>
                 </label>
+                <button class="world-sim-summary-toggle" type="button" title="View or edit character context" aria-label="View or edit character context" aria-haspopup="dialog"><i class="fa-solid fa-file-lines" aria-hidden="true"></i></button>
                 <button class="world-sim-star" type="button" title="Priority"><i class="fa-solid fa-star"></i></button>
             </div>
         `);
         $row.find('.world-sim-char-avatar').attr('src', avatarUrl);
         $row.find('.world-sim-char-name').text(item.name);
         $row.find('.world-sim-include-char').prop('checked', included).attr('data-avatar', item.avatar);
+        $row.find('.world-sim-summary-toggle')
+            .toggleClass('active', activeSummaryEditor?.id === id)
+            .toggleClass('missing', summaryStatus.state === 'missing' || summaryStatus.state === 'stale')
+            .attr('aria-expanded', activeSummaryEditor?.id === id ? 'true' : 'false')
+            .attr('aria-label', summaryStatus.context ? 'View or edit character context' : 'Prepare character context')
+            .attr('title', summaryStatus.context ? `Card context: ${summaryStatus.label}` : 'Summarize character for World Sim');
         $row.find('.world-sim-star').toggleClass('active', priority).attr('data-avatar', item.avatar);
         $card.append($row);
 
         if (expandedChars.has(item.avatar)) {
-            $card.append(buildDetail(id, strings, !!entry?.initialized));
+            $card.append(buildDetail(id, strings, !!entry?.initialized, summaryStatus));
         }
 
         $container.append($card);
@@ -428,7 +520,7 @@ function renderRoster() {
  * @param {object} strings
  * @param {boolean} initialized
  */
-function buildDetail(id, strings, initialized) {
+function buildDetail(id, strings, initialized, summaryStatus) {
     const $detail = $(`
         <div class="world-sim-char-detail">
             <div class="world-sim-detail-field">
@@ -460,6 +552,8 @@ function buildDetail(id, strings, initialized) {
     $detail.find('[data-field="plan"]').val(strings.plan || '');
 
     const $actions = $detail.find('.world-sim-detail-actions');
+    const summaryLabel = summaryStatus.context ? 'View Summary' : 'Summarize';
+    $actions.append(`<button class="world-sim-summary-toggle menu_button" type="button" aria-haspopup="dialog" aria-expanded="false">${summaryLabel}</button>`);
     if (initialized) {
         $actions.append('<button class="world-sim-reset-char menu_button menu_button_warning" type="button" title="Clear this character\'s initialization, fields, and World Sim history">Reset</button>');
     } else {
@@ -469,105 +563,452 @@ function buildDetail(id, strings, initialized) {
     return $detail;
 }
 
+async function openSummaryEditor(id, characterName, trigger, regenerateOnOpen = false) {
+    if (activeSummaryEditor) {
+        activeSummaryEditor.textarea.focus();
+        return;
+    }
+
+    const initialStatus = getCardContextStatus(id);
+    const content = document.createElement('section');
+    content.className = 'world-sim-summary-popup';
+    content.innerHTML = `
+        <header class="world-sim-summary-popup-head">
+            <h3 id="world-sim-summary-dialog-title"></h3>
+            <div class="world-sim-summary-popup-meta" aria-live="polite">
+                <span class="world-sim-summary-status"></span>
+            </div>
+        </header>
+        <div class="world-sim-summary-popup-field">
+            <textarea class="text_pole world-sim-summary-text" aria-label="Character context" autofocus spellcheck="true"></textarea>
+        </div>
+        <footer class="world-sim-summary-popup-actions">
+            <span class="world-sim-summary-save-state" role="status" aria-live="polite"></span>
+            <button class="world-sim-summary-regenerate menu_button" type="button">
+                <i class="fa-solid fa-arrows-rotate"></i><span>Regenerate</span>
+            </button>
+        </footer>
+    `;
+
+    const title = content.querySelector('#world-sim-summary-dialog-title');
+    const textarea = content.querySelector('.world-sim-summary-text');
+    const status = content.querySelector('.world-sim-summary-status');
+    const saveState = content.querySelector('.world-sim-summary-save-state');
+    const regenerateButton = content.querySelector('.world-sim-summary-regenerate');
+    title.textContent = characterName;
+    textarea.value = initialStatus.context?.text || '';
+    status.textContent = regenerateOnOpen ? 'Preparing…' : initialStatus.label;
+    status.dataset.state = regenerateOnOpen ? '' : initialStatus.state;
+    saveState.textContent = '';
+
+    let popup;
+    const session = {
+        id,
+        popup: null,
+        trigger,
+        textarea,
+        status,
+        saveState,
+        regenerateButton,
+        dirty: false,
+        revision: 0,
+        countTimer: null,
+        saveTimer: null,
+        savePromise: null,
+        busyPromise: null,
+        outsidePointerHandler: null,
+    };
+
+    popup = new Popup(content, POPUP_TYPE.DISPLAY, '', {
+        wider: true,
+        large: true,
+        leftAlign: true,
+        animation: 'fast',
+        onClosing: async () => {
+            if (session.busyPromise) await session.busyPromise;
+            return await persistSummaryDraft(session);
+        },
+        onClose: () => {
+            clearSummaryEditorTimers(session);
+            document.removeEventListener('pointerdown', session.outsidePointerHandler, true);
+            if (activeSummaryEditor === session) activeSummaryEditor = null;
+            renderRoster();
+            const nextTrigger = Array.from(document.querySelectorAll('.world-sim-char'))
+                .find(card => String(card.dataset.id || '') === id)
+                ?.querySelector('.world-sim-summary-toggle');
+            nextTrigger?.focus();
+        },
+        onOpen: () => {
+            trigger.setAttribute('aria-expanded', 'true');
+            textarea.focus();
+            if (regenerateOnOpen) void regenerateSummaryInEditor(session);
+        },
+    });
+    popup.dlg.classList.add('world-sim-dialog', 'world-sim-summary-dialog');
+    popup.dlg.setAttribute('aria-labelledby', 'world-sim-summary-dialog-title');
+    session.popup = popup;
+    activeSummaryEditor = session;
+
+    textarea.addEventListener('input', () => scheduleSummaryDraftSave(session));
+    regenerateButton.addEventListener('click', () => void regenerateSummaryInEditor(session));
+
+    session.outsidePointerHandler = event => {
+        if (!popup.dlg.open || popup.dlg !== document.activeElement?.closest('.popup')) return;
+        const bounds = popup.dlg.getBoundingClientRect();
+        const outside = event.clientX < bounds.left
+            || event.clientX > bounds.right
+            || event.clientY < bounds.top
+            || event.clientY > bounds.bottom;
+        if (outside) void popup.completeCancelled();
+    };
+
+    const popupResult = popup.show();
+    document.addEventListener('pointerdown', session.outsidePointerHandler, true);
+    await popupResult;
+}
+
+function scheduleSummaryDraftSave(session) {
+    session.dirty = true;
+    session.revision++;
+    session.saveState.textContent = '';
+    session.saveState.dataset.state = '';
+    clearTimeout(session.countTimer);
+    clearTimeout(session.saveTimer);
+
+    const revision = session.revision;
+    session.countTimer = setTimeout(async () => {
+        const count = await getTokenCountAsync(session.textarea.value, 0);
+        if (revision !== session.revision || activeSummaryEditor !== session) return;
+        session.status.textContent = `${count} / ${CARD_CONTEXT_TOKEN_LIMIT} tokens · edited`;
+        session.status.dataset.state = count > CARD_CONTEXT_TOKEN_LIMIT ? 'stale' : 'edited';
+        if (count > CARD_CONTEXT_TOKEN_LIMIT) {
+            clearTimeout(session.saveTimer);
+            session.saveState.textContent = 'Over token limit — not saved';
+            session.saveState.dataset.state = 'error';
+        }
+    }, 200);
+
+    session.saveTimer = setTimeout(() => void persistSummaryDraft(session), 800);
+}
+
+async function persistSummaryDraft(session) {
+    clearTimeout(session.saveTimer);
+    if (session.savePromise) await session.savePromise;
+    if (!session.dirty) return true;
+
+    const draft = session.textarea.value;
+    session.saveState.textContent = '';
+    session.saveState.dataset.state = '';
+    session.savePromise = (async () => {
+        try {
+            const context = await saveEditedCardContext(session.id, draft);
+            if (session.textarea.value === draft) {
+                session.textarea.value = context.text;
+                session.dirty = false;
+                const nextStatus = getCardContextStatus(session.id);
+                session.status.textContent = nextStatus.label;
+                session.status.dataset.state = nextStatus.state;
+                session.saveState.textContent = '';
+                session.saveState.dataset.state = '';
+            } else {
+                scheduleSummaryDraftSave(session);
+            }
+            return true;
+        } catch (error) {
+            session.saveState.textContent = error?.message || String(error);
+            session.saveState.dataset.state = 'error';
+            return false;
+        } finally {
+            session.savePromise = null;
+        }
+    })();
+    return await session.savePromise;
+}
+
+async function regenerateSummaryInEditor(session) {
+    if (manualRunActive || summaryBatchActive || bulkInitActive || session.busyPromise) {
+        toastr.warning('Finish the current World Sim operation first.', 'World Sim');
+        return;
+    }
+    if (!await persistSummaryDraft(session)) return;
+
+    session.busyPromise = (async () => {
+        const previousText = session.textarea.value;
+        let succeeded = false;
+        session.textarea.readOnly = true;
+        session.textarea.value = '';
+        session.textarea.classList.add('world-sim-summary-streaming');
+        session.regenerateButton.disabled = true;
+        session.status.textContent = 'Preparing…';
+        session.status.dataset.state = '';
+        session.saveState.textContent = '';
+        session.saveState.dataset.state = '';
+        try {
+            const context = await ensureCharacterCardContext(session.id, {
+                force: true,
+                ignorePaused: true,
+                onProgress: message => {
+                    session.status.textContent = message;
+                },
+                onStream: update => renderSummaryGenerationStream(session, update),
+            });
+            session.textarea.value = context.text || '';
+            session.dirty = false;
+            succeeded = true;
+            const nextStatus = getCardContextStatus(session.id);
+            session.status.textContent = nextStatus.label;
+            session.status.dataset.state = nextStatus.state;
+            session.saveState.textContent = '';
+            session.saveState.dataset.state = '';
+            toastr.success('Character context regenerated.', 'World Sim');
+        } catch (error) {
+            session.textarea.value = previousText;
+            session.saveState.textContent = error?.message || String(error);
+            session.saveState.dataset.state = 'error';
+            toastr.error(error?.message || String(error), 'World Sim Context');
+        } finally {
+            session.textarea.readOnly = false;
+            session.textarea.classList.remove('world-sim-summary-streaming', 'world-sim-summary-streaming-reasoning');
+            session.regenerateButton.disabled = false;
+            if (!succeeded) {
+                const priorStatus = getCardContextStatus(session.id);
+                session.status.textContent = priorStatus.context ? priorStatus.label : 'Generation failed';
+                session.status.dataset.state = priorStatus.context ? priorStatus.state : 'missing';
+            }
+            session.textarea.focus();
+            updateStatusBar();
+        }
+    })();
+    await session.busyPromise;
+    session.busyPromise = null;
+}
+
+function renderSummaryGenerationStream(session, update) {
+    const reasoning = String(update?.reasoning || '');
+    const content = String(update?.content || '');
+    const showingReasoning = Boolean(update?.isThinking && reasoning);
+    session.textarea.value = showingReasoning ? reasoning : content;
+    session.textarea.classList.toggle('world-sim-summary-streaming-reasoning', showingReasoning);
+    session.status.textContent = showingReasoning ? 'Reasoning…' : 'Writing context…';
+    session.status.dataset.state = '';
+    session.textarea.scrollTop = session.textarea.scrollHeight;
+}
+
+function clearSummaryEditorTimers(session) {
+    clearTimeout(session.countTimer);
+    clearTimeout(session.saveTimer);
+    session.trigger?.setAttribute('aria-expanded', 'false');
+}
+
 function renderSettings() {
     const config = getConfig();
-    $('#world-sim-tick-interval').val(config.tickIntervalMinutes);
-    $('#world-sim-auto-pause').val(config.autoPauseIdleMinutes);
     $('#world-sim-history-entries').val(config.historyEntriesPerCharacter);
+    renderSetupControls();
 }
 
 async function renderHistory() {
-    const cycles = await loadCycles();
-    const $container = $('#world-sim-history').empty();
+    const timelineContainer = document.getElementById('world-sim-history');
+    if (timelineContainer) {
+        renderHistoryTimeline(timelineContainer, getEventHistory(), getRoster(), {
+            onCreateOption: event => openGuidedRunPanel({
+                baseRevisionId: event.revisionId,
+                parentSummary: event.summary,
+            }),
+        });
+    }
+}
 
-    if (!cycles.length) {
-        $container.append('<div class="world-sim-empty">Completed ticks will appear here.</div>');
-        return;
+async function openGuidedRunPanel({ baseRevisionId = null, parentSummary = '' } = {}) {
+    if (manualRunActive || summaryBatchActive || bulkInitActive) {
+        toastr.warning('Finish or pause the current World Sim operation first.', 'World Sim');
+        return null;
     }
 
-    for (const cycle of cycles.slice().reverse()) {
-        const failed = !cycle.updater?.ok || !cycle.selector?.ok;
-        const names = (cycle.selector?.characterIds || []).map(id => getRosterCharacter(id)?.name || id).join(', ') || 'none';
-        const time = formatWorldTimeFromMinutes(cycle.inWorldMinutes ?? getState().inWorldMinutes);
-        const isOpen = expandedTicks.has(cycle.cycleId);
+    const revisionIndex = getRevisionIndex();
+    const snapshot = baseRevisionId && baseRevisionId !== revisionIndex.headId
+        ? await loadRevisionSnapshot(baseRevisionId)
+        : null;
+    const eligible = Object.values(getRoster().characters || {})
+        .filter(character => character.included && (snapshot?.characters?.[character.id]?.initialized ?? character.initialized))
+        .sort((a, b) => String(a.name || a.id).localeCompare(String(b.name || b.id)));
+    if (!eligible.length) {
+        toastr.warning('Include and initialize at least one character first.', 'World Sim');
+        return null;
+    }
 
-        const $tick = $('<div class="world-sim-tick"></div>')
-            .attr('data-cycle', cycle.cycleId)
-            .toggleClass('failed', failed)
-            .toggleClass('open', isOpen);
-
-        const $head = $(`
-            <div class="world-sim-tick-head">
-                <i class="fa-solid fa-chevron-right chevron"></i>
-                <span class="world-sim-tick-title"></span>
-                <span class="world-sim-tick-names"></span>
+    const content = document.createElement('section');
+    content.className = 'world-sim-guided-run';
+    content.innerHTML = `
+        <header class="world-sim-popup-hero">
+            <div class="world-sim-popup-hero-icon" aria-hidden="true"><i class="fa-solid fa-compass"></i></div>
+            <div class="world-sim-popup-hero-copy">
+                <h3 id="world-sim-guided-dialog-title"></h3>
+                <div class="world-sim-guided-parent"></div>
             </div>
-        `);
-        $head.find('.world-sim-tick-title').text(`Tick ${cycle.tick} · ${time}`);
-        $head.find('.world-sim-tick-names').text(`# ${names}`);
-        $tick.append($head);
-        $tick.append('<div class="world-sim-tick-body"></div>');
-        $container.append($tick);
+        </header>
+        <label class="world-sim-guided-action">
+            <strong>What happens next?</strong>
+            <textarea class="text_pole" rows="6" required autofocus placeholder="Describe the action or direction for this event…"></textarea>
+        </label>
+        <details class="world-sim-guided-characters">
+            <summary>Characters <span>(optional)</span></summary>
+            <div class="world-sim-guided-character-help">Leave everyone on Automatic to let the model choose.</div>
+            <div class="world-sim-guided-character-list"></div>
+            <label class="world-sim-guided-exact checkbox_label">
+                <input type="checkbox">
+                <span>Use only the required characters</span>
+            </label>
+        </details>
+        <footer class="world-sim-guided-actions">
+            <button class="world-sim-guided-cancel menu_button" type="button">Cancel</button>
+            <button class="world-sim-guided-submit menu_button" type="button" disabled>Run</button>
+        </footer>
+    `;
 
-        if (isOpen) await fillTickBody($tick);
+    content.querySelector('h3').textContent = baseRevisionId ? 'Create next option' : 'Run with guidance';
+    const parent = content.querySelector('.world-sim-guided-parent');
+    parent.textContent = baseRevisionId
+        ? `After: ${parentSummary || 'selected event'}`
+        : 'Continues from the latest event';
+    const list = content.querySelector('.world-sim-guided-character-list');
+    for (const character of eligible) {
+        const row = document.createElement('label');
+        row.className = 'world-sim-guided-character';
+        const name = document.createElement('span');
+        name.textContent = character.name || character.id;
+        const select = document.createElement('select');
+        select.className = 'text_pole';
+        select.dataset.characterId = character.id;
+        select.innerHTML = '<option value="auto">Automatic</option><option value="include">Must involve</option><option value="exclude">Must not involve</option>';
+        row.append(name, select);
+        list.append(row);
     }
-}
 
-/**
- * Lazily renders a history tick's before/after diff body.
- * @param {JQuery} $tick
- */
-async function fillTickBody($tick) {
-    const $body = $tick.find('.world-sim-tick-body');
-    if ($body.data('filled')) return;
-    $body.data('filled', true);
-
-    const cycleId = $tick.data('cycle');
-    const cycles = await loadCycles();
-    const cycle = cycles.find(c => c.cycleId === cycleId);
-    if (!cycle) return;
-
-    if (!cycle.updater?.ok) {
-        $body.append($('<div class="world-sim-empty"></div>').text(cycle.updater?.error || cycle.selector?.error || 'This tick produced no update.'));
-        return;
-    }
-
-    const snapshot = await loadSnapshot(cycleId);
-    const before = snapshot?.characters || {};
-    const updates = cycle.updater?.updates || [];
-
-    const $grid = $('<div class="world-sim-diff-grid"></div>');
-    for (const update of updates) {
-        const id = update.characterId;
-        const char = getRosterCharacter(id);
-        const prev = before[id] || {};
-        const $char = $('<div class="world-sim-diff-char"></div>');
-        const $head = $('<div class="world-sim-diff-charhead"></div>');
-        if (char?.avatar) $head.append($('<img alt="">').attr('src', getThumbnailUrl('avatar', char.avatar)));
-        $head.append($('<span></span>').text(char?.name || id));
-        $char.append($head);
-
-        for (const field of ['activity', 'plan']) {
-            $char.append(buildDiffField(field, prev[field] || '', update[field] || ''));
+    const textarea = content.querySelector('textarea');
+    const exact = content.querySelector('.world-sim-guided-exact input');
+    const cancel = content.querySelector('.world-sim-guided-cancel');
+    const submit = content.querySelector('.world-sim-guided-submit');
+    const popup = new Popup(content, POPUP_TYPE.DISPLAY, '', { wider: true, large: true, leftAlign: true, animation: 'fast' });
+    popup.dlg.classList.add('world-sim-dialog', 'world-sim-guided-dialog');
+    popup.dlg.setAttribute('aria-labelledby', 'world-sim-guided-dialog-title');
+    let outcome = null;
+    textarea.addEventListener('input', () => { submit.disabled = !textarea.value.trim(); });
+    cancel.addEventListener('click', () => void popup.completeCancelled());
+    submit.addEventListener('click', async () => {
+        const guidance = textarea.value.trim();
+        if (!guidance) return;
+        const includedCharacterIds = [];
+        const excludedCharacterIds = [];
+        for (const select of list.querySelectorAll('select[data-character-id]')) {
+            if (select.value === 'include') includedCharacterIds.push(select.dataset.characterId);
+            if (select.value === 'exclude') excludedCharacterIds.push(select.dataset.characterId);
         }
-        $grid.append($char);
-    }
-    $body.append($grid);
+        if (exact.checked && !includedCharacterIds.length) {
+            toastr.warning('Mark at least one character as Must involve, or turn off exact selection.', 'World Sim');
+            return;
+        }
 
-    const ids = (cycle.selector?.characterIds || []).join(',');
-    const $actions = $('<div class="world-sim-tick-actions"></div>');
-    $('<button class="world-sim-open-scene menu_button" type="button" title="Zoom in: open a roleplay scene for this moment (managed in the Conversations tab)"><i class="fa-solid fa-masks-theater"></i><span>Open Scene</span></button>')
-        .attr('data-ids', ids)
-        .attr('data-cycle', cycleId)
-        .attr('data-tick', cycle.tick)
-        .appendTo($actions);
-    $('<button class="world-sim-undo menu_button" type="button" title="Revert the world to the state before this tick"><i class="fa-solid fa-rotate-left"></i><span>Undo</span></button>')
-        .attr('data-cycle', cycleId).appendTo($actions);
-    $body.append($actions);
+        submit.disabled = true;
+        cancel.disabled = true;
+        guidedRunActive = true;
+        manualRunActive = true;
+        summaryBatchStatus = 'Guided event';
+        updateStatusBar();
+        try {
+            outcome = await runGuidedCycle({
+                guidance,
+                baseRevisionId,
+                includedCharacterIds,
+                excludedCharacterIds,
+                exactCharacterSelection: exact.checked,
+            });
+            if (outcome?.status === 'complete') {
+                await popup.completeAffirmative();
+                await renderAll();
+            } else if (outcome?.status !== 'cancelled') {
+                toastr.warning(outcome?.reason || 'The guided event did not complete.', 'World Sim');
+            }
+        } catch (error) {
+            console.error(error);
+            toastr.error(error?.message || String(error), 'World Sim');
+        } finally {
+            guidedRunActive = false;
+            manualRunActive = false;
+            summaryBatchStatus = '';
+            updateStatusBar();
+            if (submit.isConnected) submit.disabled = !textarea.value.trim();
+            if (cancel.isConnected) cancel.disabled = false;
+        }
+    });
+
+    await popup.show();
+    return outcome;
+}
+
+function scrollRevisionHeadIntoView() {
+    document.querySelector('.world-sim-revision-node.current')?.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
+}
+
+async function openRevisionDetails(revisionId) {
+    const revision = getRevisionIndex().revisions?.[revisionId];
+    if (!revision) return;
+    const parentSnapshot = revision.parentId ? await loadRevisionSnapshot(revision.parentId) : null;
+    const content = document.createElement('section');
+    content.className = 'world-sim-revision-popup';
+    const characterRows = Object.entries(revision.characterChanges || {}).map(([id, fields]) => {
+        const name = getRosterCharacter(id)?.name || id;
+        const changes = Object.entries(fields || {}).map(([field, values]) => `${field}: ${String(values.before ?? '—')} → ${String(values.after ?? '—')}`).join('\n');
+        return `${name}\n${changes}`;
+    }).join('\n\n');
+    content.innerHTML = `
+        <header class="world-sim-popup-hero">
+            <div class="world-sim-popup-hero-icon" aria-hidden="true"><i class="fa-solid fa-code-branch"></i></div>
+            <div class="world-sim-popup-hero-copy">
+                <h3 id="world-sim-revision-dialog-title"></h3>
+                <div class="world-sim-revision-popup-meta"></div>
+            </div>
+        </header>
+        <section class="world-sim-revision-changes" aria-labelledby="world-sim-revision-changes-title">
+            <h4 id="world-sim-revision-changes-title">Changes in this revision</h4>
+            <pre class="world-sim-revision-popup-diffs"></pre>
+        </section>
+        <label class="world-sim-revision-guidance">
+            <strong>Continue from here</strong>
+            <span>Describe how this alternate path should unfold.</span>
+            <textarea class="text_pole" rows="5" required placeholder="What happens next?"></textarea>
+        </label>
+        <footer class="world-sim-revision-actions">
+            <button class="world-sim-branch-action menu_button" type="button" disabled><i class="fa-solid fa-code-branch"></i><span>Create branch</span></button>
+        </footer>
+    `;
+    content.querySelector('h3').textContent = revision.summary || 'World revision';
+    content.querySelector('.world-sim-revision-popup-meta').textContent = revision.source || 'world';
+    const generation = revision.generation ? `Generation metadata:\n${JSON.stringify(revision.generation, null, 2)}` : '';
+    content.querySelector('.world-sim-revision-popup-diffs').textContent = [characterRows, ...(revision.sharedWorldChanges || []), generation].filter(Boolean).join('\n\n') || (parentSnapshot ? 'No summarized field changes.' : 'Root snapshot.');
+    const textarea = content.querySelector('textarea');
+    const button = content.querySelector('.world-sim-branch-action');
+    textarea.addEventListener('input', () => { button.disabled = !textarea.value.trim(); });
+    const popup = new Popup(content, POPUP_TYPE.DISPLAY, '', { wider: true, large: true, leftAlign: true });
+    popup.dlg.classList.add('world-sim-dialog', 'world-sim-revision-dialog');
+    popup.dlg.setAttribute('aria-labelledby', 'world-sim-revision-dialog-title');
+    button.addEventListener('click', async () => {
+        const guidance = textarea.value;
+        if (!guidance.trim()) return;
+        button.disabled = true;
+        const result = await branchFromRevision(revisionId, guidance);
+        if (result?.status === 'complete') {
+            await popup.completeAffirmative();
+            await renderAll();
+        } else {
+            button.disabled = false;
+            toastr.warning(result?.reason || 'The branch did not complete.', 'World Sim');
+        }
+    });
+    await popup.show();
 }
 
 /**
- * Renders the Conversations tab: the list of roleplay scenes (zoomed-in tick chats).
+ * Renders the Conversations tab: the list of expanded roleplay scenes.
  * Each scene opens its backing group chat; the group itself is hidden from the main grid.
  */
 function renderConversations() {
@@ -575,7 +1016,7 @@ function renderConversations() {
     const $container = $('#world-sim-conversations').empty();
 
     if (!scenes.length) {
-        $container.append('<div class="world-sim-empty">No conversations yet. Use “Open Scene” on a tick in History to zoom in.</div>');
+        $container.append('<div class="world-sim-empty">No conversations yet. Use “Open Scene” on an event in History to zoom in.</div>');
         return;
     }
 
@@ -594,10 +1035,9 @@ function renderConversations() {
 
         const $meta = $('<div class="world-sim-scene-meta"></div>');
         $('<div class="world-sim-scene-title"></div>').text(scene.title || 'Scene').appendTo($meta);
-        const tickLabel = Number.isFinite(scene.tick) ? `Tick ${scene.tick}` : 'Free scene';
         const when = scene.createdAt ? new Date(scene.createdAt).toLocaleString() : '';
         const committed = scene.committed ? 'committed' : '';
-        $('<div class="world-sim-scene-sub"></div>').text([tickLabel, when, committed].filter(Boolean).join(' · ')).appendTo($meta);
+        $('<div class="world-sim-scene-sub"></div>').text([when, committed].filter(Boolean).join(' · ')).appendTo($meta);
 
         const $actions = $('<div class="world-sim-scene-actions"></div>');
         $('<button class="world-sim-scene-open menu_button" type="button" title="Open this scene"><i class="fa-solid fa-up-right-from-square"></i></button>')
@@ -617,88 +1057,40 @@ function renderConversations() {
  * @param {string} before
  * @param {string} after
  */
-function buildDiffField(field, before, after) {
-    const $field = $('<div class="world-sim-diff-field"></div>');
-    $('<div class="world-sim-diff-label"></div>').text(field[0].toUpperCase() + field.slice(1)).appendTo($field);
-    const $pair = $('<div class="world-sim-diff-pair"></div>');
-    $('<div class="world-sim-diff-box before"><span class="micro">Before</span></div>').append(document.createTextNode(before || '—')).appendTo($pair);
-    $('<i class="fa-solid fa-arrow-right arrow"></i>').appendTo($pair);
-    $('<div class="world-sim-diff-box after"><span class="micro">After</span></div>').append(document.createTextNode(after || '—')).appendTo($pair);
-    $field.append($pair);
-    return $field;
-}
-
 function updateStatusBar() {
-    const running = isTimerRunning();
-    const state = getState();
     const roster = getRoster();
     const eligible = Object.values(roster.characters || {}).filter(c => c.included && c.initialized).length;
+    renderSetupControls();
 
-    $('#world-sim-autorun').prop('checked', running);
-    $('#world-sim-run-now').prop('disabled', manualRunActive || bulkInitActive);
-    $('#world-sim-status-dot').toggleClass('running', running && !manualRunActive);
+    $('#world-sim-run-now')
+        .prop('disabled', bulkInitActive || summaryBatchActive || guidedRunActive)
+        .toggleClass('menu_button_warning', manualRunActive && fastForwardStopRequested)
+        .html(manualRunActive
+            ? (fastForwardStopRequested
+                ? '<span>Stopping…</span>'
+                : '<span>Stop After Event</span>')
+            : '<span>Continue</span>');
+    $('#world-sim-run-guided').prop('disabled', manualRunActive || summaryBatchActive || bulkInitActive);
+    $('#world-sim-run-count').prop('disabled', guidedRunActive);
+    $('#world-sim-status-dot').toggleClass('running', manualRunActive || summaryBatchActive || bulkInitActive);
 
     let status;
-    if (bulkInitActive) status = 'Initializing…';
-    else if (manualRunActive) status = 'Running…';
-    else if (running) status = 'Running';
+    if (bulkInitActive && bulkInitStopRequested) status = 'Pausing initialization after current character…';
+    else if (bulkInitActive) status = 'Initializing…';
+    else if (summaryBatchActive && summaryBatchStopRequested) status = 'Pausing summarization after current character…';
+    else if (summaryBatchActive) status = summaryBatchStatus || 'Summarizing…';
+    else if (guidedRunActive) status = 'Running guided event…';
+    else if (manualRunActive) status = summaryBatchStatus || 'Fast forwarding…';
     else if (!eligible) status = 'Paused · no eligible characters';
-    else status = 'Paused';
+    else status = 'Ready';
     $('#world-sim-status').text(status);
 
-    $('#world-sim-status-tick').text(state.tick ?? 0);
-    $('#world-sim-status-clock').text(formatWorldTime());
-}
-
-function updateCountdown(ms) {
-    $('#world-sim-countdown').text(ms === null ? '—' : formatDuration(ms));
-}
-
-function updateWorldClock() {
-    $('#world-sim-clock').text(formatTimeOfDay());
-    $('#world-sim-status-tick').text(getState().tick ?? 0);
-    $('#world-sim-status-clock').text(formatWorldTime());
-}
-
-function formatDuration(ms) {
-    const totalSeconds = Math.floor(ms / 1000);
-    const minutes = Math.floor(totalSeconds / 60);
-    const seconds = totalSeconds % 60;
-    return `${minutes}m ${String(seconds).padStart(2, '0')}s`;
-}
-
-function formatWorldTime() {
-    return formatWorldTimeFromMinutes(getState().inWorldMinutes || 0);
-}
-
-/**
- * @param {number} minutes
- */
-function formatWorldTimeFromMinutes(minutes) {
-    minutes = minutes || 0;
-    const day = Math.floor(minutes / 1440) + 1;
-    return `Day ${day} · ${formatClock(minutes)}`;
-}
-
-function formatTimeOfDay() {
-    return formatClock(getState().inWorldMinutes || 0);
-}
-
-/**
- * @param {number} minutes
- */
-function formatClock(minutes) {
-    const hour = Math.floor((minutes % 1440) / 60);
-    const minute = minutes % 60;
-    const ampm = hour >= 12 ? 'PM' : 'AM';
-    const displayHour = hour % 12 || 12;
-    return `${displayHour}:${String(minute).padStart(2, '0')} ${ampm}`;
 }
 
 function getBulkInitializeTargets() {
     const targets = [];
 
-    for (const char of characters.filter(c => c?.avatar)) {
+    for (const char of characters.filter(c => c?.avatar && c.avatar !== WORLD_CHARACTER_AVATAR)) {
         const entry = ensureRosterEntry(char.avatar);
         if (!entry || entry.initialized) continue;
         targets.push(entry);
@@ -707,20 +1099,91 @@ function getBulkInitializeTargets() {
     return targets;
 }
 
-function updateSetupProgress(doneCount, totalCount, currentName = '') {
-    const $includeButton = $('#world-sim-include-all');
-    const $button = $('#world-sim-init-all');
-    $includeButton.text(areAllCharactersIncluded() ? 'Disclude All' : 'Include All');
-
-    if (!bulkInitActive || doneCount === null) {
-        $button.prop('disabled', false).text('Initialize All');
-        $('#world-sim-include-all, #world-sim-reset-all').prop('disabled', false);
+async function summarizeAllCharacters() {
+    const targets = [];
+    for (const character of characters.filter(item => item?.avatar && item.avatar !== WORLD_CHARACTER_AVATAR)) {
+        const entry = ensureRosterEntry(character.avatar);
+        if (entry) targets.push(entry);
+    }
+    if (!targets.length) {
+        toastr.info('No character cards are available to summarize.', 'World Sim');
         return;
     }
 
-    const label = currentName ? `${currentName} ${doneCount + 1}/${totalCount}` : `Initializing ${doneCount}/${totalCount}`;
-    $button.prop('disabled', true).text(label);
-    $('#world-sim-include-all, #world-sim-reset-all').prop('disabled', true);
+    summaryBatchActive = true;
+    summaryBatchStopRequested = false;
+    summaryBatchStatus = `Preparing ${targets.length} characters…`;
+    renderSettings();
+    updateStatusBar();
+    let completed = 0;
+    try {
+        for (let i = 0; i < targets.length; i++) {
+            const target = targets[i];
+            summaryBatchStatus = `${target.name} · ${i + 1} of ${targets.length}`;
+            renderSettings();
+            updateStatusBar();
+            await ensureCharacterCardContext(target.id, {
+                ignorePaused: true,
+                onProgress: message => {
+                    summaryBatchStatus = `${i + 1} of ${targets.length} · ${message}`;
+                    renderSettings();
+                    updateStatusBar();
+                },
+            });
+            completed += 1;
+            renderRoster();
+            if (summaryBatchStopRequested) break;
+        }
+        if (summaryBatchStopRequested) {
+            toastr.info(`Summarization paused after ${completed} of ${targets.length} characters.`, 'World Sim');
+        } else {
+            toastr.success(`Prepared summaries for ${completed} characters.`, 'World Sim');
+        }
+    } catch (error) {
+        toastr.error(error?.message || String(error), 'World Sim Summary');
+    } finally {
+        summaryBatchActive = false;
+        summaryBatchStopRequested = false;
+        summaryBatchStatus = '';
+        await saveWorldSimState();
+        renderSettings();
+        renderRoster();
+        updateStatusBar();
+    }
+}
+
+function updateSetupProgress(doneCount, totalCount, currentName = '') {
+    renderSetupControls();
+    if (!bulkInitActive || doneCount === null) return;
+    const progress = currentName ? `${currentName} ${doneCount + 1}/${totalCount}` : `Initializing ${doneCount}/${totalCount}`;
+    $('#world-sim-init-all').attr('title', progress);
+}
+
+function renderSetupControls() {
+    const setupBusy = manualRunActive || bulkInitActive || summaryBatchActive;
+    $('#world-sim-include-all')
+        .prop('disabled', setupBusy)
+        .html(`<span>${areAllCharactersIncluded() ? 'Disclude All' : 'Include All'}</span>`);
+
+    $('#world-sim-init-all')
+        .prop('disabled', bulkInitStopRequested || summaryBatchActive || manualRunActive)
+        .attr('title', bulkInitActive ? 'Stop initialization after the current character finishes' : 'Initialize every character that has not been initialized yet')
+        .html(bulkInitActive
+            ? (bulkInitStopRequested
+                ? '<span>Pausing After Current…</span>'
+                : '<span>Pause Initialization</span>')
+            : '<span>Initialize All</span>');
+
+    $('#world-sim-summary-all')
+        .prop('disabled', summaryBatchStopRequested || bulkInitActive || manualRunActive)
+        .attr('title', summaryBatchActive ? 'Stop summarization after the current character finishes' : 'Prepare World Sim context for every character')
+        .html(summaryBatchActive
+            ? (summaryBatchStopRequested
+                ? '<span>Pausing After Current…</span>'
+                : '<span>Pause Summarization</span>')
+            : '<span>Summarize All</span>');
+
+    $('#world-sim-reset-all').prop('disabled', setupBusy);
 }
 
 function activateMapView() {
@@ -736,7 +1199,7 @@ function activateMapView() {
 }
 
 function areAllCharactersIncluded() {
-    const avatarChars = characters.filter(c => c?.avatar);
+    const avatarChars = characters.filter(c => c?.avatar && c.avatar !== WORLD_CHARACTER_AVATAR);
     const roster = getRoster();
     if (!avatarChars.length) return false;
 
@@ -767,6 +1230,7 @@ async function startBulkInitializeQueue(targets) {
         unattended: canBulkInitializeUnattended(),
     };
     bulkInitActive = true;
+    bulkInitStopRequested = false;
     updateSetupProgress(0, targets.length);
     renderRoster();
     refreshMap();
@@ -835,6 +1299,14 @@ async function pollBulkInitializeQueue() {
         refreshMap();
         updateStatusBar();
 
+        if (bulkInitStopRequested) {
+            const completed = bulkInitQueue.currentIndex;
+            const total = bulkInitQueue.total;
+            finishBulkInitializeQueue();
+            toastr.info(`Initialization paused after ${completed} of ${total} characters.`, 'World Sim');
+            return;
+        }
+
         if (!bulkInitQueue.autoAdvance && bulkInitQueue.currentIndex < bulkInitQueue.total) {
             finishBulkInitializeQueue();
             toastr.info('Bulk initialize paused because Auto-continue after tools is off.', 'World Sim');
@@ -861,10 +1333,11 @@ function finishBulkInitializeQueue() {
     stopBulkInitializePolling();
     bulkInitQueue = null;
     bulkInitActive = false;
+    bulkInitStopRequested = false;
     updateSetupProgress(null, 0);
     renderRoster();
     refreshMap();
     updateStatusBar();
 }
 
-export { renderAll, updateWorldClock };
+export { renderAll };

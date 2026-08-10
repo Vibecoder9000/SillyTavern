@@ -20,12 +20,7 @@ import {
     setCharacterStrings,
     pushCharacterHistory,
     pushCharacterInteraction,
-    getRecentInteractionPartnerIds,
     findRosterIdByName,
-    updateState,
-    locationFromCoords,
-    loadCycles,
-    getCharacterStateAtTick,
 } from './state.js';
 import { updateRun } from './run-context.js';
 
@@ -66,6 +61,7 @@ async function fireWorldSimGeneration(prompt, { disableAutoContinue = false } = 
     if (disableAutoContinue) {
         await Generate('normal', {
             skipWIAN: true,
+            skipPersona: true,
             force_name2: true,
             nativeToolAutoContinue: false,
         });
@@ -74,25 +70,40 @@ async function fireWorldSimGeneration(prompt, { disableAutoContinue = false } = 
 
     await Generate('normal', {
         skipWIAN: true,
+        skipPersona: true,
         force_name2: true,
     });
 }
 
 /** Fires the selector step: the model picks focus characters via `select_characters`. */
-export async function fireSelector() {
-    await fireWorldSimGeneration(buildSelectorPrompt());
+export async function fireSelector({ snapshot = null, guidance = '', selection = null } = {}) {
+    await fireWorldSimGeneration(buildSelectorPrompt(snapshot, guidance, selection));
 }
 
 /**
  * Fires the updater step for the given characters via `world_update`.
  * @param {string[]} characterIds
  */
-export async function fireUpdater(characterIds) {
+export async function fireUpdater(characterIds, { snapshot = null, guidance = '' } = {}) {
     const config = getConfig();
     const dice = {};
     for (const id of characterIds) dice[id] = Math.floor(Math.random() * config.diceSides) + 1;
     updateRun({ dice });
-    await fireWorldSimGeneration(buildUpdaterPrompt(characterIds, dice));
+    await fireWorldSimGeneration(buildUpdaterPrompt(characterIds, dice, snapshot, guidance));
+}
+
+function getWorldView(snapshot = null) {
+    const liveRoster = getRoster();
+    if (!snapshot) return { roster: liveRoster, state: getState(), locations: getLocations() };
+    const roster = { ...liveRoster, characters: {} };
+    for (const [id, character] of Object.entries(liveRoster.characters || {})) {
+        roster.characters[id] = {
+            ...character,
+            initialized: !!snapshot.characters?.[id]?.initialized,
+            history: snapshot.characters?.[id]?.history || { location: [], activity: [], plan: [], summary: [] },
+        };
+    }
+    return { roster, state: snapshot.state || {}, locations: snapshot.locations || { locations: {} } };
 }
 
 /**
@@ -100,8 +111,7 @@ export async function fireUpdater(characterIds) {
  * @param {string} avatar
  */
 export async function fireInitialize(avatar, extraInstructions = '') {
-    const cycles = await loadCycles();
-    await fireWorldSimGeneration(buildInitialCharacterPrompt(avatar, cycles, extraInstructions), {
+    await fireWorldSimGeneration(buildInitialCharacterPrompt(avatar, extraInstructions), {
         disableAutoContinue: true,
     });
 }
@@ -110,23 +120,24 @@ export async function fireInitialize(avatar, extraInstructions = '') {
  * Fires the commit step (post-roleplay) via `world_update`.
  * @param {string[]} characterIds
  * @param {string} chatMessages
+ * @param {{snapshot?: object|null}} [context]
  */
-export async function fireCommit(characterIds, chatMessages) {
-    await fireWorldSimGeneration(buildCommitPrompt(characterIds, chatMessages));
+export async function fireCommit(characterIds, chatMessages, { snapshot = null } = {}) {
+    await fireWorldSimGeneration(buildCommitPrompt(characterIds, chatMessages, snapshot));
 }
 
 /**
  * Renders the known location regions with their map bounding boxes.
  * @returns {string}
  */
-function formatKnownLocations() {
-    const locations = getLocations().locations || {};
-    const entries = Object.values(locations).filter(l => Number.isFinite(l.x) && Number.isFinite(l.y) && Number.isFinite(l.w) && Number.isFinite(l.h));
+function formatKnownLocations(view = getWorldView()) {
+    const locations = view.locations.locations || {};
+    const entries = Object.values(locations).filter(hasLocationBounds);
     if (!entries.length) return '';
     let out = 'Known locations (name / description / map edges):\n';
     for (const loc of entries) {
         const desc = loc.description ? ` — ${loc.description}` : '';
-        out += `- "${loc.name}"${desc}: left ${round(loc.x)}, bottom ${round(loc.y)}, right ${round(loc.x + loc.w)}, top ${round(loc.y + loc.h)}\n`;
+        out += `- "${loc.name}"${desc}: left ${round(loc.left)}, bottom ${round(loc.bottom)}, right ${round(loc.right)}, top ${round(loc.top)}\n`;
     }
     return out + '\n';
 }
@@ -135,13 +146,12 @@ function formatKnownLocations() {
  * Renders the current positions of all initialized characters.
  * @returns {string}
  */
-function formatCharacterPositions() {
-    const roster = getRoster();
-    const state = getState();
+function formatCharacterPositions(view = getWorldView()) {
+    const { roster, state } = view;
     const eligible = Object.values(roster.characters).filter(c => c.included && c.initialized);
     if (!eligible.length) return '';
 
-    let out = 'Existing character positions so you don\'t accidentally overwrite one of their positions. None of these are the same as the character to be added.\n';
+    let out = 'Existing initialized character positions:\n';
     for (const char of eligible) {
         const cur = state.characters[char.id] || {};
         const coord = (Number.isFinite(cur.x) && Number.isFinite(cur.y)) ? `(x: ${round(cur.x)}, y: ${round(cur.y)})` : 'unplaced';
@@ -152,23 +162,36 @@ function formatCharacterPositions() {
 }
 
 /**
- * Renders the 3 most recent world summaries.
- * @param {object[]} cycles
+ * Lists existing characters that a scene transcript may have brought into the event.
+ * @param {string[]} initialCharacterIds
  * @returns {string}
  */
-function formatRecentSummaries(cycles) {
-    const recent = (cycles || []).slice(-3).reverse();
-    if (!recent.length) return '';
-    let out = 'Recent world events:\n';
-    for (const cycle of recent) {
-        const summary = cycle.updater?.summary || 'No summary available.';
-        out += `- Tick ${cycle.tick}: ${summary}\n`;
+function formatSceneCharacterRoster(initialCharacterIds, view = getWorldView()) {
+    const { roster, state } = view;
+    const initial = new Set(initialCharacterIds);
+    const charactersInWorld = Object.values(roster.characters).filter(char => char.included && char.initialized);
+    if (!charactersInWorld.length) return '';
+
+    const lines = ['Existing World Sim characters available to include:'];
+    for (const char of charactersInWorld) {
+        const cur = state.characters[char.id] || {};
+        const coord = Number.isFinite(cur.x) && Number.isFinite(cur.y) ? `(${round(cur.x)}, ${round(cur.y)})` : 'unplaced';
+        const startedHere = initial.has(char.id) ? ' [scene started with this character]' : '';
+        lines.push(`- ${char.name} [id: ${char.id}]${startedHere}`);
+        lines.push(`  location: "${cur.location || ''}"; position: ${coord}; activity: "${cur.activity || ''}"; plan: "${cur.plan || ''}"`);
     }
-    return out + '\n';
+    return lines.join('\n');
 }
 
 function round(n) {
     return Math.round(n * 100) / 100;
+}
+
+function hasLocationBounds(loc) {
+    return loc
+        && [loc.left, loc.right, loc.bottom, loc.top].every(Number.isFinite)
+        && loc.right > loc.left
+        && loc.top > loc.bottom;
 }
 
 /**
@@ -212,9 +235,8 @@ export function buildPromptWithMeter(sections) {
 /**
  * @returns {{ label: string, content: string }[]}
  */
-export function buildSelectorPromptSections() {
-    const roster = getRoster();
-    const state = getState();
+export function buildSelectorPromptSections(snapshot = null, guidance = '', selection = null) {
+    const { roster, state } = getWorldView(snapshot);
 
     const eligible = Object.values(roster.characters).filter(c => c.included && c.initialized);
     const characterLines = ['Eligible characters:'];
@@ -268,7 +290,7 @@ export function buildSelectorPromptSections() {
         }
     }
 
-    return [
+    const sections = [
         { label: 'character info', content: characterLines.join('\n').trim() },
         { label: 'history info', content: historyLines.length ? ['Recent history:', ...historyLines].join('\n') : '' },
         {
@@ -280,7 +302,7 @@ export function buildSelectorPromptSections() {
                 '',
                 'Instructions:',
                 '- Select at least 1 character.',
-                '- Select up to 5 characters.',
+                '- Select up to 10 characters.',
                 '- Return the chosen characters in `characterIds` in the same order you want them updated.',
                 '- Base your choice on their plans, recent activity, and natural opportunity.',
                 '- Do not force interactions or meetings.',
@@ -291,13 +313,27 @@ export function buildSelectorPromptSections() {
             ].join('\n'),
         },
     ];
+    const requiredIds = Array.isArray(selection?.includedCharacterIds) ? selection.includedCharacterIds : [];
+    const excludedIds = Array.isArray(selection?.excludedCharacterIds) ? selection.excludedCharacterIds : [];
+    if (requiredIds.length || excludedIds.length) {
+        sections.push({
+            label: 'character constraints',
+            content: [
+                requiredIds.length ? `The event must involve these character IDs: ${requiredIds.join(', ')}` : '',
+                excludedIds.length ? `The event must not involve these character IDs: ${excludedIds.join(', ')}` : '',
+                'Choose any other characters according to the action guidance and world state.',
+            ].filter(Boolean).join('\n'),
+        });
+    }
+    if (guidance) sections.push({ label: 'action guidance', content: `Action guidance:\n${guidance}\nChoose the characters who should carry out or be affected by this action.` });
+    return sections;
 }
 
 /**
  * @returns {string}
  */
-export function buildSelectorPrompt() {
-    return buildPromptWithMeter(buildSelectorPromptSections());
+export function buildSelectorPrompt(snapshot = null, guidance = '', selection = null) {
+    return buildPromptWithMeter(buildSelectorPromptSections(snapshot, guidance, selection));
 }
 
 /**
@@ -305,9 +341,9 @@ export function buildSelectorPrompt() {
  * @param {Record<string, number>} dice
  * @returns {{ label: string, content: string }[]}
  */
-export function buildUpdaterPromptSections(characterIds, dice) {
-    const roster = getRoster();
-    const state = getState();
+export function buildUpdaterPromptSections(characterIds, dice, snapshot = null, guidance = '') {
+    const view = getWorldView(snapshot);
+    const { roster, state } = view;
     const config = getConfig();
 
     const characterLines = ['Selected:'];
@@ -317,12 +353,11 @@ export function buildUpdaterPromptSections(characterIds, dice) {
     for (const id of characterIds) {
         const char = roster.characters[id];
         if (!char) continue;
-        const chid = characters.findIndex(c => c.avatar === char.avatar);
-        const fullCard = getCharacterCardFields({ chid, name2Override: char.name });
         characterLines.push('<character>');
         characterLines.push(`Name: ${char.name}`);
-        characterLines.push(`Description: ${fullCard.description}`);
-        characterLines.push(`Personality: ${fullCard.personality}`);
+        characterLines.push(`ID: ${id}`);
+        characterLines.push('Card context:');
+        characterLines.push(char.cardContext?.text || 'No character context available.');
         characterLines.push('</character>');
 
         const history = char.history;
@@ -341,12 +376,12 @@ export function buildUpdaterPromptSections(characterIds, dice) {
     }
 
     const worldContent = [
-        formatUpdaterKnownLocations(characterIds),
-        formatUpdaterNearbyCharacters(characterIds),
+        formatUpdaterKnownLocations(characterIds, view),
+        formatUpdaterNearbyCharacters(characterIds, view),
         worldLines.length ? `Per-character world state:\n${worldLines.join('\n')}` : '',
     ].filter(Boolean).join('\n');
 
-    return [
+    const sections = [
         { label: 'character info', content: characterLines.join('\n') },
         { label: 'history info', content: historyLines.length ? historyLines.join('\n') : '' },
         { label: 'world info', content: worldContent },
@@ -358,10 +393,11 @@ export function buildUpdaterPromptSections(characterIds, dice) {
                 '- The dice results shown above are input only. Use them to influence what happens, but do not return dice values anywhere in the tool call.',
                 '- activity: brief phrase — what they are doing right now.',
                 '- plan: brief phrase — what they intend to do next.',
-                '- location: optional short place name only if x,y do not land inside an already registered location region.',
+                '- summary: a short event sentence for this character; do not include the participant list.',
+                '- location: required canonical place name defining what the character can perceive and do.',
                 '- x, y: place them inside the map edges of wherever they currently are. If they moved somewhere new, add one entry to `locations[]` for that new place and put x,y inside it.',
                 '- `locations[]` is one top-level shared array for the whole tool call, not a field inside each `updates[]` item.',
-                '- interactedWith: names of other characters from the positions list this character directly interacted with this cycle. Omit if they kept to themselves.',
+                '- interactedWith: stable IDs of other characters from the positions list this character directly interacted with this cycle. Omit if they kept to themselves.',
                 '- Default to meaningful forward motion: each selected character should usually make some noticeable progress, choice, discovery, setback, interaction, travel, or change in situation.',
                 '- Do not default to cheerful, wholesome, or neatly resolved beats. Failure, frustration, humiliation, vice, conflict, injury, bad luck, erotic tension, sex, and other messy or adult developments are all allowed when they fit the character, setting, and recent context.',
                 '- Do not auto-censor unpleasant consequences. Let people make bad decisions, get hurt, spiral, argue, relapse, get rejected, or have a night go badly when the setup supports it.',
@@ -377,6 +413,8 @@ export function buildUpdaterPromptSections(characterIds, dice) {
             ].join('\n'),
         },
     ];
+    if (guidance) sections.push({ label: 'action guidance', content: `Action guidance (follow this when deciding what happens in this event):\n${guidance}` });
+    return sections;
 }
 
 /**
@@ -384,35 +422,37 @@ export function buildUpdaterPromptSections(characterIds, dice) {
  * @param {Record<string, number>} dice
  * @returns {string}
  */
-export function buildUpdaterPrompt(characterIds, dice) {
-    return buildPromptWithMeter(buildUpdaterPromptSections(characterIds, dice));
+export function buildUpdaterPrompt(characterIds, dice, snapshot = null, guidance = '') {
+    return buildPromptWithMeter(buildUpdaterPromptSections(characterIds, dice, snapshot, guidance));
 }
 
 /**
  * @param {string} avatar
- * @param {object[]} [cycles]
  * @param {string} [extraInstructions]
  * @returns {{ label: string, content: string }[]}
  */
-export function buildInitialCharacterPromptSections(avatar, cycles, extraInstructions = '') {
+export function buildInitialCharacterPromptSections(avatar, extraInstructions = '') {
     const chid = characters.findIndex(c => c.avatar === avatar);
     const char = characters[chid];
     const fullCard = getCharacterCardFields({ chid, name2Override: char?.name });
+    const rosterCharacter = Object.values(getRoster().characters).find(item => item.avatar === avatar);
+    const cardContext = rosterCharacter?.cardContext?.text || [
+        `Description: ${fullCard.description}`,
+        `Personality: ${fullCard.personality}`,
+        `Scenario: ${fullCard.scenario}`,
+    ].join('\n');
 
-    const history = formatRecentSummaries(cycles);
     const world = [
         formatKnownLocations(),
         formatCharacterPositions(),
     ].filter(Boolean).join('\n');
 
     const systemInstructions = [
-        `This new character is being introduced to the world simulator. Use ${char?.name || 'Unknown'} as the actual character name in every card field and generated summary.`,
+        `This new character is being introduced to the world simulator. This is not a roleplay chat. Use ${char?.name || 'Unknown'} as the actual character name in every card field and generated summary.`,
         '',
-        'Character card:',
+        'Character card context:',
         `Name: ${char?.name || 'Unknown'}`,
-        `Description: ${fullCard.description}`,
-        `Personality: ${fullCard.personality}`,
-        `Scenario: ${fullCard.scenario}`,
+        cardContext,
         '',
         'Establish the character\'s starting state and create the concrete map locations they need and the outside map. For instance, someone on a beach should have their beach hut, the beach, some of the ocean (as much as the map space allows), and some of the island. The idea is to fill the world with places. Not too much, but not too little.',
         'New locations must extend the existing mapped area unless the related-name character rule below applies. Try to balance the amount of locations in each quadrent and avoid expanding the absolute world size unnecessarily. For example if there\'s 10 items in Q2 and 3 in Q3, place in Q3. Don\'t worry too much about balancing it exactly, approximate is fine. Prioritize the neighbors more.',
@@ -464,7 +504,7 @@ export function buildInitialCharacterPromptSections(avatar, cycles, extraInstruc
         'Return one initialization result with:',
         '- activity: a brief phrase describing what the character is doing now; do not mention the user',
         '- plan: a brief phrase describing what the character intends to do next; do not frame it as interaction with the user or mention anyone else',
-        '- summary: one sentence describing how the character entered the world or what they just did',
+        '- summary: one short event sentence describing how the character entered the world or what they just did; do not include a participant list',
         '- x, y: the character\'s exact map coordinates, located inside the boundaries of their starting location',
     ];
 
@@ -478,14 +518,11 @@ export function buildInitialCharacterPromptSections(avatar, cycles, extraInstruc
             label: 'character info',
             content: [
                 `This new character is being introduced to the world simulator. Use ${char?.name || 'Unknown'} as the actual character name in every card field and generated summary.`,
-                'Character card:',
+                'Character card context:',
                 `Name: ${char?.name || 'Unknown'}`,
-                `Description: ${fullCard.description}`,
-                `Personality: ${fullCard.personality}`,
-                `Scenario: ${fullCard.scenario}`,
+                cardContext,
             ].join('\n'),
         },
-        { label: 'history info', content: history },
         { label: 'world info', content: world },
         { label: 'system instructions', content: systemInstructions.join('\n') },
     ];
@@ -493,29 +530,29 @@ export function buildInitialCharacterPromptSections(avatar, cycles, extraInstruc
 
 /**
  * @param {string} avatar
- * @param {object[]} [cycles]
  * @param {string} [extraInstructions]
  * @returns {string}
  */
-export function buildInitialCharacterPrompt(avatar, cycles, extraInstructions = '') {
-    return buildPromptWithMeter(buildInitialCharacterPromptSections(avatar, cycles, extraInstructions));
+export function buildInitialCharacterPrompt(avatar, extraInstructions = '') {
+    return buildPromptWithMeter(buildInitialCharacterPromptSections(avatar, extraInstructions));
 }
 
 /**
  * @param {string[]} characterIds
  * @param {string} chatMessages
+ * @param {object|null} [snapshot]
  * @returns {{ label: string, content: string }[]}
  */
-export function buildCommitPromptSections(characterIds, chatMessages) {
-    const roster = getRoster();
-    const state = getState();
+export function buildCommitPromptSections(characterIds, chatMessages, snapshot = null) {
+    const view = getWorldView(snapshot);
+    const { roster, state } = view;
 
     const characterLines = ['Characters:'];
     for (const id of characterIds) {
         const strings = state.characters[id] || { location: '', activity: '', plan: '' };
         const char = roster.characters[id];
         const coord = (Number.isFinite(strings.x) && Number.isFinite(strings.y)) ? `(${strings.x}, ${strings.y})` : 'unplaced';
-        characterLines.push(`- ${char?.name || id}`);
+        characterLines.push(`- ${char?.name || id} [id: ${id}]`);
         characterLines.push(`  previous location: "${strings.location}"`);
         characterLines.push(`  previous activity: "${strings.activity}"`);
         characterLines.push(`  previous plan: "${strings.plan}"`);
@@ -523,28 +560,32 @@ export function buildCommitPromptSections(characterIds, chatMessages) {
     }
 
     return [
-        { label: 'character info', content: characterLines.join('\n') },
+        { label: 'character info', content: [characterLines.join('\n'), formatSceneCharacterRoster(characterIds, view)].filter(Boolean).join('\n\n') },
         { label: 'history info', content: ['Roleplay transcript:', chatMessages].filter(Boolean).join('\n') },
         {
             label: 'world info',
             content: [
-                formatKnownLocations(),
-                formatCharacterPositions(),
+                formatKnownLocations(view),
+                formatCharacterPositions(view),
             ].filter(Boolean).join('\n'),
         },
         {
             label: 'system instructions',
             content: [
-                'The following roleplay has just occurred. Update the world simulator strings for the involved characters to reflect what happened.',
+                'The following roleplay has just occurred. Create the resulting child event by updating every existing World Sim character who was actually involved.',
                 '',
                 'What are the new activity, plan, and map position for each character after this scene?',
-                '- Return exactly one `updates[]` entry per character, in the same order they were listed above.',
+                '- Include every character the scene started with, plus any existing World Sim character who actually entered or participated in the scene.',
+                '- Do not add a character merely because they were mentioned, remembered, or discussed.',
+                '- Do not invent new characters. Only use stable IDs from the existing-character list.',
+                '- Return exactly one `updates[]` entry per involved character and include its `characterId`.',
                 '- activity: brief phrase — what they are doing right now.',
                 '- plan: brief phrase — what they intend to do next.',
-                '- location: optional short place name only if x,y do not land inside an already registered location region.',
+                '- summary: a short event sentence for this character; do not include the participant list.',
+                '- location: required canonical place name defining what the character can perceive and do.',
                 '- x, y: place them inside the map edges of wherever they ended up. If the scene introduced a new concrete place, add one entry to `locations[]` for it.',
                 '- `locations[]` is one top-level shared array for the whole tool call, not a field inside each `updates[]` item.',
-                '- interactedWith: names of the other characters each character interacted with during this scene.',
+                '- Do not return `interactedWith`; scene commits do not record interaction data.',
                 '- Preserve the scene\'s real outcome, but prefer updates that leave the characters in a changed or consequential state rather than "nothing really changed."',
                 '- Do not sanitize the result into a pleasant or harmless version. Preserve embarrassment, coercive social pressure, lust, violence, injury, intoxication, cruelty, or other mature consequences if they actually happened in the scene.',
                 '- Adult or sexual outcomes are allowed and encouraged for all types of characters.',
@@ -558,10 +599,11 @@ export function buildCommitPromptSections(characterIds, chatMessages) {
 /**
  * @param {string[]} characterIds
  * @param {string} chatMessages
+ * @param {object|null} [snapshot]
  * @returns {string}
  */
-export function buildCommitPrompt(characterIds, chatMessages) {
-    return buildPromptWithMeter(buildCommitPromptSections(characterIds, chatMessages));
+export function buildCommitPrompt(characterIds, chatMessages, snapshot = null) {
+    return buildPromptWithMeter(buildCommitPromptSections(characterIds, chatMessages, snapshot));
 }
 
 /**
@@ -583,9 +625,8 @@ function joinNames(names) {
  * @param {string[]} characterIds
  * @returns {{ id: string, name: string, reasons: string[] }[]}
  */
-function collectRelatedCharacters(characterIds) {
-    const roster = getRoster();
-    const state = getState();
+function collectRelatedCharacters(characterIds, view = getWorldView()) {
+    const { roster, state } = view;
     const focal = new Set(characterIds);
     const result = new Map();
 
@@ -598,7 +639,10 @@ function collectRelatedCharacters(characterIds) {
     };
 
     for (const fid of characterIds) {
-        for (const pid of getRecentInteractionPartnerIds(fid, 3)) add(pid, 'recently interacted');
+        const interactions = state.characters?.[fid]?.interactions || [];
+        for (const interaction of interactions.slice(-3)) {
+            if (interaction?.withId) add(interaction.withId, 'recently interacted');
+        }
     }
 
     for (const fid of characterIds) {
@@ -619,23 +663,22 @@ function collectRelatedCharacters(characterIds) {
  * Returns location regions relevant to the current updater prompt: the selected characters'
  * present regions, plus regions occupied by nearby/recently-related characters, with a small
  * coordinate fallback for nearby unnamed regions. This keeps the map context local instead
- * of dumping the full world every tick.
+ * of dumping the full world every update.
  * @param {string[]} characterIds
  * @returns {string}
  */
-function formatUpdaterKnownLocations(characterIds) {
-    const state = getState();
-    const locations = getLocations().locations || {};
+function formatUpdaterKnownLocations(characterIds, view = getWorldView()) {
+    const { state } = view;
+    const locations = view.locations.locations || {};
     const relevantIds = new Set(characterIds);
-    for (const related of collectRelatedCharacters(characterIds)) relevantIds.add(related.id);
+    for (const related of collectRelatedCharacters(characterIds, view)) relevantIds.add(related.id);
 
     const selectedStates = characterIds.map(id => state.characters[id] || {});
     const regionIds = new Set();
 
     for (const id of relevantIds) {
         const cur = state.characters[id] || {};
-        const byCoords = locationFromCoords(cur.x, cur.y);
-        const name = byCoords || cur.location;
+        const name = cur.location;
         if (!name) continue;
         const key = String(name).toLowerCase();
         const match = Object.entries(locations).find(([, loc]) => String(loc.name || '').toLowerCase() === key);
@@ -643,24 +686,24 @@ function formatUpdaterKnownLocations(characterIds) {
     }
 
     const nearbyRegions = Object.entries(locations)
-        .filter(([, loc]) => Number.isFinite(loc.x) && Number.isFinite(loc.y) && Number.isFinite(loc.w) && Number.isFinite(loc.h))
+        .filter(([, loc]) => hasLocationBounds(loc))
         .filter(([, loc]) => selectedStates.some(cur => Number.isFinite(cur.x) && Number.isFinite(cur.y)
-            && cur.x >= loc.x - 120 && cur.x <= loc.x + loc.w + 120
-            && cur.y >= loc.y - 120 && cur.y <= loc.y + loc.h + 120))
+            && cur.x >= loc.left - 120 && cur.x <= loc.right + 120
+            && cur.y >= loc.bottom - 120 && cur.y <= loc.top + 120))
         .slice(0, UPDATER_NEARBY_LOCATION_LIMIT);
 
     for (const [id] of nearbyRegions) regionIds.add(id);
 
     const entries = [...regionIds]
         .map(id => locations[id])
-        .filter(loc => loc && Number.isFinite(loc.x) && Number.isFinite(loc.y) && Number.isFinite(loc.w) && Number.isFinite(loc.h));
+        .filter(hasLocationBounds);
 
     if (!entries.length) return '';
 
     let out = 'Relevant known locations (name / description / map edges):\n';
     for (const loc of entries) {
         const desc = loc.description ? ` — ${clipText(loc.description, 120)}` : '';
-        out += `- "${loc.name}"${desc}: left ${round(loc.x)}, bottom ${round(loc.y)}, right ${round(loc.x + loc.w)}, top ${round(loc.y + loc.h)}\n`;
+        out += `- "${loc.name}"${desc}: left ${round(loc.left)}, bottom ${round(loc.bottom)}, right ${round(loc.right)}, top ${round(loc.top)}\n`;
     }
     return out + '\n';
 }
@@ -671,18 +714,18 @@ function formatUpdaterKnownLocations(characterIds) {
  * @param {string[]} characterIds
  * @returns {string}
  */
-function formatUpdaterNearbyCharacters(characterIds) {
-    const state = getState();
-    const related = collectRelatedCharacters(characterIds);
+function formatUpdaterNearbyCharacters(characterIds, view = getWorldView()) {
+    const { state } = view;
+    const related = collectRelatedCharacters(characterIds, view);
     if (!related.length) return '';
 
     let out = 'Nearby or recently-related characters:\n';
     for (const entry of related) {
         const cur = state.characters[entry.id] || {};
         const coord = (Number.isFinite(cur.x) && Number.isFinite(cur.y)) ? `(x: ${round(cur.x)}, y: ${round(cur.y)})` : 'unplaced';
-        const location = cur.location || locationFromCoords(cur.x, cur.y) || 'unknown location';
+        const location = cur.location || 'unknown location';
         const activity = clipText(cur.activity, 100);
-        out += `- ${entry.name}: ${coord} - ${location}`;
+        out += `- ${entry.name} [id: ${entry.id}]: ${coord} - ${location}`;
         if (activity) out += ` - ${activity}`;
         if (entry.reasons?.length) out += ` (${entry.reasons.join(', ')})`;
         out += '\n';
@@ -696,12 +739,12 @@ function formatUpdaterNearbyCharacters(characterIds) {
  * @param {string[]} characterIds
  * @returns {string}
  */
-function describeLocales(characterIds, tick = null) {
-    const locs = getLocations().locations || {};
+function describeLocales(characterIds, view = getWorldView()) {
+    const locs = view.locations.locations || {};
     const seen = new Set();
     const out = [];
     for (const id of characterIds) {
-        const name = getCharacterStateAtTick(id, tick).location;
+        const name = view.state.characters?.[id]?.location;
         if (!name) continue;
         const key = String(name).toLowerCase();
         if (seen.has(key)) continue;
@@ -719,40 +762,41 @@ function describeLocales(characterIds, tick = null) {
  * are nearby or recently involved, and the locale descriptions. This grounds the scene in
  * the simulation instead of the (stale) character-card greeting.
  * @param {string[]} characterIds
+ * @param {object|null} [snapshot]
  * @returns {string}
  */
-export function buildSceneOpening(characterIds, tick = null) {
-    const roster = getRoster();
+export function buildSceneOpening(characterIds, snapshot = null) {
+    const view = getWorldView(snapshot);
+    const { roster, state } = view;
     const names = characterIds.map(id => roster.characters[id]?.name || id);
     const lines = [];
 
     lines.push(`<system>\n# Scene: ${joinNames(names)}`, '');
 
-    const locale = describeLocales(characterIds, tick);
+    const locale = describeLocales(characterIds, view);
     if (locale) lines.push(locale, '');
 
     lines.push('## Current state');
     for (const id of characterIds) {
         const char = roster.characters[id];
         if (!char) continue;
-        const cur = getCharacterStateAtTick(id, tick);
+        const cur = state.characters?.[id] || {};
         lines.push(char.name);
         if (cur.location) lines.push(`  Location: ${cur.location}`);
         if (cur.activity) lines.push(`  Now: ${cur.activity}`);
         if (cur.plan) lines.push(`  Intends to: ${cur.plan}`);
         if (cur.summary) lines.push(`  Status: ${cur.summary}`);
         const recent = (char.history?.activity || [])
-            .filter(h => !Number.isFinite(tick) || !Number.isFinite(h?.tick) || h.tick <= tick)
             .slice(-3).map(h => h?.text).filter(Boolean);
         if (recent.length) lines.push(`  Recent history: ${recent.join(' → ')}`);
         lines.push('');
     }
 
-    const related = collectRelatedCharacters(characterIds);
+    const related = collectRelatedCharacters(characterIds, view);
     if (related.length) {
         lines.push('## Nearby / recently involved');
         for (const r of related) {
-            const cur = getCharacterStateAtTick(r.id, tick);
+            const cur = state.characters?.[r.id] || {};
             const at = cur.location ? ` — at ${cur.location}` : '';
             const doing = cur.activity ? `, ${cur.activity}` : '';
             lines.push(`- ${r.name} (${r.reasons.join(', ')})${at}${doing}`);
@@ -784,15 +828,17 @@ export function buildSceneOpening(characterIds, tick = null) {
  * (stale) card scenario for the scene chat. ST falls back to card scenarios only when the
  * chat_metadata scenario override is empty, so a non-empty current scenario suppresses them.
  * @param {string[]} characterIds
+ * @param {object|null} [snapshot]
  * @returns {string}
  */
-export function buildSceneScenario(characterIds, tick = null) {
-    const roster = getRoster();
+export function buildSceneScenario(characterIds, snapshot = null) {
+    const view = getWorldView(snapshot);
+    const { roster, state } = view;
     const parts = [];
     for (const id of characterIds) {
         const char = roster.characters[id];
         if (!char) continue;
-        const cur = getCharacterStateAtTick(id, tick);
+        const cur = state.characters?.[id] || {};
         const bits = [cur.location && `at ${cur.location}`, cur.activity].filter(Boolean).join(', ');
         parts.push(bits ? `${char.name} is ${bits}.` : `${char.name} is present.`);
     }
@@ -804,19 +850,20 @@ export function buildSceneScenario(characterIds, tick = null) {
  * the stale card scenario with the current world state, posts a world-state opening message,
  * and auto-fires the first group generation. Must run with the scene group already selected.
  * @param {string[]} characterIds
+ * @param {object|null} [snapshot]
  * @returns {Promise<void>}
  */
-export async function seedSceneOpening(characterIds, tick = null) {
+export async function seedSceneOpening(characterIds, snapshot = null) {
     const roster = getRoster();
     const names = characterIds.map(id => roster.characters[id]?.name || id);
-    console.log('[world-sim] Zooming in on:', names.join(', '), Number.isFinite(tick) ? `(event tick ${tick})` : '(current state)');
+    console.log('[world-sim] Zooming in on current state:', names.join(', '));
 
     // Replace the auto-seeded card greeting(s) with our world-state opening.
     console.log('[world-sim] Clearing card greeting and seeding world-state opening.');
     await clearChat({ clearData: true });
 
     // Suppress the stale per-card scenario by overriding it with the current situation.
-    const scenario = buildSceneScenario(characterIds, tick);
+    const scenario = buildSceneScenario(characterIds, snapshot);
     console.log('[world-sim] Overriding scene scenario:', scenario);
     updateChatMetadata({ scenario }, false);
 
@@ -825,7 +872,7 @@ export async function seedSceneOpening(characterIds, tick = null) {
         is_user: false,
         is_system: false,
         force_avatar: system_avatar,
-        mes: buildSceneOpening(characterIds, tick),
+        mes: buildSceneOpening(characterIds, snapshot),
         send_date: new Date().toLocaleString(),
         extra: {},
     };
@@ -843,11 +890,9 @@ export async function seedSceneOpening(characterIds, tick = null) {
 
 /**
  * @param {object} updateArgs
- * @param {number} tick
  */
-export function applyWorldUpdate(updateArgs, tick) {
+export function applyWorldUpdate(updateArgs) {
     const updates = Array.isArray(updateArgs.updates) ? updateArgs.updates : [];
-    const globalMinutes = Number(updateArgs.globalMinutesPassed) || 0;
 
     for (const update of updates) {
         const id = update.characterId;
@@ -858,25 +903,21 @@ export function applyWorldUpdate(updateArgs, tick) {
         const coords = {};
         if (Number.isFinite(Number(update.x))) coords.x = Number(update.x);
         if (Number.isFinite(Number(update.y))) coords.y = Number(update.y);
-        const location = locationFromCoords(coords.x, coords.y) || String(update.location || '');
+        const location = String(update.location || '');
         setCharacterStrings(id, { location, activity, plan, summary, ...coords });
-        pushCharacterHistory(id, 'location', location, tick);
-        pushCharacterHistory(id, 'activity', activity, tick);
-        pushCharacterHistory(id, 'plan', plan, tick);
-        pushCharacterHistory(id, 'summary', summary, tick);
+        pushCharacterHistory(id, 'location', location);
+        pushCharacterHistory(id, 'activity', activity);
+        pushCharacterHistory(id, 'plan', plan);
+        pushCharacterHistory(id, 'summary', summary);
 
         // Record interactions symmetrically so either participant's scene context can surface
         // the other as "recently interacted". Partner names are resolved to roster ids.
         const partners = Array.isArray(update.interactedWith) ? update.interactedWith : [];
         for (const partnerName of partners) {
-            const partnerId = findRosterIdByName(partnerName);
+            const partnerId = getRoster().characters?.[String(partnerName)] ? String(partnerName) : findRosterIdByName(partnerName);
             if (!partnerId || partnerId === id) continue;
-            pushCharacterInteraction(id, partnerId, tick, summary);
-            pushCharacterInteraction(partnerId, id, tick, summary);
+            pushCharacterInteraction(id, partnerId, summary);
+            pushCharacterInteraction(partnerId, id, summary);
         }
     }
-
-    updateState({
-        inWorldMinutes: (getState().inWorldMinutes || 0) + globalMinutes,
-    });
 }

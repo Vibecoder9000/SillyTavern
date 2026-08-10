@@ -112,6 +112,23 @@ export const personasFilter = new FilterHelper(debounce(getUserAvatars, debounce
 
 /** @type {string} The last loaded chat id to remember for persona loading */
 let personaLastLoadedChatId = null;
+let personaAutoSelectionSuppressionDepth = 0;
+
+/**
+ * Runs a chat switch without applying that chat's persona locks or default persona.
+ * Internal/background chats can use this when the user is not participating in them.
+ * @template T
+ * @param {() => Promise<T>} action
+ * @returns {Promise<T>}
+ */
+export async function withoutAutoPersonaSelection(action) {
+    personaAutoSelectionSuppressionDepth++;
+    try {
+        return await action();
+    } finally {
+        personaAutoSelectionSuppressionDepth--;
+    }
+}
 
 /** @type {function(string): void} */
 let navigateToAvatar = () => { };
@@ -1544,6 +1561,10 @@ async function loadPersonaForCurrentChat({ doRender = false } = {}) {
     const currentChatId = getCurrentChatId();
     if (currentChatId === personaLastLoadedChatId) return;
     personaLastLoadedChatId = currentChatId;
+
+    if (personaAutoSelectionSuppressionDepth > 0) {
+        return false;
+    }
 
     // Cache persona list to check if they exist
     const userAvatars = await getUserAvatars(doRender);

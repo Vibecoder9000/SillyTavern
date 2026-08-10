@@ -4852,7 +4852,6 @@
         <div id="world-sim-button" class="drawer">
             <div class="drawer-toggle drawer-header" title="World Sim" data-i18n="[title]World Sim">
                 <div id="worldSimDrawerIcon" class="drawer-icon fa-solid fa-earth-americas fa-fw closedIcon"></div>
-                <div id="world-sim-clock" class="world-sim-clock">--:--</div>
             </div>
             <div id="world-sim-panel" class="drawer-content closedDrawer world-sim-panel">
                 <div class="world-sim-app" data-mtab="characters">
@@ -4860,11 +4859,13 @@
                         <button class="world-sim-mtab active" data-mtab="characters" type="button">Characters</button>
                         <button class="world-sim-mtab" data-mtab="map" type="button">Map</button>
                         <button class="world-sim-mtab" data-mtab="history" type="button">History</button>
+                        <button class="world-sim-mtab" data-mtab="settings" type="button">Settings</button>
                         <button class="world-sim-mtab" data-mtab="actions" type="button">Actions</button>
                     </nav>
                     <aside class="world-sim-pane world-sim-roster-pane">
                         <div class="world-sim-pane-head">
                             <h3 class="margin0">Characters <span id="world-sim-roster-count" class="world-sim-count">(0)</span></h3>
+                            <button id="world-sim-include-all" type="button" class="menu_button" title="Toggle every character between included and discluded for World Sim"><span>Include All</span></button>
                         </div>
                         <div class="world-sim-search-row">
                             <div class="world-sim-search">
@@ -4882,6 +4883,7 @@
                             <button class="world-sim-tab active" data-tab="map" type="button">Map</button>
                             <button class="world-sim-tab" data-tab="history" type="button">History</button>
                             <button class="world-sim-tab" data-tab="conversations" type="button">Conversations</button>
+                            <button class="world-sim-tab" data-tab="settings" type="button">Settings</button>
                         </div>
                         <div class="world-sim-tab-body">
                             <div id="world-sim-map-tab" class="world-sim-tabpane active">
@@ -4902,44 +4904,36 @@
                             <div id="world-sim-conversations-tab" class="world-sim-tabpane">
                                 <div id="world-sim-conversations" class="world-sim-conversations"></div>
                             </div>
+                            <div id="world-sim-settings-tab" class="world-sim-tabpane">
+                                <div class="world-sim-settings">
+                                    <div class="world-sim-setting-row">
+                                        <div class="world-sim-setting-label">
+                                            <span>History Entries</span>
+                                            <i class="margin5 fa-solid fa-circle-info opacity50p" title="How many past updates per character are fed to the AI for context."></i>
+                                        </div>
+                                        <input id="world-sim-history-entries" type="number" min="1" step="1" class="text_pole">
+                                    </div>
+                                    <div class="world-sim-setting-row">
+                                        <span>Delete All Data</span>
+                                        <button id="world-sim-reset-all" type="button" class="menu_button menu_button_icon redWarningBG margin0" title="Delete all World Sim data, locations, history, scenes, and initialization progress" aria-label="Delete all World Sim data"><i class="fa-solid fa-trash-can"></i></button>
+                                    </div>
+                                </div>
+                            </div>
                         </div>
                     </section>
 
                     <aside class="world-sim-pane world-sim-actions-pane">
-                        <div class="world-sim-card">
-                            <div class="world-sim-card-head"><i class="fa-solid fa-bolt"></i> Actions</div>
-                            <button id="world-sim-run-now" type="button" class="menu_button world-sim-run-now"><i class="fa-solid fa-play"></i><span>Run Now</span></button>
-                            <label class="world-sim-field">
-                                <span>Ticks to Advance</span>
-                                <input id="world-sim-run-count" type="number" min="1" max="100" value="1" class="text_pole">
-                            </label>
-                            <label class="world-sim-checkbox">
-                                <input id="world-sim-autorun" type="checkbox">
-                                <span>Auto-run</span>
-                            </label>
-                        </div>
-                        <div class="world-sim-card">
-                            <div class="world-sim-card-head"><i class="fa-solid fa-gear"></i> Settings</div>
-                            <label class="world-sim-field world-sim-field-inline" title="Real-world minutes between automatic cycles when Auto-run is on">
-                                <span>Tick Interval</span>
-                                <input id="world-sim-tick-interval" type="number" class="text_pole" min="1">
-                                <em>min</em>
-                            </label>
-                            <label class="world-sim-field world-sim-field-inline" title="Pause Auto-run after this many minutes of inactivity">
-                                <span>Idle Pause</span>
-                                <input id="world-sim-auto-pause" type="number" class="text_pole" min="1">
-                                <em>min</em>
-                            </label>
-                            <label class="world-sim-field world-sim-field-inline" title="How many past updates per character are fed to the AI for context">
-                                <span>History Entries</span>
-                                <input id="world-sim-history-entries" type="number" class="text_pole" min="1">
+                        <div class="world-sim-fast-forward">
+                            <button id="world-sim-run-now" type="button" class="menu_button world-sim-run-now"><span>Continue</span></button>
+                            <button id="world-sim-run-guided" type="button" class="menu_button world-sim-run-guided" title="Guide the next event"><span>Run with guidance…</span></button>
+                            <label class="world-sim-run-count">
+                                <input id="world-sim-run-count" type="number" inputmode="numeric" min="1" max="100" value="1" class="text_pole" aria-label="Events to advance">
                             </label>
                         </div>
                         <div id="world-sim-locations-list" class="world-sim-locations-list"></div>
                         <div class="world-sim-setup-actions" aria-label="World Sim setup actions">
-                            <button id="world-sim-include-all" type="button" class="menu_button" title="Toggle every character between included and discluded for World Sim">Include All</button>
-                            <button id="world-sim-init-all" type="button" class="menu_button" title="Initialize every character that has not been initialized yet">Initialize All</button>
-                            <button id="world-sim-reset-all" type="button" class="menu_button menu_button_warning" title="Delete all World Sim data, locations, history, scenes, and initialization progress">Delete All Data</button>
+                            <button id="world-sim-init-all" type="button" class="menu_button" title="Initialize every character that has not been initialized yet"><span>Initialize All</span></button>
+                            <button id="world-sim-summary-all" type="button" class="menu_button" title="Prepare World Sim context for every character"><span>Summarize All</span></button>
                         </div>
                     </aside>
 
@@ -4947,18 +4941,6 @@
                         <div class="world-sim-status-item world-sim-status-run">
                             <span id="world-sim-status-dot" class="world-sim-dot"></span>
                             <span id="world-sim-status" class="world-sim-status-text">Paused</span>
-                        </div>
-                        <div class="world-sim-status-item">
-                            <span class="world-sim-status-label">Current Tick</span>
-                            <span id="world-sim-status-tick" class="world-sim-status-value">0</span>
-                        </div>
-                        <div class="world-sim-status-item">
-                            <span class="world-sim-status-label">In-World Time</span>
-                            <span id="world-sim-status-clock" class="world-sim-status-value">Day 1 · 12:00 AM</span>
-                        </div>
-                        <div class="world-sim-status-item">
-                            <span class="world-sim-status-label">Next Tick In</span>
-                            <span id="world-sim-countdown" class="world-sim-status-value">--</span>
                         </div>
                     </footer>
                 </div>

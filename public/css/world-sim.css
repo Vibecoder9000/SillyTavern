@@ -20,23 +20,6 @@
     height: 100%;
 }
 
-.world-sim-clock {
-    position: absolute;
-    bottom: -6px;
-    left: 50%;
-    transform: translateX(-50%);
-    min-width: 44px;
-    padding: 1px 4px;
-    font-size: calc(var(--mainFontSize) * 0.55);
-    line-height: 1;
-    color: var(--SmartThemeBodyColor);
-    text-align: center;
-    white-space: nowrap;
-    pointer-events: none;
-    background-color: color-mix(in srgb, var(--SmartThemeBlurTintColor) 92%, transparent);
-    border-radius: 4px;
-}
-
 /* ---- Full-screen three-pane panel ---- */
 
 #world-sim-panel.world-sim-panel {
@@ -53,7 +36,7 @@
 
 .world-sim-app {
     display: grid;
-    grid-template-columns: 250px minmax(0, 1fr) 230px;
+    grid-template-columns: 300px minmax(0, 1fr) 230px;
     grid-template-rows: minmax(0, 1fr) auto;
     grid-template-areas:
         "roster center actions"
@@ -68,12 +51,12 @@
     flex-direction: column;
     min-width: 0;
     min-height: 0;
-    padding: 12px;
+    padding: 8px;
 }
 
 .world-sim-roster-pane {
     grid-area: roster;
-    gap: 12px;
+    gap: 0px;
     border-right: 1px solid color-mix(in srgb, var(--SmartThemeBorderColor) 70%, transparent);
 }
 
@@ -100,6 +83,11 @@
     font-size: calc(var(--mainFontSize) * 1.05);
 }
 
+#world-sim-include-all {
+    flex: 0 0 auto;
+    white-space: nowrap;
+}
+
 .world-sim-count {
     opacity: 0.6;
     font-weight: 400;
@@ -107,7 +95,7 @@
 
 .world-sim-setup-actions {
     display: grid;
-    gap: 8px;
+    gap: 4px;
     margin-top: auto;
     width: 100%;
     align-self: stretch;
@@ -117,6 +105,7 @@
     justify-content: center;
     width: 100%;
     min-width: 0;
+    margin: 0;
     white-space: nowrap;
 }
 
@@ -182,7 +171,7 @@
 
 .world-sim-char-row {
     display: grid;
-    grid-template-columns: 38px minmax(0, 1fr) auto auto;
+    grid-template-columns: 38px minmax(0, 1fr) auto auto auto;
     gap: 10px;
     align-items: center;
     padding: 8px 10px;
@@ -194,7 +183,7 @@
     height: 38px;
     object-fit: cover;
     border: 1px solid var(--SmartThemeBorderColor);
-    border-radius: var(--avatar-base-border-radius-round);
+    border-radius: var(--avatar-base-border-radius);
 }
 
 /* Follow the user's Avatars style setting */
@@ -282,6 +271,24 @@ body.rounded-avatars .world-sim-diff-charhead img {
     color: var(--SmartThemeQuoteColor);
 }
 
+.world-sim-char-row .world-sim-summary-toggle {
+    cursor: pointer;
+    opacity: 0.62;
+    background: none;
+    border: 0;
+    color: inherit;
+    padding: 2px;
+}
+
+.world-sim-char-row .world-sim-summary-toggle.active {
+    opacity: 1;
+    color: var(--SmartThemeQuoteColor);
+}
+
+.world-sim-char-row .world-sim-summary-toggle.missing {
+    color: #d6a84b;
+}
+
 /* Expanded detail drawer */
 .world-sim-char-detail {
     display: grid;
@@ -322,16 +329,292 @@ body.rounded-avatars .world-sim-diff-charhead img {
 }
 
 .world-sim-init-char.menu_button {
-    align-self: flex-start;
+    align-self: stretch;
     margin: 0;
-    padding: 4px 14px;
 }
 
 .world-sim-detail-actions {
-    display: flex;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
     gap: 8px;
-    align-items: center;
     margin-top: 2px;
+}
+
+.world-sim-detail-actions > .menu_button {
+    width: 100%;
+    min-width: 0;
+    min-height: 36px;
+    margin: 0;
+    justify-content: center;
+    text-align: center;
+}
+
+/* ---- World Sim popups ---- */
+
+.popup.world-sim-dialog {
+    background-color: color-mix(in srgb, var(--SmartThemeBlurTintColor) 94%, black);
+    border-color: color-mix(in srgb, var(--SmartThemeBorderColor) 78%, var(--SmartThemeQuoteColor));
+    box-shadow: 0 18px 55px var(--black70a), 0 0 0 1px var(--black30a);
+}
+
+.popup.world-sim-dialog .popup-button-close {
+    top: 9px;
+    right: 9px;
+    z-index: 2;
+}
+
+.world-sim-popup-hero {
+    display: flex;
+    gap: 12px;
+    align-items: center;
+    padding: 4px 38px 14px 0;
+    border-bottom: 1px solid color-mix(in srgb, var(--SmartThemeBorderColor) 72%, transparent);
+}
+
+.world-sim-popup-hero-icon,
+.world-sim-confirm-icon {
+    display: grid;
+    flex: 0 0 auto;
+    place-items: center;
+    color: var(--SmartThemeQuoteColor);
+    background: color-mix(in srgb, var(--SmartThemeQuoteColor) 14%, var(--black30a));
+    border: 1px solid color-mix(in srgb, var(--SmartThemeQuoteColor) 40%, var(--SmartThemeBorderColor));
+    border-radius: 10px;
+}
+
+.world-sim-popup-hero-icon {
+    width: 42px;
+    height: 42px;
+    font-size: 1.1em;
+}
+
+.world-sim-popup-hero-copy {
+    display: grid;
+    min-width: 0;
+    gap: 3px;
+}
+
+.world-sim-popup-hero-copy h3 {
+    margin: 0;
+    line-height: 1.25;
+    overflow-wrap: anywhere;
+}
+
+.world-sim-confirm-dialog {
+    width: min(540px, calc(100dvw - 2em));
+}
+
+.world-sim-input-dialog {
+    width: min(560px, calc(100dvw - 2em));
+}
+
+.world-sim-confirm-dialog .popup-content,
+.world-sim-input-dialog .popup-content {
+    margin-top: 0;
+    padding: 0 4px;
+}
+
+.world-sim-confirm {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    gap: 14px;
+    padding: 20px 0 16px;
+    text-align: left;
+}
+
+.world-sim-confirm-icon {
+    width: 46px;
+    height: 46px;
+    margin-top: 1px;
+    font-size: 1.15em;
+}
+
+.world-sim-confirm.is-danger .world-sim-confirm-icon {
+    color: #f1a1a1;
+    background: color-mix(in srgb, var(--crimson70a) 45%, var(--black30a));
+    border-color: color-mix(in srgb, var(--crimson70a) 70%, var(--SmartThemeBorderColor));
+}
+
+.world-sim-confirm-copy {
+    display: grid;
+    gap: 7px;
+    min-width: 0;
+}
+
+.world-sim-confirm-copy h3,
+.world-sim-confirm-copy p {
+    margin: 0;
+}
+
+.world-sim-confirm-copy h3 {
+    padding-right: 26px;
+    font-size: calc(var(--mainFontSize) * 1.08);
+    line-height: 1.3;
+    overflow-wrap: anywhere;
+}
+
+.world-sim-confirm-message {
+    line-height: 1.5;
+    opacity: 0.9;
+}
+
+.world-sim-confirm-detail {
+    padding: 8px 10px;
+    color: color-mix(in srgb, var(--SmartThemeBodyColor) 84%, var(--SmartThemeQuoteColor));
+    font-size: calc(var(--mainFontSize) * 0.86);
+    line-height: 1.4;
+    background: var(--black30a);
+    border-left: 3px solid color-mix(in srgb, var(--SmartThemeQuoteColor) 58%, var(--SmartThemeBorderColor));
+    border-radius: 6px;
+}
+
+.world-sim-confirm.is-danger .world-sim-confirm-detail {
+    color: #f1b5b5;
+    border-left-color: color-mix(in srgb, var(--crimson70a) 80%, white);
+}
+
+.popup.world-sim-confirm-dialog .popup-controls,
+.popup.world-sim-input-dialog .popup-controls {
+    align-self: stretch;
+    justify-content: flex-end;
+    gap: 8px;
+    margin-top: 0;
+    padding: 12px 4px 10px;
+    border-top: 1px solid color-mix(in srgb, var(--SmartThemeBorderColor) 72%, transparent);
+}
+
+.popup.world-sim-confirm-dialog .popup-controls .menu_button,
+.popup.world-sim-input-dialog .popup-controls .menu_button {
+    min-width: 112px;
+    min-height: 36px;
+    margin: 0;
+    justify-content: center;
+}
+
+.popup.world-sim-input-dialog .popup-input {
+    width: calc(100% - 8px);
+    min-height: 42px;
+    margin: 0 4px 14px;
+    line-height: 1.45;
+    resize: vertical;
+}
+
+.menu_button.popup-button-ok.world-sim-popup-primary {
+    background-color: color-mix(in srgb, var(--SmartThemeQuoteColor) 38%, var(--black50a));
+    border-color: color-mix(in srgb, var(--SmartThemeQuoteColor) 70%, var(--SmartThemeBorderColor));
+}
+
+.menu_button.popup-button-ok.world-sim-popup-primary:hover {
+    background-color: color-mix(in srgb, var(--SmartThemeQuoteColor) 55%, var(--black30a));
+}
+
+.menu_button.popup-button-ok.world-sim-popup-danger {
+    background-color: var(--crimson70a);
+    border-color: color-mix(in srgb, var(--crimson70a) 75%, white);
+}
+
+.menu_button.popup-button-ok.world-sim-popup-danger:hover {
+    background-color: var(--crimson-hover);
+}
+
+.world-sim-summary-dialog {
+    width: min(900px, calc(100dvw - 2em));
+}
+
+.world-sim-summary-dialog .popup-content {
+    display: flex;
+    min-height: 0;
+    padding: 0 12px 12px;
+}
+
+.world-sim-summary-popup {
+    display: grid;
+    grid-template-rows: auto minmax(240px, 1fr) auto;
+    gap: 14px;
+    width: 100%;
+    height: 100%;
+    min-height: 0;
+}
+
+.world-sim-summary-popup-head {
+    display: flex;
+    gap: 16px;
+    align-items: flex-start;
+    justify-content: space-between;
+    padding-right: 34px;
+}
+
+.world-sim-summary-popup-head h3 {
+    margin: 0;
+}
+
+.world-sim-summary-popup-meta {
+    display: grid;
+    flex: 0 0 auto;
+    gap: 3px;
+    justify-items: end;
+    text-align: right;
+}
+
+.world-sim-summary-status {
+    font-size: calc(var(--mainFontSize) * 0.78);
+    opacity: 0.72;
+}
+
+.world-sim-summary-status[data-state="stale"],
+.world-sim-summary-status[data-state="edited-stale"],
+.world-sim-summary-status[data-state="missing"] {
+    color: #d6a84b;
+    opacity: 1;
+}
+
+.world-sim-summary-popup-field {
+    display: grid;
+    grid-template-rows: minmax(0, 1fr);
+    min-height: 0;
+}
+
+.world-sim-summary-text {
+    width: 100%;
+    min-height: 360px;
+    height: 100%;
+    resize: none;
+    font-family: var(--monoFontFamily, monospace);
+    font-size: calc(var(--mainFontSize) * 0.82);
+    line-height: 1.45;
+}
+
+.world-sim-summary-text.world-sim-summary-streaming {
+    cursor: progress;
+}
+
+.world-sim-summary-text.world-sim-summary-streaming-reasoning {
+    opacity: 0.78;
+    font-style: italic;
+}
+
+.world-sim-summary-popup-actions {
+    display: flex;
+    gap: 16px;
+    align-items: flex-end;
+    justify-content: space-between;
+}
+
+.world-sim-summary-save-state {
+    min-width: 0;
+    font-weight: 600;
+    overflow-wrap: anywhere;
+}
+
+.world-sim-summary-save-state[data-state="error"] {
+    color: #e06c75;
+    opacity: 1;
+}
+
+.world-sim-summary-regenerate.menu_button {
+    flex: 0 0 auto;
+    min-width: 140px;
+    margin: 0;
 }
 
 .world-sim-init-badge {
@@ -650,13 +933,299 @@ body.rounded-avatars .world-sim-diff-charhead img {
     vector-effect: non-scaling-stroke;
 }
 
-/* ---- History accordion ---- */
+/* ---- History timeline ---- */
 
 .world-sim-history {
+    display: grid;
+    grid-template-rows: minmax(0, 1fr);
+    height: 100%;
+    min-height: 0;
+}
+
+.world-sim-history-viewport {
+    position: relative;
+    min-height: 260px;
+    overflow: hidden;
+    overscroll-behavior: contain;
+    touch-action: none;
+    border: 1px solid var(--SmartThemeBorderColor);
+    border-radius: 8px;
+    background: color-mix(in srgb, var(--SmartThemeBlurTintColor) 70%, transparent);
+    cursor: grab;
+}
+
+.world-sim-history-viewport:active { cursor: grabbing; }
+
+.world-sim-history-scene {
+    position: absolute;
+    left: 0;
+    top: 0;
+    transform-origin: 0 0;
+    background-image: radial-gradient(circle, color-mix(in srgb, var(--SmartThemeBodyColor) 24%, transparent) 1.2px, transparent 1.4px);
+    background-position: 0 0;
+    background-size: 24px 24px;
+    will-change: transform;
+}
+
+.world-sim-history-scene.is-auto-panning {
+    transition: transform 320ms cubic-bezier(0.33, 1, 0.68, 1);
+}
+
+.world-sim-history-edges {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    overflow: visible;
+}
+
+.world-sim-history-edges path {
+    fill: none;
+    stroke: var(--SmartThemeBorderColor);
+    stroke-width: 2;
+    transition: opacity 140ms ease;
+}
+
+.world-sim-history-scene.is-exploring .world-sim-history-edges path {
+    opacity: 0.18;
+}
+
+.world-sim-history-node {
+    position: absolute;
+    box-sizing: border-box;
+    padding: 10px 12px;
+    color: var(--SmartThemeBodyColor);
+    text-align: left;
+    background: color-mix(in srgb, var(--SmartThemeBlurTintColor) 88%, var(--black30a));
+    border: 1px solid var(--SmartThemeBorderColor);
+    border-radius: 14px;
+    cursor: pointer;
+    transition: opacity 140ms ease, border-color 140ms ease, box-shadow 140ms ease;
+    user-select: none;
+}
+
+.world-sim-history-event-node {
+    display: grid;
+    grid-template-rows: minmax(0, 1fr);
+    gap: 5px;
+}
+
+.world-sim-history-guided-marker {
+    position: absolute;
+    top: 7px;
+    right: 8px;
+    color: var(--SmartThemeQuoteColor);
+    font-size: 0.72em;
+    opacity: 0.8;
+}
+
+.world-sim-history-event-node.is-guided .world-sim-history-event-summary { padding-right: 14px; }
+
+.world-sim-history-event-node.is-initialize {
+    place-items: center;
+    font-weight: 600;
+    text-align: center;
+}
+
+.world-sim-history-event-node.has-participants {
+    grid-template-rows: 2.7em minmax(0, 4.05em);
+}
+
+.world-sim-history-event-summary {
+    display: -webkit-box;
+    overflow: hidden;
+    font-size: 0.9em;
+    line-height: 1.35em;
+    overflow-wrap: anywhere;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 3;
+}
+
+.world-sim-history-event-node.has-participants .world-sim-history-event-summary { -webkit-line-clamp: 2; }
+.world-sim-history-event-summary.is-missing { color: var(--warning-color, #e7a53b); font-style: italic; }
+
+.world-sim-history-participants {
+    max-height: 4.05em;
+    overflow: hidden;
+    font-size: 0.82em;
+    line-height: 1.35em;
+}
+
+.world-sim-history-participant {
+    display: inline;
+    margin: 0;
+    padding: 0;
+    color: var(--SmartThemeQuoteColor);
+    font: inherit;
+    line-height: inherit;
+    white-space: nowrap;
+    background: none;
+    border: 0;
+    cursor: pointer;
+    text-decoration: underline;
+    text-decoration-color: transparent;
+    text-underline-offset: 2px;
+}
+
+.world-sim-history-participant:hover,
+.world-sim-history-participant:focus-visible { text-decoration-color: currentColor; }
+.world-sim-history-more { white-space: nowrap; }
+
+.world-sim-history-aggregate {
+    display: grid;
+    place-items: center;
+    padding: 0;
+    font-size: 1.55em;
+    font-weight: 700;
+    text-align: center;
+}
+
+.world-sim-history-aggregate.is-expanded {
+    visibility: hidden;
+}
+
+.world-sim-history-orbits {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+}
+
+.world-sim-history-orbit-node,
+.world-sim-history-hover-bridge,
+.world-sim-history-dropdown { pointer-events: auto; }
+
+.world-sim-history-hover-bridge {
+    position: absolute;
+    background: transparent;
+}
+
+.world-sim-history-scene.is-exploring .world-sim-history-base-node:not(.is-related),
+.world-sim-history-scene.is-exploring .world-sim-history-aggregate:not(.is-expanded) {
+    opacity: 0.18;
+}
+
+.world-sim-history-node.is-menu-open,
+.world-sim-history-node.is-jump-target {
+    border-color: var(--SmartThemeQuoteColor);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--SmartThemeQuoteColor) 28%, transparent);
+}
+
+.world-sim-history-dropdown {
+    position: absolute;
+    z-index: 10000;
+    display: grid;
+    grid-auto-rows: min-content;
+    gap: 5px;
+    box-sizing: border-box;
+    height: auto;
+    padding: 7px;
+    background: var(--SmartThemeBlurTintColor);
+    border: 1px solid var(--SmartThemeBorderColor);
+    border-radius: 10px;
+    box-shadow: 0 8px 26px var(--black50a);
+}
+
+.world-sim-history-dropdown .menu_button {
+    width: 100%;
+    min-width: 0;
+    min-height: 28px;
+    margin: 0;
+    white-space: nowrap;
+}
+
+.world-sim-history-event-guidance {
+    display: grid;
+    gap: 3px;
+    max-height: 110px;
+    padding: 7px 8px;
+    overflow: auto;
+    font-size: 0.82em;
+    line-height: 1.3;
+    overflow-wrap: anywhere;
+    background: var(--black30a);
+    border-radius: 7px;
+}
+
+.world-sim-revision-dialog {
+    width: min(760px, calc(100dvw - 2em));
+    height: min(780px, calc(100dvh - 2em)) !important;
+}
+
+.world-sim-revision-dialog .popup-content {
     display: flex;
-    flex-direction: column;
-    gap: 6px;
-    padding: 4px 2px;
+    min-height: 0;
+    padding: 0 12px 12px;
+}
+
+.world-sim-revision-popup {
+    display: grid;
+    grid-template-rows: auto minmax(140px, 1fr) auto auto;
+    gap: 14px;
+    width: 100%;
+    min-height: 0;
+}
+
+.world-sim-revision-popup-meta {
+    font-size: calc(var(--mainFontSize) * 0.84);
+    opacity: 0.72;
+}
+
+.world-sim-revision-changes {
+    display: grid;
+    grid-template-rows: auto minmax(0, 1fr);
+    gap: 7px;
+    min-height: 0;
+}
+
+.world-sim-revision-changes h4 {
+    margin: 0;
+    font-size: calc(var(--mainFontSize) * 0.88);
+    opacity: 0.78;
+}
+
+.world-sim-revision-popup-diffs {
+    margin: 0;
+    padding: 12px;
+    overflow: auto;
+    white-space: pre-wrap;
+    color: var(--SmartThemeBodyColor);
+    font: calc(var(--mainFontSize) * 0.84) / 1.45 var(--monoFontFamily, monospace);
+    overflow-wrap: anywhere;
+    background: var(--black30a);
+    border: 1px solid color-mix(in srgb, var(--SmartThemeBorderColor) 72%, transparent);
+    border-radius: 8px;
+}
+
+.world-sim-revision-guidance {
+    display: grid;
+    gap: 5px;
+}
+
+.world-sim-revision-guidance > span {
+    font-size: calc(var(--mainFontSize) * 0.84);
+    opacity: 0.72;
+}
+
+.world-sim-revision-guidance textarea {
+    min-height: 104px;
+    margin: 0;
+    resize: vertical;
+}
+
+.world-sim-revision-actions {
+    display: flex;
+    justify-content: flex-end;
+    padding-top: 12px;
+    border-top: 1px solid color-mix(in srgb, var(--SmartThemeBorderColor) 72%, transparent);
+}
+
+.world-sim-branch-action {
+    min-width: 150px;
+    margin: 0;
+    justify-self: end;
+}
+
+@media (max-width: 700px) {
+    .world-sim-history-viewport { min-height: 55vh; }
 }
 
 .world-sim-tick {
@@ -851,55 +1420,165 @@ body.rounded-avatars .world-sim-diff-charhead img {
     border-left: 4px solid var(--SmartThemeQuoteColor, #6c9);
 }
 
-/* ---- Actions / Settings cards ---- */
+/* ---- Actions / Settings ---- */
 
-.world-sim-card {
-    display: flex;
-    flex-direction: column;
+.world-sim-fast-forward {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
     gap: 8px;
-    padding: 10px;
-    background-color: var(--black30a);
-    border: 1px solid var(--SmartThemeBorderColor);
-    border-radius: 8px;
+    align-items: center;
 }
 
-.world-sim-card-head {
-    display: flex;
-    gap: 7px;
-    align-items: center;
-    font-weight: 600;
+.world-sim-run-guided {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    justify-content: center;
+    width: 100%;
+    min-width: 0;
+    margin: 0;
+    white-space: nowrap;
 }
 
 .world-sim-run-now {
+    grid-column: 1;
+    grid-row: 1;
     justify-content: center;
-    gap: 6px;
-    width: 100%;
-}
-
-.world-sim-field {
-    display: grid;
-    gap: 4px;
+    min-width: 0;
     margin: 0;
-    font-size: calc(var(--mainFontSize) * 0.84);
+    white-space: nowrap;
 }
 
-.world-sim-field-inline {
-    grid-template-columns: 1fr 72px auto;
+.world-sim-run-count {
+    display: flex;
+    grid-column: 2;
+    grid-row: 1;
+    align-items: center;
+    margin: 0;
+}
+
+.world-sim-run-count input {
+    width: 48px;
+    min-width: 48px;
+    margin: 0;
+    padding-inline: 5px;
+    text-align: center;
+    appearance: textfield;
+}
+
+.world-sim-guided-run {
+    display: grid;
+    grid-template-rows: auto auto minmax(0, 1fr) auto;
+    gap: 14px;
+    width: 100%;
+    min-height: 0;
+}
+
+.world-sim-guided-action,
+.world-sim-guided-characters { display: grid; gap: 6px; }
+.world-sim-guided-parent,
+.world-sim-guided-character-help,
+.world-sim-guided-characters summary span { opacity: 0.72; }
+.world-sim-guided-dialog {
+    width: min(720px, calc(100dvw - 2em));
+    height: min(780px, calc(100dvh - 2em)) !important;
+}
+
+.world-sim-guided-dialog .popup-content {
+    display: flex;
+    min-height: 0;
+    padding: 0 12px 12px;
+}
+
+.world-sim-guided-action textarea {
+    min-height: 120px;
+    margin: 0;
+    resize: vertical;
+}
+
+.world-sim-guided-action,
+.world-sim-guided-characters {
+    padding: 12px;
+    background: var(--black30a);
+    border: 1px solid color-mix(in srgb, var(--SmartThemeBorderColor) 72%, transparent);
+    border-radius: 8px;
+}
+
+.world-sim-guided-characters {
+    min-height: 0;
+    overflow: hidden;
+}
+
+.world-sim-guided-characters[open] {
+    grid-template-rows: auto auto minmax(0, 1fr) auto;
+}
+
+.world-sim-guided-characters summary { cursor: pointer; font-weight: 600; }
+.world-sim-guided-character-list {
+    display: grid;
+    gap: 6px;
+    max-height: 34vh;
+    padding-right: 4px;
+    overflow: auto;
+}
+.world-sim-guided-character {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(140px, 0.6fr);
+    gap: 10px;
     align-items: center;
 }
-
-.world-sim-field-inline em {
-    font-style: normal;
-    opacity: 0.6;
-}
-
-.world-sim-checkbox {
+.world-sim-guided-character select { width: 100%; margin: 0; }
+.world-sim-guided-exact { margin-top: 8px; }
+.world-sim-guided-actions {
     display: flex;
     gap: 8px;
-    align-items: center;
+    justify-content: flex-end;
+    padding-top: 12px;
+    border-top: 1px solid color-mix(in srgb, var(--SmartThemeBorderColor) 72%, transparent);
+}
+
+.world-sim-guided-actions .menu_button {
+    min-width: 104px;
     margin: 0;
-    font-size: calc(var(--mainFontSize) * 0.88);
-    cursor: pointer;
+    justify-content: center;
+}
+
+.world-sim-guided-submit:not(:disabled),
+.world-sim-branch-action:not(:disabled) {
+    background-color: color-mix(in srgb, var(--SmartThemeQuoteColor) 38%, var(--black50a));
+    border-color: color-mix(in srgb, var(--SmartThemeQuoteColor) 70%, var(--SmartThemeBorderColor));
+}
+
+.world-sim-run-count input::-webkit-inner-spin-button,
+.world-sim-run-count input::-webkit-outer-spin-button {
+    margin: 0;
+    appearance: none;
+}
+
+.world-sim-settings {
+    display: grid;
+    gap: 8px;
+    width: min(100%, 360px);
+}
+
+.world-sim-setting-row {
+    display: flex;
+    gap: 12px;
+    align-items: center;
+    justify-content: space-between;
+    min-height: 34px;
+}
+
+.world-sim-setting-label {
+    display: flex;
+    align-items: center;
+}
+
+.world-sim-setting-row > input {
+    flex: 0 0 72px;
+    width: 72px;
+    min-width: 72px;
+    margin: 0;
+    text-align: center;
 }
 
 /* ---- Bottom status bar ---- */
@@ -907,7 +1586,7 @@ body.rounded-avatars .world-sim-diff-charhead img {
 .world-sim-statusbar {
     grid-area: status;
     display: grid;
-    grid-template-columns: 1.4fr 1fr 1.4fr 1fr;
+    grid-template-columns: 1.6fr 1fr 1.4fr;
     gap: 10px;
     align-items: center;
     padding: 10px 16px;
@@ -985,9 +1664,9 @@ body.rounded-avatars .world-sim-diff-charhead img {
         border-top: 1px solid color-mix(in srgb, var(--SmartThemeBorderColor) 70%, transparent);
     }
 
-    .world-sim-actions-pane .world-sim-card {
+    .world-sim-fast-forward {
         flex: 1;
-        min-width: 240px;
+        min-width: 260px;
     }
 }
 
@@ -1065,7 +1744,8 @@ body.rounded-avatars .world-sim-diff-charhead img {
     }
 
     .world-sim-app[data-mtab="map"] .world-sim-center-pane,
-    .world-sim-app[data-mtab="history"] .world-sim-center-pane {
+    .world-sim-app[data-mtab="history"] .world-sim-center-pane,
+    .world-sim-app[data-mtab="settings"] .world-sim-center-pane {
         display: flex;
         flex: 1 1 auto;
     }
@@ -1113,5 +1793,99 @@ body.rounded-avatars .world-sim-diff-charhead img {
         position: static;
         flex: 0 0 auto;
         grid-template-columns: 1fr 1fr;
+    }
+
+    .world-sim-confirm-dialog,
+    .world-sim-input-dialog,
+    .world-sim-guided-dialog,
+    .world-sim-revision-dialog {
+        width: calc(100dvw - 1em);
+        max-width: calc(100dvw - 1em);
+        padding-inline: 8px;
+    }
+
+    .world-sim-guided-dialog,
+    .world-sim-revision-dialog {
+        height: calc(100dvh - 1em) !important;
+        max-height: calc(100dvh - 1em);
+    }
+
+    .world-sim-confirm {
+        grid-template-columns: 40px minmax(0, 1fr);
+        gap: 10px;
+        padding-top: 16px;
+    }
+
+    .world-sim-confirm-icon {
+        width: 40px;
+        height: 40px;
+    }
+
+    .popup.world-sim-confirm-dialog .popup-controls,
+    .popup.world-sim-input-dialog .popup-controls {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+    }
+
+    .popup.world-sim-confirm-dialog .popup-controls .menu_button,
+    .popup.world-sim-input-dialog .popup-controls .menu_button {
+        min-width: 0;
+        width: 100%;
+    }
+
+    .world-sim-guided-dialog .popup-content,
+    .world-sim-revision-dialog .popup-content {
+        padding-inline: 4px;
+    }
+
+    .world-sim-guided-character {
+        grid-template-columns: minmax(0, 1fr);
+        gap: 4px;
+    }
+
+    .world-sim-popup-hero {
+        padding-right: 34px;
+    }
+
+    .world-sim-revision-popup {
+        grid-template-rows: auto minmax(110px, 1fr) auto auto;
+    }
+
+    .world-sim-guided-actions .menu_button,
+    .world-sim-branch-action {
+        min-width: 0;
+        flex: 1 1 0;
+    }
+
+    .world-sim-summary-dialog {
+        width: calc(100dvw - 1em);
+        max-width: calc(100dvw - 1em);
+        height: calc(100dvh - 1em) !important;
+        max-height: calc(100dvh - 1em);
+        padding-inline: 8px;
+    }
+
+    .world-sim-summary-dialog .popup-content {
+        padding-inline: 4px;
+    }
+
+    .world-sim-summary-popup-head,
+    .world-sim-summary-popup-actions {
+        align-items: stretch;
+        flex-direction: column;
+    }
+
+    .world-sim-summary-popup-meta {
+        display: flex;
+        justify-content: space-between;
+        text-align: left;
+    }
+
+    .world-sim-summary-text {
+        min-height: 240px;
+    }
+
+    .world-sim-summary-regenerate.menu_button {
+        width: 100%;
     }
 }
