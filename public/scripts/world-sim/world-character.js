@@ -88,7 +88,7 @@ export async function openWorldCharacterChat() {
 
     // This is an implementation chat, not a scene in which the user participates.
     // Switching to it must not select or auto-lock a different user persona.
-    return withoutAutoPersonaSelection(() => selectCharacterById(id));
+    return withoutAutoPersonaSelection(() => selectCharacterById(id, { openInWorkspace: false }));
 }
 
 export { WORLD_CHARACTER_NAME, WORLD_CHARACTER_AVATAR };

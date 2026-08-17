@@ -38,6 +38,7 @@ import { chat_completion_sources, oai_settings, POLLINATIONS_ENDPOINT } from './
 import { getTokenCountAsync } from './tokenizers.js';
 import { textgen_types, textgenerationwebui_settings as textgen_settings, getTextGenServer } from './textgen-settings.js';
 import { debounce_timeout, SWIPE_SOURCE } from './constants.js';
+import { isChatWorkspaceChild, isChatWorkspaceInteractionActive } from './chat-workspace-bridge.js';
 
 import { Popup } from './popup.js';
 import { accountStorage } from './util/AccountStorage.js';
@@ -743,7 +744,7 @@ export function initRossMods() {
     // initial status check
     checkStatusDebounced();
 
-    if (power_user.auto_load_chat) {
+    if (power_user.auto_load_chat && !isChatWorkspaceChild()) {
         RA_autoloadchat();
     }
 
@@ -1039,6 +1040,12 @@ export function initRossMods() {
      * @param {KeyboardEvent} event
      */
     async function processHotkeys(event) {
+        // A workspace tab can retain DOM focus briefly while its iframe is being hidden.
+        // Never let that stale focus operate on a chat that is no longer interactive.
+        if (!isChatWorkspaceInteractionActive()) {
+            return;
+        }
+
         // Default hotkeys and shortcuts shouldn't work if any popup is currently open
         if (Popup.util.isPopupOpen()) {
             return;

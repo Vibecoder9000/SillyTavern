@@ -45,7 +45,7 @@ const SELECTOR_HISTORY_PLAN_ENTRIES = 3;
 async function fireWorldSimGeneration(prompt, { disableAutoContinue = false } = {}) {
     // Fresh chat per generation so each selector/updater/initialize step is self-contained
     // and the model isn't paying to re-read the previous step's prompt + tool exchange.
-    await doNewChat();
+    await doNewChat({ openInWorkspace: false });
 
     const message = {
         name: name1,

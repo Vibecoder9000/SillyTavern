@@ -71,6 +71,7 @@ import { checkForNewContent } from './endpoints/content-manager.js';
 import { init as settingsInit } from './endpoints/settings.js';
 import { syncBackgroundsMetadata } from './endpoints/backgrounds-manager.js';
 import { redirectDeprecatedEndpoints, ServerStartup, setupPrivateEndpoints } from './server-startup.js';
+import { getChatWorkspaceRootDocument } from './endpoints/chat-workspace.js';
 import { diskCache } from './endpoints/characters.js';
 import { migrateFlatSecrets } from './endpoints/secrets.js';
 import { migrateGroupChatsMetadataFormat } from './endpoints/groups.js';
@@ -224,7 +225,7 @@ app.get('/', cacheBuster.middleware, (request, response) => {
         return response.redirect(redirectUrl);
     }
 
-    return response.sendFile('index.html', { root: path.join(serverDirectory, 'public') });
+    return response.sendFile(getChatWorkspaceRootDocument(request), { root: path.join(serverDirectory, 'public') });
 });
 
 // Callback endpoint for OAuth PKCE flows (e.g. OpenRouter)

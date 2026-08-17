@@ -1,0 +1,23 @@
+:root {
+    color-scheme: dark light;
+    --workspace-bg: rgb(17, 17, 17);
+    --workspace-fg: rgb(245, 245, 245);
+    --SmartThemeBlurTintColor: var(--workspace-bg);
+    --SmartThemeBodyColor: var(--workspace-fg);
+    --animation-duration-2x: .4s;
+    font-family: system-ui, sans-serif;
+}
+
+* { box-sizing: border-box; }
+html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; background: var(--workspace-bg); }
+
+#chat-workspace-frames { position: absolute; inset: 0; }
+.chat-workspace-frame {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    border: 0;
+    background: var(--workspace-bg);
+}
+.chat-workspace-frame.active { z-index: 1; }

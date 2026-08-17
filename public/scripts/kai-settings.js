@@ -96,10 +96,7 @@ function selectKoboldGuiPreset() {
 
 export function loadKoboldSettings(data, preset, settings) {
     koboldai_setting_names = data.koboldai_setting_names;
-    koboldai_settings = data.koboldai_settings;
-    koboldai_settings.forEach(function (item, i, arr) {
-        koboldai_settings[i] = JSON.parse(item);
-    });
+    koboldai_settings = data.koboldai_settings.map(item => JSON.parse(item));
 
     $('#settings_preset').empty();
     $('#settings_preset').append('<option value="gui">GUI KoboldAI Settings</option>');

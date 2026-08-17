@@ -29,6 +29,7 @@ import {
     updateRemoteChatName,
 } from '../script.js';
 import { getRegexedString, regex_placement } from './extensions/regex/engine.js';
+import { requestWorkspaceNewChat, requestWorkspaceOpen } from './chat-workspace-bridge.js';
 import { deleteGroupChatByName, getGroupAvatar, groups, is_group_generating, openGroupById, openGroupChat } from './group-chats.js';
 import { t } from './i18n.js';
 import { callGenericPopup, POPUP_TYPE } from './popup.js';
@@ -483,6 +484,11 @@ async function openRecentCharacterChat(avatarId, fileName) {
     }
 
     try {
+        const character = characters[characterId];
+        if (requestWorkspaceOpen(
+            { kind: 'character', ownerId: avatarId, chatId: fileName },
+            { title: character.name, avatar: character.avatar !== 'none' ? getThumbnailUrl('avatar', character.avatar) : '' },
+        )) return;
         if (!await selectCharacterById(characterId)) return;
         setActiveCharacter(avatarId);
         saveSettingsDebounced();
@@ -511,6 +517,10 @@ async function openRecentGroupChat(groupId, fileName) {
     }
 
     try {
+        if (requestWorkspaceOpen(
+            { kind: 'group', ownerId: String(groupId), chatId: fileName },
+            { title: group.name, avatar: getGroupAvatar(group).find('img').first().attr('src') || '' },
+        )) return;
         if (!await openGroupById(groupId)) return;
         setActiveGroup(groupId);
         saveSettingsDebounced();
@@ -837,9 +847,18 @@ export async function openPermanentAssistantChat({ tryCreate = true, created = f
     }
 
     try {
+        const identity = characters[characterId]?.chat
+            ? { kind: 'character', ownerId: avatar, chatId: String(characters[characterId].chat) }
+            : null;
+        const presentation = {
+            title: characters[characterId].name,
+            avatar: characters[characterId].avatar !== 'none' ? getThumbnailUrl('avatar', characters[characterId].avatar) : '',
+        };
+        if (!created && identity && requestWorkspaceNewChat(identity, presentation)) return;
+        if (created && identity && requestWorkspaceOpen(identity, presentation)) return;
         if (!await selectCharacterById(characterId)) return;
         if (!created) {
-            await doNewChat({ deleteCurrentChat: false });
+            await doNewChat({ deleteCurrentChat: false, openInWorkspace: false });
         }
         console.log(`Opened permanent assistant chat for ${neutralCharacterName}.`, getCurrentChatId());
     } catch (error) {

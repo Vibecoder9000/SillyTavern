@@ -60,6 +60,7 @@ import {
     displayPastChats,
     sendMessageAsUser,
     getBiasStrings,
+    flushPendingChatSave,
     saveChatConditional,
     deactivateSendButtons,
     activateSendButtons,
@@ -92,6 +93,7 @@ import { t } from './i18n.js';
 import { accountStorage } from './util/AccountStorage.js';
 import { compressRequest } from './request-compression.js';
 import { shouldHideXmlToolExchanges } from './group-tool-visibility.js';
+import { requestWorkspaceOpen } from './chat-workspace-bridge.js';
 
 export {
     selected_group,
@@ -2152,9 +2154,34 @@ function updateFavButtonState(state) {
 /**
  * Opens a group chat by its ID and updates the UI accordingly.
  * @param {string} groupId ID of the group to open
+ * @param {object} [options] Open options
+ * @param {boolean} [options.openInWorkspace=true] Whether user navigation may open the group in another workspace tab
+ * @param {boolean} [options.loadChat=true] Whether switching groups should load the group's current chat
  * @returns {Promise<boolean>} Whether the group was opened
  */
-export async function openGroupById(groupId) {
+export async function openGroupById(groupId, { openInWorkspace = true, loadChat = true } = {}) {
+    const targetGroup = groups.find(x => String(x.id) === String(groupId));
+    const targetIdentity = targetGroup?.chat_id
+        ? { kind: 'group', ownerId: String(targetGroup.id), chatId: String(targetGroup.chat_id) }
+        : null;
+    const currentGroup = groups.find(x => String(x.id) === String(selected_group));
+    const currentIdentity = currentGroup?.chat_id
+        ? { kind: 'group', ownerId: String(currentGroup.id), chatId: String(currentGroup.chat_id) }
+        : null;
+    const isCurrent = targetIdentity && currentIdentity
+        && targetIdentity.ownerId === currentIdentity.ownerId
+        && targetIdentity.chatId === currentIdentity.chatId;
+    const targetPresentation = targetGroup
+        ? {
+            title: targetGroup.name,
+            avatar: getGroupAvatar(targetGroup).find('img').first().attr('src') || '',
+        }
+        : null;
+    if (openInWorkspace && targetIdentity && !isCurrent && requestWorkspaceOpen(targetIdentity, targetPresentation)) {
+        return true;
+    }
+
+    await flushPendingChatSave();
     if (isChatSaving) {
         toastr.info(t`Please wait until the chat is saved before switching characters.`, t`Your chat is still saving...`);
         return false;
@@ -2188,7 +2215,7 @@ export async function openGroupById(groupId) {
             selected_group = groupId;
             setEditedMessageId(undefined);
             updateChatMetadata({}, true);
-            await getGroupChat(groupId);
+            if (loadChat) await getGroupChat(groupId);
             return true;
         }
     }
@@ -2348,17 +2375,40 @@ export async function getGroupPastChats(groupId) {
  * Opens a specific group chat for the specified group by its ID.
  * @param {string} groupId Group ID
  * @param {string} chatId Chat ID
+ * @param {object} [options] Open options
+ * @param {boolean} [options.openInWorkspace=true] Whether user navigation may open the chat in another workspace tab
+ * @param {boolean} [options.skipClear=false] Whether the caller has already cleared the current chat
+ * @param {boolean} [options.waitForSave=true] Whether to wait for a pending chat save before opening
  * @returns {Promise<void>}
  */
-export async function openGroupChat(groupId, chatId) {
-    await waitUntilCondition(() => !isChatSaving, debounce_timeout.extended, 10);
+export async function openGroupChat(groupId, chatId, { openInWorkspace = true, skipClear = false, waitForSave = true } = {}) {
+    const targetIdentity = { kind: 'group', ownerId: String(groupId), chatId: String(chatId) };
+    const targetGroup = groups.find(x => String(x.id) === targetIdentity.ownerId);
+    const currentGroup = groups.find(x => String(x.id) === String(selected_group));
+    const isCurrent = currentGroup
+        && String(currentGroup.id) === targetIdentity.ownerId
+        && String(currentGroup.chat_id) === targetIdentity.chatId;
+    const targetPresentation = targetGroup
+        ? {
+            title: targetGroup.name,
+            avatar: getGroupAvatar(targetGroup).find('img').first().attr('src') || '',
+        }
+        : null;
+    if (openInWorkspace && !isCurrent && requestWorkspaceOpen(targetIdentity, targetPresentation)) {
+        return;
+    }
+
+    if (waitForSave) {
+        await flushPendingChatSave();
+        await waitUntilCondition(() => !isChatSaving, debounce_timeout.extended, 10);
+    }
     const group = groups.find(x => x.id === groupId);
 
     if (!group || !group.chats.includes(chatId)) {
         return;
     }
 
-    await clearChat({ clearData: true });
+    if (!skipClear) await clearChat({ clearData: true });
     group.chat_id = chatId;
     group.date_last_chat = Date.now();
     updateChatMetadata({}, true);

@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="robots" content="noindex, nofollow">
+    <title>SillyTavern</title>
+    <link rel="manifest" crossorigin="use-credentials" href="manifest.json">
+    <link rel="apple-touch-icon" sizes="144x144" href="img/apple-icon-144x144.png">
+    <link rel="icon" type="image/x-icon" href="favicon.ico">
+    <link rel="stylesheet" href="css/fontawesome.min.css">
+    <link rel="stylesheet" href="css/solid.min.css">
+    <link rel="stylesheet" href="css/loader.css">
+    <link rel="stylesheet" href="css/chat-workspace.css">
+</head>
+<body>
+    <div id="preloader" role="status" aria-live="polite" aria-label="SillyTavern is initializing">
+        <div id="loader" class="splash-screen">
+            <img src="img/logo.png" alt="SillyTavern" class="splash-logo">
+            <div id="load-spinner" class="fa-solid fa-gear fa-spin fa-3x" aria-hidden="true"></div>
+            <h2 class="splash-message">Initializing…</h2>
+        </div>
+    </div>
+    <main id="chat-workspace-frames"></main>
+    <script type="module" src="scripts/chat-workspace.js?v=lan-http-uuid-fix"></script>
+</body>
+</html>

@@ -24,6 +24,7 @@ import { getActiveManualApiSamplers, loadApiSelectedSamplers, isSamplerManualPri
 import { SECRET_KEYS, writeSecret } from './secrets.js';
 import { getEventSourceStream } from './sse-stream.js';
 import { getCurrentDreamGenModelTokenizer, getCurrentOpenRouterModelTokenizer, loadAphroditeModels, loadDreamGenModels, loadFeatherlessModels, loadGenericModels, loadInfermaticAIModels, loadLlamaCppModels, loadMancerModels, loadOllamaModels, loadOpenRouterModels, loadTabbyModels, loadTogetherAIModels, loadVllmModels, updateOpenRouterProvidersWarning } from './textgen-models.js';
+import { isTextGenControlVisible } from './textgen-control-visibility.js';
 import { ENCODE_TOKENIZERS, TEXTGEN_TOKENIZERS, TOKENIZER_SUPPORTED_KEY, getTextTokens, getTokenizerBestMatch, tokenizers } from './tokenizers.js';
 import { AbortReason } from './util/AbortReason.js';
 import { getSortableDelay, onlyUnique, arraysEqual, isObject } from './utils.js';
@@ -1155,52 +1156,24 @@ export function initTextGenSettings() {
  * @returns void
  */
 function showSamplerControls(apiType = null) {
-    $('#textgenerationwebui_api-settings [data-tg-samplers], #textgenerationwebui_api [data-tg-samplers]').each(function (idx, elem) {
-        const typeSpecificControlled = $(elem).data('tg-type') !== undefined;
-
-        if (!typeSpecificControlled) $(this).show();
-    });
-
-    showTypeSpecificControls(apiType ?? textgenerationwebui_settings.type);
-
-    const prioritizeManualSamplerSelect = isSamplerManualPriorityEnabled(apiType ?? textgenerationwebui_settings.type);
-    const samplersActivatedManually = getActiveManualApiSamplers(apiType ?? textgenerationwebui_settings.type);
-
-    if (!samplersActivatedManually?.length || !prioritizeManualSamplerSelect) return;
-
-    $('#textgenerationwebui_api-settings [data-tg-samplers], #textgenerationwebui_api [data-tg-samplers]').each(function () {
-        const tgSamplers = $(this).attr('data-tg-samplers').split(',').map(x => x.trim()).filter(str => str !== '');
-
-        for (const tgSampler of tgSamplers) {
-            if (samplersActivatedManually.includes(tgSampler)) {
-                $(this).show();
-                return;
-            } else {
-                $(this).hide();
-            }
-        }
-    });
-}
-
-function showTypeSpecificControls(apiType) {
-    $('[data-tg-type]').each(function () {
-        const mode = String($(this).attr('data-tg-type-mode') ?? '').toLowerCase().trim();
-        const tgTypes = $(this).attr('data-tg-type').split(',').map(x => x.trim());
-
-        if (mode === 'except') {
-            $(this)[tgTypes.includes(apiType) ? 'hide' : 'show']();
-            return;
-        }
-
-        for (const tgType of tgTypes) {
-            if (tgType === apiType || tgType == 'all') {
-                $(this).show();
-                return;
-            } else {
-                $(this).hide();
-            }
-        }
-    });
+    const selectedApiType = apiType ?? textgenerationwebui_settings.type;
+    const activeSamplers = getActiveManualApiSamplers(selectedApiType) ?? [];
+    const state = {
+        apiType: selectedApiType,
+        prioritizeManual: Boolean(activeSamplers.length && isSamplerManualPriorityEnabled(selectedApiType)),
+        activeSamplers,
+    };
+    const controls = document.querySelectorAll(
+        '[data-tg-type], #textgenerationwebui_api-settings [data-tg-samplers], #textgenerationwebui_api [data-tg-samplers]',
+    );
+    for (const control of controls) {
+        const visible = isTextGenControlVisible({
+            samplers: control.dataset.tgSamplers,
+            type: control.dataset.tgType,
+            typeMode: control.dataset.tgTypeMode,
+        }, state);
+        control.classList.toggle('textgen-control-hidden', !visible);
+    }
 }
 
 /**

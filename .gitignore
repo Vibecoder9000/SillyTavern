@@ -63,3 +63,5 @@ yarn.lock
 test-results/
 uploads backup/
 models/
+images/
+AGENTS.md

@@ -316,7 +316,7 @@ export async function startRoleplayChat(characterIds, { cycleId = null, baseRevi
     // openGroupChat here would skip group selection and corrupt the chat's identity on save.
     console.log('[world-sim] Created new scene group:', data.id, '— opening it.');
     await getGroups();
-    if (!await openGroupById(data.id)) return;
+    if (!await openGroupById(data.id, { openInWorkspace: false })) return;
     setActiveGroup(data.id);
     printCharacters();
 

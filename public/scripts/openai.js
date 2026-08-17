@@ -4416,10 +4416,7 @@ function migrateChatCompletionSettings(settings) {
  */
 function loadOpenAISettings(data, settings) {
     openai_setting_names = data.openai_setting_names;
-    openai_settings = data.openai_settings;
-    openai_settings.forEach(function (item, i) {
-        openai_settings[i] = JSON.parse(item);
-    });
+    openai_settings = data.openai_settings.map(item => JSON.parse(item));
 
     $('#settings_preset_openai').empty();
     const settingNames = {};

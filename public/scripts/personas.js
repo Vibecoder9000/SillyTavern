@@ -183,6 +183,24 @@ export async function setUserAvatar(imgfile, { toastPersonaNameChange = true, na
     await eventSource.emit(event_types.PERSONA_CHANGED, user_avatar);
 }
 
+/**
+ * Applies a persona received from another workspace frame without treating it as a new user action.
+ * Chat-specific persona selection still runs normally when that frame becomes active.
+ * @param {string} imgfile Persona avatar identifier
+ */
+export async function syncUserAvatar(imgfile) {
+    if (!imgfile || user_avatar === imgfile) return;
+    user_avatar = imgfile;
+    reloadUserAvatar();
+    updatePersonaUIStates();
+    await selectCurrentPersona({
+        toastPersonaNameChange: false,
+        allowAutoLock: false,
+        persistSettings: false,
+    });
+    $('.zoomed_avatar[forchar]').remove();
+}
+
 function reloadUserAvatar(force = false) {
     $('.mes').each(function () {
         const avatarImg = $(this).find('.avatar img');
@@ -909,16 +927,21 @@ async function renamePersona(avatarId) {
  * Selects the persona with the currently set avatar ID by updating the user name and persona description, and updating the locked persona if the setting is enabled.
  * @param {object} [options={}] - Optional settings
  * @param {boolean} [options.toastPersonaNameChange=true] - Whether to show a toast when the persona name is changed
+ * @param {boolean} [options.allowAutoLock=true] - Whether persona auto-lock may update the current chat
+ * @param {boolean} [options.persistSettings=true] - Whether changes should schedule a global settings save
  * @returns {Promise<void>}
  */
-async function selectCurrentPersona({ toastPersonaNameChange = true } = {}) {
+async function selectCurrentPersona({ toastPersonaNameChange = true, allowAutoLock = true, persistSettings = true } = {}) {
     const personaName = power_user.personas[user_avatar];
     if (personaName) {
-        const shouldAutoLock = power_user.persona_auto_lock && user_avatar !== chat_metadata.persona;
+        const shouldAutoLock = allowAutoLock && power_user.persona_auto_lock && user_avatar !== chat_metadata.persona;
 
         if (personaName !== name1) {
             console.log(`Auto-updating user name to ${personaName}`);
-            setUserName(personaName, { toastPersonaNameChange: !shouldAutoLock && toastPersonaNameChange });
+            setUserName(personaName, {
+                toastPersonaNameChange: !shouldAutoLock && toastPersonaNameChange,
+                persistSettings,
+            });
         }
 
         const descriptor = power_user.persona_descriptions[user_avatar];
@@ -960,7 +983,7 @@ async function selectCurrentPersona({ toastPersonaNameChange = true } = {}) {
         }
 
         // As the last step, inform user if the persona is only temporarily chosen
-        if (power_user.persona_show_notifications && !isPersonaPanelOpen()) {
+        if (toastPersonaNameChange && power_user.persona_show_notifications && !isPersonaPanelOpen()) {
             const temporary = getPersonaTemporaryLockInfo();
             if (temporary.isTemporary) {
                 toastr.info(t`This persona is only temporarily chosen. Click for more info.`, t`Temporary Persona`, {
@@ -1557,14 +1580,15 @@ function getPersonaTemporaryLockInfo() {
  * @param {boolean} [options.doRender=false] - Whether to render the persona immediately
  * @returns {Promise<boolean>} - A promise that resolves to a boolean indicating whether a persona was selected
  */
-async function loadPersonaForCurrentChat({ doRender = false } = {}) {
+export async function loadPersonaForCurrentChat({ doRender = false } = {}) {
     const currentChatId = getCurrentChatId();
     if (currentChatId === personaLastLoadedChatId) return;
-    personaLastLoadedChatId = currentChatId;
 
     if (personaAutoSelectionSuppressionDepth > 0) {
         return false;
     }
+
+    personaLastLoadedChatId = currentChatId;
 
     // Cache persona list to check if they exist
     const userAvatars = await getUserAvatars(doRender);

@@ -46,9 +46,17 @@ let filterIncludedOnly = false;
 let searchTerm = '';
 let selectedCharacterId = null;
 const expandedChars = new Set();
+let worldSimToolsRegistered = false;
+let worldSimUiInitPromise = null;
 
-export async function initWorldSimUi() {
+function ensureWorldSimToolsRegistered() {
+    if (worldSimToolsRegistered) return;
+    worldSimToolsRegistered = true;
     registerWorldSimTools();
+}
+
+async function initializeWorldSimUi() {
+    ensureWorldSimToolsRegistered();
     await loadWorldSimState();
     if (getConfig().summaryPaused) {
         updateConfig({ summaryPaused: false });
@@ -59,6 +67,34 @@ export async function initWorldSimUi() {
     bindEvents();
     await renderAll();
     initWorldSimMap(document.getElementById('world-sim-map'));
+}
+
+export function initWorldSimUi() {
+    worldSimUiInitPromise ??= initializeWorldSimUi();
+    return worldSimUiInitPromise;
+}
+
+/**
+ * Registers generation tools immediately, but leaves the large roster UI
+ * unrendered until the World Sim drawer is actually opened. Rendering it at
+ * startup creates an avatar element for every character, even while the panel
+ * is hidden, which is especially expensive on mobile clients.
+ */
+export function initWorldSimUiOnDemand() {
+    ensureWorldSimToolsRegistered();
+
+    const drawer = document.getElementById('world-sim-button');
+    if (!drawer) return;
+
+    const initialize = () => {
+        void initWorldSimUi().catch(error => {
+            console.error('Could not initialize World Sim UI', error);
+            toastr.error('Could not initialize World Sim. See console for details.');
+        });
+    };
+
+    drawer.addEventListener('pointerdown', initialize, { once: true, capture: true });
+    drawer.addEventListener('focusin', initialize, { once: true, capture: true });
 }
 
 function bindEvents() {

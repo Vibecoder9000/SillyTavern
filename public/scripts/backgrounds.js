@@ -68,22 +68,14 @@ async function toggleStarredBackground(filename) {
             throw new Error(`Server responded with ${response.status}: ${await response.text()}`);
         }
 
-        // 1. On success, update the client-side data model.
         imageInMasterList.isStarred = newStarredState;
         const imageInFilteredList = backgroundSelector.filteredImages.find(img => img.filename === filename);
-        if (imageInFilteredList) {
-            imageInFilteredList.isStarred = newStarredState;
-        }
+        if (imageInFilteredList) imageInFilteredList.isStarred = newStarredState;
 
-        // 2. Perform a targeted DOM update instead of a full re-render.
-        // This finds the thumbnail in the main gallery AND the popup if it's open.
-        const thumbnailElements = document.querySelectorAll(`.thumbnail[data-bgfile="${filename}"]`);
-        thumbnailElements.forEach(thumb => {
+        document.querySelectorAll(`.thumbnail[data-bgfile="${filename}"]`).forEach(thumb => {
             thumb.dataset.isStarred = String(newStarredState);
             const clipper = thumb.querySelector('.thumbnail-clipper');
-            if (clipper) {
-                clipper.dataset.isStarred = String(newStarredState);
-            }
+            if (clipper) clipper.dataset.isStarred = String(newStarredState);
         });
     } catch (error) {
         console.error(`Failed to toggle star for ${filename}:`, error);
@@ -3455,45 +3447,35 @@ export async function initBackgrounds() {
 
             if (isNowOpen && !hasGalleryLoaded && !galleryLoadInProgress) {
                 galleryLoadInProgress = true;
-
-                // Define the check-and-load logic once
                 const checkAndLoad = async () => {
                     try {
                         const response = await fetch('/api/backgrounds/status');
                         const status = await response.json();
-
                         if (status.ready) {
-                            // Server is ready, load immediately.
                             console.log('[Backgrounds] Server is ready. Loading gallery data.');
-                            await getBackgrounds(); // Await the entire process
+                            await getBackgrounds();
                             hasGalleryLoaded = true;
                             galleryLoadInProgress = false;
-                            return true; // Signal that loading is complete
+                            return true;
                         }
                     } catch (error) {
                         console.error('[Backgrounds] Failed to poll server status, will retry...', error);
                     }
-                    return false; // Signal that we need to poll
+                    return false;
                 };
 
-                // Immediately try to load
                 checkAndLoad().then(isReady => {
-                    // If the initial check failed (server was busy), start polling as a fallback.
                     if (!isReady) {
                         const pollServerStatus = setInterval(async () => {
                             const loaded = await checkAndLoad();
-                            if (loaded) {
-                                clearInterval(pollServerStatus);
-                            }
-                        }, 1000); // Poll every second until ready
+                            if (loaded) clearInterval(pollServerStatus);
+                        }, 1000);
                     }
                 });
             }
         };
 
-        // This attaches the function to the browser, so it runs when the panel opens.
         new MutationObserver(checkVisibility).observe(drawerElement, { attributes: true, attributeFilter: ['class'] });
-        // This runs the check once on page load, in case the panel is already open.
         checkVisibility();
     }
 

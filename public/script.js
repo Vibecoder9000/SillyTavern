@@ -72,6 +72,8 @@ import {
     getGroupBlock,
     getGroupCharacterCardsLazy,
     getGroupDepthPrompts,
+    openGroupById,
+    openGroupChat,
 } from './scripts/group-chats.js';
 
 import {
@@ -184,6 +186,7 @@ import {
     clamp,
     shakeElement,
     createTimeout,
+    cancelDebounce,
 } from './scripts/utils.js';
 import { debounce_timeout, GENERATION_TYPE_TRIGGERS, IGNORE_SYMBOL, inject_ids, MEDIA_DISPLAY, MEDIA_SOURCE, MEDIA_TYPE, OVERSWIPE_BEHAVIOR, SCROLL_BEHAVIOR, SWIPE_DIRECTION, SWIPE_SOURCE, SWIPE_STATE } from './scripts/constants.js';
 
@@ -240,8 +243,11 @@ import {
     initPersonas,
     setPersonaDescription,
     initUserAvatar,
+    syncUserAvatar,
     updatePersonaConnectionsAvatarList,
     isPersonaPanelOpen,
+    loadPersonaForCurrentChat,
+    withoutAutoPersonaSelection,
 } from './scripts/personas.js';
 import { getBackgrounds, initBackgrounds, loadBackgroundSettings, background_settings } from './scripts/backgrounds.js';
 import { loader } from './scripts/action-loader.js';
@@ -288,10 +294,23 @@ import { MacroEngine } from './scripts/macros/engine/MacroEngine.js';
 import { addChatBackupsBrowser } from './scripts/chat-backups.js';
 import { onboardingExperimentalMacroEngine } from './scripts/macros/engine/MacroDiagnostics.js';
 import { compressRequest, setRequestCompressionConfig } from './scripts/request-compression.js';
-import { initWorldSimUi } from './scripts/world-sim/ui.js';
+import { initWorldSimUiOnDemand } from './scripts/world-sim/ui.js';
 import { canJumpToSwipeForMessage, canOpenSwipePickerForMessage, initSwipePicker } from './scripts/swipe-picker.js';
 import { captureJSpaceFromSavedMessage, initJSpace, mergeJSpaceCaptures, prepareJSpaceGenerationCapture, setPendingJSpaceResponse } from './scripts/jspace.js';
 import { initCharacterCardEditor, isCharacterDesignerGenerating } from './scripts/character-card-editor.js';
+import {
+    beginWorkspaceNewChat,
+    canPersistWorkspaceGlobals,
+    finishWorkspaceNewChat,
+    initChatWorkspaceBridge,
+    isChatWorkspaceChild,
+    notifyWorkspacePersonaChanged,
+    notifyWorkspaceState,
+    reportWorkspaceBootError,
+    reportWorkspaceBootProgress,
+    requestWorkspaceOpen,
+} from './scripts/chat-workspace-bridge.js';
+import { getWorkspaceCachedValue, setWorkspaceCachedValue, WORKSPACE_CACHE_KEYS } from './scripts/chat-workspace-cache.js';
 
 export { isCharacterDesignerGenerating };
 
@@ -518,7 +537,22 @@ export const DEFAULT_SAVE_EDIT_TIMEOUT = debounce_timeout.relaxed;
 /** @type {debounce_timeout} The debounce timeout used for printing. debounce_timeout.quick: 100 ms */
 export const DEFAULT_PRINT_TIMEOUT = debounce_timeout.quick;
 
-export const saveSettingsDebounced = debounce((loopCounter = 0) => saveSettings(loopCounter), DEFAULT_SAVE_EDIT_TIMEOUT);
+let settingsSavePending = false;
+const saveSettingsDebounceImpl = debounce((loopCounter = 0) => {
+    settingsSavePending = false;
+    return saveSettings(loopCounter);
+}, DEFAULT_SAVE_EDIT_TIMEOUT);
+export function saveSettingsDebounced(loopCounter = 0) {
+    settingsSavePending = true;
+    saveSettingsDebounceImpl(loopCounter);
+}
+export async function flushPendingSettingsSave() {
+    if (!settingsSavePending) return;
+    settingsSavePending = false;
+    cancelDebounce(saveSettingsDebounceImpl);
+    const saved = await saveSettings();
+    if (!saved) throw new Error('Could not flush pending settings');
+}
 export const saveCharacterDebounced = debounce(() => $('#create_button').trigger('click'), DEFAULT_SAVE_EDIT_TIMEOUT);
 
 /**
@@ -738,6 +772,7 @@ let this_edit_mes_id = undefined;
 
 //settings
 export let settings;
+let workspaceSettingsResponse = null;
 export let amount_gen = 80; //default max length of AI generated responses
 export let max_context = 2048;
 
@@ -826,6 +861,7 @@ export async function pingServer() {
 
 //MARK: firstLoadInit
 async function firstLoadInit() {
+    reportWorkspaceBootProgress('requesting security token');
     try {
         const tokenResponse = await fetch('/csrf-token');
         const tokenData = await tokenResponse.json();
@@ -858,6 +894,7 @@ async function firstLoadInit() {
         overlayContent: initLoaderOverlay,
     });
 
+    reportWorkspaceBootProgress('initializing core modules');
     registerPromptManagerMigration();
     initDomHandlers();
     initStandaloneMode();
@@ -884,6 +921,7 @@ async function firstLoadInit() {
     initToolCalling();
     await initPresetManager();
     await initSystemMessages();
+    reportWorkspaceBootProgress('loading settings and extensions');
     await getSettings(initLoaderHandle);
     initWorkspaceLastChatUi();
     await checkOpenRouterAuth();
@@ -891,9 +929,12 @@ async function firstLoadInit() {
     initDynamicStyles();
     initTags();
     initBookmarks();
+    reportWorkspaceBootProgress('loading characters');
     await getUserAvatars(true, user_avatar);
     await getCharacters();
+    reportWorkspaceBootProgress('loading background library');
     await getBackgrounds();
+    reportWorkspaceBootProgress('loading tokenizers and personas');
     await initTokenizers();
     initBackgrounds();
     initAuthorsNote();
@@ -922,11 +963,136 @@ async function firstLoadInit() {
     void initCharacterCardEditor();
     addDebugFunctions();
     doDailyExtensionUpdatesCheck();
+    reportWorkspaceBootProgress('finalizing extensions');
     await eventSource.emit(event_types.APP_INITIALIZED);
-    await initLoaderHandle.hide();
+    if (!isChatWorkspaceChild()) await initLoaderHandle.hide();
     await fixViewport();
     await eventSource.emit(event_types.APP_READY);
-    await initWorldSimUi();
+    initWorldSimUiOnDemand();
+    reportWorkspaceBootProgress('opening chat workspace');
+    initInAppChatWorkspace(initLoaderHandle);
+}
+
+function getWorkspaceChatIdentity() {
+    if (selected_group) {
+        const group = groups.find(item => String(item.id) === String(selected_group));
+        return group?.chat_id ? { kind: 'group', ownerId: String(group.id), chatId: String(group.chat_id) } : null;
+    }
+
+    const character = characters[this_chid];
+    return character?.avatar && character?.chat
+        ? { kind: 'character', ownerId: String(character.avatar), chatId: String(character.chat) }
+        : null;
+}
+
+function workspaceIdentityEquals(left, right) {
+    return Boolean(left && right
+        && left.kind === right.kind
+        && left.ownerId === right.ownerId
+        && left.chatId === right.chatId);
+}
+
+function getWorkspaceChatState(extra = {}) {
+    const identity = getWorkspaceChatIdentity();
+    const group = identity?.kind === 'group' ? groups.find(item => String(item.id) === identity.ownerId) : null;
+    const character = identity?.kind === 'character' ? characters[this_chid] : null;
+    const groupAvatar = group ? getGroupAvatar(group).find('img').first().attr('src') : '';
+    const askUserPanel = document.querySelector('#ask_user_panel');
+    const waitingForUser = askUserPanel && !askUserPanel.hidden;
+    const ownerName = group?.name || character?.name || '';
+    const title = ownerName || identity?.chatId || 'Home';
+
+    return {
+        identity,
+        title,
+        avatar: groupAvatar || (character?.avatar && character.avatar !== 'none' ? getThumbnailUrl('avatar', character.avatar) : ''),
+        draft: document.querySelector('#send_textarea')?.value || '',
+        scrollTop: document.querySelector('#chat')?.scrollTop || 0,
+        personaAvatar: chat_metadata?.persona || '',
+        saving: isChatSaving,
+        pendingSave: Boolean(chatSaveTimeout),
+        status: waitingForUser ? 'waiting' : (is_send_press || is_group_generating ? 'generating' : 'idle'),
+        ...extra,
+    };
+}
+
+async function openWorkspaceIdentity(identity) {
+    if (!identity) return;
+
+    const openIdentity = async () => {
+        if (identity.kind === 'character') {
+            const characterId = characters.findIndex(character => String(character.avatar) === String(identity.ownerId));
+            if (characterId < 0) throw new Error(`Character not found: ${identity.ownerId}`);
+            await selectCharacterById(characterId, { switchMenu: false, openInWorkspace: false, loadChat: false });
+            await openCharacterChat(identity.chatId, {
+                openInWorkspace: false,
+                waitForSave: false,
+            });
+            return;
+        }
+
+        if (identity.kind === 'group') {
+            if (!groups.length) await getGroups();
+            const group = groups.find(item => String(item.id) === String(identity.ownerId));
+            if (!group) throw new Error(`Group not found: ${identity.ownerId}`);
+            await openGroupById(group.id, { openInWorkspace: false, loadChat: false });
+            await openGroupChat(group.id, identity.chatId, {
+                openInWorkspace: false,
+                waitForSave: false,
+            });
+        }
+    };
+
+    if (canPersistWorkspaceGlobals()) await openIdentity();
+    else await withoutAutoPersonaSelection(openIdentity);
+}
+
+function restoreWorkspaceView(restore = {}) {
+    const textarea = document.querySelector('#send_textarea');
+    if (textarea) {
+        textarea.value = restore.draft || '';
+        textarea.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+    // openIdentity has already awaited chat rendering. Do not wait for a
+    // presentation frame here: an opaque workspace loader can make browsers
+    // defer animation callbacks for the covered child and deadlock the
+    // shell's wait for the `prepared` response.
+    const chatView = document.querySelector('#chat');
+    if (chatView) chatView.scrollTop = restore.scrollTop || 0;
+}
+
+function initInAppChatWorkspace(initLoaderHandle) {
+    if (!isChatWorkspaceChild()) return Promise.resolve();
+
+    initChatWorkspaceBridge({
+        getState: getWorkspaceChatState,
+        openIdentity: openWorkspaceIdentity,
+        restoreView: restoreWorkspaceView,
+        hideLoader: () => initLoaderHandle.hide(),
+        createNewChat: () => doNewChat({ deleteCurrentChat: false, openInWorkspace: true }),
+        flushPendingChat: flushPendingChatSave,
+        flushGlobalSettings: flushPendingSettingsSave,
+        confirmClose: () => Popup.show.confirm(
+            t`Discard unsent draft?`,
+            t`This draft has not been sent. Close the chat and discard it?`,
+        ),
+        onActivated: async personaAvatar => {
+            await syncUserAvatar(personaAvatar);
+            await loadPersonaForCurrentChat();
+        },
+    });
+    eventSource.on(event_types.CHAT_CHANGED, () => notifyWorkspaceState());
+    eventSource.on(event_types.PERSONA_CHANGED, avatar => notifyWorkspacePersonaChanged(avatar));
+    eventSource.on(event_types.GENERATION_STARTED, (_type, _options, dryRun) => {
+        if (dryRun) return;
+        notifyWorkspaceState(getWorkspaceChatState({ status: 'generating' }));
+    });
+    eventSource.on(event_types.GENERATION_ENDED, () => {
+        notifyWorkspaceState(getWorkspaceChatState({ status: 'idle', completed: true }));
+    });
+    eventSource.on(event_types.GENERATION_STOPPED, () => {
+        notifyWorkspaceState(getWorkspaceChatState({ status: 'idle' }));
+    });
 }
 
 async function fixViewport() {
@@ -1009,13 +1175,29 @@ export function resultCheckStatus() {
  * @param {number} id The ID of the character to switch to.
  * @param {object} [options] Options for the switch.
  * @param {boolean} [options.switchMenu=true] Whether to switch the right menu to the character edit menu if the character is already selected.
+ * @param {boolean} [options.openInWorkspace=true] Whether user navigation may open the character in another workspace tab.
+ * @param {boolean} [options.loadChat=true] Whether switching characters should load the selected character's current chat.
  * @returns {Promise<boolean>} Whether the requested character is selected.
  */
-export async function selectCharacterById(id, { switchMenu = true } = {}) {
+export async function selectCharacterById(id, { switchMenu = true, openInWorkspace = true, loadChat = true } = {}) {
     if (characters[id] === undefined) {
         return false;
     }
 
+    const targetIdentity = characters[id]?.chat
+        ? { kind: 'character', ownerId: String(characters[id].avatar), chatId: String(characters[id].chat) }
+        : null;
+    const targetPresentation = characters[id]
+        ? {
+            title: characters[id].name,
+            avatar: characters[id].avatar !== 'none' ? getThumbnailUrl('avatar', characters[id].avatar) : '',
+        }
+        : null;
+    if (openInWorkspace && targetIdentity && !workspaceIdentityEquals(targetIdentity, getWorkspaceChatIdentity()) && requestWorkspaceOpen(targetIdentity, targetPresentation)) {
+        return true;
+    }
+
+    await flushPendingChatSave();
     if (isChatSaving) {
         toastr.info(t`Please wait until the chat is saved before switching characters.`, t`Your chat is still saving...`);
         return false;
@@ -1042,7 +1224,7 @@ export async function selectCharacterById(id, { switchMenu = true } = {}) {
         selected_button = 'character_edit';
         setCharacterId(id);
         chat_metadata = {};
-        await getChat();
+        if (loadChat) await getChat();
     } else {
         //if clicked on character that was already selected
         switchMenu && (selected_button = 'character_edit');
@@ -1461,7 +1643,7 @@ export async function getCharacters() {
             const newCharacterId = characters.findIndex(x => x.avatar === previousAvatar);
             if (newCharacterId >= 0) {
                 setCharacterId(newCharacterId);
-                await selectCharacterById(newCharacterId, { switchMenu: false });
+                await selectCharacterById(newCharacterId, { switchMenu: false, openInWorkspace: false });
             } else {
                 await Popup.show.text(t`ERROR: The active character is no longer available.`, t`The page will be refreshed to prevent data loss. Press "OK" to continue.`);
                 return location.reload();
@@ -3043,7 +3225,7 @@ function initWorkspaceLastChatUi() {
             return;
         }
         chat_metadata.workspace_last_chat.enabled = toggle.checked;
-        await saveChatConditional();
+        saveChatDebounced();
     });
     const maxChars = document.getElementById('workspace_last_chat_max_chars');
     maxChars?.addEventListener('change', () => {
@@ -4048,7 +4230,7 @@ async function addStableDiffusionWorkflowImageMessage(prompt, image) {
     await eventSource.emit(event_types.MESSAGE_RECEIVED, messageId, 'extension');
     addOneMessage(message);
     await eventSource.emit(event_types.CHARACTER_MESSAGE_RENDERED, messageId, 'extension');
-    await saveChatConditional();
+    saveChatDebounced();
 }
 
 function startSdToolProgressPolling(intervalKey, messageId, segmentIndex, state, key, taskIdKey) {
@@ -4167,7 +4349,7 @@ async function handleSdToolGenerate(messageId, segmentIndex) {
     } finally {
         stopSdToolProgressPolling(intervalKey, messageId, segmentIndex, state, 'generate_progress');
         updateMessageBlock(messageId, message);
-        await saveChatConditional();
+        saveChatDebounced();
     }
 }
 
@@ -4247,7 +4429,7 @@ async function handleSdToolFinish(messageId, segmentIndex) {
     } finally {
         stopSdToolProgressPolling(intervalKey, messageId, segmentIndex, state, 'finish_progress');
         updateMessageBlock(messageId, message);
-        await saveChatConditional();
+        saveChatDebounced();
     }
 }
 
@@ -6098,6 +6280,13 @@ class StreamingProcessor {
         setPendingJSpaceResponse(this.jspaceCapture);
         await this.finalizeIntermediaryMessage(messageId, text, { unlockUI: true });
 
+        // A stop can arrive after the stream has ended but while finalization is
+        // still running. Do not continue into tool execution or a blocking save.
+        if (this.isStopped) {
+            saveChatDebounced();
+            return { suppressAutoContinue: true };
+        }
+
         if (oai_settings.native_tool_calling && this.type !== 'impersonate' && this.type !== 'regenerate') {
             const parsedTool = parseNativeToolCallsForMessage(text, chat[messageId]?.extra?.reasoning ?? '');
             const parseOutcome = applyNativeToolCallParseToMessage(chat[messageId], parsedTool, { formatForDisplay: true });
@@ -6113,13 +6302,13 @@ class StreamingProcessor {
                 }
 
                 if (!hasExecutableToolCalls) {
-                    await saveChatConditional();
+                    saveChatDebounced();
                     unblockGeneration();
                     return { suppressAutoContinue: true };
                 }
 
                 if (nativeToolMessageRequiresManualExecution(chat[messageId])) {
-                    await saveChatConditional();
+                    saveChatDebounced();
                     unblockGeneration();
                     return { suppressAutoContinue: true };
                 }
@@ -6127,7 +6316,7 @@ class StreamingProcessor {
                 const executionResult = await executeNativeToolSegmentsForMessage(messageId, {
                     signal: this.abortController.signal,
                 });
-                await saveChatConditional();
+                saveChatDebounced();
 
                 const allowNativeToolAutoContinue = this.generateOptions.nativeToolAutoContinue ?? power_user.tool_auto_continue;
                 if (allowNativeToolAutoContinue && executionResult.anyContinue && !executionResult.stopped && !executionResult.failed) {
@@ -6156,7 +6345,7 @@ class StreamingProcessor {
         if (!isAborted && power_user.auto_swipe && generatedTextFiltered(text)) {
             return await swipe(null, SWIPE_DIRECTION.RIGHT, { source: SWIPE_SOURCE.AUTO_SWIPE, repeated: true, forceMesId: chat.length - 1 });
         }
-        await saveChatConditional();
+        saveChatDebounced();
 
         playMessageSound();
         return { suppressAutoContinue: false };
@@ -6190,8 +6379,14 @@ class StreamingProcessor {
     }
 
     onStopStreaming() {
+        const generationAlreadyComplete = this.isFinished;
         this.abortController.abort();
+        this.isStopped = true;
         this.isFinished = true;
+
+        // Once token generation is complete, remaining work is bookkeeping.
+        // Cancellation must not leave the controls gated on that bookkeeping.
+        if (generationAlreadyComplete) this.markUIGenStopped();
     }
 
     /**
@@ -6669,6 +6864,7 @@ function removeLastMessage() {
  * @property {number} [depth] Recursion depth for the generation. Used to prevent infinite loops in tool calls.
  * @property {JsonSchema} [jsonSchema] JSON schema to use for the structured generation. Usually requires a special instruction.
  * @property {boolean} [skipPersona] Exclude the active user persona from the generated prompt.
+ * @property {boolean} [sendComposerText] Explicitly submit the current composer text as a user message for this generation.
  */
 
 /**
@@ -6679,7 +6875,7 @@ function removeLastMessage() {
  * @param {boolean} dryRun Whether to actually generate a message or just assemble the prompt
  * @returns {Promise<any>} Returns a promise that resolves when the text is done generating.
  */
-export async function Generate(type, { automatic_trigger, force_name2, quiet_prompt, quietToLoud, skipWIAN, skipPersona = false, force_chid, signal, quietImage, quietName, jsonSchema = null, depth = 0, nativeToolAutoContinue = null } = {}, dryRun = false) {
+export async function Generate(type, { automatic_trigger, force_name2, quiet_prompt, quietToLoud, skipWIAN, skipPersona = false, force_chid, signal, quietImage, quietName, jsonSchema = null, depth = 0, nativeToolAutoContinue = null, sendComposerText = false } = {}, dryRun = false) {
     console.log('Generate entered');
     setGenerationProgress(0);
     generation_started = new Date();
@@ -6698,8 +6894,19 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
     // OpenAI doesn't need instruct mode. Use OAI main prompt instead.
     const isInstruct = power_user.instruct.enabled && main_api !== 'openai';
     const isImpersonate = type == 'impersonate';
+    const shouldSubmitComposerText = !automatic_trigger
+        && !dryRun
+        && !isImpersonate
+        && (sendComposerText || !depth);
+    const shouldConsumeComposerText = !dryRun
+        && !isImpersonate
+        && type !== 'regenerate'
+        && type !== 'swipe'
+        && type !== 'quiet'
+        && (!depth || sendComposerText);
 
-    if (!(dryRun || depth || type == 'regenerate' || type == 'swipe' || type == 'quiet')) {
+    if (!(dryRun || depth || type == 'regenerate' || type == 'swipe' || type == 'quiet')
+        || (sendComposerText && !automatic_trigger && !dryRun && !isImpersonate && type !== 'regenerate' && type !== 'swipe' && type !== 'quiet')) {
         const interruptedByCommand = await processCommands(String($('#send_textarea').val()));
 
         if (interruptedByCommand) {
@@ -6790,7 +6997,7 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
     const lastMessage = chat[chat.length - 1];
 
     let textareaText;
-    if (type !== 'regenerate' && type !== 'swipe' && type !== 'quiet' && !isImpersonate && !dryRun && !depth) {
+    if (shouldConsumeComposerText) {
         is_send_press = true;
         textareaText = String($('#send_textarea').val());
         $('#send_textarea').val('')[0].dispatchEvent(new Event('input', { bubbles: true }));
@@ -6839,14 +7046,14 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
         'continue',
     ];
     //for normal messages sent from user..
-    if ((textareaText != '' || (hasPendingFileAttachment() && !noAttachTypes.includes(type))) && !automatic_trigger && type !== 'quiet' && !dryRun && !depth) {
+    if ((textareaText != '' || (hasPendingFileAttachment() && !noAttachTypes.includes(type))) && shouldSubmitComposerText && type !== 'quiet') {
         // If user message contains no text other than bias - send as a system message
         if (messageBias && !removeMacros(textareaText)) {
             sendSystemMessage(system_message_types.GENERIC, ' ', { bias: messageBias });
         } else {
             await sendMessageAsUser(textareaText, messageBias);
         }
-    } else if (textareaText == '' && !automatic_trigger && !dryRun && [undefined, 'normal'].includes(type) && main_api == 'openai' && oai_settings.send_if_empty.trim().length > 0 && !depth) {
+    } else if (textareaText == '' && !sendComposerText && !automatic_trigger && !dryRun && [undefined, 'normal'].includes(type) && main_api == 'openai' && oai_settings.send_if_empty.trim().length > 0 && !depth) {
         // Use send_if_empty if set and the user message is empty. Only when sending messages normally
         await sendMessageAsUser(oai_settings.send_if_empty.trim(), messageBias);
     }
@@ -7827,6 +8034,7 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
 
         if (isStreamingEnabled() && type !== 'quiet') {
             continue_mag = promptReasoning.removePrefix(continue_mag);
+            // Composer submission is a one-shot user action and must not be inherited by tool recursion.
             const generateOptions = { automatic_trigger, force_name2, quiet_prompt, quietToLoud, skipWIAN, force_chid, signal, quietImage, quietName, jsonSchema, depth, nativeToolAutoContinue };
             streamingProcessor = new StreamingProcessor(type, generateOptions, dryRun, generation_started, continue_mag, promptReasoning);
             if (isContinue) {
@@ -7837,7 +8045,8 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
             streamingProcessor.generator = await sendStreamingRequest(type, generate_data, { jsonSchema });
 
             hideSwipeButtons();
-            let getMessage = await streamingProcessor.generate();
+            const completedStreamingProcessor = streamingProcessor;
+            let getMessage = await completedStreamingProcessor.generate();
             let messageChunk = cleanUpMessage({
                 getMessage: getMessage,
                 isImpersonate: isImpersonate,
@@ -7849,18 +8058,28 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
                 getMessage = continue_mag + getMessage;
             }
 
-            const isStreamFinished = streamingProcessor && !streamingProcessor.isStopped && streamingProcessor.isFinished;
-            const isStreamWithToolCalls = streamingProcessor && Array.isArray(streamingProcessor.toolCalls) && streamingProcessor.toolCalls.length;
+            if (completedStreamingProcessor.isStopped) {
+                if (streamingProcessor === completedStreamingProcessor) streamingProcessor = null;
+                completedStreamingProcessor.markUIGenStopped();
+                saveChatDebounced();
+                return Object.defineProperties(new String(getMessage), {
+                    'messageChunk': { value: messageChunk },
+                    'fromStream': { value: true },
+                });
+            }
+
+            const isStreamFinished = !completedStreamingProcessor.isStopped && completedStreamingProcessor.isFinished;
+            const isStreamWithToolCalls = Array.isArray(completedStreamingProcessor.toolCalls) && completedStreamingProcessor.toolCalls.length;
             if (canPerformToolCalls && isStreamFinished && isStreamWithToolCalls) {
                 const lastMessage = chat[chat.length - 1];
-                const hasToolCalls = ToolManager.hasToolCalls(streamingProcessor.toolCalls);
-                const shouldDeleteMessage = type !== 'swipe' && ['', '...'].includes(lastMessage?.mes) && !lastMessage?.extra?.reasoning && ['', '...'].includes(streamingProcessor?.result);
+                const hasToolCalls = ToolManager.hasToolCalls(completedStreamingProcessor.toolCalls);
+                const shouldDeleteMessage = type !== 'swipe' && ['', '...'].includes(lastMessage?.mes) && !lastMessage?.extra?.reasoning && ['', '...'].includes(completedStreamingProcessor.result);
                 hasToolCalls && shouldDeleteMessage && await deleteLastMessage();
                 if (hasToolCalls && !shouldDeleteMessage) {
-                    await streamingProcessor.finalizeIntermediaryMessage(streamingProcessor.messageId, getMessage, { unlockUI: false });
+                    await completedStreamingProcessor.finalizeIntermediaryMessage(completedStreamingProcessor.messageId, getMessage, { unlockUI: false });
                 }
-                const invocationResult = await ToolManager.invokeFunctionTools(streamingProcessor.toolCalls, {
-                    reasoningText: streamingProcessor.reasoningHandler.reasoning,
+                const invocationResult = await ToolManager.invokeFunctionTools(completedStreamingProcessor.toolCalls, {
+                    reasoningText: completedStreamingProcessor.reasoningHandler.reasoning,
                 });
                 const shouldStopGeneration = (!invocationResult.invocations.length && shouldDeleteMessage) || invocationResult.stealthCalls.length;
                 if (hasToolCalls) {
@@ -7869,11 +8088,11 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
                             ToolManager.showToolCallError(invocationResult.errors);
                         }
                         unblockGeneration(type);
-                        streamingProcessor = null;
+                        if (streamingProcessor === completedStreamingProcessor) streamingProcessor = null;
                         return;
                     }
 
-                    streamingProcessor = null;
+                    if (streamingProcessor === completedStreamingProcessor) streamingProcessor = null;
                     depth = depth + 1;
                     await ToolManager.saveFunctionToolInvocations(invocationResult.invocations);
                     return Generate('normal', { automatic_trigger, force_name2, quiet_prompt, quietToLoud, skipWIAN, force_chid, signal, quietImage, quietName, depth }, dryRun);
@@ -7881,7 +8100,6 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
             }
 
             if (isStreamFinished) {
-                const completedStreamingProcessor = streamingProcessor;
                 const finishResult = await completedStreamingProcessor.onFinishStreaming(completedStreamingProcessor.messageId, getMessage);
                 if (streamingProcessor === completedStreamingProcessor) {
                     streamingProcessor = null;
@@ -8029,21 +8247,21 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
                 }
 
                 if (!hasExecutableToolCalls) {
-                    await saveChatConditional();
+                    saveChatDebounced();
                     unblockGeneration(type);
                     generatedPromptCache = '';
                     return;
                 }
 
                 if (nativeToolMessageRequiresManualExecution(chat[chat.length - 1])) {
-                    await saveChatConditional();
+                    saveChatDebounced();
                     unblockGeneration(type);
                     generatedPromptCache = '';
                     return;
                 }
 
                 const executionResult = await executeNativeToolSegmentsForMessage(chat.length - 1, { signal });
-                await saveChatConditional();
+                saveChatDebounced();
 
                 const allowNativeToolAutoContinue = nativeToolAutoContinue ?? power_user.tool_auto_continue;
                 if (!allowNativeToolAutoContinue || executionResult.stopped || executionResult.failed || !executionResult.anyContinue) {
@@ -8078,8 +8296,7 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
             return await swipe(null, SWIPE_DIRECTION.RIGHT, { source: SWIPE_SOURCE.AUTO_SWIPE, repeated: true, forceMesId: chat.length - 1 });
         }
 
-        console.debug('/api/chats/save called by /Generate');
-        await saveChatConditional();
+        saveChatDebounced();
         unblockGeneration(type);
         streamingProcessor = null;
 
@@ -8415,13 +8632,15 @@ export async function sendMessageAsUser(messageText, messageBias, insertAt = nul
 
     if (typeof insertAt === 'number' && insertAt >= 0 && insertAt <= chat.length) {
         chat.splice(insertAt, 0, message);
-        await saveChatConditional();
+        // Message mutations are immediately visible in memory. Coalesce their
+        // full-chat persistence so input and generation are never network-gated.
+        saveChatDebounced();
         await eventSource.emit(event_types.MESSAGE_SENT, insertAt);
         await reloadCurrentChat();
         await eventSource.emit(event_types.USER_MESSAGE_RENDERED, insertAt);
     } else {
         chat.push(message);
-        await saveChatConditional();
+        saveChatDebounced();
         const chat_id = (chat.length - 1);
         await eventSource.emit(event_types.MESSAGE_SENT, chat_id);
         addOneMessage(message);
@@ -9817,7 +10036,7 @@ export async function renameCharacter(name = null, { silent = false, renameChats
 
             if (newChId !== -1) {
                 // Select the character after the renaming
-                await selectCharacterById(newChId);
+                await selectCharacterById(newChId, { openInWorkspace: false });
 
                 // Async delay to update UI
                 await delay(1);
@@ -9929,11 +10148,15 @@ export function saveChatDebounced() {
     chatSaveTimeout = setTimeout(async () => {
         if (selectedGroup !== selected_group) {
             console.warn('Chat save timeout triggered, but group changed. Aborting.');
+            chatSaveTimeout = null;
+            notifyWorkspaceState(getWorkspaceChatState());
             return;
         }
 
         if (chid !== this_chid) {
             console.warn('Chat save timeout triggered, but chid changed. Aborting.');
+            chatSaveTimeout = null;
+            notifyWorkspaceState(getWorkspaceChatState());
             return;
         }
 
@@ -9941,6 +10164,13 @@ export function saveChatDebounced() {
         await saveChatConditional();
         console.debug('Chat saved');
     }, DEFAULT_SAVE_EDIT_TIMEOUT);
+    notifyWorkspaceState(getWorkspaceChatState());
+}
+
+/** Flushes a queued chat mutation before replacing the active in-memory chat. */
+export async function flushPendingChatSave() {
+    if (!chatSaveTimeout) return;
+    await saveChatConditional();
 }
 
 /**
@@ -10240,13 +10470,15 @@ export async function getChat(initialMetadata) {
         await getChatResult();
         eventSource.emit(event_types.CHAT_LOADED, { detail: { id: this_chid, character: characters[this_chid] } });
 
-        // Focus on the textarea if not already focused on a visible text input
-        delay(debounce_timeout.short).then(() => {
-            if ($(document.activeElement).is('input:visible, textarea:visible')) {
-                return;
-            }
-            $('#send_textarea').trigger('click').trigger('focus');
-        });
+        // Workspace-controlled loads must not open the software keyboard after a tab tap.
+        if (!isChatWorkspaceChild()) {
+            delay(debounce_timeout.short).then(() => {
+                if ($(document.activeElement).is('input:visible, textarea:visible')) {
+                    return;
+                }
+                $('#send_textarea').trigger('click').trigger('focus');
+            });
+        }
     } catch (error) {
         await getChatResult();
         console.log(error);
@@ -10321,9 +10553,35 @@ function getFirstMessage() {
     return message;
 }
 
-export async function openCharacterChat(file_name) {
-    await waitUntilCondition(() => !isChatSaving, debounce_timeout.extended, 10);
-    await clearChat({ clearData: true });
+/**
+ * Opens a character chat.
+ * @param {string} file_name Chat file name
+ * @param {object} [options] Open options
+ * @param {boolean} [options.openInWorkspace=true] Whether user navigation may open the chat in another workspace tab
+ * @param {boolean} [options.skipClear=false] Whether the caller has already cleared the current chat
+ * @param {boolean} [options.waitForSave=true] Whether to wait for a pending chat save before opening
+ * @returns {Promise<void>}
+ */
+export async function openCharacterChat(file_name, { openInWorkspace = true, skipClear = false, waitForSave = true } = {}) {
+    const character = characters[this_chid];
+    const targetIdentity = character
+        ? { kind: 'character', ownerId: String(character.avatar), chatId: String(file_name) }
+        : null;
+    const targetPresentation = character
+        ? {
+            title: character.name,
+            avatar: character.avatar !== 'none' ? getThumbnailUrl('avatar', character.avatar) : '',
+        }
+        : null;
+    if (openInWorkspace && targetIdentity && !workspaceIdentityEquals(targetIdentity, getWorkspaceChatIdentity()) && requestWorkspaceOpen(targetIdentity, targetPresentation)) {
+        return;
+    }
+
+    if (waitForSave) {
+        await flushPendingChatSave();
+        await waitUntilCondition(() => !isChatSaving, debounce_timeout.extended, 10);
+    }
+    if (!skipClear) await clearChat({ clearData: true });
     characters[this_chid].chat = file_name;
     chat_metadata = {};
     await getChat();
@@ -10450,7 +10708,7 @@ export function changeMainAPI(api = null) {
     forceCharacterEditorTokenize();
 }
 
-export function setUserName(value, { toastPersonaNameChange = true } = {}) {
+export function setUserName(value, { toastPersonaNameChange = true, persistSettings = true } = {}) {
     name1 = value;
     if (name1 === undefined || name1 == '')
         name1 = default_user_name;
@@ -10459,7 +10717,7 @@ export function setUserName(value, { toastPersonaNameChange = true } = {}) {
     if (toastPersonaNameChange && power_user.persona_show_notifications && !isPersonaPanelOpen()) {
         toastr.success(t`Your messages will now be sent as ${name1}`, t`Persona Changed`);
     }
-    saveSettingsDebounced();
+    if (persistSettings) saveSettingsDebounced();
 }
 
 async function doOnboarding(avatarId) {
@@ -10490,114 +10748,64 @@ function reloadLoop() {
 
 //MARK: getSettings()
 ///////////////////////////////////////////
-export async function getSettings(initLoaderHandle = null) {
-    const response = await fetch('/api/settings/get', {
-        method: 'POST',
-        headers: getRequestHeaders(),
-        body: JSON.stringify({}),
-        cache: 'no-cache',
-    });
+async function applySettingsResponse(data, { initial = false, initLoaderHandle = null } = {}) {
+    if (data.result == 'file not find' || !data.settings) return;
 
-    if (!response.ok) {
-        reloadLoop();
-        toastr.error(t`Settings could not be loaded after multiple attempts. Please try again later.`);
-        throw new Error('Error getting settings');
+    settings = JSON.parse(data.settings);
+    if (settings.username !== undefined && settings.username !== '') {
+        name1 = settings.username;
+        $('#your_name').text(name1);
     }
 
-    const data = await response.json();
-    if (data.result != 'file not find' && data.settings) {
-        settings = JSON.parse(data.settings);
-        if (settings.username !== undefined && settings.username !== '') {
-            name1 = settings.username;
-            $('#your_name').text(name1);
-        }
+    accountStorage.init(settings?.accountStorage);
+    if (initial) await setUserControls(data.enable_accounts);
+    setRequestCompressionConfig(data.request_compression);
+    if (initial) await eventSource.emit(event_types.SETTINGS_LOADED_BEFORE, settings);
 
-        accountStorage.init(settings?.accountStorage);
-        await setUserControls(data.enable_accounts);
-        setRequestCompressionConfig(data.request_compression);
+    amount_gen = settings.amount_gen;
+    if (settings.max_context !== undefined) max_context = parseInt(settings.max_context);
+    swipes = settings.swipes !== undefined ? !!settings.swipes : true;
+    $('#swipes-checkbox').prop('checked', swipes);
+    refreshSwipeButtons();
 
-        // Allow subscribers to mutate settings
-        await eventSource.emit(event_types.SETTINGS_LOADED_BEFORE, settings);
+    loadKoboldSettings(data, settings.kai_settings ?? settings, settings);
+    loadNovelSettings(data, settings.nai_settings ?? settings);
+    await loadTextGenSettings(data, settings);
+    loadOpenAISettings(data, settings.oai_settings ?? settings);
+    loadHordeSettings(settings);
+    await loadPowerUserSettings(settings, data);
+    applyPowerUserSettings();
+    loadTagsSettings(settings);
+    loadBackgroundSettings(settings);
+    loadProxyPresets(settings);
 
-        //Load AI model config settings
-        amount_gen = settings.amount_gen;
-        if (settings.max_context !== undefined)
-            max_context = parseInt(settings.max_context);
+    if (initial) await eventSource.emit(event_types.SETTINGS_LOADED_AFTER, settings);
 
-        swipes = settings.swipes !== undefined ? !!settings.swipes : true;  // enable swipes by default
-        $('#swipes-checkbox').prop('checked', swipes); /// swipecode
-        refreshSwipeButtons();
+    $('#max_context').val(max_context);
+    $('#max_context_counter').val(max_context);
+    $('#amount_gen').val(amount_gen);
+    $('#amount_gen_counter').val(amount_gen);
 
-        // Kobold
-        loadKoboldSettings(data, settings.kai_settings ?? settings, settings);
+    settings.main_api ??= 'kobold';
+    if (settings.main_api === 'poe') settings.main_api = 'openai';
+    main_api = settings.main_api;
+    $('#main_api').val(main_api);
+    $(`#main_api option[value=${main_api}]`).attr('selected', 'true');
+    changeMainAPI();
 
-        // Novel
-        loadNovelSettings(data, settings.nai_settings ?? settings);
-
-        // TextGen
-        await loadTextGenSettings(data, settings);
-
-        // OpenAI
-        loadOpenAISettings(data, settings.oai_settings ?? settings);
-
-        // Horde
-        loadHordeSettings(settings);
-
-        // Load power user settings
-        await loadPowerUserSettings(settings, data);
-
-        // Apply theme toggles from power user settings
-        applyPowerUserSettings();
-
-        // Load character tags
-        loadTagsSettings(settings);
-
-        // Load background
-        loadBackgroundSettings(settings);
-
-        // Load proxy presets
-        loadProxyPresets(settings);
-
-        // Allow subscribers to mutate settings
-        await eventSource.emit(event_types.SETTINGS_LOADED_AFTER, settings);
-
-        // Set context size after loading power user (may override the max value)
-        $('#max_context').val(max_context);
-        $('#max_context_counter').val(max_context);
-
-        $('#amount_gen').val(amount_gen);
-        $('#amount_gen_counter').val(amount_gen);
-
-        //Load which API we are using
-        if (settings.main_api == undefined) {
-            settings.main_api = 'kobold';
-        }
-
-        if (settings.main_api == 'poe') {
-            settings.main_api = 'openai';
-        }
-
-        main_api = settings.main_api;
-        $('#main_api').val(main_api);
-        $(`#main_api option[value=${main_api}]`).attr('selected', 'true');
-        changeMainAPI();
-
-        //Load User's Name and Avatar
+    if (initial) {
         initUserAvatar(settings.user_avatar);
-        setPersonaDescription();
-
-        //Load the active character and group
         active_character = settings.active_character;
         active_group = settings.active_group;
-
-        setWorldInfoSettings(settings.world_info_settings ?? settings, data);
-
         selected_button = settings.selected_button;
+    } else {
+        await syncUserAvatar(settings.user_avatar);
+    }
+    setPersonaDescription();
+    setWorldInfoSettings(settings.world_info_settings ?? settings, data);
 
-        // TODO: Move me into firstLoadInit when experimental toggle is removed
-        // power_user.experimental_macro_engine
+    if (initial) {
         initMacros();
-
         if (data.enable_extensions) {
             const enableAutoUpdate = Boolean(data.enable_extensions_auto_update);
             const isVersionChanged = settings.currentVersion !== currentVersion;
@@ -10615,38 +10823,46 @@ export async function getSettings(initLoaderHandle = null) {
         }
 
         firstRun = !!settings.firstRun;
-
         if (firstRun) {
             await initLoaderHandle?.hide();
             await doOnboarding(user_avatar);
             firstRun = false;
         }
+    } else {
+        Object.assign(extension_settings, (settings.extension_settings ?? {}));
+        await eventSource.emit(event_types.SETTINGS_UPDATED);
     }
+}
+
+export async function getSettings(initLoaderHandle = null) {
+    const data = await getWorkspaceCachedValue(WORKSPACE_CACHE_KEYS.SETTINGS, async () => {
+        const response = await fetch('/api/settings/get', {
+            method: 'POST',
+            headers: getRequestHeaders(),
+            body: JSON.stringify({}),
+            cache: 'no-cache',
+        });
+
+        if (!response.ok) {
+            // A workspace child must report initialization failure to the shell. Reloading
+            // the child here can loop forever while the shell is still handing off tabs.
+            if (!isChatWorkspaceChild()) reloadLoop();
+            toastr.error(t`Settings could not be loaded after multiple attempts. Please try again later.`);
+            throw new Error('Error getting settings');
+        }
+
+        return await response.json();
+    });
+    workspaceSettingsResponse = data;
+    await applySettingsResponse(data, { initial: true, initLoaderHandle });
     await validateDisabledSamplers();
     settingsReady = true;
     await eventSource.emit(event_types.SETTINGS_LOADED);
 }
 
 //MARK: saveSettings()
-export async function saveSettings(loopCounter = 0) {
-    if (!settingsReady) {
-        console.warn('Settings not ready, scheduling another save');
-        saveSettingsDebounced();
-        return;
-    }
-
-    const MAX_RETRIES = 3;
-    if (TempResponseLength.isCustomized()) {
-        if (loopCounter < MAX_RETRIES) {
-            console.warn('Response length is currently being overridden, scheduling another save');
-            saveSettingsDebounced(++loopCounter);
-            return;
-        }
-        console.error('Response length is currently being overridden, but the save loop has reached the maximum number of retries');
-        TempResponseLength.restore(null);
-    }
-
-    const payload = {
+function getWorkspaceSettingsPayload() {
+    return {
         firstRun: firstRun,
         accountStorage: accountStorage.getState(),
         currentVersion: currentVersion,
@@ -10672,12 +10888,38 @@ export async function saveSettings(loopCounter = 0) {
         proxies: proxies,
         selected_proxy: selected_proxy,
     };
+}
+
+export async function saveSettings(loopCounter = 0) {
+    if (!canPersistWorkspaceGlobals()) {
+        return;
+    }
+
+    if (!settingsReady) {
+        console.warn('Settings not ready, scheduling another save');
+        saveSettingsDebounced();
+        return;
+    }
+
+    const MAX_RETRIES = 3;
+    if (TempResponseLength.isCustomized()) {
+        if (loopCounter < MAX_RETRIES) {
+            console.warn('Response length is currently being overridden, scheduling another save');
+            saveSettingsDebounced(++loopCounter);
+            return;
+        }
+        console.error('Response length is currently being overridden, but the save loop has reached the maximum number of retries');
+        TempResponseLength.restore(null);
+    }
+
+    const payload = getWorkspaceSettingsPayload();
 
     try {
+        const settingsJson = JSON.stringify(payload);
         const saveSettingsRequest = await compressRequest({
             method: 'POST',
             headers: getRequestHeaders(),
-            body: JSON.stringify(payload),
+            body: settingsJson,
             cache: 'no-cache',
         });
         const result = await fetch('/api/settings/save', saveSettingsRequest);
@@ -10687,10 +10929,19 @@ export async function saveSettings(loopCounter = 0) {
         }
 
         settings = payload;
+        if (workspaceSettingsResponse) {
+            workspaceSettingsResponse = {
+                ...workspaceSettingsResponse,
+                settings: settingsJson,
+            };
+            setWorkspaceCachedValue(WORKSPACE_CACHE_KEYS.SETTINGS, workspaceSettingsResponse);
+        }
         await eventSource.emit(event_types.SETTINGS_UPDATED);
+        return true;
     } catch (error) {
         console.error('Error saving settings:', error);
         toastr.error(t`Check the server connection and reload the page to prevent data loss.`, t`Settings could not be saved`);
+        return false;
     }
 }
 
@@ -10977,7 +11228,7 @@ async function messageEditMove(sourceId, targetId) {
     swapItemizedPrompts(sourceId, targetId);
     updateViewMessageIds();
     refreshSwipeButtons();
-    await saveChatConditional();
+    saveChatDebounced();
     return true;
 }
 
@@ -11032,7 +11283,7 @@ async function messageEditDone(div) {
 
     await eventSource.emit(event_types.MESSAGE_UPDATED, this_edit_mes_id);
     this_edit_mes_id = undefined;
-    await saveChatConditional();
+    saveChatDebounced();
     showSwipeButtons();
 }
 
@@ -12002,8 +12253,6 @@ export async function deleteSwipe(swipeId = null, messageId = chat.length - 1) {
         saveChatDebounced();
     }
 
-    await saveChatConditional();
-
     return newSwipeId;
 }
 
@@ -12023,6 +12272,7 @@ export async function saveChatConditional() {
         cancelDebouncedChatSave();
 
         isChatSaving = true;
+        notifyWorkspaceState(getWorkspaceChatState({ saving: true }));
 
         if (selected_group) {
             await saveGroupChat(selected_group, true);
@@ -12037,6 +12287,7 @@ export async function saveChatConditional() {
         console.error('Error saving chat', error);
     } finally {
         isChatSaving = false;
+        notifyWorkspaceState(getWorkspaceChatState({ saving: false }));
     }
 }
 
@@ -12519,7 +12770,7 @@ export async function createOrEditCharacter(e) {
                 await clearChat();
                 await printMessages();
                 await eventSource.emit(event_types.CHARACTER_MESSAGE_RENDERED, messageId, 'first_message');
-                await saveChatConditional();
+                saveChatDebounced();
             }
         } catch (error) {
             console.log(error);
@@ -13217,7 +13468,7 @@ async function importFromURL(items, files) {
     }
 }
 
-export async function doNewChat({ deleteCurrentChat = false } = {}) {
+export async function doNewChat({ deleteCurrentChat = false, openInWorkspace = true } = {}) {
     //Make a new chat for selected character
     if ((!selected_group && this_chid == undefined) || menu_type == 'create') {
         return;
@@ -13227,18 +13478,27 @@ export async function doNewChat({ deleteCurrentChat = false } = {}) {
     await waitUntilCondition(() => !isChatSaving, debounce_timeout.extended, 10);
     const newChatMetadata = await prepareWorkspaceLastChatForNewChat();
     chat_file_for_del = getCurrentChatDetails()?.sessionName;
+    const workspaceTransition = openInWorkspace
+        && !deleteCurrentChat
+        && beginWorkspaceNewChat(getWorkspaceChatIdentity());
+    let completed = false;
 
-    if (selected_group) {
-        await createNewGroupChat(selected_group, newChatMetadata);
-        if (deleteCurrentChat) await deleteGroupChat(selected_group, chat_file_for_del, { jumpToNewChat: false }); // don't jump, new chat was already created and jumped to above
-    } else {
-        await clearChat({ clearData: true });
-        //RossAscends: added character name to new chat filenames and replaced Date.now() with humanizedDateTime;
-        characters[this_chid].chat = `${name2} - ${humanizedDateTime()}`;
-        $('#selected_chat_pole').val(characters[this_chid].chat);
-        await getChat(newChatMetadata);
-        await createOrEditCharacter(new CustomEvent('newChat'));
-        if (deleteCurrentChat) await delChat(chat_file_for_del + '.jsonl');
+    try {
+        if (selected_group) {
+            await createNewGroupChat(selected_group, newChatMetadata);
+            if (deleteCurrentChat) await deleteGroupChat(selected_group, chat_file_for_del, { jumpToNewChat: false }); // don't jump, new chat was already created and jumped to above
+        } else {
+            await clearChat({ clearData: true });
+            //RossAscends: added character name to new chat filenames and replaced Date.now() with humanizedDateTime;
+            characters[this_chid].chat = `${name2} - ${humanizedDateTime()}`;
+            $('#selected_chat_pole').val(characters[this_chid].chat);
+            await getChat(newChatMetadata);
+            await createOrEditCharacter(new CustomEvent('newChat'));
+            if (deleteCurrentChat) await delChat(chat_file_for_del + '.jsonl');
+        }
+        completed = true;
+    } finally {
+        if (workspaceTransition) finishWorkspaceNewChat(completed);
     }
 }
 
@@ -14331,7 +14591,7 @@ jQuery(async function () {
             chatElement.find(`.mes[mesid="${this_del_mes}"]`).remove();
             chat.length = this_del_mes;
             chat_metadata.tainted = true;
-            await saveChatConditional();
+            saveChatDebounced();
             chatElement.scrollTop(chatElement[0].scrollHeight);
             await eventSource.emit(event_types.MESSAGE_DELETED, chat.length);
             chatElement.find('.mes').removeClass('last_mes');
@@ -14578,7 +14838,7 @@ jQuery(async function () {
         this_edit_mes_element.after(newMessageElement);
 
         updateViewMessageIds();
-        await saveChatConditional();
+        saveChatDebounced();
         chatElement[0].scrollTop = oldScroll;
         showSwipeButtons();
     });
@@ -15211,7 +15471,7 @@ jQuery(async function () {
 
         try {
             const executionResult = await executeNativeToolSegment(messageId, segmentIndex, {});
-            await saveChatConditional();
+            saveChatDebounced();
             const executionSummary = getNativeToolExecutionSummary(message);
             if (
                 power_user.tool_auto_continue &&
@@ -15224,7 +15484,8 @@ jQuery(async function () {
                 const currentDepth = Number.isFinite(Number(message.extra?.depth))
                     ? Number(message.extra.depth)
                     : 0;
-                Generate('normal', { depth: currentDepth + 1 });
+                // This is the explicit Execute action. Automatic/native continuations intentionally omit this flag.
+                Generate('normal', { depth: currentDepth + 1, sendComposerText: true });
             }
         } catch (error) {
             console.error('[Manual Tool Execution] Error:', error);
@@ -15251,7 +15512,7 @@ jQuery(async function () {
 
         try {
             const executionResult = await continueNativeBrowserToolSegment(messageId, segmentIndex, {});
-            await saveChatConditional();
+            saveChatDebounced();
             const executionSummary = getNativeToolExecutionSummary(message);
             if (
                 power_user.tool_auto_continue &&
@@ -15292,7 +15553,7 @@ jQuery(async function () {
             state.selected_draft_index = Number(button.data('draft-index'));
             state.error = '';
             updateMessageBlock(messageId, message);
-            await saveChatConditional();
+            saveChatDebounced();
             return;
         }
 
@@ -15339,7 +15600,13 @@ jQuery(async function () {
     });
 
     // Added here to prevent execution before script.js is loaded and get rid of quirky timeouts
-    await firstLoadInit();
+    try {
+        await firstLoadInit();
+    } catch (error) {
+        console.error('Application initialization failed', error);
+        reportWorkspaceBootError(error);
+        if (!isChatWorkspaceChild()) throw error;
+    }
 
     window.addEventListener('beforeunload', (e) => {
         if (isChatSaving || this_edit_mes_id >= 0) {

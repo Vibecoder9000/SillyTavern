@@ -537,7 +537,12 @@ async function authorizeOpenRouter() {
     // Redirect to OpenRouter authorization URL with the code challenge and callback URL
     const redirectUrl = new URL('/callback/openrouter', window.location.origin);
     const openRouterUrl = `https://openrouter.ai/auth?callback_url=${encodeURIComponent(redirectUrl.toString())}&code_challenge=${codeChallenge}&code_challenge_method=S256`;
-    location.href = openRouterUrl;
+    const inChatWorkspace = window.top !== window.self && new URLSearchParams(location.search).has('workspaceRuntime');
+    if (inChatWorkspace) {
+        window.top.location.href = openRouterUrl;
+    } else {
+        location.href = openRouterUrl;
+    }
 }
 
 /**

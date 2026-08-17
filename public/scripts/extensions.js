@@ -10,6 +10,8 @@ import { addLocaleData, getCurrentLocale, t } from './i18n.js';
 import { debounce_timeout } from './constants.js';
 import { accountStorage } from './util/AccountStorage.js';
 import { SimpleMutex } from './util/SimpleMutex.js';
+import { isChatWorkspaceChild, notifyWorkspaceExtensionChange } from './chat-workspace-bridge.js';
+import { getWorkspaceCachedValue, invalidateWorkspaceCachedValue, runOncePerWorkspace, WORKSPACE_CACHE_KEYS } from './chat-workspace-cache.js';
 
 export {
     getContext,
@@ -476,6 +478,7 @@ export async function enableExtension(name, reload = true) {
     stateChanged = true;
     await saveSettings();
     if (reload) {
+        notifyWorkspaceExtensionChange();
         location.reload();
     } else {
         requiresReload = true;
@@ -493,6 +496,7 @@ export async function disableExtension(name, reload = true) {
     stateChanged = true;
     await saveSettings();
     if (reload) {
+        notifyWorkspaceExtensionChange();
         location.reload();
     } else {
         requiresReload = true;
@@ -559,6 +563,27 @@ async function getManifests(names) {
 
     await Promise.allSettled(promises);
     return obj;
+}
+
+async function getExtensionMetadata() {
+    return getWorkspaceCachedValue(WORKSPACE_CACHE_KEYS.EXTENSIONS, async () => {
+        const extensions = await discoverExtensions();
+        const names = extensions.map(extension => extension.name);
+        return {
+            extensions,
+            manifests: await getManifests(names),
+        };
+    });
+}
+
+function applyExtensionMetadata(metadata) {
+    extensionNames = metadata.extensions.map(extension => extension.name);
+    extensionTypes = Object.fromEntries(metadata.extensions.map(extension => [extension.name, extension.type]));
+    manifests = metadata.manifests;
+}
+
+function invalidateExtensionMetadata() {
+    invalidateWorkspaceCachedValue(WORKSPACE_CACHE_KEYS.EXTENSIONS);
 }
 
 /**
@@ -1322,6 +1347,7 @@ async function showExtensionsDetails() {
         abortController.abort();
     }
     if (requiresReload) {
+        notifyWorkspaceExtensionChange();
         location.reload();
     }
 }
@@ -1375,6 +1401,7 @@ async function updateExtension(extensionName, quiet, timeout = null) {
         }
 
         const data = await response.json();
+        invalidateExtensionMetadata();
 
         if (!quiet) {
             void showExtensionsDetails();
@@ -1387,6 +1414,7 @@ async function updateExtension(extensionName, quiet, timeout = null) {
         } else {
             const fullExtensionName = extensionName.startsWith('third-party') ? extensionName : `third-party${extensionName}`;
             await callExtensionHook(fullExtensionName, 'update');
+            notifyWorkspaceExtensionChange();
             toastr.success(t`Extension ${extensionName} updated to ${data.shortCommitHash}`, t`Reload the page to apply updates`);
         }
     } catch (error) {
@@ -1451,6 +1479,7 @@ async function cleanExtension(extensionName) {
     await saveSettings();
 
     toastr.success(t`Extension ${extensionName} data cleaned`);
+    notifyWorkspaceExtensionChange();
     delay(1000).then(() => location.reload());
 }
 
@@ -1546,8 +1575,10 @@ async function moveExtension(extensionName, source, destination) {
         }
 
         toastr.success(t`Extension ${extensionName} moved.`);
+        invalidateExtensionMetadata();
         await loadExtensionSettings({}, false, false);
         void showExtensionsDetails();
+        notifyWorkspaceExtensionChange();
     } catch (error) {
         console.error('Error:', error);
     }
@@ -1576,6 +1607,7 @@ export async function deleteExtension(extensionName, shouldClean = false) {
                 global: getExtensionType(extensionName) === 'global',
             }),
         });
+        invalidateExtensionMetadata();
     } catch (error) {
         console.error('Error:', error);
     }
@@ -1584,6 +1616,7 @@ export async function deleteExtension(extensionName, shouldClean = false) {
     await saveSettings();
 
     toastr.success(t`Extension ${extensionName} deleted`);
+    notifyWorkspaceExtensionChange();
     delay(1000).then(() => location.reload());
 }
 
@@ -1681,8 +1714,10 @@ async function switchExtensionBranch(extensionName, isGlobal, branch) {
         }
 
         toastr.success(t`Extension ${extensionName} switched to ${branch}`, t`Reload the page to apply updates`);
+        invalidateExtensionMetadata();
         await loadExtensionSettings({}, false, false);
         void showExtensionsDetails();
+        notifyWorkspaceExtensionChange();
     } catch (error) {
         console.error('Error:', error);
     }
@@ -1761,6 +1796,7 @@ export async function installExtension(url, global, branch = '') {
     }
 
     const response = await request.json();
+    invalidateExtensionMetadata();
     toastr.success(t`Extension '${response.display_name}' has been installed successfully!`, t`Extension installation successful`);
     console.debug(`Extension "${response.display_name}" has been installed successfully at ${response.extensionPath}`);
     await loadExtensionSettings({}, false, false);
@@ -1770,6 +1806,8 @@ export async function installExtension(url, global, branch = '') {
         const extensionName = `third-party/${response.folderName}`;
         await callExtensionHook(extensionName, 'install');
     }
+
+    notifyWorkspaceExtensionChange();
 
     return true;
 }
@@ -1792,13 +1830,18 @@ export async function loadExtensionSettings(settings, versionChanged, enableAuto
 
     // Activate offline extensions
     await eventSource.emit(event_types.EXTENSIONS_FIRST_LOAD);
-    const extensions = await discoverExtensions();
-    extensionNames = extensions.map(x => x.name);
-    extensionTypes = Object.fromEntries(extensions.map(x => [x.name, x.type]));
-    manifests = await getManifests(extensionNames);
+    applyExtensionMetadata(await getExtensionMetadata());
 
     if (versionChanged && enableAutoUpdate) {
-        await autoUpdateExtensions(false);
+        if (isChatWorkspaceChild()) {
+            await runOncePerWorkspace(WORKSPACE_CACHE_KEYS.EXTENSION_AUTO_UPDATE, async () => {
+                await autoUpdateExtensions(false);
+                invalidateExtensionMetadata();
+            });
+            applyExtensionMetadata(await getExtensionMetadata());
+        } else {
+            await autoUpdateExtensions(false);
+        }
     }
 
     await activateExtensions();
@@ -1810,7 +1853,7 @@ export async function loadExtensionSettings(settings, versionChanged, enableAuto
 export function doDailyExtensionUpdatesCheck() {
     setTimeout(() => {
         if (extension_settings.notifyUpdates) {
-            checkForExtensionUpdates(false);
+            void runOncePerWorkspace(WORKSPACE_CACHE_KEYS.EXTENSION_DAILY_CHECK, () => checkForExtensionUpdates(false));
         }
     }, 1);
 }

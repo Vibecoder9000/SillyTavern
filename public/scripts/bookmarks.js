@@ -459,9 +459,9 @@ export async function branchChat(mesId, { swipeId = null } = {}) {
     await saveItemizedPrompts(fileName);
 
     if (selected_group) {
-        await openGroupChat(selected_group, fileName);
+        await openGroupChat(selected_group, fileName, { openInWorkspace: false });
     } else {
-        await openCharacterChat(fileName);
+        await openCharacterChat(fileName, { openInWorkspace: false });
     }
 
     return fileName;
