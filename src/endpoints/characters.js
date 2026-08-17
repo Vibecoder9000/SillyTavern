@@ -382,6 +382,7 @@ const toShallow = (character) => {
         chat_size: character.chat_size,
         data_size: character.data_size,
         tags: character.tags,
+        description: String(character.description || _.get(character, 'data.description', '')).slice(0, 500),
         data: {
             name: _.get(character, 'data.name', ''),
             character_version: _.get(character, 'data.character_version', ''),

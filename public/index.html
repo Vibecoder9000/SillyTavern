@@ -6289,7 +6289,19 @@
             </div>
             <section id="character-card-editor" class="drawer-content closedDrawer" aria-label="Character card editor">
                 <header class="cc-editor-header">
-                    <h3 id="cc-editor-name" class="margin0"></h3>
+                    <div class="cc-editor-title">
+                        <h3 id="cc-editor-name" class="margin0"></h3>
+                        <div class="cc-reference-picker">
+                            <button id="cc-editor-add-references" class="menu_button menu_button_icon" type="button" title="Add reference cards" aria-label="Add reference cards" aria-haspopup="true" aria-expanded="false"><i class="fa-solid fa-plus"></i><span id="cc-editor-reference-count" class="cc-reference-count" hidden></span></button>
+                            <div id="cc-editor-reference-menu" class="cc-reference-menu" role="dialog" aria-label="Reference cards" hidden>
+                                <div id="cc-editor-reference-options" class="cc-reference-options"></div>
+                                <div class="cc-reference-menu-footer">
+                                    <input id="cc-editor-reference-search" class="text_pole" type="search" placeholder="Find a character…" aria-label="Search reference cards" autocomplete="off" autofocus>
+                                    <button id="cc-editor-reference-add" class="menu_button" type="button">Add</button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
                     <div class="cc-editor-header-actions">
                         <div class="cc-editor-snap-actions" aria-label="Proposed edit navigation">
                             <button id="cc-editor-previous-edit" class="menu_button menu_button_icon" type="button" title="Previous proposed edit" aria-label="Previous proposed edit" disabled><i class="fa-solid fa-chevron-up"></i></button>

@@ -1,4 +1,4 @@
-import { characters, this_chid, saveCharacterDebounced, generateRawData, extractMessageFromData, cleanUpMessage, eventSource, event_types, messageFormatting, getRequestHeaders, main_api } from '../script.js';
+import { characters, this_chid, saveCharacterDebounced, generateRawData, extractMessageFromData, cleanUpMessage, eventSource, event_types, messageFormatting, getRequestHeaders, main_api, getThumbnailUrl, default_avatar, unshallowCharacter } from '../script.js';
 import { isImageInliningSupported, Message, oai_settings } from './openai.js';
 import { POPUP_RESULT, POPUP_TYPE, Popup } from './popup.js';
 import { parseReasoningStream } from './reasoning.js';
@@ -25,6 +25,8 @@ const MAX_TOOL_RETRIES = 7;
 const MAX_TOOL_CONTEXT_CHANGED_LINES = 12;
 const UNCHANGED_READ_RESULT_SUFFIX = ' unchanged; use its value from original_card.';
 const MAX_CARD_CHANGE_CONTEXT_LENGTH = 4000;
+const REFERENCE_CONTEXT_TOKEN_LIMIT = 1000;
+const REFERENCE_CONTEXT_TRUNCATION_SUFFIX = '\n[later description omitted]';
 const CARD_CHANGE_TRUNCATION_SUFFIX = '... truncated';
 const PARTIAL_RESPONSE_CONTINUATION = 'partial-response';
 const CONTINUATION_USER_PLACEHOLDER = ' ';
@@ -61,6 +63,7 @@ const toolString = description => ({ type: 'string', description });
 const toolField = () => toolString('Editor field label; First Greeting; Alternate Greeting N; Greeting N; Example Message N; or Example N.');
 const CHARACTER_DESIGNER_TOOL_SPECS = [
     { name: 'read_card_section', kind: 'read', description: 'Read the current complete value of one field or numbered Greeting/Example when the original card is no longer current.', properties: { field: toolField() }, required: ['field'] },
+    { name: 'read_workspace_card_section', kind: 'read', description: 'Read one exact field, numbered Greeting/Example, or Character Book from a read-only reference or explicitly named library card.', properties: { card_id: toolString('Exact card ID or unique card name.'), field: toolString('Card field label; numbered Greeting/Example; or Character Book.') }, required: ['card_id', 'field'] },
     { name: 'replace_card_text', kind: 'edit', description: 'Replace one exact unique string in a text field. Matching is case- and whitespace-sensitive except that CRLF is treated as LF. find may span lines; replace may be empty.', properties: { field: toolField(), find: toolString('Exact unique current text to replace.'), replace: toolString('Verbatim replacement text; may be empty.') }, required: ['field', 'find', 'replace'] },
     { name: 'delete_card_span', kind: 'edit', description: 'Delete an exact span in a text field. Deletion starts at the unique from anchor and stops immediately before the unique until anchor, preserving until.', properties: { field: toolField(), from: toolString('Exact unique starting anchor; included in the deletion.'), until: toolString('Exact unique ending anchor; preserved after the deletion.') }, required: ['field', 'from', 'until'] },
     { name: 'insert_card_text', kind: 'edit', description: 'Insert text verbatim before or after one exact unique anchor, or at the start or end of a text field. Supply all desired whitespace and newlines.', properties: { field: toolField(), content: toolString('Non-empty text to insert verbatim.'), position: { type: 'string', enum: ['before', 'after', 'start', 'end'], description: 'Insertion position. before and after require anchor; start and end forbid it.' }, anchor: toolString('Exact unique anchor required only for before or after.') }, required: ['field', 'content', 'position'] },
@@ -154,6 +157,7 @@ let fieldLineNumberObserver = null;
 let attachmentTargetMessageId = null;
 let uploadingAttachments = false;
 let pendingExternalCardRefresh = false;
+let referencePickerSelection = null;
 
 const $ = selector => document.querySelector(selector);
 const deepCopy = value => structuredClone(value);
@@ -170,6 +174,76 @@ const isNumberField = id => fieldById.get(id)?.type === 'number';
 const normalizeFieldStateValue = (id, value) => isNumberField(id) ? Math.max(0, Number(value) || 0) : value;
 const normalizeCardSection = value => cardSectionById.has(value) ? value : DEFAULT_CARD_SECTION;
 
+function libraryCharacterValue(character, path) {
+    return getPath(character?.data, path) ?? getPath(character, path);
+}
+const cardId = character => String(character?.avatar || '');
+function normalizeReferenceCardIds(value) {
+    const activeId = cardId(currentCharacter());
+    return [...new Set(Array.isArray(value) ? value.map(String) : [])]
+        .filter(id => id && id !== activeId && characterByCardId(id));
+}
+function characterByCardId(id) {
+    return characters.find(character => cardId(character) === String(id)) || null;
+}
+function cardValuesFromLibraryCharacter(character) {
+    return Object.fromEntries(FIELDS.map(field => {
+        if (field.id === 'greetings') {
+            const alternates = libraryCharacterValue(character, 'alternate_greetings');
+            return [field.id, [normalizeLineEndings(libraryCharacterValue(character, 'first_mes')), ...(Array.isArray(alternates) ? alternates.map(normalizeLineEndings) : [])]];
+        }
+        if (field.id === 'examples') return [field.id, splitExamples(libraryCharacterValue(character, field.path))];
+        const raw = libraryCharacterValue(character, field.path);
+        if (field.id === 'depth') return [field.id, normalizeFieldStateValue(field.id, raw)];
+        if (field.id === 'tags') return [field.id, Array.isArray(raw) ? raw.join(', ') : String(raw || '')];
+        return [field.id, normalizeLineEndings(raw)];
+    }));
+}
+function cardTarget(character, writable = false) {
+    return { character, id: cardId(character), name: String(character?.name || character?.data?.name || 'Character'), writable };
+}
+function resolveWorkspaceCard(selector) {
+    const active = currentCharacter();
+    const raw = String(selector).trim();
+    if (!raw || raw.toLowerCase() === 'current' || raw === cardId(active) || raw.toLowerCase() === String(active?.name || '').toLowerCase()) {
+        return cardTarget(active, true);
+    }
+    const exact = characterByCardId(raw);
+    if (exact) return cardTarget(exact);
+    const matches = characters.filter(character => String(character?.name || '').toLowerCase() === raw.toLowerCase());
+    if (matches.length === 1) return cardTarget(matches[0]);
+    if (matches.length > 1) throw Object.assign(new Error(`More than one library card is named ${raw}; use its card ID.`), { code: 'ambiguous-card' });
+    throw Object.assign(new Error(`Library card not found: ${raw}.`), { code: 'unknown-card' });
+}
+async function truncateReferenceContext(value) {
+    const text = normalizeLineEndings(value).replace(/[ \t]+/g, ' ').replace(/ *\n */g, '\n').trim();
+    if (!text || await getTokenCountAsync(text, 0) <= REFERENCE_CONTEXT_TOKEN_LIMIT) return text;
+    const suffix = REFERENCE_CONTEXT_TRUNCATION_SUFFIX;
+    const codePoints = Array.from(text);
+    let low = 0;
+    let high = codePoints.length;
+    let best = 0;
+    while (low <= high) {
+        const middle = Math.floor((low + high) / 2);
+        const candidate = `${codePoints.slice(0, middle).join('').trimEnd()}${suffix}`;
+        if (await getTokenCountAsync(candidate, 0) <= REFERENCE_CONTEXT_TOKEN_LIMIT) {
+            best = middle;
+            low = middle + 1;
+        } else {
+            high = middle - 1;
+        }
+    }
+    return `${codePoints.slice(0, best).join('').trimEnd()}${suffix}`;
+}
+async function compactReferenceCard(character, includeDescription) {
+    const card = {
+        card_id: cardId(character),
+        name: String(character?.name || 'Character'),
+    };
+    const description = includeDescription && await truncateReferenceContext(libraryCharacterValue(character, 'description'));
+    if (description) card.description_context = description;
+    return card;
+}
 function normalizeImageAttachments(attachments) {
     if (!Array.isArray(attachments)) return [];
     return attachments
@@ -609,6 +683,7 @@ function createState(saved = null) {
     next.conversations ||= [];
     for (const conversation of next.conversations) {
         conversation.messages = normalizeConversationMessages(conversation.messages);
+        conversation.referenceCards = normalizeReferenceCardIds(conversation.referenceCards);
         // A conversation without its own snapshots starts from the live card.
         // Existing snapshots are canonicalized too, or CRLF saved by an older
         // workspace looks like an edit to every line when compared with a textarea.
@@ -885,6 +960,71 @@ function commitCustomInstructions(value) {
     if (!state) return;
     accountStorage.setItem(CHARACTER_DESIGNER_INSTRUCTIONS_KEY, String(value ?? ''));
     renderCustomInstructions();
+}
+function referenceCardDescription(character) {
+    const description = String(libraryCharacterValue(character, 'description') || '').replace(/\s+/g, ' ').trim();
+    return description.slice(0, 560).trimEnd() || 'No description.';
+}
+function renderReferenceOptions() {
+    const container = $('#cc-editor-reference-options');
+    const query = $('#cc-editor-reference-search').value.trim().toLowerCase();
+    const activeId = cardId(currentCharacter());
+    const available = characters
+        .filter(character => cardId(character) && cardId(character) !== activeId)
+        .filter(character => !query || String(character?.name || '').toLowerCase().includes(query) || referenceCardDescription(character).toLowerCase().includes(query));
+    container.innerHTML = available.map(character => {
+        const id = cardId(character);
+        const avatar = character.avatar && character.avatar !== 'none' ? getThumbnailUrl('avatar', character.avatar) : default_avatar;
+        return `<label class="cc-reference-option" data-card-id="${escapeHtml(id)}">
+            <input type="checkbox" ${referencePickerSelection.has(id) ? 'checked' : ''}>
+            <span class="avatar"><img src="${escapeHtml(avatar)}" alt="${escapeHtml(character.name || 'Character')}"></span>
+            <span class="cc-reference-option-copy"><strong>${escapeHtml(character.name || 'Character')}</strong><small>${escapeHtml(referenceCardDescription(character))}</small></span>
+        </label>`;
+    }).join('') || '<div class="cc-reference-empty">No matching characters.</div>';
+    container.querySelectorAll('.cc-reference-option input').forEach(input => input.addEventListener('change', () => {
+        const id = input.closest('.cc-reference-option').dataset.cardId;
+        if (input.checked) referencePickerSelection.add(id);
+        else referencePickerSelection.delete(id);
+    }));
+}
+function renderReferencePicker() {
+    const button = $('#cc-editor-add-references');
+    const count = $('#cc-editor-reference-count');
+    const references = normalizeReferenceCardIds(activeConversation()?.referenceCards);
+    button.disabled = Boolean(activeGenerationController);
+    button.title = references.length ? `Manage ${references.length} reference card${references.length === 1 ? '' : 's'}` : 'Add reference cards';
+    count.textContent = String(references.length);
+    count.hidden = !references.length;
+    if (!$('#cc-editor-reference-menu').hidden) renderReferenceOptions();
+}
+function closeReferencePicker({ restoreFocus = false } = {}) {
+    const menu = $('#cc-editor-reference-menu');
+    const button = $('#cc-editor-add-references');
+    menu.hidden = true;
+    button.setAttribute('aria-expanded', 'false');
+    referencePickerSelection = null;
+    if (restoreFocus) button.focus();
+}
+function openReferencePicker() {
+    const menu = $('#cc-editor-reference-menu');
+    const button = $('#cc-editor-add-references');
+    const search = $('#cc-editor-reference-search');
+    referencePickerSelection = new Set(normalizeReferenceCardIds(activeConversation()?.referenceCards));
+    search.value = '';
+    menu.hidden = false;
+    button.setAttribute('aria-expanded', 'true');
+    renderReferenceOptions();
+    search.focus({ preventScroll: true });
+}
+function commitReferencePicker() {
+    const references = normalizeReferenceCardIds([...referencePickerSelection]);
+    if (JSON.stringify(activeConversation()?.referenceCards || []) !== JSON.stringify(references)) {
+        record();
+        ensureConversation().referenceCards = references;
+        persist();
+    }
+    closeReferencePicker({ restoreFocus: true });
+    renderReferencePicker();
 }
 function fieldLabel(id, index = null) {
     const label = fieldById.get(id)?.label || id;
@@ -2246,7 +2386,7 @@ function readResultReadouts(message) {
     if (message.readResults?.length) return message.readResults.map(result => contextReadoutText(result) || lorebookReadoutText(result) || unchangedReadoutText(result)).filter(Boolean);
     if (!message.toolXml) return [];
     const calls = parseCharacterDesignerToolCalls(message.toolXml || '').calls.filter(call => !call.error);
-    const labels = new Set(parseReadRequests(calls).reads.map(read => read.label));
+    const labels = new Set(parseReadRequests(calls).reads.map(read => read.contextLabel || read.label));
     const contextReadouts = [...String(message.toolResult || '').matchAll(/<context\b[^>]*>[\s\S]*?<\/context>/gi)]
         .map(match => contextReadoutText(match[0]))
         .filter(text => [...labels].some(label => text === `${label}:` || text.startsWith(`${label}:\n`)));
@@ -2751,6 +2891,7 @@ function renderChat() {
     icon.className = activeGenerationController ? 'fa-solid fa-circle-stop' : 'fa-solid fa-paper-plane';
     send.title = activeGenerationController ? 'Stop generating' : 'Send';
     renderDraftAttachments();
+    renderReferencePicker();
 }
 function pendingHunks() {
     return [...($('#cc-editor-card')?.querySelectorAll('.cc-pending-hunk') || [])];
@@ -2922,10 +3063,11 @@ function renderPendingActions() {
 // so there has to be something coherent to show when there is no card to edit.
 function renderNoCharacter() {
     void closeCustomInstructionsPopup();
+    closeReferencePicker();
     $('#cc-editor-name').textContent = 'No character selected';
     $('#cc-editor-card').innerHTML = '<div class="cc-editor-empty">Select a character to edit its card.</div>';
     $('#cc-editor-messages').innerHTML = '';
-    for (const selector of ['#cc-editor-previous-edit', '#cc-editor-next-edit', '#cc-editor-previous-message', '#cc-editor-next-message', '#cc-editor-custom-instructions-button', '#cc-editor-accept-all', '#cc-editor-reject-all', '#cc-editor-history', '#cc-editor-new-chat', '#cc-editor-attach', '#cc-editor-send']) {
+    for (const selector of ['#cc-editor-add-references', '#cc-editor-previous-edit', '#cc-editor-next-edit', '#cc-editor-previous-message', '#cc-editor-next-message', '#cc-editor-custom-instructions-button', '#cc-editor-accept-all', '#cc-editor-reject-all', '#cc-editor-history', '#cc-editor-new-chat', '#cc-editor-attach', '#cc-editor-send']) {
         $(selector).disabled = true;
     }
     $('#cc-editor-questioning-mode').disabled = false;
@@ -2935,6 +3077,7 @@ function renderNoCharacter() {
     composer.disabled = true;
     $('#cc-editor-draft-attachments').innerHTML = '';
     $('#cc-editor-draft-attachments').hidden = true;
+    $('#cc-editor-reference-count').hidden = true;
     updateMessageNavigationButtons();
 }
 function render() {
@@ -2970,7 +3113,7 @@ function snapshotText(values = {}) {
     const ids = Object.hasOwn(values, '__loreEntryIds') ? values.__loreEntryIds : state.loreEntryIds;
     if (!book) sections.push('Character Book:\n(none)');
     else {
-        sections.push(`Character Book:\n${JSON.stringify({ entries: book.entries.map((entry, index) => ({ entry_id: ids[index], name: loreEntryLabel(entry, index), enabled: entry.enabled, constant: entry.constant, keys: entry.keys, content_preview: String(entry.content || '').slice(0, 160) })) }, null, 2)}`);
+        sections.push(`Character Book:\n${JSON.stringify({ entries: book.entries.map((entry, index) => ({ entry_id: ids[index], name: loreEntryLabel(entry, index), enabled: entry.enabled, constant: entry.constant, keys: entry.keys, content: String(entry.content || '') })) }, null, 2)}`);
     }
     return sections.join('\n\n');
 }
@@ -3059,16 +3202,38 @@ function parseCharacterDesignerToolCalls(text, { cache = true } = {}) {
     }
     return result;
 }
-function characterDesignerMetadata(conversation) {
-    return {
-        attachments: (conversation?.messages || []).flatMap(message => normalizeImageAttachments(message.attachments).map(attachment => ({
-            message_id: message.id,
-            attachment_id: attachment.id,
-            title: attachment.title,
-            image: true,
-            playable_media_url: attachment.url,
-        }))),
+function referenceDescriptionReads(conversation) {
+    return new Set(conversation.messages.flatMap(message => message.readReferenceDescriptionCardIds || []));
+}
+function rememberReferenceDescriptionReads(message, parsedReads) {
+    const ids = [...new Set(parsedReads.reads
+        .filter(read => !read.target.writable && read.id === 'description')
+        .map(read => read.target.id))];
+    if (ids.length) message.readReferenceDescriptionCardIds = ids;
+}
+async function characterDesignerMetadata(conversation) {
+    const referenceIds = normalizeReferenceCardIds(conversation.referenceCards);
+    await Promise.all(referenceIds.map(id => unshallowCharacter(characters.findIndex(character => cardId(character) === id))));
+    const references = referenceIds.map(characterByCardId);
+    const descriptionsRead = referenceDescriptionReads(conversation);
+    const cardWorkspace = {
+        current_card: {
+            card_id: cardId(currentCharacter()),
+            name: String(currentCharacter()?.name || 'Character'),
+            writable: true,
+        },
+        reference_cards: await Promise.all(references.map(character => compactReferenceCard(character, !descriptionsRead.has(cardId(character))))),
     };
+    const attachments = conversation.messages.flatMap(message => normalizeImageAttachments(message.attachments).map(attachment => ({
+        message_id: message.id,
+        attachment_id: attachment.id,
+        title: attachment.title,
+        image: true,
+        playable_media_url: attachment.url,
+    })));
+    const metadata = { card_workspace: cardWorkspace };
+    if (attachments.length) metadata.attachments = attachments;
+    return metadata;
 }
 function buildCharacterDesignerPrompt({ questioningMode = getQuestioningMode(), customInstructions = '', originalCard = {}, metadata = {} } = {}) {
     return renderCharacterDesignerPrompt({
@@ -3432,61 +3597,70 @@ function editContextResult(edit) {
     const contexts = targets.map(operation => editTargetContext(edit, operation)).join('\n');
     return [statuses, contexts].filter(Boolean).join('\n');
 }
+function readToolFailure(block, code, detail, proposal) {
+    return Object.assign(new Error(detail), { toolFailure: true, code, tool: block.name, title: 'Card section read failed', detail, proposal, rawTool: block.xml });
+}
 function parseReadRequests(calls) {
     const reads = [];
     const failures = [];
     for (const block of toolCallsOfKind(calls, 'read')) {
-        const rawField = toolValue(block, 'field');
-        if (typeof rawField !== 'string') {
-            failures.push(Object.assign(new Error('field must be a string.'), {
-                toolFailure: true,
-                code: hasToolArgument(block, 'field') ? 'invalid-argument' : 'missing-argument',
-                tool: 'read_card_section',
-                title: 'Card section read failed',
-                detail: 'field must be a string.',
-                rawTool: block.xml,
-            }));
-            continue;
-        }
-        const rawLabel = rawField.trim();
-        const resolved = resolveToolField(rawLabel);
-        if (!resolved) {
-            failures.push(Object.assign(new Error(`Unknown card field: ${rawLabel.toLowerCase() || '(missing)'}`), {
-                toolFailure: true,
-                code: 'unknown-field',
-                tool: 'read_card_section',
-                title: 'Card section read failed',
-                detail: `No card section matches ${rawLabel || '(missing)'}.`,
-                rawTool: block.xml,
-            }));
-            continue;
-        }
-        if (resolved.index !== null) {
-            const values = effectiveValue(resolved.id);
-            if (!Array.isArray(values) || resolved.index >= values.length) {
-                failures.push(Object.assign(new Error(`${resolved.label} is not available in the current card.`), {
-                    toolFailure: true,
-                    code: 'unknown-field',
-                    tool: 'read_card_section',
-                    title: 'Card section read failed',
-                    detail: `${resolved.label} is not available in the current card.`,
-                    proposal: { field: resolved.id, label: resolved.label, index: resolved.index, tool: 'read_card_section' },
-                    rawTool: block.xml,
-                }));
+        const workspaceRead = block.name === 'read_workspace_card_section';
+        let target = cardTarget(currentCharacter(), true);
+        if (workspaceRead) {
+            try {
+                target = resolveWorkspaceCard(toolValue(block, 'card_id'));
+                if (target.writable) throw Object.assign(new Error('Use read_card_section or read_lorebook for the current card.'), { code: 'current-card-target' });
+            } catch (error) {
+                failures.push(readToolFailure(block, error.code || 'unknown-card', error.message));
                 continue;
             }
         }
-        reads.push({ ...resolved, block });
+        const rawField = toolValue(block, 'field');
+        if (typeof rawField !== 'string') {
+            failures.push(readToolFailure(block, hasToolArgument(block, 'field') ? 'invalid-argument' : 'missing-argument', 'field must be a string.'));
+            continue;
+        }
+        const rawLabel = rawField.trim();
+        const characterBook = workspaceRead && ['character book', 'characterbook', 'lorebook'].includes(normalizeCharacterDesignerFieldLabel(rawLabel));
+        if (characterBook) {
+            const book = (target.character.data || target.character).character_book;
+            reads.push({ block, target, lorebook: true, book: book && typeof book === 'object' ? deepCopy(book) : null, label: 'Character Book', contextLabel: `${target.name} — Character Book` });
+            continue;
+        }
+        const resolved = resolveToolField(rawLabel);
+        if (!resolved) {
+            failures.push(readToolFailure(block, 'unknown-field', `No card section matches ${rawLabel || '(missing)'}.`));
+            continue;
+        }
+        const targetValues = workspaceRead ? cardValuesFromLibraryCharacter(target.character) : null;
+        if (resolved.index !== null) {
+            const values = workspaceRead ? targetValues[resolved.id] : effectiveValue(resolved.id);
+            if (!Array.isArray(values) || resolved.index >= values.length) {
+                const proposal = { field: resolved.id, label: resolved.label, index: resolved.index, card_id: workspaceRead ? target.id : undefined, tool: block.name };
+                failures.push(readToolFailure(block, 'unknown-field', `${resolved.label} is not available in ${target.name}.`, proposal));
+                continue;
+            }
+        }
+        reads.push({ ...resolved, block, target, values: targetValues, contextLabel: workspaceRead ? `${target.name} — ${resolved.label}` : resolved.label });
     }
     return { reads, failures };
 }
 function readResult(read, values = {}) {
-    return `<result>\n<tool>read_card_section</tool>\n<status>success</status>\n<field>${xmlText(read.label)}</field>\n${contextResult(read.label, sectionValue(values, read.id, read.index))}\n</result>`;
+    const tool = read.block.name;
+    if (tool === 'read_card_section') {
+        return `<result>\n<tool>read_card_section</tool>\n<status>success</status>\n<field>${xmlText(read.label)}</field>\n${contextResult(read.label, sectionValue(values, read.id, read.index))}\n</result>`;
+    }
+    const value = read.lorebook ? JSON.stringify(read.book || { entries: [] }, null, 2) : sectionValue(values, read.id, read.index);
+    return `<result>\n<tool>read_workspace_card_section</tool>\n<status>success</status>\n<card>${xmlText(read.target.name)}</card>\n<card_id>${xmlText(read.target.id)}</card_id>\n<field>${xmlText(read.label)}</field>\n${contextResult(read.contextLabel, value)}\n</result>`;
 }
 function evaluateReadRequests(reads, currentValues = {}, baselineValues = {}) {
     const results = [];
     const failures = [];
     for (const read of reads) {
+        if (!read.target.writable) {
+            results.push(readResult(read, read.values));
+            continue;
+        }
         const current = sectionValue(currentValues, read.id, read.index);
         const original = sectionValue(baselineValues, read.id, read.index);
         if (current === original) {
@@ -3513,7 +3687,7 @@ function withoutIncompleteToolXml(text) {
 }
 function failureContextResult(error) {
     const proposal = error?.proposal;
-    if (!proposal || proposal.rewrite || !fieldById.has(proposal.field)) return '';
+    if (!proposal || proposal.rewrite || proposal.card_id || !fieldById.has(proposal.field)) return '';
     const index = proposal.index ?? null;
     const label = proposal.label || fieldLabel(proposal.field, index);
     const current = normalizeLineEndings(sectionValue({}, proposal.field, index));
@@ -3630,8 +3804,8 @@ function applyCardToolCalls(calls, generationValues, conversation, messageId, { 
     failures.push(...readResults.failures);
     updateKnownCardFields(conversation, [
         ...edits.map(edit => edit.field),
-        ...parsedReads.reads.map(read => read.id),
-        ...failures.map(failure => failure?.proposal?.field),
+        ...parsedReads.reads.filter(read => read.target.writable).map(read => read.id),
+        ...failures.filter(failure => !failure?.proposal?.card_id).map(failure => failure?.proposal?.field),
     ]);
     return { edits, parsedReads, readResults, failures, contextResults: [...edits.map(editContextResult), ...readResults.results] };
 }
@@ -3652,7 +3826,8 @@ async function generateAssistant(conversation, retriesRemaining = MAX_TOOL_RETRI
     let continueGeneration = false;
     try {
         const prompt = await promptHistory(conversation, pendingMessage.id, continuation);
-        const data = await generateRawData({ prompt, systemPrompt: buildCharacterDesignerPrompt({ customInstructions: customInstructionsValue(), originalCard: conversation.baseline, metadata: characterDesignerMetadata(conversation) }), quietToLoud: true, stream: true, signal: activeGenerationController.signal, substituteMacros: false });
+        const metadata = await characterDesignerMetadata(conversation);
+        const data = await generateRawData({ prompt, systemPrompt: buildCharacterDesignerPrompt({ customInstructions: customInstructionsValue(), originalCard: conversation.baseline, metadata }), quietToLoud: true, stream: true, signal: activeGenerationController.signal, substituteMacros: false });
         if (typeof data === 'function') {
             for await (const chunk of data()) {
                 response = chunk.text || response;
@@ -3701,6 +3876,7 @@ async function generateAssistant(conversation, retriesRemaining = MAX_TOOL_RETRI
             failures: initialFailures,
         });
         const { edits, parsedReads, readResults } = cardTools;
+        rememberReferenceDescriptionReads(pendingMessage, parsedReads);
         let failures = groupToolFailures(cardTools.failures);
         contextResults.push(...cardTools.contextResults);
         if (loreChanges.length) contextResults.push(loreSuccessResults(parsedLore));
@@ -3748,6 +3924,7 @@ async function generateAssistant(conversation, retriesRemaining = MAX_TOOL_RETRI
                     .filter(call => !call.error && ['edit', 'read'].includes(characterDesignerToolByName.get(call.name)?.kind));
                 const cardTools = applyCardToolCalls(salvagedTools, generationValues, conversation, pendingMessage.id);
                 salvaged = cardTools.edits;
+                rememberReferenceDescriptionReads(pendingMessage, cardTools.parsedReads);
                 const failureResults = cardTools.failures.map(toolFailureResult);
                 pendingMessage.toolXml = salvagedTools.map(call => call.xml).join('\n');
                 pendingMessage.toolResult = pendingMessage.toolResultDisplay = [...cardTools.contextResults, ...failureResults].join('\n');
@@ -3814,6 +3991,7 @@ async function send() {
     // silently killing a response in progress is not what typing a follow-up means.
     // Escape and the send button's stop state are the ways to abort.
     if (!state || activeGenerationController || uploadingAttachments) return;
+    closeReferencePicker();
     const composer = $('#cc-editor-composer');
     const text = composer.value.trim();
     const attachments = normalizeImageAttachments(state.draftAttachments);
@@ -3859,7 +4037,7 @@ function rerollLastAssistant() {
     return true;
 }
 function newConversation() {
-    const blank = state.conversations.find(conversation => conversation.messages.length === 0);
+    const blank = state.conversations.find(conversation => !conversation.messages.length && !conversation.referenceCards?.length);
     if (blank) {
         state.activeConversation = blank.id;
         initializeConversationCardState(blank);
@@ -3921,14 +4099,15 @@ function showHistory() {
     const entries = state.conversations.map(conversation => {
         const firstMessage = conversation.messages.find(message => message.role === 'user');
         const first = firstMessage?.text || (firstMessage?.attachments?.length ? `${firstMessage.attachments.length} image attachment${firstMessage.attachments.length === 1 ? '' : 's'}` : 'Empty conversation');
-        const detail = `${conversation.messages.length} message${conversation.messages.length === 1 ? '' : 's'}`;
+        const referenceCount = normalizeReferenceCardIds(conversation.referenceCards).length;
+        const detail = `${conversation.messages.length} message${conversation.messages.length === 1 ? '' : 's'}${referenceCount ? ` · ${referenceCount} reference${referenceCount === 1 ? '' : 's'}` : ''}`;
         return `<button class="cc-editor-history-entry" data-conversation="${conversation.id}" aria-current="${conversation.id === state.activeConversation}" type="button"><strong>${escapeHtml(first)}</strong><small>${escapeHtml(detail)}</small></button>`;
     }).join('') || '<div class="cc-editor-history-empty">No editor conversations yet.</div>';
     content.innerHTML = `<h4>Backups</h4>${backups}<h4>Conversations</h4>${entries}`;
     const popup = new Popup(content, POPUP_TYPE.DISPLAY, '', { wider: true, animation: 'fast' });
     content.querySelectorAll('[data-conversation]').forEach(button => button.addEventListener('click', async () => {
         state.activeConversation = button.dataset.conversation;
-        renderChat();
+        render();
         persist();
         await popup.complete(POPUP_RESULT.CANCELLED);
     }));
@@ -3959,6 +4138,12 @@ function isEditorTextControl(target) {
 function setupKeyboard() {
     document.addEventListener('keydown', event => {
         if (!$('#character-card-editor').classList.contains('openDrawer')) return;
+        if (event.key === 'Escape' && !$('#cc-editor-reference-menu').hidden) {
+            event.preventDefault();
+            event.stopPropagation();
+            closeReferencePicker({ restoreFocus: true });
+            return;
+        }
         if (event.key === 'Escape' && activeGenerationController) {
             event.preventDefault();
             event.stopPropagation();
@@ -4069,6 +4254,16 @@ export async function initCharacterCardEditor() {
         if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); void send(); }
     });
     $('#cc-editor-custom-instructions-button')?.addEventListener('click', () => { if (state) void toggleCustomInstructionsPopup(); });
+    $('#cc-editor-add-references')?.addEventListener('click', () => {
+        if ($('#cc-editor-reference-menu').hidden) openReferencePicker();
+        else closeReferencePicker({ restoreFocus: true });
+    });
+    $('#cc-editor-reference-search')?.addEventListener('input', renderReferenceOptions);
+    $('#cc-editor-reference-add')?.addEventListener('click', commitReferencePicker);
+    document.addEventListener('pointerdown', event => {
+        const menu = $('#cc-editor-reference-menu');
+        if (!menu.hidden && !event.target.closest('.cc-reference-picker')) closeReferencePicker();
+    }, true);
     $('#cc-editor-questioning-mode')?.addEventListener('change', event => {
         const mode = event.target.value;
         accountStorage.setItem(CHARACTER_DESIGNER_MODE_KEY, ['Adaptive', 'Interview', 'Autonomous'].includes(mode) ? mode : 'Adaptive');
@@ -4152,6 +4347,7 @@ export async function initCharacterCardEditor() {
                 }
                 removeFloatingHunkControls();
                 void closeCustomInstructionsPopup();
+                closeReferencePicker();
             }
         })
             .observe(editorPanel, { attributes: true, attributeFilter: ['class'] });
