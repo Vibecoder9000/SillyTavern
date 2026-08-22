@@ -93,7 +93,7 @@ import { t } from './i18n.js';
 import { accountStorage } from './util/AccountStorage.js';
 import { compressRequest } from './request-compression.js';
 import { shouldHideXmlToolExchanges } from './group-tool-visibility.js';
-import { requestWorkspaceOpen } from './chat-workspace-bridge.js';
+import { isChatWorkspaceChild, requestWorkspaceOpen } from './chat-workspace-bridge.js';
 
 export {
     selected_group,
@@ -116,6 +116,10 @@ export {
 
 let is_group_generating = false; // Group generation flag
 let is_group_automode_enabled = false;
+
+function runMeasuredStage(measureStage, name, callback) {
+    return measureStage ? measureStage(name, callback) : callback();
+}
 let hideMutedSprites = false;
 /** @type {Group[]} */
 let groups = [];
@@ -198,17 +202,18 @@ async function regenerateGroup() {
 /**
  * Loads group chat messages from the server.
  * @param {string} chatId Chat ID
+ * @param {Function|null} [measureStage=null] Optional workspace stage measurement callback
  * @returns {Promise<ChatFile>} Array of chat messages
  */
-async function loadGroupChat(chatId) {
-    const response = await fetch('/api/chats/group/get', {
+async function loadGroupChat(chatId, measureStage = null) {
+    const response = await runMeasuredStage(measureStage, 'chatFetch', () => fetch('/api/chats/group/get', {
         method: 'POST',
         headers: getRequestHeaders(),
         body: JSON.stringify({ id: chatId }),
-    });
+    }));
 
     if (response.ok) {
-        const data = await response.json();
+        const data = await runMeasuredStage(measureStage, 'chatParse', () => response.json());
         if (!Array.isArray(data)) {
             return [];
         }
@@ -271,9 +276,11 @@ async function validateGroup(group) {
  * @param {string} groupId - The ID of the group to load chat messages for.
  * @param {boolean} reload - Whether to reload the group chat after loading.
  * @param {object} [initialMetadata] - Metadata for a newly created chat.
+ * @param {object} [options] Load options.
+ * @param {Function|null} [options.measureStage=null] Optional workspace stage measurement callback.
  * @returns {Promise<void>} A promise that resolves when the chat messages have been loaded.
  */
-export async function getGroupChat(groupId, reload = false, initialMetadata) {
+export async function getGroupChat(groupId, reload = false, initialMetadata, { measureStage = null } = {}) {
     const group = groups.find((x) => x.id === groupId);
     if (!group) {
         console.warn('Group not found', groupId);
@@ -281,11 +288,13 @@ export async function getGroupChat(groupId, reload = false, initialMetadata) {
     }
 
     // Run validation before any loading
-    await validateGroup(group);
-    await unshallowGroupMembers(groupId);
+    await runMeasuredStage(measureStage, 'groupPreparation', async () => {
+        await validateGroup(group);
+        await unshallowGroupMembers(groupId);
+    });
 
     const chat_id = group.chat_id;
-    const data = await loadGroupChat(chat_id);
+    const data = await loadGroupChat(chat_id, measureStage);
     const metadata = initialMetadata ?? data?.[0]?.chat_metadata ?? {};
     const freshChat = !metadata.tainted && (!Array.isArray(data) || !data.length);
 
@@ -300,7 +309,7 @@ export async function getGroupChat(groupId, reload = false, initialMetadata) {
     }
     updateChatMetadata(metadata, true);
 
-    await loadItemizedPrompts(getCurrentChatId());
+    await runMeasuredStage(measureStage, 'itemizedPrompts', () => loadItemizedPrompts(getCurrentChatId()));
 
     if (group && Array.isArray(group.members) && freshChat) {
         chat.splice(0, chat.length);
@@ -328,20 +337,22 @@ export async function getGroupChat(groupId, reload = false, initialMetadata) {
         chat.splice(0, chat.length, ...data);
         chat.forEach(ensureMessageMediaIsArray);
         chatElement.find('.mes').remove();
-        await printMessages();
+        await runMeasuredStage(measureStage, 'messageRender', () => printMessages());
     }
 
     if (reload) {
         select_group_chats(groupId, true);
     }
 
-    await eventSource.emit(event_types.CHAT_CHANGED, getCurrentChatId());
+    await runMeasuredStage(measureStage, 'chatEvents', () => eventSource.emit(event_types.CHAT_CHANGED, getCurrentChatId()));
     if (!freshChat) {
-        try {
-            await syncWorkspaceLastChat();
-        } catch (error) {
-            console.warn('Could not rebuild the workspace last-chat mirror after opening the group chat:', error);
-            toastr.warning(t`Workspace last-chat mirror could not be rebuilt.`, t`Workspace last-chat mirror`);
+        if (!isChatWorkspaceChild()) {
+            try {
+                await syncWorkspaceLastChat();
+            } catch (error) {
+                console.warn('Could not rebuild the workspace last-chat mirror after opening the group chat:', error);
+                toastr.warning(t`Workspace last-chat mirror could not be rebuilt.`, t`Workspace last-chat mirror`);
+            }
         }
     }
     if (freshChat) await eventSource.emit(event_types.GROUP_CHAT_CREATED);
@@ -2157,9 +2168,10 @@ function updateFavButtonState(state) {
  * @param {object} [options] Open options
  * @param {boolean} [options.openInWorkspace=true] Whether user navigation may open the group in another workspace tab
  * @param {boolean} [options.loadChat=true] Whether switching groups should load the group's current chat
+ * @param {Function|null} [options.measureStage=null] Optional workspace stage measurement callback
  * @returns {Promise<boolean>} Whether the group was opened
  */
-export async function openGroupById(groupId, { openInWorkspace = true, loadChat = true } = {}) {
+export async function openGroupById(groupId, { openInWorkspace = true, loadChat = true, measureStage = null } = {}) {
     const targetGroup = groups.find(x => String(x.id) === String(groupId));
     const targetIdentity = targetGroup?.chat_id
         ? { kind: 'group', ownerId: String(targetGroup.id), chatId: String(targetGroup.chat_id) }
@@ -2193,7 +2205,7 @@ export async function openGroupById(groupId, { openInWorkspace = true, loadChat 
     }
 
     if (selected_group === groupId) {
-        select_group_chats(groupId, false);
+        await runMeasuredStage(measureStage, 'ownerUi', () => select_group_chats(groupId, false));
         return true;
     }
 
@@ -2203,19 +2215,19 @@ export async function openGroupById(groupId, { openInWorkspace = true, loadChat 
     }
 
     if (!is_send_press && !is_group_generating) {
-        select_group_chats(groupId, false);
+        await runMeasuredStage(measureStage, 'ownerUi', () => select_group_chats(groupId, false));
 
         if (selected_group !== groupId) {
             groupChatQueueOrder = new Map();
             setCharacterId(undefined);
             setCharacterName('');
             resetSelectedGroup({ hideMemberSpeakPopout: true });
-            await clearChat({ clearData: true });
+            await runMeasuredStage(measureStage, 'chatClear', () => clearChat({ clearData: true }));
             cancelTtsPlay();
             selected_group = groupId;
             setEditedMessageId(undefined);
             updateChatMetadata({}, true);
-            if (loadChat) await getGroupChat(groupId);
+            if (loadChat) await getGroupChat(groupId, false, undefined, { measureStage });
             return true;
         }
     }
@@ -2379,9 +2391,11 @@ export async function getGroupPastChats(groupId) {
  * @param {boolean} [options.openInWorkspace=true] Whether user navigation may open the chat in another workspace tab
  * @param {boolean} [options.skipClear=false] Whether the caller has already cleared the current chat
  * @param {boolean} [options.waitForSave=true] Whether to wait for a pending chat save before opening
+ * @param {boolean} [options.persistSelection=true] Whether to persist the group's selected chat before returning
+ * @param {Function|null} [options.measureStage=null] Optional workspace stage measurement callback
  * @returns {Promise<void>}
  */
-export async function openGroupChat(groupId, chatId, { openInWorkspace = true, skipClear = false, waitForSave = true } = {}) {
+export async function openGroupChat(groupId, chatId, { openInWorkspace = true, skipClear = false, waitForSave = true, persistSelection = true, measureStage = null } = {}) {
     const targetIdentity = { kind: 'group', ownerId: String(groupId), chatId: String(chatId) };
     const targetGroup = groups.find(x => String(x.id) === targetIdentity.ownerId);
     const currentGroup = groups.find(x => String(x.id) === String(selected_group));
@@ -2408,13 +2422,15 @@ export async function openGroupChat(groupId, chatId, { openInWorkspace = true, s
         return;
     }
 
-    if (!skipClear) await clearChat({ clearData: true });
+    if (!skipClear) {
+        await runMeasuredStage(measureStage, 'chatClear', () => clearChat({ clearData: true }));
+    }
     group.chat_id = chatId;
     group.date_last_chat = Date.now();
     updateChatMetadata({}, true);
 
-    await editGroup(groupId, true, false);
-    await getGroupChat(groupId);
+    if (persistSelection) await editGroup(groupId, true, false);
+    await getGroupChat(groupId, false, undefined, { measureStage });
 }
 
 /**

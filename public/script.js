@@ -302,6 +302,7 @@ import {
     beginWorkspaceNewChat,
     canPersistWorkspaceGlobals,
     finishWorkspaceNewChat,
+    getChatWorkspaceSessionId,
     initChatWorkspaceBridge,
     isChatWorkspaceChild,
     notifyWorkspacePersonaChanged,
@@ -311,6 +312,7 @@ import {
     requestWorkspaceOpen,
 } from './scripts/chat-workspace-bridge.js';
 import { getWorkspaceCachedValue, setWorkspaceCachedValue, WORKSPACE_CACHE_KEYS } from './scripts/chat-workspace-cache.js';
+import { createCoalescedWriter, createKeyedCoalescedWriter } from './scripts/chat-workspace-persistence.js';
 
 export { isCharacterDesignerGenerating };
 
@@ -524,6 +526,8 @@ let dialogueCloseStop = false;
 export let chat_metadata = {};
 /** @type {StreamingProcessor} */
 export let streamingProcessor = null;
+/** @type {Map<string, StreamingProcessor>} */
+const workspaceStreamingProcessors = new Map();
 let crop_data = undefined;
 let is_delete_mode = false;
 let fav_ch_checked = false;
@@ -992,8 +996,13 @@ function workspaceIdentityEquals(left, right) {
         && left.chatId === right.chatId);
 }
 
+function runMeasuredStage(measureStage, name, callback) {
+    return measureStage ? measureStage(name, callback) : callback();
+}
+
 function getWorkspaceChatState(extra = {}) {
     const identity = getWorkspaceChatIdentity();
+    const workspaceProcessor = workspaceStreamingProcessors.get(getChatWorkspaceSessionId());
     const group = identity?.kind === 'group' ? groups.find(item => String(item.id) === identity.ownerId) : null;
     const character = identity?.kind === 'character' ? characters[this_chid] : null;
     const groupAvatar = group ? getGroupAvatar(group).find('img').first().attr('src') : '';
@@ -1011,22 +1020,115 @@ function getWorkspaceChatState(extra = {}) {
         personaAvatar: chat_metadata?.persona || '',
         saving: isChatSaving,
         pendingSave: Boolean(chatSaveTimeout),
-        status: waitingForUser ? 'waiting' : (is_send_press || is_group_generating ? 'generating' : 'idle'),
+        status: waitingForUser ? 'waiting' : (workspaceProcessor || is_send_press || is_group_generating ? 'generating' : 'idle'),
+        canNavigateWhileGenerating: Boolean(workspaceProcessor?.canDetachWorkspaceOutput()),
         ...extra,
     };
 }
 
-async function openWorkspaceIdentity(identity) {
+const workspaceSelectionWriter = createKeyedCoalescedWriter(async (_key, snapshot) => {
+    if (snapshot.kind === 'character') {
+        const response = await fetch('/api/characters/edit', {
+            method: 'POST',
+            headers: getRequestHeaders({ omitContentType: true }),
+            body: snapshot.formData,
+            cache: 'no-cache',
+        });
+        if (!response.ok) throw new Error(`Character chat selection save failed: ${response.statusText}`);
+        return;
+    }
+
+    const response = await fetch('/api/groups/edit', {
+        method: 'POST',
+        headers: getRequestHeaders(),
+        body: JSON.stringify(snapshot.group),
+    });
+    if (!response.ok) throw new Error(`Group chat selection save failed: ${response.statusText}`);
+}, { delay: 0 });
+
+const workspaceMirrorWriter = createCoalescedWriter(async snapshot => {
+    await syncWorkspaceLastChat(snapshot.chat, snapshot.workspace);
+}, { delay: 0 });
+
+function captureWorkspaceCharacterSelection(identity) {
+    const characterId = characters.findIndex(character => String(character.avatar) === String(identity.ownerId));
+    const character = characters[characterId];
+    const form = /** @type {HTMLFormElement|null} */ (document.querySelector('#form_create'));
+    if (!character || !form) throw new Error(`Character selection could not be captured: ${identity.ownerId}`);
+
+    const formData = new FormData(form);
+    formData.set('fav', String(fav_ch_checked));
+    formData.set('avatar_url', character.avatar);
+    formData.set('ch_name', character.name);
+    formData.set('chat', identity.chatId);
+    // Selection persistence must not apply a pending avatar upload or crop.
+    formData.delete('avatar');
+    formData.delete('alternate_greetings');
+    for (const value of character.data?.alternate_greetings || []) {
+        formData.append('alternate_greetings', value);
+    }
+
+    return { kind: 'character', formData };
+}
+
+function captureWorkspacePostCommit(identity) {
+    const mirror = {
+        workspace: getCurrentSandboxWorkspace(),
+        chat: JSON.parse(JSON.stringify(buildWorkspaceLastChatData())),
+    };
+    if (identity?.kind === 'character') {
+        return { identity, mirror, selection: captureWorkspaceCharacterSelection(identity) };
+    }
+    if (identity?.kind === 'group') {
+        const group = groups.find(item => String(item.id) === String(identity.ownerId));
+        if (!group) throw new Error(`Group selection could not be captured: ${identity.ownerId}`);
+        return { identity, mirror, selection: { kind: 'group', group: JSON.parse(JSON.stringify(group)) } };
+    }
+    return { identity, mirror, selection: null };
+}
+
+function persistWorkspacePostCommit(identity) {
+    let snapshot;
+    try {
+        snapshot = captureWorkspacePostCommit(identity);
+    } catch (error) {
+        console.warn('Could not capture post-commit workspace persistence', error);
+        return;
+    }
+
+    void workspaceMirrorWriter.flush(snapshot.mirror).catch(error => {
+        console.warn('Could not rebuild the workspace last-chat mirror after activating a tab', error);
+        toastr.warning(t`Workspace last-chat mirror could not be rebuilt.`, t`Workspace last-chat mirror`);
+    });
+    if (snapshot.selection && snapshot.identity?.ownerId) {
+        void workspaceSelectionWriter.flush(`${snapshot.identity.kind}:${snapshot.identity.ownerId}`, snapshot.selection).catch(error => {
+            console.warn('Could not persist the selected workspace chat', error);
+            toastr.warning(t`The selected chat could not be saved to its character or group.`, t`Chat selection`);
+        });
+    }
+}
+
+async function openWorkspaceIdentity(identity, measureStage = null) {
     if (!identity) return;
 
     const openIdentity = async () => {
         if (identity.kind === 'character') {
             const characterId = characters.findIndex(character => String(character.avatar) === String(identity.ownerId));
             if (characterId < 0) throw new Error(`Character not found: ${identity.ownerId}`);
-            await selectCharacterById(characterId, { switchMenu: false, openInWorkspace: false, loadChat: false });
+            const selectionClearedChat = Boolean(selected_group) || String(this_chid) !== String(characterId);
+            await selectCharacterById(characterId, {
+                switchMenu: false,
+                openInWorkspace: false,
+                loadChat: false,
+                refreshOwnerUi: false,
+                measureStage,
+            });
             await openCharacterChat(identity.chatId, {
                 openInWorkspace: false,
+                skipClear: selectionClearedChat,
                 waitForSave: false,
+                persistSelection: false,
+                measureStage,
             });
             return;
         }
@@ -1035,16 +1137,21 @@ async function openWorkspaceIdentity(identity) {
             if (!groups.length) await getGroups();
             const group = groups.find(item => String(item.id) === String(identity.ownerId));
             if (!group) throw new Error(`Group not found: ${identity.ownerId}`);
-            await openGroupById(group.id, { openInWorkspace: false, loadChat: false });
+            const selectionClearedChat = String(selected_group) !== String(group.id);
+            await openGroupById(group.id, { openInWorkspace: false, loadChat: false, measureStage });
             await openGroupChat(group.id, identity.chatId, {
                 openInWorkspace: false,
+                skipClear: selectionClearedChat,
                 waitForSave: false,
+                persistSelection: false,
+                measureStage,
             });
         }
     };
 
-    if (canPersistWorkspaceGlobals()) await openIdentity();
-    else await withoutAutoPersonaSelection(openIdentity);
+    // Persona state is restored explicitly after the chat and view are ready.
+    // Suppress CHAT_CHANGED persona work here so it is not immediately repeated.
+    await withoutAutoPersonaSelection(openIdentity);
 }
 
 function restoreWorkspaceView(restore = {}) {
@@ -1070,8 +1177,11 @@ function initInAppChatWorkspace(initLoaderHandle) {
         restoreView: restoreWorkspaceView,
         hideLoader: () => initLoaderHandle.hide(),
         createNewChat: () => doNewChat({ deleteCurrentChat: false, openInWorkspace: true }),
-        flushPendingChat: flushPendingChatSave,
+        flushPendingChat: flushWorkspacePendingChat,
         flushGlobalSettings: flushPendingSettingsSave,
+        pauseWorkspaceGeneration,
+        resumeWorkspaceGeneration,
+        onCommitted: persistWorkspacePostCommit,
         confirmClose: () => Popup.show.confirm(
             t`Discard unsent draft?`,
             t`This draft has not been sent. Close the chat and discard it?`,
@@ -1088,10 +1198,18 @@ function initInAppChatWorkspace(initLoaderHandle) {
         notifyWorkspaceState(getWorkspaceChatState({ status: 'generating' }));
     });
     eventSource.on(event_types.GENERATION_ENDED, () => {
-        notifyWorkspaceState(getWorkspaceChatState({ status: 'idle', completed: true }));
+        notifyWorkspaceState(getWorkspaceChatState({ status: 'idle', canNavigateWhileGenerating: false, completed: true }));
     });
     eventSource.on(event_types.GENERATION_STOPPED, () => {
-        notifyWorkspaceState(getWorkspaceChatState({ status: 'idle' }));
+        const processor = workspaceStreamingProcessors.get(getChatWorkspaceSessionId());
+        notifyWorkspaceState(getWorkspaceChatState({
+            status: processor ? 'generating' : 'idle',
+            canNavigateWhileGenerating: false,
+        }));
+    });
+    globalThis.addEventListener('pagehide', () => {
+        for (const processor of workspaceStreamingProcessors.values()) processor.onStopStreaming();
+        workspaceStreamingProcessors.clear();
     });
 }
 
@@ -1177,9 +1295,11 @@ export function resultCheckStatus() {
  * @param {boolean} [options.switchMenu=true] Whether to switch the right menu to the character edit menu if the character is already selected.
  * @param {boolean} [options.openInWorkspace=true] Whether user navigation may open the character in another workspace tab.
  * @param {boolean} [options.loadChat=true] Whether switching characters should load the selected character's current chat.
+ * @param {boolean} [options.refreshOwnerUi=true] Whether selecting the current character should repopulate its editor UI.
+ * @param {Function|null} [options.measureStage=null] Optional workspace stage measurement callback.
  * @returns {Promise<boolean>} Whether the requested character is selected.
  */
-export async function selectCharacterById(id, { switchMenu = true, openInWorkspace = true, loadChat = true } = {}) {
+export async function selectCharacterById(id, { switchMenu = true, openInWorkspace = true, loadChat = true, refreshOwnerUi = true, measureStage = null } = {}) {
     if (characters[id] === undefined) {
         return false;
     }
@@ -1218,18 +1338,21 @@ export async function selectCharacterById(id, { switchMenu = true, openInWorkspa
         setCharacterId(undefined);
         setCharacterName('');
         resetSelectedGroup({ hideMemberSpeakPopout: true });
-        await clearChat({ clearData: true });
+        await runMeasuredStage(measureStage, 'chatClear', () => clearChat({ clearData: true }));
         cancelTtsPlay();
         this_edit_mes_id = undefined;
         selected_button = 'character_edit';
         setCharacterId(id);
         chat_metadata = {};
-        if (loadChat) await getChat();
-    } else {
+        if (loadChat) await getChat(undefined, { measureStage });
+    } else if (refreshOwnerUi) {
         //if clicked on character that was already selected
         switchMenu && (selected_button = 'character_edit');
-        await unshallowCharacter(this_chid);
-        select_selected_character(this_chid, { switchMenu });
+        const updateOwnerUi = async () => {
+            await unshallowCharacter(this_chid);
+            select_selected_character(this_chid, { switchMenu });
+        };
+        await runMeasuredStage(measureStage, 'ownerUi', updateOwnerUi);
     }
     return true;
 }
@@ -3167,6 +3290,11 @@ export async function captureWorkspaceLastChat(workspace = getCurrentSandboxWork
 /** Flushes the active chat and freezes the previous workspace mirror for a new chat. */
 export async function prepareWorkspaceLastChatForNewChat() {
     const workspace = getCurrentSandboxWorkspace();
+    try {
+        await workspaceMirrorWriter.flush();
+    } catch (error) {
+        console.warn('Could not flush the workspace last-chat mirror before creating a chat:', error);
+    }
     await saveChatConditional();
 
     let snapshot = { snapshot: '', path: '', workspace };
@@ -5069,7 +5197,7 @@ export function updateMessageElement(mes, { messageId = chat.length - 1, message
     messageElement.find('.timestamp').text(timestamp).attr('title', `${mes.extra?.api ? mes.extra.api + ' - ' : ''}${mes.extra?.model ?? ''}`);
     messageElement.find('.mesIDDisplay').text(`#${messageId}`);
     tokenCount && messageElement.find('.tokenCounterDisplay').text(`${tokenCount}t`);
-    messageCost && messageElement.find('.messageCostDisplay').text(messageCost);
+    messageElement.find('.messageCostDisplay').text(messageCost);
     mes.title && messageElement.attr('title', mes.title);
     timerValue && messageElement.find('.mes_timer').attr('title', timerTitle).text(timerValue);
     bookmarkLink && updateBookmarkDisplay(messageElement);
@@ -5980,6 +6108,93 @@ function hideStopButton() {
     }
 }
 
+function setWorkspaceGenerationUi(processor) {
+    if (processor) {
+        streamingProcessor = processor;
+        abortController = processor.abortController;
+        is_send_press = true;
+        if (processor.type === 'swipe') {
+            swipeState = SWIPE_STATE.SWIPING;
+            document.body.dataset.swiping = 'true';
+        }
+        showStopButton();
+        hideSwipeButtons({ hideCounters: true });
+        document.body.dataset.generating = 'true';
+        return;
+    }
+
+    streamingProcessor = null;
+    abortController = new AbortController();
+    is_send_press = false;
+    $('#mes_stop').css({ display: 'none' });
+    showSwipeButtons();
+    delete document.body.dataset.generating;
+    setGenerationProgress(0);
+}
+
+function canDetachWorkspaceGenerationType(type) {
+    return isChatWorkspaceChild()
+        && getChatWorkspaceSessionId()
+        && !selected_group
+        && ['normal', 'swipe'].includes(type);
+}
+
+function registerWorkspaceStreamingProcessor(processor) {
+    const sessionId = getChatWorkspaceSessionId();
+    if (!canDetachWorkspaceGenerationType(processor.type)) return;
+
+    processor.workspaceSessionId = sessionId;
+    processor.workspaceDetachable = true;
+    workspaceStreamingProcessors.set(sessionId, processor);
+    notifyWorkspaceState(getWorkspaceChatState({ status: 'generating', canNavigateWhileGenerating: true }));
+}
+
+function releaseWorkspaceStreamingProcessor(processor) {
+    const sessionId = processor?.workspaceSessionId;
+    if (!sessionId || workspaceStreamingProcessors.get(sessionId) !== processor) return;
+    workspaceStreamingProcessors.delete(sessionId);
+    processor.workspaceDetachable = false;
+    if (sessionId === getChatWorkspaceSessionId()) {
+        notifyWorkspaceState(getWorkspaceChatState({ status: 'idle', canNavigateWhileGenerating: false }));
+    }
+}
+
+async function pauseWorkspaceGeneration(sessionId = getChatWorkspaceSessionId()) {
+    const processor = workspaceStreamingProcessors.get(sessionId);
+    if (!processor) return false;
+    if (!processor.canDetachWorkspaceOutput()) {
+        throw new Error('Generation is finishing and cannot switch chats yet.');
+    }
+    await processor.pauseWorkspaceOutput();
+    if (streamingProcessor === processor) {
+        if (processor.type === 'swipe') {
+            swipeState = SWIPE_STATE.NONE;
+            delete document.body.dataset.swiping;
+        }
+        setWorkspaceGenerationUi(null);
+    }
+    return true;
+}
+
+async function flushWorkspacePendingChat() {
+    if (workspaceStreamingProcessors.has(getChatWorkspaceSessionId())) {
+        await saveChatConditional();
+        return;
+    }
+    await flushPendingChatSave();
+}
+
+async function resumeWorkspaceGeneration(sessionId = getChatWorkspaceSessionId()) {
+    const processor = workspaceStreamingProcessors.get(sessionId);
+    if (!processor) {
+        if (!streamingProcessor) setWorkspaceGenerationUi(null);
+        return false;
+    }
+    setWorkspaceGenerationUi(processor);
+    await processor.resumeWorkspaceOutput();
+    return true;
+}
+
 class StreamingProcessor {
     /**
      * Creates a new streaming processor.
@@ -6037,6 +6252,73 @@ class StreamingProcessor {
         this.messageCost = null;
         /** @type {{ cost: number|string|null, energy: object|null } | null} */
         this.providerReport = null;
+        this.workspaceSessionId = null;
+        this.workspaceDetachable = false;
+        this.workspaceOutputPaused = false;
+        this.workspaceFinalizing = false;
+        this.workspaceStreamSettled = false;
+        this.workspaceNeedsCatchUp = false;
+        this.workspaceReasoning = null;
+        this.workspacePresentation = Promise.resolve();
+        this.workspaceResumeWaiters = [];
+        this.workspacePrepared = false;
+    }
+
+    canDetachWorkspaceOutput() {
+        return this.workspaceDetachable && !this.isStopped && !this.workspaceFinalizing;
+    }
+
+    #queueWorkspacePresentation(callback) {
+        const presentation = this.workspacePresentation.then(callback, callback);
+        this.workspacePresentation = presentation.catch(() => {});
+        return presentation;
+    }
+
+    async pauseWorkspaceOutput() {
+        if (!this.canDetachWorkspaceOutput()) return;
+        this.workspaceOutputPaused = true;
+        await this.workspacePresentation;
+        this.messageDom = null;
+        this.messageTextDom = null;
+        this.messageTimerDom = null;
+        this.messageTokenCounterDom = null;
+        this.messageCostDom = null;
+        this.reasoningHandler.messageDom = null;
+        this.reasoningHandler.messageReasoningDetailsDom = null;
+        this.reasoningHandler.messageReasoningContentDom = null;
+        this.reasoningHandler.messageReasoningHeaderDom = null;
+    }
+
+    async resumeWorkspaceOutput() {
+        if (!this.workspaceDetachable) return;
+        while (this.workspaceNeedsCatchUp) {
+            this.workspaceNeedsCatchUp = false;
+            await this.#queueWorkspacePresentation(async () => {
+                this.reasoningHandler.updateReasoning(this.messageId, this.workspaceReasoning);
+                await eventSource.emit(event_types.STREAM_TOKEN_RECEIVED, this.result);
+                await this.onProgressStreaming(this.messageId, this.continueMessage + this.result, false);
+            });
+        }
+        if (this.workspaceStreamSettled) {
+            this.workspaceFinalizing = true;
+            notifyWorkspaceState(getWorkspaceChatState({ canNavigateWhileGenerating: false }));
+        }
+        this.workspaceOutputPaused = false;
+        const waiters = this.workspaceResumeWaiters.splice(0);
+        for (const resolve of waiters) resolve();
+    }
+
+    async #waitForWorkspaceResume() {
+        if (!this.workspaceOutputPaused) return;
+        await new Promise(resolve => this.workspaceResumeWaiters.push(resolve));
+    }
+
+    async #settleWorkspaceStream() {
+        this.workspaceStreamSettled = true;
+        await this.#waitForWorkspaceResume();
+        await this.workspacePresentation;
+        this.workspaceFinalizing = true;
+        notifyWorkspaceState(getWorkspaceChatState({ canNavigateWhileGenerating: false }));
     }
 
     /**
@@ -6093,6 +6375,18 @@ class StreamingProcessor {
         hideSwipeButtons({ hideCounters: true });
         scrollChatToBottom({ waitForFrame: true });
         return messageId;
+    }
+
+    async prepareWorkspaceStreaming() {
+        if (this.workspacePrepared) return;
+        this.messageId = await this.onStartStreaming(this.firstMessageText);
+        const isImpersonate = this.type === 'impersonate';
+        const isContinue = this.type === 'continue';
+        this.stoppingStrings = getStoppingStrings(isImpersonate, isContinue, main_api);
+        await delay(1); // delay for message to be rendered
+        scrollLock = false;
+        this.workspacePrepared = true;
+        registerWorkspaceStreamingProcessor(this);
     }
 
     async onProgressStreaming(messageId, text, isFinal) {
@@ -6397,17 +6691,7 @@ class StreamingProcessor {
     }
 
     async generate() {
-        if (this.messageId == -1) {
-            this.messageId = await this.onStartStreaming(this.firstMessageText);
-            await delay(1); // delay for message to be rendered
-            scrollLock = false;
-        }
-
-        // Stopping strings are expensive to calculate, especially with macros enabled. To remove stopping strings
-        // when streaming, we cache the result of getStoppingStrings instead of calling it once per token.
-        const isImpersonate = this.type == 'impersonate';
-        const isContinue = this.type == 'continue';
-        this.stoppingStrings = getStoppingStrings(isImpersonate, isContinue, main_api);
+        await this.prepareWorkspaceStreaming();
 
         try {
             const sw = new Stopwatch(1000 / power_user.streaming_fps);
@@ -6428,27 +6712,40 @@ class StreamingProcessor {
                 if (logprobs) {
                     this.messageLogprobs.push(...(Array.isArray(logprobs) ? logprobs : [logprobs]));
                 }
-                // Get the updated reasoning string into the handler
-                this.reasoningHandler.updateReasoning(this.messageId, state?.reasoning);
+                // Keep hidden reasoning on the processor until its chat is restored.
+                if (state?.reasoning !== undefined) this.workspaceReasoning = state.reasoning;
                 this.images = state?.images ?? [];
                 this.reasoningSignature = state?.signature ?? null;
                 this.messageCost = state?.messageCost ?? this.messageCost;
                 this.providerReport = state?.providerReport ?? this.providerReport;
                 this.jspaceCapture = mergeJSpaceCaptures(this.jspaceCapture, jspace);
-                await eventSource.emit(event_types.STREAM_TOKEN_RECEIVED, text);
-                await sw.tick(async () => await this.onProgressStreaming(this.messageId, this.continueMessage + text));
+                if (this.workspaceOutputPaused) {
+                    this.workspaceNeedsCatchUp = true;
+                    continue;
+                }
+                await this.#queueWorkspacePresentation(async () => {
+                    if (this.workspaceOutputPaused) {
+                        this.workspaceNeedsCatchUp = true;
+                        return;
+                    }
+                    this.reasoningHandler.updateReasoning(this.messageId, this.workspaceReasoning);
+                    await eventSource.emit(event_types.STREAM_TOKEN_RECEIVED, text);
+                    await sw.tick(async () => await this.onProgressStreaming(this.messageId, this.continueMessage + text));
+                });
             }
             const seconds = (timestamps[timestamps.length - 1] - timestamps[0]) / 1000;
             console.warn(`Stream stats: ${timestamps.length} tokens, ${seconds.toFixed(2)} seconds, rate: ${Number(timestamps.length / seconds).toFixed(2)} TPS`);
         } catch (err) {
             // in the case of a self-inflicted abort, we have already cleaned up
             if (!this.isFinished) {
+                await this.#settleWorkspaceStream();
                 console.error(err);
                 this.onErrorStreaming();
             }
             return this.result;
         }
 
+        await this.#settleWorkspaceStream();
         this.isFinished = true;
         return this.result;
     }
@@ -8036,23 +8333,38 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
             continue_mag = promptReasoning.removePrefix(continue_mag);
             // Composer submission is a one-shot user action and must not be inherited by tool recursion.
             const generateOptions = { automatic_trigger, force_name2, quiet_prompt, quietToLoud, skipWIAN, force_chid, signal, quietImage, quietName, jsonSchema, depth, nativeToolAutoContinue };
-            streamingProcessor = new StreamingProcessor(type, generateOptions, dryRun, generation_started, continue_mag, promptReasoning);
+            const completedStreamingProcessor = new StreamingProcessor(type, generateOptions, dryRun, generation_started, continue_mag, promptReasoning);
+            streamingProcessor = completedStreamingProcessor;
             if (isContinue) {
                 // Save reply does add cycle text to the prompt, so it's not needed here
-                streamingProcessor.firstMessageText = '';
+                completedStreamingProcessor.firstMessageText = '';
             }
 
-            streamingProcessor.generator = await sendStreamingRequest(type, generate_data, { jsonSchema });
+            // Create and register the placeholder before waiting for response headers / the first token.
+            // This gives workspace navigation a processor to pause throughout provider TTFT.
+            const prepareBeforeRequest = canDetachWorkspaceGenerationType(type);
+            if (prepareBeforeRequest) await completedStreamingProcessor.prepareWorkspaceStreaming();
+            try {
+                completedStreamingProcessor.generator = await sendStreamingRequest(type, generate_data, {
+                    jsonSchema,
+                    signal: completedStreamingProcessor.abortController.signal,
+                });
+            } catch (error) {
+                if (!prepareBeforeRequest) throw error;
+                completedStreamingProcessor.generator = async function* failedStreamingRequest() {
+                    throw error;
+                };
+            }
 
             hideSwipeButtons();
-            const completedStreamingProcessor = streamingProcessor;
             let getMessage = await completedStreamingProcessor.generate();
-            let messageChunk = cleanUpMessage({
+            try {
+                let messageChunk = cleanUpMessage({
                 getMessage: getMessage,
                 isImpersonate: isImpersonate,
                 isContinue: isContinue,
                 displayIncompleteSentences: false,
-            });
+                });
 
             if (isContinue) {
                 getMessage = continue_mag + getMessage;
@@ -8111,6 +8423,9 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
                     'messageChunk': { value: messageChunk },
                     'fromStream': { value: true },
                 });
+            }
+            } finally {
+                releaseWorkspaceStreamingProcessor(completedStreamingProcessor);
             }
         } else {
             return await sendGenerationRequest(type, generate_data, { jsonSchema });
@@ -8831,6 +9146,7 @@ function setInContextMessages(msgInContextCount, type) {
 /**
  * @typedef {object} AdditionalRequestOptions
  * @property {JsonSchema} [jsonSchema]
+ * @property {AbortSignal} [signal]
  */
 
 /**
@@ -8873,19 +9189,20 @@ export async function sendGenerationRequest(type, data, options = {}) {
  * @returns {Promise<any>} Streaming generator
  */
 export async function sendStreamingRequest(type, data, options = {}) {
-    if (abortController?.signal?.aborted) {
+    const signal = options.signal ?? streamingProcessor?.abortController?.signal ?? abortController?.signal;
+    if (signal?.aborted) {
         throw new Error('Generation was aborted.');
     }
 
     switch (main_api) {
         case 'openai':
-            return await sendOpenAIRequest(type, data.prompt, streamingProcessor.abortController.signal, options);
+            return await sendOpenAIRequest(type, data.prompt, signal, options);
         case 'textgenerationwebui':
-            return await generateTextGenWithStreaming(data, streamingProcessor.abortController.signal);
+            return await generateTextGenWithStreaming(data, signal);
         case 'novel':
-            return await generateNovelWithStreaming(data, streamingProcessor.abortController.signal);
+            return await generateNovelWithStreaming(data, signal);
         case 'kobold':
-            return await generateKoboldWithStreaming(data, streamingProcessor.abortController.signal);
+            return await generateKoboldWithStreaming(data, signal);
         default:
             throw new Error('Streaming is enabled, but the current API does not support streaming.');
     }
@@ -10433,11 +10750,11 @@ export async function unshallowCharacter(characterId) {
     await getOneCharacter(avatar);
 }
 
-export async function getChat(initialMetadata) {
+export async function getChat(initialMetadata, { measureStage = null } = {}) {
     try {
-        await unshallowCharacter(this_chid);
+        await runMeasuredStage(measureStage, 'characterLoad', () => unshallowCharacter(this_chid));
 
-        const response = await fetch('/api/chats/get', {
+        const response = await runMeasuredStage(measureStage, 'chatFetch', () => fetch('/api/chats/get', {
             method: 'POST',
             headers: getRequestHeaders(),
             cache: 'no-cache',
@@ -10446,28 +10763,30 @@ export async function getChat(initialMetadata) {
                 file_name: characters[this_chid].chat,
                 avatar_url: characters[this_chid].avatar,
             }),
-        });
+        }));
 
         if (!response.ok) {
             throw new Error('Chat could not be loaded');
         }
 
-        const data = await response.json();
-        if (Array.isArray(data) && data.length > 0) {
-            /** @type {ChatHeader} */
-            const chatHeader = data.shift();
-            chat_metadata = initialMetadata ?? chatHeader?.chat_metadata ?? {};
-            chat.splice(0, chat.length, ...data);
-            chat.forEach(ensureMessageMediaIsArray);
-        } else {
-            // An empty/corrupted chat file
-            chat.splice(0, chat.length);
-            chat_metadata = initialMetadata ?? {};
-        }
-        if (!chat_metadata.integrity) {
-            chat_metadata.integrity = uuidv4();
-        }
-        await getChatResult();
+        const data = await runMeasuredStage(measureStage, 'chatParse', () => response.json());
+        await runMeasuredStage(measureStage, 'chatApply', () => {
+            if (Array.isArray(data) && data.length > 0) {
+                /** @type {ChatHeader} */
+                const chatHeader = data.shift();
+                chat_metadata = initialMetadata ?? chatHeader?.chat_metadata ?? {};
+                chat.splice(0, chat.length, ...data);
+                chat.forEach(ensureMessageMediaIsArray);
+            } else {
+                // An empty/corrupted chat file
+                chat.splice(0, chat.length);
+                chat_metadata = initialMetadata ?? {};
+            }
+            if (!chat_metadata.integrity) {
+                chat_metadata.integrity = uuidv4();
+            }
+        });
+        await getChatResult(measureStage);
         eventSource.emit(event_types.CHAT_LOADED, { detail: { id: this_chid, character: characters[this_chid] } });
 
         // Workspace-controlled loads must not open the software keyboard after a tab tap.
@@ -10480,12 +10799,12 @@ export async function getChat(initialMetadata) {
             });
         }
     } catch (error) {
-        await getChatResult();
+        await getChatResult(measureStage);
         console.log(error);
     }
 }
 
-async function getChatResult() {
+async function getChatResult(measureStage = null) {
     name2 = characters[this_chid].name;
     let freshChat = false;
     if (chat.length === 0) {
@@ -10497,14 +10816,14 @@ async function getChatResult() {
         // Make sure the chat appears on the server
         await saveChatConditional();
     }
-    await loadItemizedPrompts(getCurrentChatId());
-    await printMessages();
-    select_selected_character(this_chid);
+    await runMeasuredStage(measureStage, 'itemizedPrompts', () => loadItemizedPrompts(getCurrentChatId()));
+    await runMeasuredStage(measureStage, 'messageRender', () => printMessages());
+    await runMeasuredStage(measureStage, 'ownerUi', () => select_selected_character(this_chid));
 
-    await eventSource.emit(event_types.CHAT_CHANGED, (getCurrentChatId()));
+    await runMeasuredStage(measureStage, 'chatEvents', () => eventSource.emit(event_types.CHAT_CHANGED, (getCurrentChatId())));
     if (!freshChat) {
         try {
-            await syncWorkspaceLastChat();
+            if (!isChatWorkspaceChild()) await syncWorkspaceLastChat();
         } catch (error) {
             console.warn('Could not rebuild the workspace last-chat mirror after opening the chat:', error);
             toastr.warning(t`Workspace last-chat mirror could not be rebuilt.`, t`Workspace last-chat mirror`);
@@ -10560,9 +10879,11 @@ function getFirstMessage() {
  * @param {boolean} [options.openInWorkspace=true] Whether user navigation may open the chat in another workspace tab
  * @param {boolean} [options.skipClear=false] Whether the caller has already cleared the current chat
  * @param {boolean} [options.waitForSave=true] Whether to wait for a pending chat save before opening
+ * @param {boolean} [options.persistSelection=true] Whether to persist the character's selected chat before returning
+ * @param {Function|null} [options.measureStage=null] Optional workspace stage measurement callback
  * @returns {Promise<void>}
  */
-export async function openCharacterChat(file_name, { openInWorkspace = true, skipClear = false, waitForSave = true } = {}) {
+export async function openCharacterChat(file_name, { openInWorkspace = true, skipClear = false, waitForSave = true, persistSelection = true, measureStage = null } = {}) {
     const character = characters[this_chid];
     const targetIdentity = character
         ? { kind: 'character', ownerId: String(character.avatar), chatId: String(file_name) }
@@ -10581,12 +10902,14 @@ export async function openCharacterChat(file_name, { openInWorkspace = true, ski
         await flushPendingChatSave();
         await waitUntilCondition(() => !isChatSaving, debounce_timeout.extended, 10);
     }
-    if (!skipClear) await clearChat({ clearData: true });
+    if (!skipClear) {
+        await runMeasuredStage(measureStage, 'chatClear', () => clearChat({ clearData: true }));
+    }
     characters[this_chid].chat = file_name;
     chat_metadata = {};
-    await getChat();
+    await getChat(undefined, { measureStage });
     $('#selected_chat_pole').val(file_name);
-    await createOrEditCharacter(new CustomEvent('newChat'));
+    if (persistSelection) await createOrEditCharacter(new CustomEvent('newChat'));
 }
 
 ////////// OPTIMZED MAIN API CHANGE FUNCTION ////////////
@@ -13135,6 +13458,7 @@ export async function swipe(event, direction, { source, repeated, message = chat
             // resets the timer
             thisMesDiv.find('.mes_timer').html('');
             thisMesDiv.find('.tokenCounterDisplay').text('');
+            thisMesDiv.find('.messageCostDisplay').text('');
             updateReasoningUI(thisMesDiv, { reset: true });
         } else {
             //console.log('showing previously generated swipe candidate, or "..."');

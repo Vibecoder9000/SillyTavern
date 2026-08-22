@@ -66,10 +66,23 @@ describe('chat workspace initial loading surface', () => {
 
     test('captures outgoing state and blocks input in inactive runtimes', () => {
         expect(bridgeScript).toContain('state: bridgeApi.getState()');
-        expect(bridgeScript).toContain('await bridgeApi.flushPendingChat();');
-        expect(bridgeScript).toContain('await bridgeApi.flushGlobalSettings();');
+        expect(bridgeScript).toContain("measureNavigationStage('chatFlush', () => bridgeApi.flushPendingChat())");
         expect(bridgeScript).toContain("document.addEventListener('beforeinput', blockInactiveEditableInput, true)");
         expect(bridgeScript).toContain('blurWorkspaceFocus();');
+    });
+
+    test('flushes global settings only after the shell commits the destination', () => {
+        const queueNavigation = bridgeScript.slice(
+            bridgeScript.indexOf('function queueWorkspaceNavigation'),
+            bridgeScript.indexOf('function requestTabActivation'),
+        );
+        const activeHandler = bridgeScript.slice(
+            bridgeScript.indexOf("if (message.type === 'active')"),
+            bridgeScript.indexOf("if (message.type === 'persona-state')"),
+        );
+        expect(queueNavigation).not.toContain('flushGlobalSettings');
+        expect(activeHandler).toContain('void runInBackground(() => bridgeApi.flushGlobalSettings()');
+        expect(activeHandler).not.toContain('await bridgeApi.flushGlobalSettings()');
     });
 
     test('owns one runtime and has no spare or cache lifecycle', () => {
@@ -93,10 +106,58 @@ describe('chat workspace initial loading surface', () => {
         expect(postAssignment).toMatch(/postToSlot\(slot, 'assign', \{\s*(?:\/\/[\s\S]*?\n\s*)?sessionId,/);
     });
 
-    test('blocks navigation during generation at both child and shell boundaries', () => {
+    test('allows only explicitly detachable generation to navigate', () => {
         expect(bridgeScript).toContain('latestTabsState.navigationBlocked');
-        expect(shellScript).toContain('isSessionGenerating(activeSession)');
+        expect(shellScript).toContain('isSessionNavigationBlocked(activeSession)');
+        expect(shellScript).toContain('canNavigateWhileGenerating: session.canNavigateWhileGenerating');
         expect(shellScript).toContain("type: 'blocked-generating'");
+    });
+
+    test('pauses before navigation and resumes only after the destination chat is restored', () => {
+        const queueNavigation = bridgeScript.slice(
+            bridgeScript.indexOf('function queueWorkspaceNavigation'),
+            bridgeScript.indexOf('function requestTabActivation'),
+        );
+        const navigate = bridgeScript.slice(
+            bridgeScript.indexOf('async function navigate'),
+            bridgeScript.indexOf('export function initChatWorkspaceBridge'),
+        );
+        expect(queueNavigation.indexOf('pauseWorkspaceGeneration')).toBeLessThan(queueNavigation.indexOf('flushPendingChat'));
+        expect(navigate.indexOf('restoreView')).toBeLessThan(navigate.indexOf('resumeWorkspaceGeneration'));
+        expect(navigate.indexOf('resumeWorkspaceGeneration')).toBeLessThan(navigate.indexOf("post('prepared'"));
+    });
+
+    test('drains hidden streams but holds presentation and completion until resume', () => {
+        const processor = appScript.slice(
+            appScript.indexOf('class StreamingProcessor'),
+            appScript.indexOf('/**\n * Constructs a prompt'),
+        );
+        expect(processor).toContain('workspaceNeedsCatchUp = true');
+        expect(processor).toContain('continue;');
+        expect(processor).toContain('await this.#waitForWorkspaceResume();');
+        expect(processor.indexOf('await this.#waitForWorkspaceResume();')).toBeLessThan(processor.lastIndexOf('this.isFinished = true'));
+        expect(appScript).toContain("['normal', 'swipe'].includes(type)");
+    });
+
+    test('makes swipe TTFT detachable and releases the global swipe lock while hidden', () => {
+        const streamingBranch = appScript.slice(
+            appScript.indexOf("if (isStreamingEnabled() && type !== 'quiet')"),
+            appScript.indexOf('} else {\n            return await sendGenerationRequest'),
+        );
+        expect(streamingBranch.indexOf('prepareWorkspaceStreaming()')).toBeLessThan(streamingBranch.indexOf('sendStreamingRequest'));
+
+        const pauseGeneration = appScript.slice(
+            appScript.indexOf('async function pauseWorkspaceGeneration'),
+            appScript.indexOf('async function flushWorkspacePendingChat'),
+        );
+        expect(pauseGeneration).toContain("processor.type === 'swipe'");
+        expect(pauseGeneration).toContain('swipeState = SWIPE_STATE.NONE');
+
+        const generationUi = appScript.slice(
+            appScript.indexOf('function setWorkspaceGenerationUi'),
+            appScript.indexOf('function registerWorkspaceStreamingProcessor'),
+        );
+        expect(generationUi).toContain('swipeState = SWIPE_STATE.SWIPING');
     });
 
     test('reassigns the active logical session after the sole iframe reloads', () => {

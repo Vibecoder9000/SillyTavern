@@ -3,6 +3,7 @@ import { getAdjacentSessionId } from './chat-workspace-state.js';
 const query = new URLSearchParams(location.search);
 const runtimeId = query.get('workspaceRuntime');
 let assignedSessionId = null;
+let assignedIdentity = null;
 let settingsRevision = Number(query.get('workspaceRevision')) || 0;
 let workspaceActive = query.get('workspaceActive') !== '0';
 let navigationDepth = 0;
@@ -15,6 +16,7 @@ let pendingPersonaAvatar = null;
 let latestTabsState = null;
 let themeStateTimer = null;
 let navigationRequestPending = false;
+let navigationTiming = null;
 let bootStage = 'starting';
 const activityLabels = {
     saving: 'Saving',
@@ -39,6 +41,10 @@ export function isChatWorkspaceChild() {
 
 export function isChatWorkspaceInteractionActive() {
     return !isChatWorkspaceChild() || workspaceActive;
+}
+
+export function getChatWorkspaceSessionId() {
+    return assignedSessionId;
 }
 
 function isWorkspaceNavigationCommand() {
@@ -85,8 +91,57 @@ function blurWorkspaceFocus() {
 }
 
 function reportNavigationError(error) {
-    console.error('Could not save the current chat before switching', error);
-    globalThis.toastr?.error?.('Could not save the current chat. Chat switching was cancelled.');
+    console.error('Could not prepare the current chat for switching', error);
+    const detail = error instanceof Error ? error.message : 'Could not save the current chat.';
+    globalThis.toastr?.error?.(`${detail} Chat switching was cancelled.`);
+}
+
+async function runInBackground(callback, warning) {
+    try {
+        await callback();
+    } catch (error) {
+        console.warn(warning, error);
+    }
+}
+
+function getTimingNow() {
+    return globalThis.performance?.now?.() ?? Date.now();
+}
+
+function beginNavigationTiming(type, targetSessionId) {
+    navigationTiming = {
+        type,
+        targetSessionId,
+        startedAt: getTimingNow(),
+        handoffStartedAt: null,
+        preparedAt: null,
+        stages: {},
+    };
+}
+
+async function measureNavigationStage(name, callback) {
+    const startedAt = getTimingNow();
+    try {
+        return await callback();
+    } finally {
+        if (navigationTiming) {
+            navigationTiming.stages[name] = (navigationTiming.stages[name] || 0) + getTimingNow() - startedAt;
+        }
+    }
+}
+
+function finishNavigationTiming(outcome) {
+    if (!navigationTiming) return;
+    const finishedAt = getTimingNow();
+    const stages = Object.fromEntries(Object.entries(navigationTiming.stages)
+        .map(([name, duration]) => [name, Number(duration.toFixed(1))]));
+    console.info('[Chat workspace] Tab switch timing', {
+        type: navigationTiming.type,
+        outcome,
+        stagesMs: stages,
+        totalMs: Number((finishedAt - navigationTiming.startedAt).toFixed(1)),
+    });
+    navigationTiming = null;
 }
 
 function queueWorkspaceNavigation(type, payload, optimisticSessionId = null) {
@@ -96,15 +151,19 @@ function queueWorkspaceNavigation(type, payload, optimisticSessionId = null) {
         || latestTabsState.pendingSessionId
         || latestTabsState.navigationBlocked) return false;
     navigationRequestPending = true;
+    beginNavigationTiming(type, optimisticSessionId);
     blurWorkspaceFocus();
     if (optimisticSessionId) renderTabs({ ...latestTabsState, pendingSessionId: optimisticSessionId });
     void (async () => {
-        await bridgeApi.flushPendingChat();
-        await bridgeApi.flushGlobalSettings();
+        await measureNavigationStage('pause', () => bridgeApi.pauseWorkspaceGeneration?.(assignedSessionId));
+        await measureNavigationStage('chatFlush', () => bridgeApi.flushPendingChat());
+        if (navigationTiming) navigationTiming.handoffStartedAt = getTimingNow();
         post(type, { ...payload, state: bridgeApi.getState() });
     })().catch(error => {
         navigationRequestPending = false;
         if (latestTabsState) renderTabs({ ...latestTabsState, pendingSessionId: null });
+        void bridgeApi.resumeWorkspaceGeneration?.(assignedSessionId);
+        finishNavigationTiming('error');
         reportNavigationError(error);
     });
     return true;
@@ -353,29 +412,36 @@ export function notifyWorkspaceExtensionChange() {
     post('extensions-changed');
 }
 
-async function navigate(requestId, targetSessionId, identity, restore = {}, personaAvatar = null) {
+async function navigate(requestId, targetSessionId, identity, restore = {}, personaAvatar = null, previousSessionId = assignedSessionId) {
     navigationDepth++;
     try {
-        if (identity) await bridgeApi.openIdentity(identity);
-        await bridgeApi.restoreView(restore);
-        await bridgeApi.onActivated(personaAvatar);
+        if (navigationTiming) {
+            navigationTiming.targetSessionId = targetSessionId;
+            if (navigationTiming.handoffStartedAt !== null) {
+                navigationTiming.stages.shellHandoff = getTimingNow() - navigationTiming.handoffStartedAt;
+            }
+        }
+        if (previousSessionId && previousSessionId !== targetSessionId) {
+            await measureNavigationStage('pause', () => bridgeApi.pauseWorkspaceGeneration?.(previousSessionId));
+        }
+        assignedSessionId = targetSessionId;
+        assignedIdentity = identity;
+        if (identity) await bridgeApi.openIdentity(identity, measureNavigationStage);
+        await measureNavigationStage('viewRestore', () => bridgeApi.restoreView(restore));
+        await measureNavigationStage('personaActivation', () => bridgeApi.onActivated(personaAvatar));
+        await measureNavigationStage('generationResume', () => bridgeApi.resumeWorkspaceGeneration?.(targetSessionId));
         // The application is prepared once its chat, view, and persona state
         // are restored. Loader popup disposal is visual cleanup and may wait
         // for an animation or popup lifecycle even after its DOM is gone; it
         // must not hold the shell loader open.
-        try {
-            void Promise.resolve(bridgeApi.hideLoader()).catch(error => {
-                console.warn('Could not finish hiding the child loader', error);
-            });
-        } catch (error) {
-            console.warn('Could not start hiding the child loader', error);
-        }
+        void runInBackground(() => bridgeApi.hideLoader(), 'Could not finish hiding the child loader');
         post('prepared', {
             requestId,
             targetSessionId,
             state: bridgeApi.getState(),
             settingsRevision,
         });
+        if (navigationTiming) navigationTiming.preparedAt = getTimingNow();
     } catch (error) {
         console.error('Could not open chat workspace session', error);
         post('navigation-error', {
@@ -383,6 +449,7 @@ async function navigate(requestId, targetSessionId, identity, restore = {}, pers
             targetSessionId,
             message: error instanceof Error ? error.message : String(error),
         });
+        finishNavigationTiming('error');
     } finally {
         navigationDepth--;
     }
@@ -397,11 +464,11 @@ export function initChatWorkspaceBridge(api) {
         const message = event.data;
         if (!message || message.source !== 'sillytavern-chat-workspace-shell' || message.runtimeId !== runtimeId) return;
         if (message.type === 'assign') {
-            assignedSessionId = message.sessionId;
+            const previousSessionId = assignedSessionId;
             settingsRevision = message.settingsRevision;
             pendingPersonaAvatar = message.personaAvatar || pendingPersonaAvatar;
             setWorkspaceActive(false);
-            void navigate(message.requestId, message.sessionId, message.identity, message.restore, pendingPersonaAvatar).finally(() => {
+            void navigate(message.requestId, message.sessionId, message.identity, message.restore, pendingPersonaAvatar, previousSessionId).finally(() => {
                 pendingPersonaAvatar = null;
             });
         }
@@ -409,6 +476,8 @@ export function initChatWorkspaceBridge(api) {
         if (message.type === 'activation-blocked') {
             navigationRequestPending = false;
             if (latestTabsState) renderTabs({ ...latestTabsState, pendingSessionId: null });
+            void bridgeApi.resumeWorkspaceGeneration?.(assignedSessionId);
+            finishNavigationTiming('blocked');
             const text = message.reason === 'generating'
                 ? 'Wait for generation to finish before switching chats.'
                 : message.reason === 'failed'
@@ -418,7 +487,15 @@ export function initChatWorkspaceBridge(api) {
         }
         if (message.type === 'active') {
             setWorkspaceActive(message.active);
-            if (message.active) globalThis.toastr?.clear?.(undefined, { force: true });
+            if (message.active) {
+                if (navigationTiming && navigationTiming.preparedAt !== null) {
+                    navigationTiming.stages.commitHandshake = getTimingNow() - navigationTiming.preparedAt;
+                }
+                finishNavigationTiming('success');
+                void runInBackground(() => bridgeApi.onCommitted?.(assignedIdentity), 'Could not finish post-commit workspace persistence');
+                void runInBackground(() => bridgeApi.flushGlobalSettings(), 'Could not flush workspace settings after committing the tab');
+                globalThis.toastr?.clear?.(undefined, { force: true });
+            }
         }
         if (message.type === 'persona-state' && typeof message.avatar === 'string') pendingPersonaAvatar = message.avatar;
         if (message.type === 'request-state') notifyWorkspaceState();

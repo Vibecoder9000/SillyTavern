@@ -39,6 +39,7 @@ export function createWorkspaceSession(identity = null, seed = {}) {
         scrollTop: Number(seed.scrollTop) || 0,
         personaAvatar: typeof seed.personaAvatar === 'string' ? seed.personaAvatar : '',
         status: SESSION_STATUS.IDLE,
+        canNavigateWhileGenerating: false,
         saving: false,
         pendingSave: false,
         unread: false,
@@ -70,6 +71,10 @@ export function isSessionGenerating(session) {
         || session?.status === SESSION_STATUS.WAITING;
 }
 
+export function isSessionNavigationBlocked(session) {
+    return isSessionGenerating(session) && !session?.canNavigateWhileGenerating;
+}
+
 export function findSessionByIdentity(sessions, identity) {
     const key = getIdentityKey(identity);
     return key ? sessions.find(session => getIdentityKey(session.identity) === key) ?? null : null;
@@ -93,6 +98,7 @@ export function hasTabPresentationChanged(previous, next) {
     return previous.title !== next.title
         || previous.avatar !== next.avatar
         || previous.status !== next.status
+        || previous.canNavigateWhileGenerating !== next.canNavigateWhileGenerating
         || previous.saving !== next.saving
         || previous.pendingSave !== next.pendingSave
         || previous.unread !== next.unread;

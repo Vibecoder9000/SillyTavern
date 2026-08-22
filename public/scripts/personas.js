@@ -1489,6 +1489,10 @@ function getPersonaStates(avatarId) {
  */
 
 function updatePersonaUIStates({ navigateToCurrent = false } = {}) {
+    // Workspace activation restores persona state after CHAT_CHANGED. Avoid a
+    // redundant full persona-panel refresh while that event is suppressed.
+    if (personaAutoSelectionSuppressionDepth > 0) return;
+
     if (navigateToCurrent) {
         navigateToAvatar(user_avatar);
     }

@@ -1,5 +1,5 @@
 import { describe, expect, jest, test } from '@jest/globals';
-import { createCoalescedWriter } from '../public/scripts/chat-workspace-persistence.js';
+import { createCoalescedWriter, createKeyedCoalescedWriter } from '../public/scripts/chat-workspace-persistence.js';
 
 describe('chat workspace persistence coalescing', () => {
     test('continuous updates persist only the latest trailing snapshot', async () => {
@@ -37,5 +37,31 @@ describe('chat workspace persistence coalescing', () => {
         await Promise.resolve();
         expect(writes).toEqual(['first', 'latest']);
         jest.useRealTimers();
+    });
+
+    test('coalesces keyed writes independently and serializes each key', async () => {
+        let releaseFirst;
+        const firstBlocked = new Promise(resolve => { releaseFirst = resolve; });
+        const writes = [];
+        const writer = createKeyedCoalescedWriter(async (key, value) => {
+            writes.push([key, value]);
+            if (key === 'character-a' && value === 'first') await firstBlocked;
+        }, { delay: 0 });
+
+        const first = writer.flush('character-a', 'first');
+        const replacement = writer.flush('character-a', 'latest');
+        await writer.flush('character-b', 'only');
+
+        expect(writes).toEqual([
+            ['character-a', 'first'],
+            ['character-b', 'only'],
+        ]);
+        releaseFirst();
+        await Promise.all([first, replacement]);
+        expect(writes).toEqual([
+            ['character-a', 'first'],
+            ['character-b', 'only'],
+            ['character-a', 'latest'],
+        ]);
     });
 });

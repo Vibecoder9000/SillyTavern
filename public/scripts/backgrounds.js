@@ -5,6 +5,7 @@ import { SlashCommandParser } from './slash-commands/SlashCommandParser.js';
 import { flashHighlight, stringFormat, debounce, createThumbnail, getBase64Async } from './utils.js';
 import { t, translate } from './i18n.js';
 import { Popup } from './popup.js';
+import { getAnimatedWebpDuration } from './util/animated-webp.js';
 
 const PNG_PIXEL_B64 = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
 const FOLDER_LIMIT = 100;
@@ -36,6 +37,8 @@ const BG_METADATA_KEY = 'custom_background';
 const LIST_METADATA_KEY = 'chat_backgrounds';
 let backgroundLoadPromise = null;
 let backgroundNameMap = null;
+let firefoxWebpResetTimer = null;
+let firefoxWebpResetAbortController = null;
 const thumbnailElementsByFile = new Map();
 const selectedThumbnailElements = new Set();
 const lockedThumbnailElements = new Set();
@@ -43,6 +46,100 @@ const staticThumbnailGenerationQueue = [];
 const staticThumbnailPersistQueue = [];
 let lastStaticThumbnailFailureWidth = window.innerWidth;
 let lastStaticThumbnailFailureIsMobile = window.innerWidth <= 1000;
+
+function cancelFirefoxWebpDecoderReset() {
+    clearTimeout(firefoxWebpResetTimer);
+    firefoxWebpResetTimer = null;
+    firefoxWebpResetAbortController?.abort();
+    firefoxWebpResetAbortController = null;
+}
+
+function getCssUrlSource(cssUrl) {
+    const match = String(cssUrl ?? '').match(/^url\((['"]?)(.*?)\1\)$/);
+    return match?.[2] || null;
+}
+
+function getFirefoxAnimatedWebpUrl(cssUrl) {
+    if (typeof navigator === 'undefined' || !/Firefox\//.test(navigator.userAgent)) return null;
+
+    const source = getCssUrlSource(cssUrl);
+    if (!source) return null;
+
+    try {
+        const url = new URL(source, window.location.href);
+        return url.pathname.toLowerCase().endsWith('.webp') ? url : null;
+    } catch {
+        return null;
+    }
+}
+
+function getDecoderResetCssUrl(sourceUrl, resetNumber) {
+    const url = new URL(sourceUrl);
+    url.hash = `st-bg-decoder-reset-${resetNumber}`;
+    return `url("${url.href}")`;
+}
+
+/**
+ * Recreates Firefox's animated-WebP decoder at each natural loop boundary.
+ * The reset URL is runtime-only and is never persisted with background settings.
+ * @param {string} cssUrl CSS url(...) value for the selected background.
+ * @returns {void}
+ */
+async function startFirefoxWebpDecoderReset(cssUrl) {
+    cancelFirefoxWebpDecoderReset();
+    const sourceUrl = getFirefoxAnimatedWebpUrl(cssUrl);
+    if (!sourceUrl) return;
+
+    const abortController = new AbortController();
+    firefoxWebpResetAbortController = abortController;
+    const { signal } = abortController;
+
+    try {
+        const response = await fetch(sourceUrl, {
+            cache: 'force-cache',
+            signal,
+        });
+        if (!response.ok) throw new Error(`WebP fetch failed with status ${response.status}`);
+
+        const duration = getAnimatedWebpDuration(await response.arrayBuffer());
+        if (signal.aborted || !duration) return;
+
+        let resetNumber = 0;
+        const scheduleReset = () => {
+            if (signal.aborted) return;
+
+            firefoxWebpResetTimer = setTimeout(() => {
+                firefoxWebpResetTimer = null;
+                if (signal.aborted) return;
+
+                const background = $('#bg1');
+                const previousTransition = background.css('transition');
+                background.css('transition', 'none').css('background-image', 'none');
+
+                requestAnimationFrame(() => {
+                    if (signal.aborted) return;
+                    resetNumber++;
+                    background.css('background-image', getDecoderResetCssUrl(sourceUrl, resetNumber));
+                    requestAnimationFrame(() => background.css('transition', previousTransition));
+                    scheduleReset();
+                });
+            }, duration);
+        };
+
+        scheduleReset();
+    } catch (error) {
+        if (error.name !== 'AbortError') console.debug('[Backgrounds] Firefox WebP decoder reset unavailable:', error);
+    } finally {
+        if (firefoxWebpResetAbortController === abortController) firefoxWebpResetAbortController = null;
+    }
+}
+
+function applyMainBackground(cssUrl) {
+    $('#bg1').css('background-image', cssUrl);
+    void startFirefoxWebpDecoderReset(cssUrl);
+}
+
+globalThis.addEventListener('pagehide', cancelFirefoxWebpDecoderReset);
 
 /**
  * Toggles the starred status of a background by calling the server API and then updates the UI.
@@ -1707,10 +1804,10 @@ async function onChatChanged() {
 
     if (lockedUrl) {
         // This chat has a locked background, so apply it directly to the main view.
-        $('#bg1').css('background-image', lockedUrl);
+        applyMainBackground(lockedUrl);
     } else {
         // This chat does not have a locked background, so apply the user's global setting.
-        $('#bg1').css('background-image', background_settings.url);
+        applyMainBackground(background_settings.url);
     }
 
     // Update all UI elements to reflect the current state.
@@ -1771,7 +1868,7 @@ function onUnlockBackgroundClick() {
     removeBackgroundMetadata();
 
     // Revert the view to the current global background.
-    $('#bg1').css('background-image', background_settings.url);
+    applyMainBackground(background_settings.url);
 
     // Update UI states to reflect the removal of the lock.
     highlightLockedBackground();
@@ -2347,7 +2444,7 @@ async function autoBackgroundCommand() {
  * @param {string} url - The CSS URL string for the background.
  */
 async function setBackground(bg, url) {
-    $('#bg1').css('background-image', url);
+    applyMainBackground(url);
     background_settings.name = bg;
     background_settings.url = url;
     saveSettingsDebounced();

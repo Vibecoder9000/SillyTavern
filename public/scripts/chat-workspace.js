@@ -6,7 +6,7 @@ import {
     getIdentityKey,
     hasPersistedSessionChanged,
     hasTabPresentationChanged,
-    isSessionGenerating,
+    isSessionNavigationBlocked,
     isSessionBusy,
     normalizeIdentity,
     restoreWorkspace,
@@ -208,13 +208,14 @@ function getTabsState() {
             title: session.title || session.identity?.chatId || 'Home',
             avatar: session.avatar || '',
             status: session.status,
+            canNavigateWhileGenerating: session.canNavigateWhileGenerating,
             saving: session.saving,
             unread: session.unread,
             busy: isSessionBusy(session),
         })),
         activeSessionId: runtimeController.activeSessionId,
         pendingSessionId: runtimeController.pendingSessionId,
-        navigationBlocked: isSessionGenerating(activeSession),
+        navigationBlocked: isSessionNavigationBlocked(activeSession),
     };
 }
 
@@ -233,7 +234,9 @@ function requestActivation(sessionId, { force = false, recovering = false } = {}
     const session = sessions.find(candidate => candidate.id === sessionId);
     if (!session) return { type: 'failed', requestId: null, slot: null };
     const activeSession = sessions.find(candidate => candidate.id === runtimeController.activeSessionId);
-    if (!force && sessionId !== runtimeController.activeSessionId && isSessionGenerating(activeSession)) {
+    if (!force
+        && sessionId !== runtimeController.activeSessionId
+        && isSessionNavigationBlocked(activeSession)) {
         notifyActivationBlocked('generating');
         return { type: 'blocked-generating', requestId: null, slot: runtimeController.slot };
     }
@@ -269,6 +272,7 @@ function applyChildState(session, state) {
     session.scrollTop = state.scrollTop || 0;
     session.personaAvatar = state.personaAvatar ?? session.personaAvatar;
     session.status = state.status || SESSION_STATUS.IDLE;
+    session.canNavigateWhileGenerating = Boolean(state.canNavigateWhileGenerating);
     session.saving = Boolean(state.saving);
     session.pendingSave = Boolean(state.pendingSave);
     const selectedSessionId = runtimeController.pendingSessionId || runtimeController.activeSessionId;
@@ -285,12 +289,16 @@ function getInitialPresentation(presentation) {
     };
 }
 
-function openSession(identity, presentation) {
+function isOpeningBlocked() {
     const activeSession = sessions.find(candidate => candidate.id === runtimeController.activeSessionId);
-    if (isSessionGenerating(activeSession) || runtimeController.pendingSessionId) {
-        notifyActivationBlocked(isSessionGenerating(activeSession) ? 'generating' : 'pending');
-        return null;
-    }
+    const reason = isSessionNavigationBlocked(activeSession) ? 'generating' : runtimeController.pendingSessionId ? 'pending' : null;
+    if (!reason) return false;
+    notifyActivationBlocked(reason);
+    return true;
+}
+
+function openSession(identity, presentation) {
+    if (isOpeningBlocked()) return null;
     const normalized = normalizeIdentity(identity);
     if (!normalized) return null;
     let session = findSessionByIdentity(sessions, normalized);
@@ -304,11 +312,7 @@ function openSession(identity, presentation) {
 }
 
 function openNewChat(identity, presentation) {
-    const activeSession = sessions.find(candidate => candidate.id === runtimeController.activeSessionId);
-    if (isSessionGenerating(activeSession) || runtimeController.pendingSessionId) {
-        notifyActivationBlocked(isSessionGenerating(activeSession) ? 'generating' : 'pending');
-        return null;
-    }
+    if (isOpeningBlocked()) return null;
     const normalized = normalizeIdentity(identity);
     if (!normalized) return null;
     let session = findSessionByIdentity(sessions, normalized);

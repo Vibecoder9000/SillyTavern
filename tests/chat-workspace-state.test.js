@@ -10,6 +10,7 @@ import {
     hasTabPresentationChanged,
     isSessionBusy,
     isSessionGenerating,
+    isSessionNavigationBlocked,
     normalizeIdentity,
     restoreWorkspace,
     serializeWorkspace,
@@ -67,6 +68,17 @@ describe('chat workspace state', () => {
         expect(isSessionGenerating(session)).toBe(false);
     });
 
+    test('only detachable generation permits workspace navigation', () => {
+        const session = createWorkspaceSession(characterChat);
+        session.status = SESSION_STATUS.GENERATING;
+        expect(isSessionNavigationBlocked(session)).toBe(true);
+        session.canNavigateWhileGenerating = true;
+        expect(isSessionNavigationBlocked(session)).toBe(false);
+        expect(isSessionBusy(session)).toBe(true);
+        session.status = SESSION_STATUS.IDLE;
+        expect(isSessionNavigationBlocked(session)).toBe(false);
+    });
+
     test('does not persist runtime-only activity updates', () => {
         const previous = createWorkspaceSession(characterChat, {
             title: 'Alice',
@@ -74,7 +86,7 @@ describe('chat workspace state', () => {
             scrollTop: 42,
             personaAvatar: 'user.png',
         });
-        const active = { ...previous, status: SESSION_STATUS.GENERATING, saving: true };
+        const active = { ...previous, status: SESSION_STATUS.GENERATING, canNavigateWhileGenerating: true, saving: true };
 
         expect(hasPersistedSessionChanged(previous, active)).toBe(false);
         expect(hasPersistedSessionChanged(previous, { ...active, draft: 'changed' })).toBe(true);
@@ -137,6 +149,7 @@ describe('chat workspace state', () => {
         expect(hasTabPresentationChanged(previous, { ...viewOnlyUpdate, saving: true })).toBe(true);
         expect(hasTabPresentationChanged(previous, { ...viewOnlyUpdate, unread: true })).toBe(true);
         expect(hasTabPresentationChanged(previous, { ...viewOnlyUpdate, status: SESSION_STATUS.GENERATING })).toBe(true);
+        expect(hasTabPresentationChanged(previous, { ...viewOnlyUpdate, canNavigateWhileGenerating: true })).toBe(true);
     });
 
     test('cycles through chats in either direction and wraps at the ends', () => {
