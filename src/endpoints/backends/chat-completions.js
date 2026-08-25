@@ -2279,6 +2279,14 @@ router.post('/generate', async function (request, response) {
                 bodyParams['reasoning']['effort'] = request.body.reasoning_effort;
             }
 
+            if (request.body.service_tier && request.body.service_tier !== 'auto') {
+                bodyParams['service_tier'] = request.body.service_tier;
+            }
+
+            if (request.body.session_id) {
+                bodyParams['session_id'] = String(request.body.session_id);
+            }
+
             if (request.body.verbosity) {
                 bodyParams['verbosity'] = request.body.verbosity;
             }

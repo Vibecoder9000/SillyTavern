@@ -327,6 +327,8 @@ export const settingsToUpdate = {
     openrouter_quantizations: ['#openrouter_quantizations_chat', 'openrouter_quantizations', false, true],
     openrouter_allow_fallbacks: ['#openrouter_allow_fallbacks', 'openrouter_allow_fallbacks', true, true],
     openrouter_middleout: ['#openrouter_middleout', 'openrouter_middleout', false, true],
+    openrouter_service_tier: ['#openrouter_service_tier', 'openrouter_service_tier', false, true],
+    openrouter_session_id: ['#openrouter_session_id', 'openrouter_session_id', false, true],
     tool_reasoning_mode: ['#tool_reasoning_mode', 'tool_reasoning_mode', false, false],
     tool_result_role: ['#tool_result_role', 'tool_result_role', false, false],
     parse_tools_in_thinking_blocks: ['#tool_parse_in_thinking_blocks', 'parse_tools_in_thinking_blocks', true, false],
@@ -488,6 +490,8 @@ const default_settings = {
     openrouter_quantizations: [],
     openrouter_allow_fallbacks: true,
     openrouter_middleout: openrouter_middleout_types.ON,
+    openrouter_service_tier: 'auto',
+    openrouter_session_id: '',
     tool_reasoning_mode: tool_reasoning_modes.DISABLED,
     reverse_proxy: '',
     chat_completion_source: chat_completion_sources.OPENAI,
@@ -2973,6 +2977,8 @@ export async function createGenerationParameters(settings, model, type, messages
         generate_data.quantizations = settings.openrouter_quantizations;
         generate_data.allow_fallbacks = settings.openrouter_allow_fallbacks;
         generate_data.middleout = settings.openrouter_middleout;
+        generate_data.service_tier = settings.openrouter_service_tier;
+        generate_data.session_id = settings.openrouter_session_id;
     }
 
     if (settings.chat_completion_source === chat_completion_sources.NANOGPT) {
@@ -4476,6 +4482,8 @@ function loadOpenAISettings(data, settings) {
     $('#openrouter_allow_fallbacks').prop('checked', oai_settings.openrouter_allow_fallbacks);
     $('#openrouter_providers_chat').val(oai_settings.openrouter_providers).trigger('change');
     $('#openrouter_middleout').val(oai_settings.openrouter_middleout);
+    $('#openrouter_service_tier').val(oai_settings.openrouter_service_tier);
+    $('#openrouter_session_id').val(oai_settings.openrouter_session_id);
     $('#squash_system_messages').prop('checked', oai_settings.squash_system_messages);
     $('#continue_prefill').prop('checked', oai_settings.continue_prefill);
     $('#openai_function_calling').prop('checked', oai_settings.function_calling);
@@ -7160,6 +7168,16 @@ export function initOpenAI() {
 
     $('#openrouter_middleout').on('input', function () {
         oai_settings.openrouter_middleout = String($(this).val());
+        saveSettingsDebounced();
+    });
+
+    $('#openrouter_service_tier').on('input', function () {
+        oai_settings.openrouter_service_tier = String($(this).val());
+        saveSettingsDebounced();
+    });
+
+    $('#openrouter_session_id').on('input', function () {
+        oai_settings.openrouter_session_id = String($(this).val());
         saveSettingsDebounced();
     });
 
