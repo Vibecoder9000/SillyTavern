@@ -3,6 +3,7 @@ import {
     cleanUpMessage,
     extractMessageFromData,
     generateRawData,
+    getOneCharacter,
     getMaxPromptTokens,
     main_api,
 } from '../../script.js';
@@ -125,8 +126,20 @@ export function getCardContextStatus(characterId) {
  * @param {{ force?: boolean, ignorePaused?: boolean, onProgress?: (message:string) => void, onStream?: (update:{reasoning:string, content:string, isThinking:boolean}) => void }} [options]
  */
 export async function ensureCharacterCardContext(characterId, { force = false, ignorePaused = false, onProgress = null, onStream = null } = {}) {
-    const { rosterCharacter, character } = findCharacter(characterId);
+    let { rosterCharacter, character } = findCharacter(characterId);
     if (!rosterCharacter || !character) throw new Error(`Character card not found for ${characterId}.`);
+
+    // The character list may contain shallow entries when lazy loading is enabled.
+    // Summaries must be built from the complete card, so hydrate through the canonical
+    // character endpoint before reading any card fields.
+    if (character.shallow) {
+        onProgress?.(`Loading ${rosterCharacter.name}'s full card…`);
+        await getOneCharacter(character.avatar);
+        ({ rosterCharacter, character } = findCharacter(characterId));
+        if (!rosterCharacter || !character || character.shallow) {
+            throw new Error(`Failed to load the full character card for ${rosterCharacter?.name || characterId}.`);
+        }
+    }
 
     const source = buildCharacterCardSource(character);
     if (!source) throw new Error(`${rosterCharacter.name || characterId} has no textual card content.`);
