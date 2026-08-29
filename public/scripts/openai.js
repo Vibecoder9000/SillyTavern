@@ -1909,11 +1909,11 @@ function calculateOpenRouterCost() {
 }
 
 /**
- * Extracts OpenRouter's reported per-message cost from a response payload when present.
+ * Extracts provider reporting metadata from a streamed response payload when present.
  * @param {object} data Response payload
- * @returns {number|string|null}
+ * @returns {{ cost: number|string|null, energy: object|null } | null}
  */
-function extractOpenRouterMessageCost(data) {
+function extractStreamingProviderReport(data) {
     const candidates = [
         data?.cost?.request_cost_usd,
         data?.cost?.total_cost_usd,
@@ -1924,16 +1924,25 @@ function extractOpenRouterMessageCost(data) {
         data?.total_cost,
     ];
 
+    let cost = null;
     for (const candidate of candidates) {
         if (typeof candidate === 'number' && Number.isFinite(candidate)) {
-            return candidate;
+            cost = candidate;
+            break;
         }
         if (typeof candidate === 'string' && candidate.trim()) {
-            return candidate.trim();
+            cost = candidate.trim();
+            break;
         }
     }
 
-    return null;
+    const energy = data?.energy && typeof data.energy === 'object' ? structuredClone(data.energy) : null;
+
+    if (cost === null && energy === null) {
+        return null;
+    }
+
+    return { cost, energy };
 }
 
 function getElectronHubModelTemplate(option) {
@@ -3243,7 +3252,7 @@ async function sendOpenAIRequest(type, messages, signal, { jsonSchema = null, fo
             let text = '';
             const swipes = [];
             const toolCalls = [];
-            const state = { reasoning: '', images: [], messageCost: null, toolSignatures: {}, signature: null };
+            const state = { reasoning: '', images: [], messageCost: null, providerReport: null, toolSignatures: {}, signature: null };
             while (true) {
                 const { done, value } = await reader.read();
                 if (done) return;
@@ -3261,8 +3270,13 @@ async function sendOpenAIRequest(type, messages, signal, { jsonSchema = null, fo
                 }
 
                 ToolManager.parseToolCalls(toolCalls, parsed);
-                if (oai_settings.chat_completion_source === chat_completion_sources.OPENROUTER) {
-                    state.messageCost = extractOpenRouterMessageCost(parsed) ?? state.messageCost;
+                const providerReport = extractStreamingProviderReport(parsed);
+                if (providerReport) {
+                    state.messageCost = providerReport.cost ?? state.messageCost;
+                    state.providerReport = {
+                        cost: state.messageCost,
+                        energy: providerReport.energy ?? state.providerReport?.energy ?? null,
+                    };
                 }
 
                 yield { text, swipes: swipes, logprobs: parseChatCompletionLogprobs(parsed), toolCalls: toolCalls, state: state };
@@ -3817,6 +3831,10 @@ class Message {
             chat_completion_sources.VERTEXAI,
         ];
         const sizeThreshold = 2 * 1024 * 1024;
+        const configuredMaxDimension = Number(power_user.chat_inline_image_max_dimension);
+        const maxDimension = Number.isFinite(configuredMaxDimension)
+            ? Math.min(4096, Math.max(512, Math.round(configuredMaxDimension)))
+            : 2048;
         const conversion = power_user.chat_inline_image_conversion || 'default';
         const conversionType = this.getInlineImageConversionMimeType(conversion);
         const needsConversion = Boolean(conversionType);
@@ -3824,9 +3842,18 @@ class Message {
         const safeMimeTypes = ['image/jpeg', 'image/png', 'image/webp'];
         const mimeType = image?.split(';')?.[0]?.split(':')?.[1];
         const quality = needsConversion ? Message.inlineImageConversionQuality : undefined;
-        if (compressImageSources.includes(oai_settings.chat_completion_source) && dataSize > sizeThreshold) {
-            const maxSide = 2048;
-            image = await createThumbnail(image, maxSide, maxSide, conversionType || 'image/jpeg', quality);
+        let exceedsMaxDimension = false;
+        try {
+            const imageSize = await getImageSizeFromDataURL(image);
+            exceedsMaxDimension = Math.max(imageSize.width, imageSize.height) > maxDimension;
+        } catch (error) {
+            console.warn('Failed to determine inline image dimensions:', error);
+        }
+
+        const needsSizeCompression = compressImageSources.includes(oai_settings.chat_completion_source) && dataSize > sizeThreshold;
+        if (needsSizeCompression || exceedsMaxDimension) {
+            const outputType = conversionType || (exceedsMaxDimension && safeMimeTypes.includes(mimeType) ? mimeType : 'image/jpeg');
+            image = await createThumbnail(image, maxDimension, maxDimension, outputType, quality);
         } else if (needsConversion) {
             image = await createThumbnail(image, null, null, conversionType, quality);
         } else if (!safeMimeTypes.includes(mimeType)) {

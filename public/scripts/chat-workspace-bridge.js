@@ -1,6 +1,8 @@
 import { getAdjacentSessionId } from './chat-workspace-state.js';
 
 const query = new URLSearchParams(location.search);
+const DIRECT_SHELL_RECEIVER = '__sillyTavernChatWorkspaceShellReceive';
+const DIRECT_CHILD_RECEIVER = '__sillyTavernChatWorkspaceChildReceive';
 const runtimeId = query.get('workspaceRuntime');
 let assignedSessionId = null;
 let assignedIdentity = null;
@@ -18,14 +20,7 @@ let themeStateTimer = null;
 let navigationRequestPending = false;
 let navigationTiming = null;
 let bootStage = 'starting';
-const activityLabels = {
-    saving: 'Saving',
-    opening: 'Opening',
-    generating: 'Writing',
-    waiting: 'Reply',
-    error: 'Error',
-    unread: 'New',
-};
+const TRANSIENT_ACTIVITY_DELAY = 400;
 const statusLabels = {
     saving: 'saving',
     opening: 'opening',
@@ -34,6 +29,40 @@ const statusLabels = {
     error: 'error',
     unread: 'unread response',
 };
+
+function setTabActivity(elements, statusKey) {
+    const { activity } = elements;
+    const transient = statusKey === 'saving' || statusKey === 'opening';
+    elements.requestedActivity = statusKey;
+
+    if (elements.activityTimer && elements.activityTimerStatus !== statusKey) {
+        clearTimeout(elements.activityTimer);
+        elements.activityTimer = null;
+        elements.activityTimerStatus = '';
+    }
+
+    if (!transient) {
+        if (elements.activityTimer) clearTimeout(elements.activityTimer);
+        elements.activityTimer = null;
+        elements.activityTimerStatus = '';
+        activity.dataset.status = statusKey;
+        return;
+    }
+
+    if (activity.dataset.status === statusKey || elements.activityTimer) return;
+    // Opening and saving commonly finish within a single perceptual moment.
+    // Retain any useful existing state and only reveal these indicators when
+    // the operation lasts long enough for feedback to help instead of flash.
+    if (!activity.dataset.status || ['opening', 'saving'].includes(activity.dataset.status)) {
+        activity.dataset.status = '';
+    }
+    elements.activityTimerStatus = statusKey;
+    elements.activityTimer = setTimeout(() => {
+        elements.activityTimer = null;
+        elements.activityTimerStatus = '';
+        if (elements.requestedActivity === statusKey) activity.dataset.status = statusKey;
+    }, TRANSIENT_ACTIVITY_DELAY);
+}
 
 export function isChatWorkspaceChild() {
     return Boolean(runtimeId && parent !== self);
@@ -57,13 +86,28 @@ export function canPersistWorkspaceGlobals() {
 
 function post(type, payload = {}) {
     if (!isChatWorkspaceChild()) return;
-    globalThis.parent.postMessage({
+    const message = {
         source: 'sillytavern-chat-workspace',
         type,
         runtimeId,
         sessionId: assignedSessionId,
         ...payload,
-    }, globalThis.location.origin);
+    };
+
+    // Both workspace documents are same-origin. A direct receiver avoids two
+    // queued window-message tasks on the tab-switch handshake while retaining
+    // postMessage as the startup/failure fallback.
+    let receiver = null;
+    try {
+        receiver = globalThis.parent?.[DIRECT_SHELL_RECEIVER];
+    } catch {
+        // Cross-window access can fail while either document is navigating.
+    }
+    if (typeof receiver === 'function') {
+        receiver(message, globalThis);
+        return;
+    }
+    globalThis.parent.postMessage(message, globalThis.location.origin);
 }
 
 export function reportWorkspaceBootProgress(stage) {
@@ -224,6 +268,7 @@ function renderTabs(tabs) {
 
     for (const [sessionId, elements] of tabElements) {
         if (liveSessionIds.has(sessionId)) continue;
+        if (elements.activityTimer) clearTimeout(elements.activityTimer);
         elements.tab.remove();
         tabElements.delete(sessionId);
     }
@@ -288,7 +333,7 @@ function renderTabs(tabs) {
             });
             select.append(avatar, title, activity);
             tab.append(select, close);
-            elements = { tab, select, avatar, title, activity, close };
+            elements = { tab, select, avatar, title, activity, close, requestedActivity: '', activityTimer: null, activityTimerStatus: '' };
             tabElements.set(session.id, elements);
         }
 
@@ -322,9 +367,10 @@ function renderTabs(tabs) {
                 : session.status !== 'idle'
                     ? session.status
                     : session.unread ? 'unread' : '';
-        // A pending tab's spinner is sufficient feedback. Keep the accessible
-        // status on the tab button without adding shifting "Opening" text.
-        activity.textContent = statusKey === 'opening' ? '' : activityLabels[statusKey] || '';
+        // The compact icon is sufficient visual feedback. Full status text is
+        // retained in the tooltip and accessible name below.
+        activity.textContent = '';
+        setTabActivity(elements, statusKey);
 
         close.disabled = Boolean(session.busy || tabs.pendingSessionId);
         const closeLabel = session.busy
@@ -435,13 +481,14 @@ async function navigate(requestId, targetSessionId, identity, restore = {}, pers
         // for an animation or popup lifecycle even after its DOM is gone; it
         // must not hold the shell loader open.
         void runInBackground(() => bridgeApi.hideLoader(), 'Could not finish hiding the child loader');
+        const state = bridgeApi.getState();
+        if (navigationTiming) navigationTiming.preparedAt = getTimingNow();
         post('prepared', {
             requestId,
             targetSessionId,
-            state: bridgeApi.getState(),
+            state,
             settingsRevision,
         });
-        if (navigationTiming) navigationTiming.preparedAt = getTimingNow();
     } catch (error) {
         console.error('Could not open chat workspace session', error);
         post('navigation-error', {
@@ -459,9 +506,8 @@ export function initChatWorkspaceBridge(api) {
     if (!isChatWorkspaceChild() || initialized) return;
     initialized = true;
     bridgeApi = api;
-    globalThis.addEventListener('message', event => {
-        if (event.origin !== globalThis.location.origin || event.source !== globalThis.parent) return;
-        const message = event.data;
+    const receiveShellMessage = (message, source, origin) => {
+        if (origin !== globalThis.location.origin || source !== globalThis.parent) return;
         if (!message || message.source !== 'sillytavern-chat-workspace-shell' || message.runtimeId !== runtimeId) return;
         if (message.type === 'assign') {
             const previousSessionId = assignedSessionId;
@@ -519,7 +565,9 @@ export function initChatWorkspaceBridge(api) {
                 console.error('Could not create a new workspace chat', error);
             });
         }
-    });
+    };
+    globalThis[DIRECT_CHILD_RECEIVER] = (message, source) => receiveShellMessage(message, source, globalThis.location.origin);
+    globalThis.addEventListener('message', event => receiveShellMessage(event.data, event.source, event.origin));
 
     document.querySelector('#send_textarea')?.addEventListener('input', () => notifyWorkspaceState());
     const blockInactiveEditableInput = event => {

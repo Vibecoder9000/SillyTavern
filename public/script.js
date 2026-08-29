@@ -280,7 +280,7 @@ import { extractReasoningFromData, extractReasoningSignatureFromData, initReason
 import { accountStorage } from './scripts/util/AccountStorage.js';
 import { initWelcomeScreen, openPermanentAssistantChat, openPermanentAssistantCard, getPermanentAssistantAvatar } from './scripts/welcome-screen.js';
 import { initDataMaid } from './scripts/data-maid.js';
-import { clearItemizedPrompts, deleteItemizedPromptForMessage, deleteItemizedPrompts, findItemizedPromptSet, initItemizedPrompts, itemizedParams, itemizedPrompts, loadItemizedPrompts, promptItemize, replaceItemizedPromptText, saveItemizedPrompts, swapItemizedPrompts } from './scripts/itemized-prompts.js';
+import { clearItemizedPrompts, deleteItemizedPromptForMessage, deleteItemizedPrompts, findItemizedPromptSet, initItemizedPrompts, itemizedParams, itemizedPrompts, loadItemizedPrompts, prepareItemizedPrompts, promptItemize, replaceItemizedPromptText, saveItemizedPrompts, swapItemizedPrompts, unloadItemizedPrompts } from './scripts/itemized-prompts.js';
 import { getSystemMessageByType, initSystemMessages, SAFETY_CHAT, sendSystemMessage, system_message_types, system_messages } from './scripts/system-messages.js';
 import { event_types, eventSource } from './scripts/events.js';
 import { initAccessibility } from './scripts/a11y.js';
@@ -311,7 +311,7 @@ import {
     reportWorkspaceBootProgress,
     requestWorkspaceOpen,
 } from './scripts/chat-workspace-bridge.js';
-import { getWorkspaceCachedValue, setWorkspaceCachedValue, WORKSPACE_CACHE_KEYS } from './scripts/chat-workspace-cache.js';
+import { getWorkspaceCachedValue, getWorkspaceChatSnapshot, setWorkspaceCachedValue, setWorkspaceChatSnapshot, WORKSPACE_CACHE_KEYS } from './scripts/chat-workspace-cache.js';
 import { createCoalescedWriter, createKeyedCoalescedWriter } from './scripts/chat-workspace-persistence.js';
 
 export { isCharacterDesignerGenerating };
@@ -335,6 +335,7 @@ export {
     itemizedPrompts,
     saveItemizedPrompts,
     loadItemizedPrompts,
+    prepareItemizedPrompts,
     itemizedParams,
     clearItemizedPrompts,
     replaceItemizedPromptText,
@@ -1050,6 +1051,43 @@ const workspaceMirrorWriter = createCoalescedWriter(async snapshot => {
     await syncWorkspaceLastChat(snapshot.chat, snapshot.workspace);
 }, { delay: 0 });
 
+let pendingWorkspaceOwnerUiIdentity = null;
+let pendingWorkspaceChatEvents = Promise.resolve();
+let pendingWorkspaceDraftInput = null;
+const workspaceComposerGenerationPendingSessions = new Set();
+
+/**
+ * Returns whether the chat currently displayed by the workspace is generating.
+ * Detached processors belonging to other tabs must not gate this chat's swipe
+ * controls just because the legacy generation flags are shared by the iframe.
+ * @returns {boolean}
+ */
+function isActiveChatGenerating() {
+    if (!isChatWorkspaceChild()) return isGenerating();
+
+    const sessionId = getChatWorkspaceSessionId();
+    if (!sessionId) return isGenerating();
+
+    return is_group_generating
+        || isCharacterDesignerGenerating()
+        || workspaceComposerGenerationPendingSessions.has(sessionId)
+        || workspaceStreamingProcessors.has(sessionId)
+        // With no detachable processor, the legacy flag still belongs to the
+        // active chat (for non-streaming and non-detachable generation paths).
+        || (is_send_press && workspaceStreamingProcessors.size === 0);
+}
+
+export function emitChatChanged(chatId, { background = false } = {}) {
+    if (!background) return eventSource.emit(event_types.CHAT_CHANGED, chatId);
+    // Yield the entire observer dispatch until after the workspace has handed
+    // the rendered chat back to the shell. flushWorkspacePendingChat awaits
+    // this promise before another activation, so every listener still runs
+    // against the chat it was emitted for and cannot spill into the next one.
+    pendingWorkspaceChatEvents = delay(0)
+        .then(() => eventSource.emitInBackground(event_types.CHAT_CHANGED, chatId));
+    return Promise.resolve();
+}
+
 function captureWorkspaceCharacterSelection(identity) {
     const characterId = characters.findIndex(character => String(character.avatar) === String(identity.ownerId));
     const character = characters[characterId];
@@ -1087,7 +1125,28 @@ function captureWorkspacePostCommit(identity) {
     return { identity, mirror, selection: null };
 }
 
-function persistWorkspacePostCommit(identity) {
+async function persistWorkspacePostCommit(identity) {
+    const restoredDraftInput = pendingWorkspaceDraftInput;
+    pendingWorkspaceDraftInput = null;
+    // Let the committed chat paint before broadcasting programmatic draft
+    // restoration. Input observers update secondary UI and can be relatively
+    // expensive, while the textarea value itself is already correct.
+    await delay(0);
+    if (workspaceIdentityEquals(identity, getWorkspaceChatIdentity())) {
+        restoredDraftInput?.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+
+    if (workspaceIdentityEquals(identity, pendingWorkspaceOwnerUiIdentity)) {
+        if (!workspaceIdentityEquals(identity, getWorkspaceChatIdentity())) return;
+        const characterId = characters.findIndex(character => String(character.avatar) === String(identity.ownerId));
+        if (identity.kind === 'character' && characterId >= 0) {
+            select_selected_character(characterId, { switchMenu: false });
+        } else if (identity.kind === 'group') {
+            select_group_chats(identity.ownerId, true);
+        }
+        pendingWorkspaceOwnerUiIdentity = null;
+    }
+
     let snapshot;
     try {
         snapshot = captureWorkspacePostCommit(identity);
@@ -1128,8 +1187,11 @@ async function openWorkspaceIdentity(identity, measureStage = null) {
                 skipClear: selectionClearedChat,
                 waitForSave: false,
                 persistSelection: false,
+                refreshOwnerUi: false,
+                backgroundChatEvents: true,
                 measureStage,
             });
+            if (selectionClearedChat) pendingWorkspaceOwnerUiIdentity = { ...identity };
             return;
         }
 
@@ -1138,14 +1200,16 @@ async function openWorkspaceIdentity(identity, measureStage = null) {
             const group = groups.find(item => String(item.id) === String(identity.ownerId));
             if (!group) throw new Error(`Group not found: ${identity.ownerId}`);
             const selectionClearedChat = String(selected_group) !== String(group.id);
-            await openGroupById(group.id, { openInWorkspace: false, loadChat: false, measureStage });
+            await openGroupById(group.id, { openInWorkspace: false, loadChat: false, refreshOwnerUi: false, measureStage });
             await openGroupChat(group.id, identity.chatId, {
                 openInWorkspace: false,
                 skipClear: selectionClearedChat,
                 waitForSave: false,
                 persistSelection: false,
+                backgroundChatEvents: true,
                 measureStage,
             });
+            if (selectionClearedChat) pendingWorkspaceOwnerUiIdentity = { ...identity };
         }
     };
 
@@ -1157,8 +1221,13 @@ async function openWorkspaceIdentity(identity, measureStage = null) {
 function restoreWorkspaceView(restore = {}) {
     const textarea = document.querySelector('#send_textarea');
     if (textarea) {
-        textarea.value = restore.draft || '';
-        textarea.dispatchEvent(new Event('input', { bubbles: true }));
+        const draft = restore.draft || '';
+        if (textarea.value !== draft) {
+            textarea.value = draft;
+            pendingWorkspaceDraftInput = textarea;
+        } else {
+            pendingWorkspaceDraftInput = null;
+        }
     }
     // openIdentity has already awaited chat rendering. Do not wait for a
     // presentation frame here: an opaque workspace loader can make browsers
@@ -2048,7 +2117,7 @@ export async function clearChat({ clearData = false } = {}) {
     } else { console.debug('saw no avatars'); }
 
     await saveItemizedPrompts(getCurrentChatId());
-    itemizedPrompts.length = 0;
+    unloadItemizedPrompts();
 
     if (clearData) chat.length = 0;
 }
@@ -2154,6 +2223,7 @@ export async function reloadCurrentChatUnsafe() {
  * Send the message currently typed into the chat box.
  */
 export async function sendTextareaMessage() {
+    const workspaceSessionId = isChatWorkspaceChild() ? getChatWorkspaceSessionId() : null;
     // don't proceed during swipeGenerate()
     if (swipeState == SWIPE_STATE.EDITING) {
         toastr.warning(t`Confirm the edit to start a generation.`, t`You cannot send a message during a swipe-edit.`);
@@ -2162,32 +2232,54 @@ export async function sendTextareaMessage() {
     if (swipeState !== SWIPE_STATE.NONE) return; // don't proceed if mid-swipe.
     if (is_send_press) return;
     if (isExecutingCommandsFromChatInput) return;
+    if (workspaceSessionId && workspaceComposerGenerationPendingSessions.has(workspaceSessionId)) return;
 
-    hideSwipeButtons(); //Swipe buttons must be hidden now, otherwise concurrent generations are possible.
-
-    let generateType = 'normal';
-    // "Continue on send" is activated when the user hits "send" (or presses enter) on an empty chat box, and the last
-    // message was sent from a character (not the user or the system).
-    const textareaText = String($('#send_textarea').val());
-    const lastMessage = chat[chat.length - 1];
-    if (power_user.continue_on_send &&
-        !hasPendingFileAttachment() &&
-        !textareaText &&
-        !selected_group &&
-        chat.length &&
-        !lastMessage.is_user &&
-        !lastMessage.is_system
-    ) {
-        generateType = 'continue';
+    if (workspaceSessionId) {
+        // The chat can become visible before its independent CHAT_CHANGED
+        // observers finish. Prompt construction must not race those observers
+        // (persona, tools, regex, notes, and similar per-chat state).
+        workspaceComposerGenerationPendingSessions.add(workspaceSessionId);
+        try {
+            await pendingWorkspaceChatEvents;
+        } catch (error) {
+            console.warn('Could not finish preparing the workspace chat before generation', error);
+        }
+        // Re-check locks after the readiness wait. Another command or
+        // generation may have started while the click was queued.
+        if (is_send_press || isExecutingCommandsFromChatInput || swipeState !== SWIPE_STATE.NONE) {
+            workspaceComposerGenerationPendingSessions.delete(workspaceSessionId);
+            return;
+        }
     }
 
-    if (textareaText && !selected_group && this_chid === undefined && name2 !== neutralCharacterName) {
-        await newAssistantChat({ temporary: false });
-    }
+    try {
+        hideSwipeButtons(); //Swipe buttons must be hidden now, otherwise concurrent generations are possible.
 
-    let generation = await Generate(generateType);
-    showSwipeButtons();
-    return generation;
+        let generateType = 'normal';
+        // "Continue on send" is activated when the user hits "send" (or presses enter) on an empty chat box, and the last
+        // message was sent from a character (not the user or the system).
+        const textareaText = String($('#send_textarea').val());
+        const lastMessage = chat[chat.length - 1];
+        if (power_user.continue_on_send &&
+            !hasPendingFileAttachment() &&
+            !textareaText &&
+            !selected_group &&
+            chat.length &&
+            !lastMessage.is_user &&
+            !lastMessage.is_system
+        ) {
+            generateType = 'continue';
+        }
+
+        if (textareaText && !selected_group && this_chid === undefined && name2 !== neutralCharacterName) {
+            await newAssistantChat({ temporary: false });
+        }
+
+        return await Generate(generateType);
+    } finally {
+        if (workspaceSessionId) workspaceComposerGenerationPendingSessions.delete(workspaceSessionId);
+        showSwipeButtons({ updateCounters: isChatWorkspaceChild(), fade: !isChatWorkspaceChild() });
+    }
 }
 
 /**
@@ -6127,7 +6219,7 @@ function setWorkspaceGenerationUi(processor) {
     abortController = new AbortController();
     is_send_press = false;
     $('#mes_stop').css({ display: 'none' });
-    showSwipeButtons();
+    showSwipeButtons({ updateCounters: true, fade: false });
     delete document.body.dataset.generating;
     setGenerationProgress(0);
 }
@@ -6177,11 +6269,13 @@ async function pauseWorkspaceGeneration(sessionId = getChatWorkspaceSessionId())
 }
 
 async function flushWorkspacePendingChat() {
+    await pendingWorkspaceChatEvents;
     if (workspaceStreamingProcessors.has(getChatWorkspaceSessionId())) {
         await saveChatConditional();
-        return;
+    } else {
+        await flushPendingChatSave();
     }
-    await flushPendingChatSave();
+    setWorkspaceChatSnapshot(getWorkspaceChatIdentity(), chat_metadata, chat);
 }
 
 async function resumeWorkspaceGeneration(sessionId = getChatWorkspaceSessionId()) {
@@ -8356,7 +8450,12 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
                 };
             }
 
-            hideSwipeButtons();
+            const processorOwnsActiveWorkspace = !completedStreamingProcessor.workspaceDetachable
+                || (completedStreamingProcessor.workspaceSessionId === getChatWorkspaceSessionId()
+                    && !completedStreamingProcessor.workspaceOutputPaused);
+            // The request can finish connecting after its chat was detached.
+            // Do not let that late continuation hide controls in another tab.
+            if (processorOwnsActiveWorkspace) hideSwipeButtons();
             let getMessage = await completedStreamingProcessor.generate();
             try {
                 let messageChunk = cleanUpMessage({
@@ -10750,43 +10849,59 @@ export async function unshallowCharacter(characterId) {
     await getOneCharacter(avatar);
 }
 
-export async function getChat(initialMetadata, { measureStage = null } = {}) {
+export async function getChat(initialMetadata, { measureStage = null, refreshOwnerUi = true, backgroundChatEvents = false } = {}) {
+    const preparedItemizedPrompts = prepareItemizedPrompts(getCurrentChatId());
+    const identity = getWorkspaceChatIdentity();
     try {
         await runMeasuredStage(measureStage, 'characterLoad', () => unshallowCharacter(this_chid));
+        const cachedSnapshot = await runMeasuredStage(measureStage, 'chatCache', () => getWorkspaceChatSnapshot(identity));
+        let loadedMetadata = cachedSnapshot?.metadata;
+        let loadedMessages = cachedSnapshot?.messages;
 
-        const response = await runMeasuredStage(measureStage, 'chatFetch', () => fetch('/api/chats/get', {
-            method: 'POST',
-            headers: getRequestHeaders(),
-            cache: 'no-cache',
-            body: JSON.stringify({
-                ch_name: characters[this_chid].name,
-                file_name: characters[this_chid].chat,
-                avatar_url: characters[this_chid].avatar,
-            }),
-        }));
+        if (!cachedSnapshot) {
+            const response = await runMeasuredStage(measureStage, 'chatFetch', () => fetch('/api/chats/get', {
+                method: 'POST',
+                headers: getRequestHeaders(),
+                cache: 'no-cache',
+                body: JSON.stringify({
+                    ch_name: characters[this_chid].name,
+                    file_name: characters[this_chid].chat,
+                    avatar_url: characters[this_chid].avatar,
+                }),
+            }));
 
-        if (!response.ok) {
-            throw new Error('Chat could not be loaded');
-        }
+            if (!response.ok) {
+                throw new Error('Chat could not be loaded');
+            }
 
-        const data = await runMeasuredStage(measureStage, 'chatParse', () => response.json());
-        await runMeasuredStage(measureStage, 'chatApply', () => {
+            const data = await runMeasuredStage(measureStage, 'chatParse', () => response.json());
             if (Array.isArray(data) && data.length > 0) {
                 /** @type {ChatHeader} */
                 const chatHeader = data.shift();
-                chat_metadata = initialMetadata ?? chatHeader?.chat_metadata ?? {};
-                chat.splice(0, chat.length, ...data);
+                loadedMetadata = chatHeader?.chat_metadata;
+                loadedMessages = data;
+            } else {
+                loadedMetadata = {};
+                loadedMessages = [];
+            }
+        }
+
+        await runMeasuredStage(measureStage, 'chatApply', () => {
+            if (Array.isArray(loadedMessages) && loadedMessages.length > 0) {
+                chat_metadata = initialMetadata ?? loadedMetadata ?? {};
+                chat.splice(0, chat.length, ...loadedMessages);
                 chat.forEach(ensureMessageMediaIsArray);
             } else {
                 // An empty/corrupted chat file
                 chat.splice(0, chat.length);
-                chat_metadata = initialMetadata ?? {};
+                chat_metadata = initialMetadata ?? loadedMetadata ?? {};
             }
             if (!chat_metadata.integrity) {
                 chat_metadata.integrity = uuidv4();
             }
         });
-        await getChatResult(measureStage);
+        setWorkspaceChatSnapshot(identity, chat_metadata, chat);
+        await getChatResult(measureStage, { preparedItemizedPrompts, refreshOwnerUi, backgroundChatEvents });
         eventSource.emit(event_types.CHAT_LOADED, { detail: { id: this_chid, character: characters[this_chid] } });
 
         // Workspace-controlled loads must not open the software keyboard after a tab tap.
@@ -10799,12 +10914,12 @@ export async function getChat(initialMetadata, { measureStage = null } = {}) {
             });
         }
     } catch (error) {
-        await getChatResult(measureStage);
+        await getChatResult(measureStage, { preparedItemizedPrompts, refreshOwnerUi, backgroundChatEvents });
         console.log(error);
     }
 }
 
-async function getChatResult(measureStage = null) {
+async function getChatResult(measureStage = null, { preparedItemizedPrompts = null, refreshOwnerUi = true, backgroundChatEvents = false } = {}) {
     name2 = characters[this_chid].name;
     let freshChat = false;
     if (chat.length === 0) {
@@ -10816,11 +10931,17 @@ async function getChatResult(measureStage = null) {
         // Make sure the chat appears on the server
         await saveChatConditional();
     }
-    await runMeasuredStage(measureStage, 'itemizedPrompts', () => loadItemizedPrompts(getCurrentChatId()));
+    await runMeasuredStage(measureStage, 'itemizedPrompts', () => loadItemizedPrompts(getCurrentChatId(), preparedItemizedPrompts));
     await runMeasuredStage(measureStage, 'messageRender', () => printMessages());
-    await runMeasuredStage(measureStage, 'ownerUi', () => select_selected_character(this_chid));
+    await runMeasuredStage(measureStage, 'ownerUi', () => {
+        if (refreshOwnerUi) {
+            select_selected_character(this_chid);
+        } else {
+            $('#selected_chat_pole').val(characters[this_chid].chat);
+        }
+    });
 
-    await runMeasuredStage(measureStage, 'chatEvents', () => eventSource.emit(event_types.CHAT_CHANGED, (getCurrentChatId())));
+    await runMeasuredStage(measureStage, 'chatEvents', () => emitChatChanged(getCurrentChatId(), { background: backgroundChatEvents }));
     if (!freshChat) {
         try {
             if (!isChatWorkspaceChild()) await syncWorkspaceLastChat();
@@ -10880,10 +11001,12 @@ function getFirstMessage() {
  * @param {boolean} [options.skipClear=false] Whether the caller has already cleared the current chat
  * @param {boolean} [options.waitForSave=true] Whether to wait for a pending chat save before opening
  * @param {boolean} [options.persistSelection=true] Whether to persist the character's selected chat before returning
+ * @param {boolean} [options.refreshOwnerUi=true] Whether to repopulate the character editor after loading
+ * @param {boolean} [options.backgroundChatEvents=false] Whether asynchronous chat observers may finish after the workspace commit
  * @param {Function|null} [options.measureStage=null] Optional workspace stage measurement callback
  * @returns {Promise<void>}
  */
-export async function openCharacterChat(file_name, { openInWorkspace = true, skipClear = false, waitForSave = true, persistSelection = true, measureStage = null } = {}) {
+export async function openCharacterChat(file_name, { openInWorkspace = true, skipClear = false, waitForSave = true, persistSelection = true, refreshOwnerUi = true, backgroundChatEvents = false, measureStage = null } = {}) {
     const character = characters[this_chid];
     const targetIdentity = character
         ? { kind: 'character', ownerId: String(character.avatar), chatId: String(file_name) }
@@ -10907,7 +11030,7 @@ export async function openCharacterChat(file_name, { openInWorkspace = true, ski
     }
     characters[this_chid].chat = file_name;
     chat_metadata = {};
-    await getChat(undefined, { measureStage });
+    await getChat(undefined, { measureStage, refreshOwnerUi, backgroundChatEvents });
     $('#selected_chat_pole').val(file_name);
     if (persistSelection) await createOrEditCharacter(new CustomEvent('newChat'));
 }
@@ -12342,7 +12465,7 @@ export function isSwipingAllowed() {
         //The swipes setting must be enabled, and swipes can't be hidden.
         swipes && !swipesHidden &&
         //Cannot swipe while generating.
-        !isGenerating() &&
+        !isActiveChatGenerating() &&
         //If mid-swipe, the message cannot be swiped.
         swipeState === SWIPE_STATE.NONE
     );
@@ -12486,9 +12609,9 @@ export function refreshSwipeButtons(updateCounters = false, fade = true) {
 /**
  * This function is misleadingly named. It allows generation then refreshes the swipe buttons and counters.
  */
-export function showSwipeButtons() {
+export function showSwipeButtons({ updateCounters = false, fade = true } = {}) {
     swipesHidden = false;
-    refreshSwipeButtons();
+    refreshSwipeButtons(updateCounters, fade);
 }
 
 /**
@@ -13150,7 +13273,7 @@ export async function swipe(event, direction, { source, repeated, message = chat
         console.info(`The ${direction} swipe source on message #${mesId} is ${source}, Most checks have been bypassed. `);
     } else {
         //Only show an error if swipes are not hidden and a message is generating.
-        if (isGenerating() && (swipes && !swipesHidden && (swipeState === SWIPE_STATE.NONE))) {
+        if (isActiveChatGenerating() && (swipes && !swipesHidden && (swipeState === SWIPE_STATE.NONE))) {
             toastr.warning(t`Cannot swipe while generating. Stop the request and try again.`, t`Swipe aborted`);
             return;
         }
@@ -13491,7 +13614,7 @@ export async function swipe(event, direction, { source, repeated, message = chat
 
         await eventSource.emit(event_types.MESSAGE_SWIPED, (mesId));
 
-        if (run_generate && !is_send_press) {
+        if (run_generate && !isActiveChatGenerating()) {
             is_send_press = true;
             generation = Generate('swipe');
         }

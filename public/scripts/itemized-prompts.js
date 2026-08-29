@@ -13,24 +13,59 @@ let PromptArrayItemForRawPromptDisplay;
 let priorPromptArrayItemForRawPromptDisplay;
 
 const promptStorage = localforage.createInstance({ name: 'SillyTavern_Prompts' });
+const MAX_CACHED_PROMPT_CHATS = 8;
+const itemizedPromptCache = new Map();
+const pendingItemizedPromptLoads = new Map();
 export let itemizedPrompts = [];
+
+function cacheItemizedPrompts(chatId, prompts) {
+    itemizedPromptCache.delete(chatId);
+    itemizedPromptCache.set(chatId, prompts);
+
+    while (itemizedPromptCache.size > MAX_CACHED_PROMPT_CHATS) {
+        itemizedPromptCache.delete(itemizedPromptCache.keys().next().value);
+    }
+
+    return prompts;
+}
+
+/**
+ * Starts reading a chat's itemized prompts without changing the active chat state.
+ * Repeated workspace visits reuse the same in-memory value, while first visits can
+ * overlap IndexedDB work with the chat network request and parsing.
+ * @param {string} chatId Chat ID to prepare
+ * @returns {Promise<Array>}
+ */
+export function prepareItemizedPrompts(chatId) {
+    if (!chatId) return Promise.resolve([]);
+
+    if (itemizedPromptCache.has(chatId)) {
+        return Promise.resolve(cacheItemizedPrompts(chatId, itemizedPromptCache.get(chatId)));
+    }
+
+    if (pendingItemizedPromptLoads.has(chatId)) {
+        return pendingItemizedPromptLoads.get(chatId);
+    }
+
+    const load = promptStorage.getItem(chatId)
+        .then(prompts => cacheItemizedPrompts(chatId, Array.isArray(prompts) ? prompts : []))
+        .finally(() => pendingItemizedPromptLoads.delete(chatId));
+    pendingItemizedPromptLoads.set(chatId, load);
+    return load;
+}
 
 /**
  * Gets the itemized prompts for a chat.
  * @param {string} chatId Chat ID to load
  */
-export async function loadItemizedPrompts(chatId) {
+export async function loadItemizedPrompts(chatId, preparedPrompts = null) {
     try {
         if (!chatId) {
             itemizedPrompts = [];
             return;
         }
 
-        itemizedPrompts = await promptStorage.getItem(chatId);
-
-        if (!itemizedPrompts) {
-            itemizedPrompts = [];
-        }
+        itemizedPrompts = await (preparedPrompts ?? prepareItemizedPrompts(chatId));
 
         await eventSource.emit(event_types.ITEMIZED_PROMPTS_LOADED, { chatId: chatId });
     } catch {
@@ -49,11 +84,20 @@ export async function saveItemizedPrompts(chatId) {
             return;
         }
 
+        cacheItemizedPrompts(chatId, itemizedPrompts);
         await promptStorage.setItem(chatId, itemizedPrompts);
         await eventSource.emit(event_types.ITEMIZED_PROMPTS_SAVED, { chatId: chatId });
     } catch {
         console.log('Error saving itemized prompts for chat', chatId);
     }
+}
+
+/**
+ * Detaches the active prompt list after it has been saved. Cached chat prompt
+ * arrays must remain intact while the next chat is being cleared and loaded.
+ */
+export function unloadItemizedPrompts() {
+    itemizedPrompts = [];
 }
 
 /**
@@ -86,6 +130,7 @@ export async function deleteItemizedPrompts(chatId) {
             return;
         }
 
+        itemizedPromptCache.delete(chatId);
         await promptStorage.removeItem(chatId);
         await eventSource.emit(event_types.ITEMIZED_PROMPTS_DELETED, { chatId: chatId, all: false });
     } catch {
@@ -99,6 +144,7 @@ export async function deleteItemizedPrompts(chatId) {
 export async function clearItemizedPrompts() {
     try {
         await promptStorage.clear();
+        itemizedPromptCache.clear();
         itemizedPrompts = [];
         await eventSource.emit(event_types.ITEMIZED_PROMPTS_DELETED, { all: true });
     } catch {
@@ -391,7 +437,8 @@ export function deleteItemizedPromptForMessage(messageId) {
         return;
     }
 
-    itemizedPrompts = itemizedPrompts.filter(x => x.mesId !== messageId);
+    const retainedPrompts = itemizedPrompts.filter(x => x.mesId !== messageId);
+    itemizedPrompts.splice(0, itemizedPrompts.length, ...retainedPrompts);
 
     for (const prompt of itemizedPrompts.filter(x => x.mesId > messageId)) {
         prompt.mesId -= 1;

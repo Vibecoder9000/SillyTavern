@@ -719,9 +719,10 @@ export function getImages(directoryPath, sortBy = 'name', type = MEDIA_REQUEST_T
  * Pipe a fetch() response to an Express.js Response, including status code.
  * @param {import('node-fetch').Response} from The Fetch API response to pipe from.
  * @param {import('express').Response} to The Express response to pipe to.
+ * @param {{onChunk?: (chunk: Buffer|string) => void, onEnd?: () => void, onClose?: () => void}} [observer] Optional stream observer
  * @returns {Promise<void>}
  */
-export async function forwardFetchResponse(from, to) {
+export async function forwardFetchResponse(from, to, observer = undefined) {
     let statusCode = from.status;
     let statusText = from.statusText;
 
@@ -753,15 +754,28 @@ export async function forwardFetchResponse(from, to) {
     }
 
     if (from.body && to.socket) {
+        const safelyNotifyObserver = (hook, ...args) => {
+            try {
+                observer?.[hook]?.(...args);
+            } catch (error) {
+                console.warn(`Streaming response observer ${hook} failed:`, error);
+            }
+        };
+
+        if (observer?.onChunk) {
+            from.body.on('data', chunk => safelyNotifyObserver('onChunk', chunk));
+        }
         from.body.pipe(to);
 
         to.socket.on('close', function () {
+            safelyNotifyObserver('onClose');
             if (from.body instanceof Readable) from.body.destroy(); // Close the remote stream
 
             to.end(); // End the Express response
         });
 
         from.body.on('end', function () {
+            safelyNotifyObserver('onEnd');
             console.info('Streaming request finished');
             to.end();
         });

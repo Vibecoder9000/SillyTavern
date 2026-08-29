@@ -1,4 +1,5 @@
 const WORKSPACE_CACHE_PROPERTY = '__sillyTavernWorkspaceCacheV1__';
+const MAX_CACHED_CHATS = 12;
 
 export const WORKSPACE_CACHE_KEYS = Object.freeze({
     SETTINGS: 'settings',
@@ -19,8 +20,51 @@ function getWorkspaceCacheStore() {
     window.parent[WORKSPACE_CACHE_PROPERTY] ??= {
         values: new Map(),
         once: new Map(),
+        chats: new Map(),
     };
-    return window.parent[WORKSPACE_CACHE_PROPERTY];
+    const store = window.parent[WORKSPACE_CACHE_PROPERTY];
+    store.chats ??= new Map();
+    return store;
+}
+
+function getChatCacheKey(identity) {
+    if (!identity?.kind || !identity?.ownerId || !identity?.chatId) return null;
+    return `${identity.kind}:${identity.ownerId}:${identity.chatId}`;
+}
+
+/**
+ * Returns a cloned snapshot of a chat previously loaded by this workspace.
+ * Reading refreshes its LRU position so frequently switched tabs stay warm.
+ * @param {{kind: string, ownerId: string, chatId: string}} identity Chat identity
+ * @returns {{metadata: object, messages: any[]}|null}
+ */
+export function getWorkspaceChatSnapshot(identity) {
+    const store = getWorkspaceCacheStore();
+    const key = getChatCacheKey(identity);
+    if (!store || !key || !store.chats.has(key)) return null;
+
+    const snapshot = store.chats.get(key);
+    store.chats.delete(key);
+    store.chats.set(key, snapshot);
+    return cloneValue(snapshot);
+}
+
+/**
+ * Keeps the latest in-memory form of a chat available for a warm tab switch.
+ * @param {{kind: string, ownerId: string, chatId: string}} identity Chat identity
+ * @param {object} metadata Chat metadata
+ * @param {any[]} messages Chat messages
+ */
+export function setWorkspaceChatSnapshot(identity, metadata, messages) {
+    const store = getWorkspaceCacheStore();
+    const key = getChatCacheKey(identity);
+    if (!store || !key || !Array.isArray(messages)) return;
+
+    store.chats.delete(key);
+    store.chats.set(key, cloneValue({ metadata: metadata || {}, messages }));
+    while (store.chats.size > MAX_CACHED_CHATS) {
+        store.chats.delete(store.chats.keys().next().value);
+    }
 }
 
 /**

@@ -838,7 +838,10 @@ function formatNativeToolCallXml(toolCall) {
     const args = toolCall?.args && typeof toolCall.args === 'object' && !Array.isArray(toolCall.args)
         ? toolCall.args
         : {};
-    const continueValue = toolCall?.continue !== false;
+    // A missing flag must never schedule a follow-up generation. The prompt
+    // requires the model to provide the flag, but keeping the serializer
+    // conservative also protects older/saved calls and parser fallbacks.
+    const continueValue = toolCall?.continue === true;
     const lines = [`<${toolName}>`];
 
     for (const [argName, value] of Object.entries(args)) {
@@ -1168,8 +1171,23 @@ function collectNativeToolSchemaNotes(tagName, schema, path = []) {
     return notes;
 }
 
+function normalizeNativeToolDisplaySchema(schema) {
+    const normalized = isPlainObject(schema) ? schema : { type: 'object', properties: {} };
+    if (!normalized.properties || typeof normalized.properties !== 'object' || Array.isArray(normalized.properties)) {
+        return normalized;
+    }
+
+    // `continue` is a reserved control tag, not a tool argument. Avoid showing
+    // it twice if a legacy registration included it in its function schema.
+    const properties = Object.fromEntries(Object.entries(normalized.properties).filter(([name]) => name !== 'continue'));
+    const required = Array.isArray(normalized.required)
+        ? normalized.required.filter(name => name !== 'continue')
+        : normalized.required;
+    return { ...normalized, properties, ...(Array.isArray(normalized.required) ? { required } : {}) };
+}
+
 function formatNativeToolXmlSignature(toolName, schema, { includeContinue = true } = {}) {
-    const normalizedSchema = isPlainObject(schema) ? schema : { type: 'object', properties: {} };
+    const normalizedSchema = normalizeNativeToolDisplaySchema(schema);
     const lines = buildNativeToolXmlStructureLines(toolName, normalizedSchema, 0);
 
     if (includeContinue) {
@@ -1184,14 +1202,15 @@ function formatNativeToolXmlSignature(toolName, schema, { includeContinue = true
 }
 
 function formatNativeToolDefinitionText(toolName, description, schema, displayName) {
-    const normalizedSchema = isPlainObject(schema) ? schema : { type: 'object', properties: {} };
+    const normalizedSchema = normalizeNativeToolDisplaySchema(schema);
     const required = new Set(Array.isArray(normalizedSchema?.required) ? normalizedSchema.required : []);
     const properties = normalizedSchema?.properties && typeof normalizedSchema.properties === 'object'
         ? Object.keys(normalizedSchema.properties)
         : [];
-    const optional = properties.filter(propertyName => !required.has(propertyName));
+    const optional = properties.filter(propertyName => propertyName !== 'continue' && !required.has(propertyName));
+    const requiredTags = [...new Set([...required, 'continue'])];
     const notes = collectNativeToolSchemaNotes(toolName, normalizedSchema);
-    notes.push('continue controls whether the model waits for the result before replying.');
+    notes.push('continue is required and must be exactly true or false; it controls whether the model waits for the result before replying.');
 
     const sections = [
         toolName,
@@ -1199,14 +1218,10 @@ function formatNativeToolDefinitionText(toolName, description, schema, displayNa
         formatNativeToolXmlSignature(toolName, normalizedSchema),
     ];
 
-    if (required.size > 0) {
-        sections.push(`Required tags: ${Array.from(required).join(', ')}.`);
-    }
+    sections.push(`Required tags: ${requiredTags.join(', ')}.`);
 
     if (optional.length > 0) {
-        sections.push(`Optional tags: ${optional.join(', ')}, continue.`);
-    } else {
-        sections.push('Optional tags: continue.');
+        sections.push(`Optional tags: ${optional.join(', ')}.`);
     }
 
     if (notes.length > 0) {
@@ -1220,20 +1235,21 @@ function formatNativeToolDefinitionHtml(toolName, description, schema, displayNa
     const text = formatNativeToolDefinitionText(toolName, description, schema, displayName);
     const [title = '', subtitle = ''] = String(text).split('\n');
     const codeBlock = formatNativeToolXmlSignature(toolName, schema);
-    const normalizedSchema = isPlainObject(schema) ? schema : { type: 'object', properties: {} };
+    const normalizedSchema = normalizeNativeToolDisplaySchema(schema);
     const required = Array.isArray(normalizedSchema?.required) ? normalizedSchema.required : [];
     const properties = normalizedSchema?.properties && typeof normalizedSchema.properties === 'object'
         ? Object.keys(normalizedSchema.properties)
         : [];
-    const optional = properties.filter(propertyName => !required.includes(propertyName));
+    const optional = properties.filter(propertyName => propertyName !== 'continue' && !required.includes(propertyName));
+    const requiredTags = [...new Set([...required, 'continue'])];
     const notes = collectNativeToolSchemaNotes(toolName, normalizedSchema);
-    notes.push('continue controls whether the model waits for the result before replying.');
+    notes.push('continue is required and must be exactly true or false; it controls whether the model waits for the result before replying.');
 
     const metaLines = [];
-    if (required.length > 0) {
-        metaLines.push(`<div><small><b>Required tags:</b> ${escapeToolDisplayHtml(required.join(', '))}</small></div>`);
+    metaLines.push(`<div><small><b>Required tags:</b> ${escapeToolDisplayHtml(requiredTags.join(', '))}</small></div>`);
+    if (optional.length > 0) {
+        metaLines.push(`<div><small><b>Optional tags:</b> ${escapeToolDisplayHtml(optional.join(', '))}</small></div>`);
     }
-    metaLines.push(`<div><small><b>Optional tags:</b> ${escapeToolDisplayHtml(optional.length > 0 ? `${optional.join(', ')}, continue` : 'continue')}</small></div>`);
 
     const noteHtml = notes.length > 0
         ? `<div><small>${notes.map(note => escapeToolDisplayHtml(note)).join('<br>')}</small></div>`
@@ -1279,6 +1295,10 @@ let mcpRefreshButtonInitialized = false;
 let sandboxWorkspaceRefreshButtonInitialized = false;
 let sandboxWorkspaceAddButtonInitialized = false;
 let sandboxRootPath = '';
+let cachedSandboxWorkspaces = null;
+let cachedSandboxWorkspacesAt = 0;
+let pendingSandboxWorkspacesFetch = null;
+const SANDBOX_WORKSPACES_CACHE_TTL = 60_000;
 
 function getConfiguredSdToolUrl() {
     const toolUrl = String(power_user.sd_tool_url ?? '').trim();
@@ -5930,7 +5950,7 @@ export class ToolManager {
                 raw_xml: detectedToolBlock,
                 detected_tool_name: effectiveToolName || toolName,
                 tool_call: null,
-                continue: true,
+                continue: false,
                 parse_error: parseError,
             };
         };
@@ -5946,7 +5966,7 @@ export class ToolManager {
                         : {};
                     const shouldContinue = typeof forcedContinue === 'boolean'
                         ? forcedContinue
-                        : parsedJson?.continue !== false;
+                        : parsedJson?.continue === true;
                     const parsed = {
                         tool: effectiveToolName,
                         args,
@@ -5975,7 +5995,7 @@ export class ToolManager {
                             raw_tool_block: detectedToolBlock,
                             raw_xml: detectedToolBlock,
                             tool_call: nestedToolSegment.tool_call,
-                            continue: nestedToolSegment.continue !== false,
+                            continue: nestedToolSegment.continue === true,
                             parse_error: null,
                         };
                     }
@@ -5999,9 +6019,7 @@ export class ToolManager {
             const args = parseNativeXmlBlocksToObject(argumentBlocks, schema?.properties ?? {});
             const shouldContinue = typeof forcedContinue === 'boolean'
                 ? forcedContinue
-                : continueBlocks.length === 0
-                    ? true
-                    : !/^false$/i.test(String(continueBlocks[continueBlocks.length - 1].value ?? '').trim());
+                : /^true$/i.test(String(continueBlocks[continueBlocks.length - 1]?.value ?? '').trim());
 
             const parsed = {
                 tool: effectiveToolName,
@@ -6088,7 +6106,7 @@ export class ToolManager {
             segments.push(parsedSegment);
             hasToolCalls = true;
             hasErrors = hasErrors || !!parsedSegment.parse_error;
-            if (parsedSegment.tool_call?.continue !== false) {
+            if (parsedSegment.tool_call?.continue === true) {
                 shouldContinue = true;
             }
             searchIndex = Math.max(parsedSegment.endIndex, tagMatch.startIndex + tagMatch.openTag.length);
@@ -6282,6 +6300,7 @@ line 3</code>
 - Never put JSON inside XML tags.
 Use <continue>true</continue> when you need the result before replying.
 Use <continue>false</continue> when you already gave your full reply and the tool is only a side effect.
+Every tool call must include exactly one <continue> tag. Its value must be either true or false; never omit it.
 Tool results will be returned inside <result> tags.
 To provide a non-media file for the user to download, use the syntax \`![](filename.ext)\``);
 
@@ -7105,8 +7124,15 @@ function updateSandboxLocationLabel() {
     locationElement.textContent = `${basePath}\\<workspace>`;
 }
 
-async function fetchSandboxWorkspaces() {
-    try {
+async function fetchSandboxWorkspaces({ forceRefresh = false } = {}) {
+    if (!forceRefresh && cachedSandboxWorkspaces && Date.now() - cachedSandboxWorkspacesAt < SANDBOX_WORKSPACES_CACHE_TTL) {
+        return cachedSandboxWorkspaces.slice();
+    }
+    if (!forceRefresh && pendingSandboxWorkspacesFetch) {
+        return (await pendingSandboxWorkspacesFetch).slice();
+    }
+
+    const request = (async () => {
         const response = await fetch('/api/extensions/tools/workspaces', {
             method: 'GET',
             headers: getRequestHeaders(),
@@ -7120,11 +7146,20 @@ async function fetchSandboxWorkspaces() {
         const result = await response.json();
         sandboxRootPath = String(result.rootPath || '').trim();
         updateSandboxLocationLabel();
-        return Array.isArray(result.workspaces) ? result.workspaces : [];
+        cachedSandboxWorkspaces = Array.isArray(result.workspaces) ? result.workspaces.slice() : [];
+        cachedSandboxWorkspacesAt = Date.now();
+        return cachedSandboxWorkspaces;
+    })();
+    pendingSandboxWorkspacesFetch = request;
+
+    try {
+        return (await request).slice();
     } catch (error) {
         console.error('Failed to fetch sandbox workspaces:', error);
         toastr.error(`Failed to fetch sandbox workspaces: ${error.message}`);
         return [];
+    } finally {
+        if (pendingSandboxWorkspacesFetch === request) pendingSandboxWorkspacesFetch = null;
     }
 }
 
@@ -7141,6 +7176,8 @@ async function createSandboxWorkspace(workspace) {
             throw new Error(error.error || 'Failed to create workspace.');
         }
 
+        cachedSandboxWorkspaces = null;
+        cachedSandboxWorkspacesAt = 0;
         return true;
     } catch (error) {
         console.error('Failed to create workspace:', error);
@@ -7680,10 +7717,10 @@ async function openSandboxManagerPopup() {
                 renderList();
             };
 
-            const refreshWorkspaces = async () => {
+            const refreshWorkspaces = async (forceRefresh = false) => {
                 setButtonBusy(refreshButton, true);
                 try {
-                    const workspaceNames = await fetchSandboxWorkspaces();
+                    const workspaceNames = await fetchSandboxWorkspaces({ forceRefresh });
                     const uniqueWorkspaces = [...new Set(workspaceNames.map(x => String(x || '').trim()).filter(Boolean))]
                         .sort((a, b) => a.localeCompare(b));
 
@@ -7752,7 +7789,7 @@ async function openSandboxManagerPopup() {
             });
 
             refreshButton.addEventListener('click', async () => {
-                await refreshWorkspaces();
+                await refreshWorkspaces(true);
                 setStatus('Workspace list refreshed.', 'success');
             });
 
@@ -9551,7 +9588,7 @@ function getMetadataWorkspace() {
         : '';
 }
 
-async function refreshSandboxWorkspaceSelector({ persistDefault = false } = {}) {
+async function refreshSandboxWorkspaceSelector({ persistDefault = false, forceRefresh = false } = {}) {
     const select = getSandboxWorkspaceSelectElement();
     if (!select) {
         return;
@@ -9569,7 +9606,7 @@ async function refreshSandboxWorkspaceSelector({ persistDefault = false } = {}) 
         }
     }
 
-    const workspaceNames = await fetchSandboxWorkspaces();
+    const workspaceNames = await fetchSandboxWorkspaces({ forceRefresh });
     const uniqueWorkspaces = [...new Set(workspaceNames.map(x => String(x || '').trim()).filter(Boolean))]
         .sort((a, b) => a.localeCompare(b));
 
@@ -9677,7 +9714,7 @@ async function initSandboxWorkspaceSelector() {
 
     if (refreshButton && !sandboxWorkspaceRefreshButtonInitialized) {
         refreshButton.addEventListener('click', () => {
-            void refreshSandboxWorkspaceSelector();
+            void refreshSandboxWorkspaceSelector({ forceRefresh: true });
         });
         sandboxWorkspaceRefreshButtonInitialized = true;
     }

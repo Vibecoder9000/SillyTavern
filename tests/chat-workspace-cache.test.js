@@ -1,9 +1,11 @@
 import { afterEach, describe, expect, jest, test } from '@jest/globals';
 import {
     getWorkspaceCachedValue,
+    getWorkspaceChatSnapshot,
     invalidateWorkspaceCachedValue,
     runOncePerWorkspace,
     setWorkspaceCachedValue,
+    setWorkspaceChatSnapshot,
     WORKSPACE_CACHE_KEYS,
 } from '../public/scripts/chat-workspace-cache.js';
 
@@ -71,6 +73,40 @@ describe('chat workspace cache', () => {
         useWorkspaceWindow(parent);
         await expect(getWorkspaceCachedValue('cross-frame', loader)).resolves.toEqual({ shared: true });
         expect(loader).toHaveBeenCalledTimes(1);
+    });
+
+    test('returns isolated warm chat snapshots across frames', () => {
+        const parent = useWorkspaceWindow();
+        const identity = { kind: 'character', ownerId: 'avatar.png', chatId: 'chat-a' };
+        setWorkspaceChatSnapshot(identity, { persona: 'one.png' }, [{ mes: 'hello' }]);
+
+        const first = getWorkspaceChatSnapshot(identity);
+        first.metadata.persona = 'mutated.png';
+        first.messages[0].mes = 'mutated';
+        useWorkspaceWindow(parent);
+
+        expect(getWorkspaceChatSnapshot(identity)).toEqual({
+            metadata: { persona: 'one.png' },
+            messages: [{ mes: 'hello' }],
+        });
+    });
+
+    test('bounds warm chat snapshots with least-recently-used eviction', () => {
+        useWorkspaceWindow();
+        for (let index = 0; index < 12; index++) {
+            setWorkspaceChatSnapshot(
+                { kind: 'character', ownerId: `avatar-${index}`, chatId: `chat-${index}` },
+                {},
+                [{ mes: String(index) }],
+            );
+        }
+
+        // Touch the oldest entry, making the second entry the eviction target.
+        expect(getWorkspaceChatSnapshot({ kind: 'character', ownerId: 'avatar-0', chatId: 'chat-0' })).not.toBeNull();
+        setWorkspaceChatSnapshot({ kind: 'group', ownerId: 'group', chatId: 'new-chat' }, {}, []);
+
+        expect(getWorkspaceChatSnapshot({ kind: 'character', ownerId: 'avatar-0', chatId: 'chat-0' })).not.toBeNull();
+        expect(getWorkspaceChatSnapshot({ kind: 'character', ownerId: 'avatar-1', chatId: 'chat-1' })).toBeNull();
     });
 
     test('evicts failed loads so a later call can retry', async () => {

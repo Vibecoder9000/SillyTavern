@@ -7,7 +7,7 @@ import { getTokenCountAsync } from './tokenizers.js';
 import { cancelDebounce, debounce, escapeHtml, getBase64Async, getFileExtension, getStringHash, saveBase64AsFile, uuidv4 } from './utils.js';
 import { morphdom } from '../lib.js';
 import { ToolManager } from './tool-calling.js';
-import { resolveDeleteCardSpan, resolveInsertCardText, resolveReplaceCardText } from './character-card-edit.js';
+import { formatLorebookContentField, parseLorebookContentField, resolveDeleteCardSpan, resolveInsertCardText, resolveReplaceCardText, xmlCdata } from './character-card-edit.js';
 import { computeCharacterCardDiff } from './character-card-diff.js';
 import { loadCharacterDesignerPrompts, renderCharacterDesignerPrompt } from './character-designer-prompt.js';
 import { normalizeCharacterDesignerFieldLabel, resolveCharacterDesignerFieldAlias } from './character-designer-fields.js';
@@ -60,16 +60,16 @@ const cardSectionById = new Map(CARD_SECTIONS.map(section => [section.id, sectio
 const cardSectionByField = new Map(CARD_SECTIONS.flatMap(section => section.fields.map(field => [field, section.id])));
 let characterDesignerPromptResource = null;
 const toolString = description => ({ type: 'string', description });
-const toolField = () => toolString('Editor field label; First Greeting; Alternate Greeting N; Greeting N; Example Message N; or Example N.');
+const toolField = () => toolString('Exact text field label. This may be an ordinary card field, numbered Greeting/Example, or the Character Book entry content field returned by read_lorebook.');
 const CHARACTER_DESIGNER_TOOL_SPECS = [
     { name: 'read_card_section', kind: 'read', description: 'Read the current complete value of one field or numbered Greeting/Example when the original card is no longer current.', properties: { field: toolField() }, required: ['field'] },
     { name: 'read_workspace_card_section', kind: 'read', description: 'Read one exact field, numbered Greeting/Example, or Character Book from a read-only reference or explicitly named library card.', properties: { card_id: toolString('Exact card ID or unique card name.'), field: toolString('Card field label; numbered Greeting/Example; or Character Book.') }, required: ['card_id', 'field'] },
-    { name: 'replace_card_text', kind: 'edit', description: 'Replace one exact unique string in a text field. Matching is case- and whitespace-sensitive except that CRLF is treated as LF. find may span lines; replace may be empty.', properties: { field: toolField(), find: toolString('Exact unique current text to replace.'), replace: toolString('Verbatim replacement text; may be empty.') }, required: ['field', 'find', 'replace'] },
+    { name: 'replace_card_text', kind: 'edit', description: 'Replace one exact unique string in a card text field, including a Character Book entry content field. Matching is case- and whitespace-sensitive except that CRLF is treated as LF. find may span lines; replace may be empty.', properties: { field: toolField(), find: toolString('Exact unique current text to replace.'), replace: toolString('Verbatim replacement text; may be empty.') }, required: ['field', 'find', 'replace'] },
     { name: 'delete_card_span', kind: 'edit', description: 'Delete an exact span in a text field. Deletion starts at the unique from anchor and stops immediately before the unique until anchor, preserving until.', properties: { field: toolField(), from: toolString('Exact unique starting anchor; included in the deletion.'), until: toolString('Exact unique ending anchor; preserved after the deletion.') }, required: ['field', 'from', 'until'] },
     { name: 'insert_card_text', kind: 'edit', description: 'Insert text verbatim before or after one exact unique anchor, or at the start or end of a text field. Supply all desired whitespace and newlines.', properties: { field: toolField(), content: toolString('Non-empty text to insert verbatim.'), position: { type: 'string', enum: ['before', 'after', 'start', 'end'], description: 'Insertion position. before and after require anchor; start and end forbid it.' }, anchor: toolString('Exact unique anchor required only for before or after.') }, required: ['field', 'content', 'position'] },
-    { name: 'rewrite_card_field', kind: 'edit', description: 'Replace the complete value of exactly one ordinary field or one numbered Greeting/Example. Use only for substantial rewrites.', properties: { field: toolField(), content: toolString('Complete replacement value. Depth requires a nonnegative integer string.') }, required: ['field', 'content'] },
-    { name: 'read_lorebook', kind: 'lore', description: 'Read the complete editable fields of all Character Book entries, including stable entry IDs.', properties: {} },
-    { name: 'edit_lorebook_entry', kind: 'lore', description: 'Create an entry when entry_id is omitted, or update the named entry. Include at least one editable property. Complete content replaces the whole entry body; advanced properties are preserved.', properties: { entry_id: toolString('Stable entry ID from read_lorebook.'), name: toolString('Entry name.'), content: toolString('Complete entry content.'), keys: { type: 'array', description: 'Non-empty trigger strings.', items: { type: 'string' } }, constant: { type: 'boolean', description: 'Whether the entry is always active.' } } },
+    { name: 'rewrite_card_field', kind: 'edit', description: 'Replace the complete value of exactly one text field, including a Character Book entry content field. Use only for substantial rewrites.', properties: { field: toolField(), content: toolString('Complete replacement value. Depth requires a nonnegative integer string.') }, required: ['field', 'content'] },
+    { name: 'read_lorebook', kind: 'lore', description: 'Read all Character Book entries. Each entry includes a stable field label that works with the same card text read, replace, delete, insert, and rewrite tools as ordinary fields.', properties: {} },
+    { name: 'edit_lorebook_entry', kind: 'lore', description: 'Create an entry when entry_id is omitted, or update its structured name, keys, or constant flag. Content is also accepted for creation or whole-body replacement, though rewrite_card_field is the semantically uniform text-field tool. Advanced properties are preserved.', properties: { entry_id: toolString('Stable entry ID from read_lorebook.'), name: toolString('Entry name.'), content: toolString('Complete entry content.'), keys: { type: 'array', description: 'Non-empty trigger strings.', items: { type: 'string' } }, constant: { type: 'boolean', description: 'Whether the entry is always active.' } } },
     { name: 'delete_lorebook_entry', kind: 'lore', description: 'Delete exactly one Character Book entry identified by its stable entry ID.', properties: { entry_id: toolString('Stable entry ID from read_lorebook.') }, required: ['entry_id'] },
     { name: 'random_keywords', kind: 'context', action: selectRandomKeywords, description: 'Select cryptographically random keywords. The result contains only space-separated selected entries.', properties: { count: { type: 'integer', minimum: 1, maximum: 100, description: 'Integer from 1 through 100.' } }, required: ['count'] },
     { name: 'set_avatar_from_attachment', kind: 'context', action: setAvatarFromAttachment, description: 'Set the current character avatar from a supported image attachment in this editor conversation.', properties: { message_id: toolString('Stable editor message ID.'), attachment_id: toolString('Stable editor attachment ID.') }, required: ['message_id', 'attachment_id'] },
@@ -89,6 +89,7 @@ const LORE_ENTRY_DEFAULTS = Object.freeze({
     position: 'after_char',
 });
 const LORE_ENTRY_PROPERTIES = new Set(['name', 'constant', 'keys', 'content']);
+const TEXT_EDIT_TOOLS = new Set(['replace_card_text', 'delete_card_span', 'insert_card_text', 'rewrite_card_field']);
 const fieldById = new Map(FIELDS.map(field => [field.id, field]));
 let state = null;
 let workspaceAvatarUrl = null;
@@ -259,14 +260,24 @@ function normalizeImageAttachments(attachments) {
 function attachmentFingerprint(attachment) {
     return `${attachment.title}\0${attachment.size}\0${attachment.lastModified}`;
 }
+function attachmentDisplayLabel(attachment) {
+    const stableId = String(attachment?.id || attachmentFingerprint(attachment));
+    return `A-${getStringHash(stableId).toString(36).slice(0, 8)}`;
+}
 function imageAttachmentsHtml(attachments, { editable = false } = {}) {
     const items = normalizeImageAttachments(attachments);
     if (!items.length) return '';
-    return `<div class="cc-image-attachments">${items.map((attachment, index) => `
+    return `<div class="cc-image-attachments">${items.map((attachment, index) => {
+        const label = attachmentDisplayLabel(attachment);
+        return `
         <figure class="cc-image-attachment" data-attachment-index="${index}">
-            <img src="${escapeHtml(attachment.url)}" alt="${escapeHtml(attachment.title)}" title="${escapeHtml(attachment.title)}">
+            <div class="cc-image-attachment-thumb">
+                <img src="${escapeHtml(attachment.url)}" alt="Attachment ${escapeHtml(label)}" title="${escapeHtml(`${label} — ${attachment.title}`)}">
+                <span class="cc-image-attachment-index" title="This same stable label identifies the image to the Character Designer model.">${label}</span>
+            </div>
             ${editable ? `<button class="cc-image-attachment-delete menu_button" type="button" title="Remove ${escapeHtml(attachment.title)}" aria-label="Remove ${escapeHtml(attachment.title)}"><i class="fa-solid fa-xmark"></i></button>` : ''}
-        </figure>`).join('')}</div>`;
+        </figure>`;
+    }).join('')}</div>`;
 }
 function renderDraftAttachments() {
     const container = $('#cc-editor-draft-attachments');
@@ -348,7 +359,14 @@ async function promptContentWithImages(message, text) {
     const attachments = normalizeImageAttachments(message?.attachments);
     if (!attachments.length || main_api !== 'openai' || !isImageInliningSupported()) return text;
     const prepared = await Message.createAsync(message.role, text, `character-card-editor-${message.id}`);
-    for (const attachment of attachments) await prepared.addImage(attachment.url);
+    for (const attachment of attachments) {
+        const label = attachmentDisplayLabel(attachment);
+        prepared.ensureContentIsArray().push({
+            type: 'text',
+            text: `\n\n[Attachment ${label}; the next image is this exact attachment. Match ${label} to editor_metadata.attachments.display_label.]`,
+        });
+        await prepared.addImage(attachment.url);
+    }
     return prepared.content;
 }
 
@@ -544,6 +562,9 @@ function loreEntry(entryId) {
 }
 function loreEntryLabel(entry, index = 0) {
     return String(entry?.name || entry?.comment || `Entry ${index + 1}`);
+}
+function isLoreContentEditCall(block) {
+    return TEXT_EDIT_TOOLS.has(block?.name) && typeof block?.args?.field === 'string' && Boolean(parseLorebookContentField(block.args.field));
 }
 function lorePropertyLabel(property) {
     return String(property || '').replaceAll('_', ' ').replace(/\b\w/g, letter => letter.toUpperCase());
@@ -1271,11 +1292,51 @@ function diffIsPending(diff) {
         .flatMap(hunkChanges)
         .some(proposed => unresolved.some(part => part.removed === proposed.removed && part.added === proposed.added));
 }
+function lorebookDiffIsPending(diff) {
+    const proposal = state.lorebookProposal;
+    if (!proposal) return false;
+    if (diff.proposalId) return diff.proposalId === proposal.id;
+    // Legacy saved messages predate proposal IDs. Only keep the most recent exact
+    // snapshot active; an unrelated later lorebook proposal must not reactivate it.
+    return JSON.stringify(diff.after) === JSON.stringify(proposal.after)
+        && JSON.stringify(diff.afterIds) === JSON.stringify(proposal.afterIds);
+}
+function lorebookDiffOperations(diff) {
+    const operations = [];
+    const beforeIds = diff?.beforeIds || [];
+    const afterIds = diff?.afterIds || [];
+    const beforeEntries = diff?.before?.entries || [];
+    const afterEntries = diff?.after?.entries || [];
+    for (const entryId of new Set([...beforeIds, ...afterIds])) {
+        const beforeIndex = beforeIds.indexOf(entryId);
+        const afterIndex = afterIds.indexOf(entryId);
+        const beforeEntry = beforeEntries[beforeIndex];
+        const afterEntry = afterEntries[afterIndex];
+        if (beforeIndex < 0) {
+            operations.push({ operation: 'insert', content: `Entry: ${loreEntryLabel(afterEntry, afterIndex)}` });
+            continue;
+        }
+        if (afterIndex < 0) {
+            operations.push({ find: `Entry: ${loreEntryLabel(beforeEntry, beforeIndex)}`, replace: '' });
+            continue;
+        }
+        for (const property of ['name', 'keys', 'constant', 'content']) {
+            const before = lorePropertyText(property, beforeEntry?.[property]);
+            const after = lorePropertyText(property, afterEntry?.[property]);
+            if (before === after) continue;
+            const prefix = `${loreEntryLabel(afterEntry, afterIndex)} ${lorePropertyLabel(property)}`;
+            operations.push({ find: `${prefix}: ${before}`, replace: `${prefix}: ${after}` });
+        }
+    }
+    return operations;
+}
 function diffHtml(pending) {
     if (pending.lorebook) {
-        const unresolved = Boolean(state.lorebookProposal);
-        const content = `<span>${escapeHtml(lorebookChangeSummary(pending))}</span>`;
-        if (!unresolved) return `<div class="cc-diff-jump cc-diff-resolved">${content}</div>`;
+        const operations = lorebookDiffOperations(pending);
+        const content = operations.length
+            ? operations.map(proposalDiffHtml).join('')
+            : `<span>${escapeHtml(lorebookChangeSummary(pending))}</span>`;
+        if (!lorebookDiffIsPending(pending)) return `<div class="cc-diff-jump cc-diff-resolved">${content}</div>`;
         return `<button class="cc-diff-jump" data-lorebook type="button">${content}</button>`;
     }
     const proposals = pending.operations?.length ? pending.operations : [{ label: fieldById.get(pending.field)?.label || pending.field, find: asText(pending.before), replace: asText(pending.after) }];
@@ -1316,30 +1377,62 @@ function joinedLabels(labels) {
     if (unique.length === 2) return `${unique[0]} and ${unique[1]}`;
     return `${unique.slice(0, -1).join(', ')}, and ${unique.at(-1)}`;
 }
+function toolCallActionText(call) {
+    const name = String(call?.name || call?.tool_call?.tool || '').trim();
+    if (!name) return '';
+    if (name === 'random_keywords') return 'Selected random keywords';
+    if (name === 'set_avatar_from_attachment') return 'Set the avatar';
+    const args = call?.args || call?.tool_call?.args || {};
+    const rawLabel = String(args.field || '').trim();
+    const label = name.includes('lorebook') ? 'Character Book' : resolveToolField(rawLabel)?.label || rawLabel || 'an unknown section';
+    return `${name.startsWith('read_') ? 'Read' : 'Edited'} ${label}`;
+}
 function toolCallSummaryText(text) {
-    const reads = [];
-    const edits = [];
-    const contextActions = [];
-    for (const call of parseCharacterDesignerToolCalls(text).calls.filter(call => !call.error)) {
-        if (call.name === 'random_keywords') { contextActions.push('Selected random keywords'); continue; }
-        if (call.name === 'set_avatar_from_attachment') { contextActions.push('Set the avatar'); continue; }
-        const rawLabel = String(call.args.field || '').trim();
-        const label = call.name.includes('lorebook') ? 'Character Book' : resolveToolField(rawLabel)?.label || rawLabel || 'an unknown section';
-        (call.name.startsWith('read_') ? reads : edits).push(label);
-    }
-    const actions = [];
-    if (reads.length) actions.push(`Read ${joinedLabels(reads)}`);
-    if (edits.length) actions.push(`Edited ${joinedLabels(edits)}`);
-    actions.push(...contextActions);
+    const actions = parseCharacterDesignerToolCalls(text).calls
+        .filter(call => !call.error)
+        .map(toolCallActionText)
+        .filter(Boolean);
     if (!actions.length) return 'Using card tools\u2026';
     return `${actions.join('; ')}.`;
 }
-function toolCallSummaryHtml(message) {
-    if (!message.toolXml) return '';
-    return `<div class="cc-tool-call-summary"><i class="fa-solid fa-wrench" aria-hidden="true"></i><span>${escapeHtml(toolCallSummaryText(message.toolXml))}</span></div>`;
+function toolCallSummaryHtml(call, className = 'cc-tool-call-summary') {
+    const summary = toolCallActionText(call) || 'Using card tools\u2026';
+    return `<div class="${className}"><i class="fa-solid fa-wrench" aria-hidden="true"></i><span>${escapeHtml(summary)}</span></div>`;
 }
 function streamingToolHtml(text) {
     return `<div class="cc-tool-stream"><i class="fa-solid fa-wrench" aria-hidden="true"></i><span>${escapeHtml(toolCallSummaryText(text))}</span></div>`;
+}
+// Keep tool indicators in the same order as the model's response. Rendering from
+// the raw response is important here: message.text intentionally removes XML and
+// therefore cannot tell whether a call was in the middle of, or after, the prose.
+function messageTextContentsHtml(message) {
+    const fallbackText = message.text || '';
+    if (message.role !== 'assistant') return formattedMessageText(fallbackText, message.role);
+
+    const source = rawMessageText(message);
+    const parsed = parseCharacterDesignerToolCalls(source);
+    const toolSegments = parsed.parsed.segments.filter(segment => segment.type === 'tool');
+    const validToolSegments = toolSegments.filter(segment => segment.tool_call && !segment.parse_error);
+    if (!validToolSegments.length) {
+        return `${formattedMessageText(fallbackText, message.role)}${message.streaming && message.toolStream ? streamingToolHtml(message.toolStream) : ''}`;
+    }
+    const contents = parsed.parsed.segments.map(segment => {
+        if (segment.type === 'text') return formattedMessageText(segment.text, message.role);
+        if (!segment.tool_call || segment.parse_error) return '';
+        const toolSummary = toolCallSummaryHtml({
+            name: segment.tool_call.tool,
+            args: segment.tool_call.args,
+            continue: segment.tool_call.continue,
+            xml: segment.raw_xml,
+        }, message.streaming ? 'cc-tool-stream' : 'cc-tool-call-summary');
+        return toolSummary;
+    });
+    const incomplete = toolSegments.find(segment => !segment.tool_call || segment.parse_error);
+    if (message.streaming && incomplete) {
+        const name = incomplete.detected_tool_name || incomplete.tool_call?.tool;
+        contents.push(`<div class="cc-tool-stream"><i class="fa-solid fa-wrench" aria-hidden="true"></i><span>${escapeHtml(name ? `Calling ${name}\u2026` : 'Using card tools\u2026')}</span></div>`);
+    }
+    return contents.join('');
 }
 function streamedToolText(text, toolParse = null) {
     const source = String(text || '');
@@ -2361,14 +2454,14 @@ function editResultSummary(diffs) {
 function contextReadoutText(contextXml) {
     const match = String(contextXml || '').match(/<context\b[^>]*>([\s\S]*?)<\/context>/i);
     if (!match) return '';
-    const document = new DOMParser().parseFromString(`<textarea>${match[1]}</textarea>`, 'text/html');
-    return (document.querySelector('textarea')?.value ?? match[1]).trim();
+    const document = new DOMParser().parseFromString(`<context>${match[1]}</context>`, 'application/xml');
+    return (document.querySelector('parsererror') ? match[1] : document.documentElement.textContent || '').trim();
 }
 function lorebookReadoutText(resultXml) {
     const match = String(resultXml || '').match(/<character_book\b[^>]*>([\s\S]*?)<\/character_book>/i);
     if (!match) return '';
-    const document = new DOMParser().parseFromString(`<textarea>${match[1]}</textarea>`, 'text/html');
-    const value = (document.querySelector('textarea')?.value ?? match[1]).trim();
+    const document = new DOMParser().parseFromString(`<character_book>${match[1]}</character_book>`, 'application/xml');
+    const value = (document.querySelector('parsererror') ? match[1] : document.documentElement.textContent || '').trim();
     try {
         const entries = JSON.parse(value)?.entries || [];
         const names = entries.map((entry, index) => String(entry?.name || `Entry ${index + 1}`));
@@ -2601,7 +2694,6 @@ function saveMessageEdit(messageId) {
 }
 function messageBubbleHtml(message) {
     const reasoning = message.reasoning ? `<details class="cc-message-reasoning" ${resolveReasoningOpen(message) ? 'open' : ''}><summary>Reasoning</summary><div class="cc-message-reasoning-body">${formattedMessageText(message.reasoning, message.role, true)}</div></details>` : '';
-    const toolStream = message.streaming && message.toolStream ? streamingToolHtml(message.toolStream) : '';
     const displayText = message.text || '';
     const canEdit = !message.streaming;
     const canEditAttachments = message.role === 'user' && !message.streaming;
@@ -2612,9 +2704,8 @@ function messageBubbleHtml(message) {
     const addAttachment = canEditAttachments ? '<button class="cc-message-attachment-add menu_button" type="button" title="Add images" aria-label="Add images"><i class="fa-solid fa-paperclip"></i></button>' : '';
     const actions = canEdit ? `<div class="cc-message-actions">${forkButton}${addAttachment}${editButton}</div>` : '';
     const errors = [...(message.errors || []), ...(message.error ? [message.error] : [])];
-    const toolCall = !message.streaming ? toolCallSummaryHtml(message) : '';
     if (!(message.streaming || displayText || message.attachments?.length || canEditAttachments || message.reasoning || message.toolStream || message.toolXml || message.diffs?.length || errors.length)) return '';
-    return `<article class="cc-message ${message.role === 'user' ? 'cc-user-message' : ''} ${canEdit ? 'cc-message-has-edit' : ''} ${canEditAttachments ? 'cc-message-has-attachment-action' : ''} ${canFork ? 'cc-message-has-fork-action' : ''}" data-message-id="${message.id}">${actions}${reasoning}<div class="cc-message-text">${formattedMessageText(displayText, message.role)}</div>${attachments}${toolStream}${toolCall}${(message.diffs || []).map(diffHtml).join('')}</article>`;
+    return `<article class="cc-message ${message.role === 'user' ? 'cc-user-message' : ''} ${canEdit ? 'cc-message-has-edit' : ''} ${canEditAttachments ? 'cc-message-has-attachment-action' : ''} ${canFork ? 'cc-message-has-fork-action' : ''}" data-message-id="${message.id}">${actions}${reasoning}<div class="cc-message-text">${messageTextContentsHtml(message)}</div>${attachments}${(message.diffs || []).map(diffHtml).join('')}</article>`;
 }
 function messageHtml(message) {
     if (messageEdit.id === message.id) {
@@ -2664,31 +2755,20 @@ function patchReasoning(article, anchor, message, reasoning, changed) {
         requestAnimationFrame(() => updateReasoningFades(body));
     }
 }
-function patchToolStream(article, anchor, toolStream) {
-    let pre = article.querySelector(':scope > .cc-tool-stream');
-    if (!toolStream) { pre?.remove(); return; }
-    if (!pre) {
-        pre = document.createElement('div');
-        pre.className = 'cc-tool-stream';
-        pre.innerHTML = '<i class="fa-solid fa-wrench" aria-hidden="true"></i><span></span>';
-        anchor.after(pre);
-    }
-    pre.querySelector('span').textContent = toolCallSummaryText(toolStream);
-}
 // Compared against what this message last rendered rather than against the DOM, so an
 // unchanged part is skipped outright instead of being formatted and written identically.
 function patchStreamingMessage(article, message) {
     if (!canPatchStreamingMessage(message)) return false;
     const textNode = article.querySelector(':scope > .cc-message-text');
     if (!textNode) return false;
-    const rendered = streamRenderCache.get(message) ?? { reasoning: '', text: '', toolStream: '' };
+    const rendered = streamRenderCache.get(message) ?? { reasoning: '', text: '', raw: '', toolStream: '' };
     const reasoning = message.reasoning || '';
     const text = message.text || '';
+    const raw = message.raw || '';
     const toolStream = message.toolStream || '';
     patchReasoning(article, textNode, message, reasoning, reasoning !== rendered.reasoning);
-    if (text !== rendered.text) textNode.innerHTML = formattedMessageText(text, message.role);
-    if (toolStream !== rendered.toolStream) patchToolStream(article, textNode, toolStream);
-    streamRenderCache.set(message, { reasoning, text, toolStream });
+    if (text !== rendered.text || raw !== rendered.raw || toolStream !== rendered.toolStream) textNode.innerHTML = messageTextContentsHtml(message);
+    streamRenderCache.set(message, { reasoning, text, raw, toolStream });
     return true;
 }
 // Streaming repaints only touch the message being written, and within it only the parts
@@ -3113,7 +3193,7 @@ function snapshotText(values = {}) {
     const ids = Object.hasOwn(values, '__loreEntryIds') ? values.__loreEntryIds : state.loreEntryIds;
     if (!book) sections.push('Character Book:\n(none)');
     else {
-        sections.push(`Character Book:\n${JSON.stringify({ entries: book.entries.map((entry, index) => ({ entry_id: ids[index], name: loreEntryLabel(entry, index), enabled: entry.enabled, constant: entry.constant, keys: entry.keys, content: String(entry.content || '') })) }, null, 2)}`);
+        sections.push(`Character Book:\n${JSON.stringify({ entries: book.entries.map((entry, index) => ({ entry_id: ids[index], field: formatLorebookContentField(ids[index]), name: loreEntryLabel(entry, index), enabled: entry.enabled, constant: entry.constant, keys: entry.keys, content: String(entry.content || '') })) }, null, 2)}`);
     }
     return sections.join('\n\n');
 }
@@ -3182,7 +3262,7 @@ function parseCharacterDesignerToolCalls(text, { cache = true } = {}) {
         };
         segment.tool_call = null;
         parsed.hasErrors = true;
-        parsed.shouldContinue = true;
+        parsed.shouldContinue = false;
     }
     const result = {
         parsed,
@@ -3190,7 +3270,7 @@ function parseCharacterDesignerToolCalls(text, { cache = true } = {}) {
             name: segment.tool_call?.tool || segment.detected_tool_name,
             xml: segment.raw_xml,
             args: segment.tool_call?.args || {},
-            continue: segment.tool_call?.continue !== false,
+            continue: segment.tool_call?.continue === true,
             error: segment.parse_error || null,
             start: segment.startIndex,
             end: segment.endIndex,
@@ -3227,6 +3307,7 @@ async function characterDesignerMetadata(conversation) {
     const attachments = conversation.messages.flatMap(message => normalizeImageAttachments(message.attachments).map(attachment => ({
         message_id: message.id,
         attachment_id: attachment.id,
+        display_label: attachmentDisplayLabel(attachment),
         title: attachment.title,
         image: true,
         playable_media_url: attachment.url,
@@ -3289,7 +3370,13 @@ function parseEditBatch(blocks, sourceValues = {}) {
         const initialProposal = { tool: block.name };
         const rawLabel = editStringArgument(block, 'field', initialProposal).trim();
         const resolved = resolveToolField(rawLabel);
-        if (!resolved) throw editToolFailure('unknown-field', `No card field matches ${rawLabel || '(missing)'}.`, { tool: block.name, label: rawLabel }, 'Unknown card field');
+        if (!resolved) {
+            const isLorebook = /^(character\s*book|lorebook)$/i.test(rawLabel);
+            const detail = isLorebook
+                ? 'Character Book contains multiple text fields. Use read_lorebook, then pass the exact field value returned for the intended entry to this same tool.'
+                : `No card field matches ${rawLabel || '(missing)'}.`;
+            throw editToolFailure(isLorebook ? 'invalid-field-type' : 'unknown-field', detail, { tool: block.name, label: rawLabel }, isLorebook ? 'Choose a Character Book entry field' : 'Unknown card field');
+        }
         const { field, id, index, label } = resolved;
         const isRewrite = block.name === 'rewrite_card_field';
         if (isCollection(id) && index === null) {
@@ -3390,7 +3477,7 @@ function parseEditBatch(blocks, sourceValues = {}) {
     return [...mergedEdits.values()];
 }
 function parseEdits(calls, sourceValues = {}) {
-    const blocks = toolCallsOfKind(calls, 'edit');
+    const blocks = toolCallsOfKind(calls, 'edit').filter(block => !isLoreContentEditCall(block));
     const accepted = [];
     const failures = [];
     let edits = [];
@@ -3428,7 +3515,7 @@ function parseLorebookTools(calls, sourceBook, sourceIds) {
     const reads = [];
     const failures = [];
     const findEntry = entryId => workingIds.indexOf(entryId);
-    const blocks = toolCallsOfKind(calls, 'lore');
+    const blocks = calls.filter(block => characterDesignerToolByName.get(block.name)?.kind === 'lore' || isLoreContentEditCall(block));
     for (const block of blocks) {
         try {
             if (block.name === 'read_lorebook') {
@@ -3436,8 +3523,9 @@ function parseLorebookTools(calls, sourceBook, sourceIds) {
                 reads.push({ kind: 'book', block });
                 continue;
             }
-            const hasEntryId = hasToolArgument(block, 'entry_id');
-            const rawEntryId = toolValue(block, 'entry_id');
+            const loreContentTarget = isLoreContentEditCall(block) ? parseLorebookContentField(toolValue(block, 'field')) : null;
+            const hasEntryId = Boolean(loreContentTarget) || hasToolArgument(block, 'entry_id');
+            const rawEntryId = loreContentTarget?.entryId ?? toolValue(block, 'entry_id');
             if (rawEntryId !== undefined && typeof rawEntryId !== 'string') throw Object.assign(new Error('entry_id must be a string.'), { code: 'invalid-argument' });
             const entryId = String(rawEntryId ?? '').trim();
             const supplied = [...LORE_ENTRY_PROPERTIES].filter(property => hasToolArgument(block, property));
@@ -3467,6 +3555,39 @@ function parseLorebookTools(calls, sourceBook, sourceIds) {
                 successes.push({ tool: block.name, change });
                 continue;
             }
+            if (loreContentTarget) {
+                const source = normalizeLineEndings(entry.content || '');
+                let resolvedEdit;
+                if (block.name === 'rewrite_card_field') {
+                    const content = editStringArgument(block, 'content', { tool: block.name, label: loreContentTarget.label });
+                    resolvedEdit = { start: 0, end: source.length, replacement: normalizeLineEndings(content) };
+                } else if (block.name === 'replace_card_text') {
+                    const find = editStringArgument(block, 'find', { tool: block.name, label });
+                    const replace = editStringArgument(block, 'replace', { tool: block.name, label });
+                    resolvedEdit = resolveReplaceCardText(source, { find, replace });
+                } else if (block.name === 'delete_card_span') {
+                    const from = editStringArgument(block, 'from', { tool: block.name, label });
+                    const until = editStringArgument(block, 'until', { tool: block.name, label });
+                    resolvedEdit = resolveDeleteCardSpan(source, { from, until });
+                } else {
+                    const content = editStringArgument(block, 'content', { tool: block.name, label });
+                    const position = editStringArgument(block, 'position', { tool: block.name, label }).trim();
+                    const anchor = editStringArgument(block, 'anchor', { tool: block.name, label }, { required: false });
+                    resolvedEdit = resolveInsertCardText(source, { content, position, anchor });
+                }
+                if (resolvedEdit.error) {
+                    const detail = resolvedEdit.candidates?.length
+                        ? `${resolvedEdit.error} Candidate excerpts: ${resolvedEdit.candidates.join(' | ')}`
+                        : resolvedEdit.error;
+                    throw Object.assign(new Error(detail), { code: resolvedEdit.code || 'invalid-argument' });
+                }
+                entry.content = source.slice(0, resolvedEdit.start) + resolvedEdit.replacement + source.slice(resolvedEdit.end);
+                const change = `Edited ${label} content`;
+                changes.push(change);
+                successes.push({ tool: block.name, change, field: loreContentTarget.label });
+                continue;
+            }
+            if (block.name !== 'edit_lorebook_entry') throw Object.assign(new Error(`Unsupported Character Book tool: ${block.name}.`), { code: 'invalid-tool' });
             if (!supplied.length) throw Object.assign(new Error('edit_lorebook_entry must include at least one of name, content, keys, or constant.'), { code: 'missing-argument' });
             for (const property of supplied) {
                 entry[property] = parseLoreValue(property, toolValue(block, property));
@@ -3481,12 +3602,13 @@ function parseLorebookTools(calls, sourceBook, sourceIds) {
     return { changes, successes, reads, failures, afterBook: workingBook, afterIds: workingIds, toolXml: blocks.map(block => block.xml).join('\n') };
 }
 function loreSuccessResults(parsedLore) {
-    return (parsedLore.successes || []).map(success => `<result>\n<tool>${xmlText(success.tool)}</tool>\n<status>success</status>\n<field>Character Book</field>\n<change>${xmlText(success.change)}</change>\n</result>`).join('\n');
+    return (parsedLore.successes || []).map(success => `<result>\n<tool>${xmlText(success.tool)}</tool>\n<status>success</status>\n<field>${xmlText(success.field || 'Character Book')}</field>\n<change>${xmlText(success.change)}</change>\n</result>`).join('\n');
 }
 function loreReadResult(read, book, ids) {
     const result = {
         entries: (book?.entries || []).map((entry, index) => ({
             entry_id: ids[index],
+            field: formatLorebookContentField(ids[index]),
             name: entry.name || entry.comment || '',
             enabled: entry.enabled,
             constant: entry.constant,
@@ -3494,7 +3616,7 @@ function loreReadResult(read, book, ids) {
             content: entry.content || '',
         })),
     };
-    return `<result>\n<tool>read_lorebook</tool>\n<status>success</status>\n<character_book>${xmlText(JSON.stringify(result, null, 2))}</character_book>\n</result>`;
+    return `<result>\n<tool>read_lorebook</tool>\n<status>success</status>\n<character_book>${xmlCdata(JSON.stringify(result, null, 2))}</character_book>\n</result>`;
 }
 function applyLorebookProposal(parsedLore, beforeBook, beforeIds) {
     if (!parsedLore.changes.length) return null;
@@ -3514,6 +3636,7 @@ function applyLorebookProposal(parsedLore, beforeBook, beforeIds) {
         before: deepCopy(beforeBook),
         beforeIds: deepCopy(beforeIds),
     };
+    diff.proposalId = state.lorebookProposal.id;
     state.lorebook = deepCopy(parsedLore.afterBook);
     state.loreEntryIds = deepCopy(parsedLore.afterIds);
     const beforeEntries = beforeBook?.entries || [];
@@ -3538,6 +3661,12 @@ function xmlText(value) {
 function sectionValue(values, id, index = null) {
     const value = Object.hasOwn(values || {}, id) ? values[id] : liveValue(id);
     return index === null ? asText(value) : collectionItemValue(value, index);
+}
+function loreContentValue(values, entryId) {
+    const ids = Array.isArray(values?.__loreEntryIds) ? values.__loreEntryIds : state.loreEntryIds;
+    const book = Object.hasOwn(values || {}, '__lorebook') ? values.__lorebook : state.lorebook;
+    const index = ids.map(String).indexOf(String(entryId || ''));
+    return index < 0 ? '' : String(book?.entries?.[index]?.content || '');
 }
 function contextBody(label, value, start = 0, end = null) {
     const lines = String(value ?? '').split('\n');
@@ -3621,6 +3750,15 @@ function parseReadRequests(calls) {
             continue;
         }
         const rawLabel = rawField.trim();
+        const loreContentTarget = !workspaceRead ? parseLorebookContentField(rawLabel) : null;
+        if (loreContentTarget) {
+            if (loreEntryIndex(loreContentTarget.entryId) < 0) {
+                failures.push(readToolFailure(block, 'unknown-field', `${loreContentTarget.label} is not available in the current card.`));
+                continue;
+            }
+            reads.push({ ...loreContentTarget, block, target, loreContent: true, contextLabel: loreContentTarget.label });
+            continue;
+        }
         const characterBook = workspaceRead && ['character book', 'characterbook', 'lorebook'].includes(normalizeCharacterDesignerFieldLabel(rawLabel));
         if (characterBook) {
             const book = (target.character.data || target.character).character_book;
@@ -3648,7 +3786,11 @@ function parseReadRequests(calls) {
 function readResult(read, values = {}) {
     const tool = read.block.name;
     if (tool === 'read_card_section') {
-        return `<result>\n<tool>read_card_section</tool>\n<status>success</status>\n<field>${xmlText(read.label)}</field>\n${contextResult(read.label, sectionValue(values, read.id, read.index))}\n</result>`;
+        const value = read.loreContent ? loreContentValue(values, read.entryId) : sectionValue(values, read.id, read.index);
+        const context = read.loreContent
+            ? `<context>${xmlCdata(contextBody(read.label, value))}</context>`
+            : contextResult(read.label, value);
+        return `<result>\n<tool>read_card_section</tool>\n<status>success</status>\n<field>${xmlText(read.label)}</field>\n${context}\n</result>`;
     }
     const value = read.lorebook ? JSON.stringify(read.book || { entries: [] }, null, 2) : sectionValue(values, read.id, read.index);
     return `<result>\n<tool>read_workspace_card_section</tool>\n<status>success</status>\n<card>${xmlText(read.target.name)}</card>\n<card_id>${xmlText(read.target.id)}</card_id>\n<field>${xmlText(read.label)}</field>\n${contextResult(read.contextLabel, value)}\n</result>`;
@@ -3661,8 +3803,8 @@ function evaluateReadRequests(reads, currentValues = {}, baselineValues = {}) {
             results.push(readResult(read, read.values));
             continue;
         }
-        const current = sectionValue(currentValues, read.id, read.index);
-        const original = sectionValue(baselineValues, read.id, read.index);
+        const current = read.loreContent ? loreContentValue(currentValues, read.entryId) : sectionValue(currentValues, read.id, read.index);
+        const original = read.loreContent ? loreContentValue(baselineValues, read.entryId) : sectionValue(baselineValues, read.id, read.index);
         if (current === original) {
             results.push(`${read.label}${UNCHANGED_READ_RESULT_SUFFIX}`);
             continue;
@@ -3749,6 +3891,10 @@ async function promptHistory(conversation, excludeId, continuation = null) {
                 : (interruptedAssistant ? message.text || '' : rawMessageText(message)))
             : [message.text, message.cardChangeContext].filter(Boolean).join('\n');
         const content = await promptContentWithImages(message, text);
+        const hasPromptContent = Array.isArray(content)
+            ? content.some(part => part?.type !== 'text' || String(part.text || '').trim())
+            : String(content || '').trim();
+        if (message.role === 'assistant' && !hasPromptContent && !String(message.toolResultDisplay || '').trim()) continue;
         const historyMessage = { role: message.role, content };
         includedContinuationMessage ||= continuingPartialAssistant;
         prompt.push(historyMessage);
@@ -3883,7 +4029,10 @@ async function generateAssistant(conversation, retriesRemaining = MAX_TOOL_RETRI
         const loreDiff = loreChanges.length ? applyLorebookProposal(parsedLore, generationBook, generationLoreIds) : null;
         const loreReadResults = parsedLore.reads.map(read => loreReadResult(read, generationBook, generationLoreIds));
         contextResults.push(...loreReadResults);
-        const requestedContinuation = scopedTools.parsed.shouldContinue && scopedTools.calls.length > 0;
+        // Only a valid call that explicitly asks for the result may trigger a
+        // follow-up. Missing, malformed, or unrelated tool tags must not cause a
+        // second request after the model has already finished its response.
+        const requestedContinuation = toolCalls.some(call => call.continue === true);
         continueGeneration = requestedContinuation && retriesRemaining > 0;
         conversation.pendingContinuation = requestedContinuation && retriesRemaining === 0;
         pendingMessage.text = streamedProse(visibleResponse, scopedTools);

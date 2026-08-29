@@ -2,6 +2,8 @@
 # Root directory for user data storage
 dataRoot: ./data
 # -- SERVER CONFIGURATION --
+# Log detailed wall-clock and CPU timings for server startup phases.
+enableStartupTiming: false
 # Listen for incoming connections
 listen: false
 # Listen on a specific address, supports IPv4 and IPv6

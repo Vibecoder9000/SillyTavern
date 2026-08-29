@@ -72,6 +72,16 @@ declare global {
     var COMMAND_LINE_ARGS: CommandLineArguments;
 
     /**
+     * Whether detailed server startup timing logs are enabled.
+     */
+    var STARTUP_TIMING_ENABLED: boolean;
+
+    /**
+     * High-resolution timestamp captured immediately before server module loading.
+     */
+    var SERVER_START_TIME: number;
+
+    /**
      * Forces a global mode if set to `true` before parsing the CLI arguments.
      */
     var FORCE_GLOBAL_MODE: boolean;

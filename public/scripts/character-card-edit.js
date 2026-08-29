@@ -2,6 +2,15 @@ const CONTEXT_RADIUS = 60;
 
 const normalizeLineEndings = value => String(value ?? '').replace(/\r\n?/g, '\n');
 
+export function formatLorebookContentField(entryId) {
+    return `Character Book Entry [${String(entryId || '')}] Content`;
+}
+
+export function parseLorebookContentField(label) {
+    const match = String(label || '').trim().match(/^Character Book Entry \[([^\]]+)\] Content$/i);
+    return match ? { entryId: match[1], label: formatLorebookContentField(match[1]) } : null;
+}
+
 function candidateContext(source, start, end) {
     const before = source.slice(Math.max(0, start - CONTEXT_RADIUS), start);
     const match = source.slice(start, end);
@@ -99,4 +108,14 @@ export function resolveInsertCardText(source, { content = '', position = '', anc
         position,
         operation: 'insert',
     };
+}
+
+/**
+ * Preserve arbitrary text verbatim inside an XML result payload.
+ * Splitting the CDATA terminator keeps even content containing "]]>" lossless.
+ * @param {string} value
+ * @returns {string}
+ */
+export function xmlCdata(value) {
+    return `<![CDATA[${String(value ?? '').replaceAll(']]>', ']]]]><![CDATA[>')}]]>`;
 }

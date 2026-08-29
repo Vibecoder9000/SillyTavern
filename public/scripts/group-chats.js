@@ -75,6 +75,7 @@ import {
     createLazyFields,
     depth_prompt_depth_default,
     loadItemizedPrompts,
+    prepareItemizedPrompts,
     animation_duration,
     depth_prompt_role_default,
     shouldAutoContinue,
@@ -84,6 +85,7 @@ import {
     syncWorkspaceLastChat,
     prepareWorkspaceLastChatForNewChat,
     getCurrentSandboxWorkspace,
+    emitChatChanged,
 } from '../script.js';
 import { printTagList, createTagMapFromList, applyTagsOnCharacterSelect, tag_map, applyTagsOnGroupSelect, printTagFilters, tag_filter_type } from './tags.js';
 import { FILTER_TYPES, FilterHelper } from './filters.js';
@@ -94,6 +96,7 @@ import { accountStorage } from './util/AccountStorage.js';
 import { compressRequest } from './request-compression.js';
 import { shouldHideXmlToolExchanges } from './group-tool-visibility.js';
 import { isChatWorkspaceChild, requestWorkspaceOpen } from './chat-workspace-bridge.js';
+import { getWorkspaceChatSnapshot, setWorkspaceChatSnapshot } from './chat-workspace-cache.js';
 
 export {
     selected_group,
@@ -205,7 +208,13 @@ async function regenerateGroup() {
  * @param {Function|null} [measureStage=null] Optional workspace stage measurement callback
  * @returns {Promise<ChatFile>} Array of chat messages
  */
-async function loadGroupChat(chatId, measureStage = null) {
+async function loadGroupChat(chatId, groupId, measureStage = null) {
+    const identity = { kind: 'group', ownerId: String(groupId), chatId: String(chatId) };
+    const cachedSnapshot = await runMeasuredStage(measureStage, 'chatCache', () => getWorkspaceChatSnapshot(identity));
+    if (cachedSnapshot) {
+        return [{ chat_metadata: cachedSnapshot.metadata }, ...cachedSnapshot.messages];
+    }
+
     const response = await runMeasuredStage(measureStage, 'chatFetch', () => fetch('/api/chats/group/get', {
         method: 'POST',
         headers: getRequestHeaders(),
@@ -217,6 +226,8 @@ async function loadGroupChat(chatId, measureStage = null) {
         if (!Array.isArray(data)) {
             return [];
         }
+        const hasHeader = data.length > 0 && Object.hasOwn(data[0], 'chat_metadata');
+        setWorkspaceChatSnapshot(identity, hasHeader ? data[0].chat_metadata : {}, hasHeader ? data.slice(1) : data);
         return data;
     }
 
@@ -278,14 +289,17 @@ async function validateGroup(group) {
  * @param {object} [initialMetadata] - Metadata for a newly created chat.
  * @param {object} [options] Load options.
  * @param {Function|null} [options.measureStage=null] Optional workspace stage measurement callback.
+ * @param {boolean} [options.backgroundChatEvents=false] Whether asynchronous chat observers may finish after the workspace commit.
  * @returns {Promise<void>} A promise that resolves when the chat messages have been loaded.
  */
-export async function getGroupChat(groupId, reload = false, initialMetadata, { measureStage = null } = {}) {
+export async function getGroupChat(groupId, reload = false, initialMetadata, { measureStage = null, backgroundChatEvents = false } = {}) {
     const group = groups.find((x) => x.id === groupId);
     if (!group) {
         console.warn('Group not found', groupId);
         return;
     }
+
+    const preparedItemizedPrompts = prepareItemizedPrompts(group.chat_id);
 
     // Run validation before any loading
     await runMeasuredStage(measureStage, 'groupPreparation', async () => {
@@ -294,7 +308,7 @@ export async function getGroupChat(groupId, reload = false, initialMetadata, { m
     });
 
     const chat_id = group.chat_id;
-    const data = await loadGroupChat(chat_id, measureStage);
+    const data = await loadGroupChat(chat_id, groupId, measureStage);
     const metadata = initialMetadata ?? data?.[0]?.chat_metadata ?? {};
     const freshChat = !metadata.tainted && (!Array.isArray(data) || !data.length);
 
@@ -309,7 +323,7 @@ export async function getGroupChat(groupId, reload = false, initialMetadata, { m
     }
     updateChatMetadata(metadata, true);
 
-    await runMeasuredStage(measureStage, 'itemizedPrompts', () => loadItemizedPrompts(getCurrentChatId()));
+    await runMeasuredStage(measureStage, 'itemizedPrompts', () => loadItemizedPrompts(getCurrentChatId(), preparedItemizedPrompts));
 
     if (group && Array.isArray(group.members) && freshChat) {
         chat.splice(0, chat.length);
@@ -344,7 +358,7 @@ export async function getGroupChat(groupId, reload = false, initialMetadata, { m
         select_group_chats(groupId, true);
     }
 
-    await runMeasuredStage(measureStage, 'chatEvents', () => eventSource.emit(event_types.CHAT_CHANGED, getCurrentChatId()));
+    await runMeasuredStage(measureStage, 'chatEvents', () => emitChatChanged(getCurrentChatId(), { background: backgroundChatEvents }));
     if (!freshChat) {
         if (!isChatWorkspaceChild()) {
             try {
@@ -2168,10 +2182,11 @@ function updateFavButtonState(state) {
  * @param {object} [options] Open options
  * @param {boolean} [options.openInWorkspace=true] Whether user navigation may open the group in another workspace tab
  * @param {boolean} [options.loadChat=true] Whether switching groups should load the group's current chat
+ * @param {boolean} [options.refreshOwnerUi=true] Whether to rebuild the group editor UI
  * @param {Function|null} [options.measureStage=null] Optional workspace stage measurement callback
  * @returns {Promise<boolean>} Whether the group was opened
  */
-export async function openGroupById(groupId, { openInWorkspace = true, loadChat = true, measureStage = null } = {}) {
+export async function openGroupById(groupId, { openInWorkspace = true, loadChat = true, refreshOwnerUi = true, measureStage = null } = {}) {
     const targetGroup = groups.find(x => String(x.id) === String(groupId));
     const targetIdentity = targetGroup?.chat_id
         ? { kind: 'group', ownerId: String(targetGroup.id), chatId: String(targetGroup.chat_id) }
@@ -2205,7 +2220,8 @@ export async function openGroupById(groupId, { openInWorkspace = true, loadChat 
     }
 
     if (selected_group === groupId) {
-        await runMeasuredStage(measureStage, 'ownerUi', () => select_group_chats(groupId, false));
+        openGroupId = groupId;
+        if (refreshOwnerUi) await runMeasuredStage(measureStage, 'ownerUi', () => select_group_chats(groupId, false));
         return true;
     }
 
@@ -2215,7 +2231,8 @@ export async function openGroupById(groupId, { openInWorkspace = true, loadChat 
     }
 
     if (!is_send_press && !is_group_generating) {
-        await runMeasuredStage(measureStage, 'ownerUi', () => select_group_chats(groupId, false));
+        openGroupId = groupId;
+        if (refreshOwnerUi) await runMeasuredStage(measureStage, 'ownerUi', () => select_group_chats(groupId, false));
 
         if (selected_group !== groupId) {
             groupChatQueueOrder = new Map();
@@ -2392,10 +2409,11 @@ export async function getGroupPastChats(groupId) {
  * @param {boolean} [options.skipClear=false] Whether the caller has already cleared the current chat
  * @param {boolean} [options.waitForSave=true] Whether to wait for a pending chat save before opening
  * @param {boolean} [options.persistSelection=true] Whether to persist the group's selected chat before returning
+ * @param {boolean} [options.backgroundChatEvents=false] Whether asynchronous chat observers may finish after the workspace commit
  * @param {Function|null} [options.measureStage=null] Optional workspace stage measurement callback
  * @returns {Promise<void>}
  */
-export async function openGroupChat(groupId, chatId, { openInWorkspace = true, skipClear = false, waitForSave = true, persistSelection = true, measureStage = null } = {}) {
+export async function openGroupChat(groupId, chatId, { openInWorkspace = true, skipClear = false, waitForSave = true, persistSelection = true, backgroundChatEvents = false, measureStage = null } = {}) {
     const targetIdentity = { kind: 'group', ownerId: String(groupId), chatId: String(chatId) };
     const targetGroup = groups.find(x => String(x.id) === targetIdentity.ownerId);
     const currentGroup = groups.find(x => String(x.id) === String(selected_group));
@@ -2430,7 +2448,7 @@ export async function openGroupChat(groupId, chatId, { openInWorkspace = true, s
     updateChatMetadata({}, true);
 
     if (persistSelection) await editGroup(groupId, true, false);
-    await getGroupChat(groupId, false, undefined, { measureStage });
+    await getGroupChat(groupId, false, undefined, { measureStage, backgroundChatEvents });
 }
 
 /**

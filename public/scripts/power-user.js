@@ -84,6 +84,21 @@ const MAX_RESPONSE_UNLOCKED = 64 * 1024;
 const unlockedMaxContextStep = 512;
 const maxContextMin = 512;
 const maxContextStep = 64;
+const CHAT_INLINE_IMAGE_MAX_DIMENSION_MIN = 512;
+const CHAT_INLINE_IMAGE_MAX_DIMENSION_MAX = 4096;
+const CHAT_INLINE_IMAGE_MAX_DIMENSION_DEFAULT = 2048;
+
+function normalizeChatInlineImageMaxDimension(value) {
+    const numericValue = Number(value);
+    if (value === null || value === '' || !Number.isFinite(numericValue)) {
+        return CHAT_INLINE_IMAGE_MAX_DIMENSION_DEFAULT;
+    }
+
+    return Math.min(
+        CHAT_INLINE_IMAGE_MAX_DIMENSION_MAX,
+        Math.max(CHAT_INLINE_IMAGE_MAX_DIMENSION_MIN, Math.round(numericValue)),
+    );
+}
 
 const defaultStoryString = '{{#if system}}{{system}}\n{{/if}}{{#if description}}{{description}}\n{{/if}}{{#if personality}}{{char}}\'s personality: {{personality}}\n{{/if}}{{#if scenario}}Scenario: {{scenario}}\n{{/if}}{{#if persona}}{{persona}}\n{{/if}}';
 const defaultExampleSeparator = '***';
@@ -136,6 +151,7 @@ export const power_user = {
     markdown_escape_strings: '',
     chat_truncation: 100,
     chat_inline_image_messages: 0,
+    chat_inline_image_max_dimension: CHAT_INLINE_IMAGE_MAX_DIMENSION_DEFAULT,
     chat_inline_image_conversion: 'default',
     streaming_fps: 30,
     smooth_streaming: false,
@@ -1804,6 +1820,8 @@ export async function loadPowerUserSettings(settings, data) {
         power_user.chat_width = 50;
     }
 
+    power_user.chat_inline_image_max_dimension = normalizeChatInlineImageMaxDimension(power_user.chat_inline_image_max_dimension);
+
     if (power_user.tokenizer === tokenizers.LEGACY) {
         power_user.tokenizer = tokenizers.GPT2;
     }
@@ -1928,6 +1946,8 @@ export async function loadPowerUserSettings(settings, data) {
     $('#chat_truncation_counter').val(power_user.chat_truncation);
     $('#chat_inline_image_messages').val(power_user.chat_inline_image_messages);
     $('#chat_inline_image_messages_counter').val(power_user.chat_inline_image_messages);
+    $('#chat_inline_image_max_dimension').val(power_user.chat_inline_image_max_dimension);
+    $('#chat_inline_image_max_dimension_counter').val(power_user.chat_inline_image_max_dimension);
     $('#chat_inline_image_conversion').val(power_user.chat_inline_image_conversion || 'default');
 
     $('#streaming_fps').val(power_user.streaming_fps);
@@ -3596,6 +3616,13 @@ jQuery(() => {
     $('#chat_inline_image_messages').on('input', function () {
         power_user.chat_inline_image_messages = Number($('#chat_inline_image_messages').val());
         $('#chat_inline_image_messages_counter').val(power_user.chat_inline_image_messages);
+        saveSettingsDebounced();
+    });
+
+    $('#chat_inline_image_max_dimension').on('input', function () {
+        power_user.chat_inline_image_max_dimension = normalizeChatInlineImageMaxDimension($('#chat_inline_image_max_dimension').val());
+        $('#chat_inline_image_max_dimension').val(power_user.chat_inline_image_max_dimension);
+        $('#chat_inline_image_max_dimension_counter').val(power_user.chat_inline_image_max_dimension);
         saveSettingsDebounced();
     });
 

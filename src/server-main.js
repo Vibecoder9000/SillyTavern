@@ -92,6 +92,38 @@ util.inspect.defaultOptions.depth = 4;
 /** @type {import('./command-line.js').CommandLineArguments} */
 const cliArgs = globalThis.COMMAND_LINE_ARGS;
 
+const serverStartTime = globalThis.SERVER_START_TIME ?? performance.now();
+
+/**
+ * Runs and times one server startup phase.
+ * @template T
+ * @param {string} name Human-readable phase name.
+ * @param {() => T | Promise<T>} task Startup work to run.
+ * @returns {Promise<T>} The task result.
+ */
+async function timeStartupPhase(name, task) {
+    if (!globalThis.STARTUP_TIMING_ENABLED) {
+        return await task();
+    }
+
+    const phaseStart = performance.now();
+    const cpuStart = process.cpuUsage();
+    const elapsed = () => Math.round(performance.now() - serverStartTime);
+    console.log(`[startup +${elapsed()}ms] Starting: ${name}`);
+    try {
+        const result = await task();
+        const cpu = process.cpuUsage(cpuStart);
+        const cpuMs = Math.round((cpu.user + cpu.system) / 1000);
+        console.log(`[startup +${elapsed()}ms] Finished: ${name} (${Math.round(performance.now() - phaseStart)}ms wall, ${cpuMs}ms CPU)`);
+        return result;
+    } catch (error) {
+        const cpu = process.cpuUsage(cpuStart);
+        const cpuMs = Math.round((cpu.user + cpu.system) / 1000);
+        console.error(`[startup +${elapsed()}ms] Failed: ${name} (${Math.round(performance.now() - phaseStart)}ms wall, ${cpuMs}ms CPU)`, error);
+        throw error;
+    }
+}
+
 if (!cliArgs.enableIPv6 && !cliArgs.enableIPv4) {
     console.error('error: You can\'t disable all internet protocols: at least IPv6 or IPv4 must be enabled.');
     process.exit(1);
@@ -290,7 +322,7 @@ setupPrivateEndpoints(app);
  * @returns {Promise<void>}
  */
 async function preSetupTasks() {
-    const version = await getVersion();
+    const version = await timeStartupPhase('read application version', getVersion);
 
     // Print formatted header
     console.log();
@@ -306,28 +338,28 @@ async function preSetupTasks() {
     }
     console.log();
 
-    const directories = await getUserDirectoriesList();
-    await migrateGroupChatsMetadataFormat(directories);
-    await checkForNewContent(directories);
+    const directories = await timeStartupPhase('list user directories', getUserDirectoriesList);
+    await timeStartupPhase('migrate group chat metadata', () => migrateGroupChatsMetadataFormat(directories));
+    await timeStartupPhase('check bundled content', () => checkForNewContent(directories));
 
     for (const userDirectories of directories) {
         try {
-            await syncBackgroundsMetadata(userDirectories);
+            await timeStartupPhase(`sync background metadata (${userDirectories.root})`, () => syncBackgroundsMetadata(userDirectories));
         } catch (error) {
             console.error(`Failed to sync background metadata for user at ${userDirectories.root}:`, error);
         }
     }
 
-    await diskCache.verify(directories);
-    migrateFlatSecrets(directories);
-    cleanUploads();
-    migrateAccessLog();
+    await timeStartupPhase('verify character disk cache', () => diskCache.verify(directories));
+    await timeStartupPhase('migrate secrets', () => migrateFlatSecrets(directories));
+    await timeStartupPhase('clean temporary uploads', cleanUploads);
+    await timeStartupPhase('migrate access log', migrateAccessLog);
 
-    await settingsInit();
-    await statsInit();
+    await timeStartupPhase('initialize settings', settingsInit);
+    await timeStartupPhase('initialize statistics', statsInit);
 
     const pluginsDirectory = path.join(serverDirectory, 'plugins');
-    const cleanupPlugins = await loadPlugins(app, pluginsDirectory);
+    const cleanupPlugins = await timeStartupPhase('update and load server plugins', () => loadPlugins(app, pluginsDirectory));
     const consoleTitle = process.title;
 
     let isExiting = false;
@@ -367,7 +399,7 @@ async function preSetupTasks() {
     initRequestProxy({ enabled: cliArgs.requestProxyEnabled, url: cliArgs.requestProxyUrl, bypass: cliArgs.requestProxyBypass, enableKeepAlive: cliArgs.enableKeepAlive, privateRequestFilterEnabled: requestFilterOptions.enabled });
 
     // Wait for frontend libs to compile
-    await webpackMiddleware.runWebpackCompiler({ pruneCache: true });
+    await timeStartupPhase('compile frontend libraries', () => webpackMiddleware.runWebpackCompiler({ pruneCache: true }));
 }
 
 /**
@@ -493,14 +525,14 @@ function setDnsResolutionOrder() {
 }
 
 // User storage module needs to be initialized before starting the server
-initUserStorage(globalThis.DATA_ROOT)
-    .then(setDnsResolutionOrder)
-    .then(ensurePublicDirectoriesExist)
-    .then(migrateUserData)
-    .then(migrateSystemPrompts)
-    .then(migratePublicOverrides)
-    .then(verifySecuritySettings)
-    .then(preSetupTasks)
-    .then(apply404Middleware)
-    .then(() => new ServerStartup(app, cliArgs).start())
-    .then(postSetupTasks);
+timeStartupPhase('initialize user storage', () => initUserStorage(globalThis.DATA_ROOT))
+    .then(() => timeStartupPhase('configure DNS resolution', setDnsResolutionOrder))
+    .then(() => timeStartupPhase('ensure public directories exist', ensurePublicDirectoriesExist))
+    .then(() => timeStartupPhase('migrate legacy user data', migrateUserData))
+    .then(() => timeStartupPhase('migrate system prompts', migrateSystemPrompts))
+    .then(() => timeStartupPhase('migrate public overrides', migratePublicOverrides))
+    .then(() => timeStartupPhase('verify security settings', verifySecuritySettings))
+    .then(() => timeStartupPhase('run pre-listen setup', preSetupTasks))
+    .then(() => timeStartupPhase('install 404 middleware', apply404Middleware))
+    .then(() => timeStartupPhase('bind HTTP server', () => new ServerStartup(app, cliArgs).start()))
+    .then(result => timeStartupPhase('run post-listen setup', () => postSetupTasks(result)));

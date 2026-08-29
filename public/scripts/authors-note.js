@@ -26,6 +26,7 @@ import { power_user } from './power-user.js';
 const MODULE_NAME = '2_floating_prompt'; // <= Deliberate, for sorting lower than memory
 
 export var shouldWIAddPrompt = false;
+let tokenCounterUpdateRevision = 0;
 
 export const metadata_keys = {
     prompt: 'note_prompt',
@@ -438,7 +439,7 @@ function onANMenuItemClick() {
     $('#options').stop().fadeOut(animation_duration);
 }
 
-async function onChatChanged() {
+function onChatChanged() {
     loadSettings();
     setFloatingPrompt();
     const context = getContext();
@@ -446,21 +447,29 @@ async function onChatChanged() {
     // Disable the chara note if in a group
     $('#extension_floating_chara').prop('disabled', !!context.groupId);
 
-    const tokenCounter1 = chat_metadata[metadata_keys.prompt] ? await getTokenCountAsync(chat_metadata[metadata_keys.prompt]) : 0;
-    $('#extension_floating_prompt_token_counter').text(tokenCounter1);
-
-    let tokenCounter2;
+    let characterPrompt = '';
     if (extension_settings.note.chara && context.characterId !== undefined) {
         const charaNote = extension_settings.note.chara.find((e) => e.name === getCharaFilename());
-
-        if (charaNote) {
-            tokenCounter2 = await getTokenCountAsync(charaNote.prompt);
-        }
+        characterPrompt = charaNote?.prompt || '';
     }
 
-    $('#extension_floating_chara_token_counter').text(tokenCounter2 || 0);
+    const prompt = chat_metadata[metadata_keys.prompt] || '';
+    const defaultPrompt = extension_settings.note.default || '';
+    const revision = ++tokenCounterUpdateRevision;
+    void updateTokenCounters(revision, prompt, characterPrompt, defaultPrompt);
+}
 
-    const tokenCounter3 = extension_settings.note.default ? await getTokenCountAsync(extension_settings.note.default) : 0;
+async function updateTokenCounters(revision, prompt, characterPrompt, defaultPrompt) {
+    const [tokenCounter1, tokenCounter2, tokenCounter3] = await Promise.all([
+        prompt ? getTokenCountAsync(prompt) : 0,
+        characterPrompt ? getTokenCountAsync(characterPrompt) : 0,
+        defaultPrompt ? getTokenCountAsync(defaultPrompt) : 0,
+    ]);
+
+    if (revision !== tokenCounterUpdateRevision) return;
+
+    $('#extension_floating_prompt_token_counter').text(tokenCounter1);
+    $('#extension_floating_chara_token_counter').text(tokenCounter2);
     $('#extension_floating_default_token_counter').text(tokenCounter3);
 }
 

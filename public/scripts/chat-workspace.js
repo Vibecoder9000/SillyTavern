@@ -16,6 +16,8 @@ import { createCoalescedWriter } from './chat-workspace-persistence.js';
 import { WorkspaceRuntimeController } from './chat-workspace-runtime.js';
 
 const REMOTE_STATE_URL = '/api/chat-workspace/state';
+const DIRECT_SHELL_RECEIVER = '__sillyTavernChatWorkspaceShellReceive';
+const DIRECT_CHILD_RECEIVER = '__sillyTavernChatWorkspaceChildReceive';
 // Draft and scroll updates can arrive for every keystroke/frame. Keep them in
 // memory immediately, but wait for a real idle window before writing remotely.
 const PERSIST_DELAY = 1500;
@@ -140,13 +142,27 @@ function createFrameSlot() {
 }
 
 function postToSlot(slot, type, payload = {}) {
-    slot?.frame?.contentWindow?.postMessage({
+    const target = slot?.frame?.contentWindow;
+    if (!target) return;
+    const message = {
         source: 'sillytavern-chat-workspace-shell',
         type,
         runtimeId: slot.id,
         sessionId: slot.sessionId,
         ...payload,
-    }, location.origin);
+    };
+
+    let receiver = null;
+    try {
+        receiver = target[DIRECT_CHILD_RECEIVER];
+    } catch {
+        // The child may still be loading or navigating; postMessage is safe.
+    }
+    if (typeof receiver === 'function') {
+        receiver(message, globalThis);
+        return;
+    }
+    target.postMessage(message, location.origin);
 }
 
 function postToSession(session, type, payload = {}) {
@@ -402,12 +418,11 @@ function closeSession(sessionId, { discardDraft = false } = {}) {
     }
 }
 
-window.addEventListener('message', event => {
-    if (event.origin !== location.origin) return;
-    const message = event.data;
+function receiveWorkspaceChildMessage(message, source, origin) {
+    if (origin !== location.origin) return;
     if (!message || message.source !== 'sillytavern-chat-workspace') return;
     const slot = runtimeController.getSlot(message.runtimeId);
-    if (!slot || event.source !== slot.frame.contentWindow) return;
+    if (!slot || source !== slot.frame.contentWindow) return;
 
     if (message.type === 'app-ready') {
         runtimeController.markAppReady(slot.id);
@@ -523,7 +538,10 @@ window.addEventListener('message', event => {
         globalSettingsRevision++;
         return;
     }
-});
+}
+
+globalThis[DIRECT_SHELL_RECEIVER] = (message, source) => receiveWorkspaceChildMessage(message, source, location.origin);
+window.addEventListener('message', event => receiveWorkspaceChildMessage(event.data, event.source, event.origin));
 
 globalThis.addEventListener('pagehide', () => {
     void persistence.flush(getPersistedSnapshot());

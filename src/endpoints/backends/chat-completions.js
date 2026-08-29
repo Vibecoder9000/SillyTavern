@@ -66,6 +66,7 @@ import {
     getWebTokenizer,
 } from '../tokenizers.js';
 import { getVertexAIAuth, getProjectIdFromServiceAccount } from '../google.js';
+import { ChatCompletionStreamCollector } from '../../chat-completion-stream.js';
 
 const API_OPENAI = 'https://api.openai.com/v1';
 const API_CLAUDE = 'https://api.anthropic.com/v1';
@@ -2622,7 +2623,44 @@ router.post('/generate', async function (request, response) {
 
         if (request.body.stream) {
             console.info('Streaming request in progress');
-            return await forwardFetchResponse(fetchResponse, response);
+            const collector = new ChatCompletionStreamCollector();
+            let responseLogged = false;
+
+            const logStreamingResponse = (result) => {
+                if (responseLogged) {
+                    return;
+                }
+                responseLogged = true;
+
+                if (!result.response) {
+                    console.warn('Chat Completion streaming response contained no reconstructable JSON events.');
+                    if (result.parseErrors.length > 0) {
+                        console.warn('Chat Completion streaming response reconstruction errors:', result.parseErrors);
+                    }
+                    return;
+                }
+
+                if (!result.complete) {
+                    console.warn('Chat Completion streaming response reconstruction was incomplete:', result.parseErrors);
+                }
+                console.debug('Chat Completion response:', result.response);
+            };
+
+            return await forwardFetchResponse(fetchResponse, response, {
+                onChunk: chunk => {
+                    const state = collector.push(chunk);
+                    if (state.done && state.result) {
+                        logStreamingResponse(state.result);
+                    }
+                },
+                onEnd: () => logStreamingResponse(collector.finish()),
+                onClose: () => {
+                    if (!responseLogged) {
+                        responseLogged = true;
+                        collector.abort();
+                    }
+                },
+            });
         }
 
         if (fetchResponse.ok) {

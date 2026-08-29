@@ -1,5 +1,5 @@
 import { afterEach, describe, test, expect, jest } from '@jest/globals';
-import { once } from 'node:events';
+import { EventEmitter, once } from 'node:events';
 import { PassThrough } from 'node:stream';
 import { Response } from 'node-fetch';
 import { CHAT_COMPLETION_SOURCES } from '../src/constants';
@@ -132,6 +132,55 @@ describe('flattenSchema', () => {
 });
 
 describe('forwardFetchResponse', () => {
+    test('should observe successful streams without changing the forwarded body', async () => {
+        const body = 'data: one\n\ndata: two\n\n';
+        const response = createMockExpressResponse();
+        response.socket = new EventEmitter();
+        const bodyPromise = collectResponseBody(response);
+        const chunks = [];
+        const events = [];
+        jest.spyOn(console, 'info').mockImplementation(() => events.push('finished'));
+
+        await forwardFetchResponse(new Response(body), response, {
+            onChunk: chunk => chunks.push(Buffer.from(chunk)),
+            onEnd: () => events.push('end'),
+            onClose: () => events.push('close'),
+        });
+
+        expect(await bodyPromise).toBe(body);
+        expect(Buffer.concat(chunks).toString('utf8')).toBe(body);
+        expect(events).toEqual(['end', 'finished']);
+    });
+
+    test('should isolate observer failures from successful forwarding', async () => {
+        const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+        const body = 'unchanged';
+        const response = createMockExpressResponse();
+        response.socket = new EventEmitter();
+        const bodyPromise = collectResponseBody(response);
+
+        await forwardFetchResponse(new Response(body), response, {
+            onChunk: () => { throw new Error('observer failure'); },
+            onEnd: () => { throw new Error('observer end failure'); },
+        });
+
+        expect(await bodyPromise).toBe(body);
+        expect(warnSpy).toHaveBeenCalledTimes(2);
+    });
+
+    test('should notify the observer when the client closes early', async () => {
+        const upstream = new PassThrough();
+        const response = createMockExpressResponse();
+        response.socket = new EventEmitter();
+        const observer = { onClose: jest.fn() };
+
+        await forwardFetchResponse(new Response(upstream), response, observer);
+        response.socket.emit('close');
+
+        expect(observer.onClose).toHaveBeenCalledTimes(1);
+        expect(upstream.destroyed).toBe(true);
+    });
+
     test('should log JSON error bodies and return the original body for non-2xx streaming responses', async () => {
         const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
         const body = JSON.stringify({ error: { message: 'Forbidden by upstream policy' }, detail: 'policy_denied' });

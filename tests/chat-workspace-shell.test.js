@@ -6,6 +6,7 @@ const shellCss = readFileSync(new URL('../public/css/chat-workspace.css', import
 const shellScript = readFileSync(new URL('../public/scripts/chat-workspace.js', import.meta.url), 'utf8');
 const bridgeScript = readFileSync(new URL('../public/scripts/chat-workspace-bridge.js', import.meta.url), 'utf8');
 const appScript = readFileSync(new URL('../public/script.js', import.meta.url), 'utf8');
+const appCss = readFileSync(new URL('../public/style.css', import.meta.url), 'utf8');
 const rossModsScript = readFileSync(new URL('../public/scripts/RossAscends-mods.js', import.meta.url), 'utf8');
 
 describe('chat workspace initial loading surface', () => {
@@ -36,13 +37,19 @@ describe('chat workspace initial loading surface', () => {
         expect(requestActivation).not.toContain('loaderElement.hidden = false');
     });
 
-    test('shows only the spinner for a pending tab', () => {
+    test('uses delayed icon-only feedback for transient tab activity', () => {
         const renderTabs = bridgeScript.slice(
             bridgeScript.indexOf('function renderTabs'),
             bridgeScript.indexOf('export function requestWorkspaceOpen'),
         );
-        expect(renderTabs).toContain("activity.textContent = statusKey === 'opening' ? ''");
+        expect(bridgeScript).toContain('const TRANSIENT_ACTIVITY_DELAY = 400');
+        expect(bridgeScript).toContain("transient = statusKey === 'saving' || statusKey === 'opening'");
+        expect(renderTabs).toContain("activity.textContent = ''");
+        expect(renderTabs).toContain('setTabActivity(elements, statusKey)');
         expect(renderTabs).toContain("statusLabels[statusKey]");
+        expect(appCss).toContain('--workspace-tab-status-size: calc(var(--mainFontSize) * .6)');
+        expect(appCss).toContain('width: calc(var(--mainFontSize) * 17)');
+        expect(appCss).toContain('.chat_workspace_tab_activity[data-status="saving"]::before');
     });
 
     test('restores child view state without waiting for an occlusion-sensitive animation frame', () => {
@@ -145,6 +152,10 @@ describe('chat workspace initial loading surface', () => {
             appScript.indexOf('} else {\n            return await sendGenerationRequest'),
         );
         expect(streamingBranch.indexOf('prepareWorkspaceStreaming()')).toBeLessThan(streamingBranch.indexOf('sendStreamingRequest'));
+        expect(streamingBranch).toContain('processorOwnsActiveWorkspace');
+        expect(streamingBranch).toContain('completedStreamingProcessor.workspaceSessionId === getChatWorkspaceSessionId()');
+        expect(streamingBranch).toContain('!completedStreamingProcessor.workspaceOutputPaused');
+        expect(streamingBranch).toContain('if (processorOwnsActiveWorkspace) hideSwipeButtons()');
 
         const pauseGeneration = appScript.slice(
             appScript.indexOf('async function pauseWorkspaceGeneration'),
@@ -158,6 +169,43 @@ describe('chat workspace initial loading surface', () => {
             appScript.indexOf('function registerWorkspaceStreamingProcessor'),
         );
         expect(generationUi).toContain('swipeState = SWIPE_STATE.SWIPING');
+        expect(generationUi).toContain('showSwipeButtons({ updateCounters: true, fade: false })');
+    });
+
+    test('scopes swipe generation gating to the active workspace chat', () => {
+        const activeChatGeneration = appScript.slice(
+            appScript.indexOf('function isActiveChatGenerating'),
+            appScript.indexOf('export function emitChatChanged'),
+        );
+        expect(activeChatGeneration).toContain('workspaceComposerGenerationPendingSessions.has(sessionId)');
+        expect(activeChatGeneration).toContain('workspaceStreamingProcessors.has(sessionId)');
+        expect(activeChatGeneration).toContain('is_send_press && workspaceStreamingProcessors.size === 0');
+
+        const swipeAllowed = appScript.slice(
+            appScript.indexOf('export function isSwipingAllowed'),
+            appScript.indexOf('export function isMessageSwipeable'),
+        );
+        expect(swipeAllowed).toContain('!isActiveChatGenerating()');
+
+        const swipeHandler = appScript.slice(
+            appScript.indexOf('export async function swipe'),
+            appScript.indexOf('/**\n * Imports tags for the given characters'),
+        );
+        expect(swipeHandler).toContain('if (isActiveChatGenerating()');
+        expect(swipeHandler).toContain('if (run_generate && !isActiveChatGenerating())');
+    });
+
+    test('waits for per-chat observers before accepting an immediate workspace send', () => {
+        const sendMessage = appScript.slice(
+            appScript.indexOf('export async function sendTextareaMessage'),
+            appScript.indexOf('/**\n * Formats raw message text'),
+        );
+        expect(sendMessage).toContain('workspaceComposerGenerationPendingSessions.has(workspaceSessionId)');
+        expect(sendMessage).toContain('workspaceComposerGenerationPendingSessions.add(workspaceSessionId)');
+        expect(sendMessage).toContain('workspaceComposerGenerationPendingSessions.delete(workspaceSessionId)');
+        expect(sendMessage).toContain('await pendingWorkspaceChatEvents');
+        expect(sendMessage).toContain('Re-check locks after the readiness wait');
+        expect(sendMessage).toContain('showSwipeButtons({ updateCounters: isChatWorkspaceChild(), fade: !isChatWorkspaceChild() })');
     });
 
     test('reassigns the active logical session after the sole iframe reloads', () => {

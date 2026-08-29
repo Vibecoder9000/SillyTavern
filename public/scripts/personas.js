@@ -100,6 +100,9 @@ export const persona_description_positions = {
 const USER_AVATAR_PATH = 'User Avatars/';
 
 let savePersonasPage = 0;
+const USER_AVATAR_CACHE_TTL = 60_000;
+let cachedUserAvatars = null;
+let cachedUserAvatarsAt = 0;
 const GRID_STORAGE_KEY = 'Personas_GridView';
 const DEFAULT_DEPTH = 2;
 const DEFAULT_ROLE = 0;
@@ -192,7 +195,6 @@ export async function syncUserAvatar(imgfile) {
     if (!imgfile || user_avatar === imgfile) return;
     user_avatar = imgfile;
     reloadUserAvatar();
-    updatePersonaUIStates();
     await selectCurrentPersona({
         toastPersonaNameChange: false,
         allowAutoLock: false,
@@ -308,6 +310,10 @@ async function addMissingPersonas(avatarsList) {
  * @returns {Promise<string[]>} List of avatar file names
  */
 export async function getUserAvatars(doRender = true, openPageAt = '') {
+    if (!doRender && Array.isArray(cachedUserAvatars) && Date.now() - cachedUserAvatarsAt < USER_AVATAR_CACHE_TTL) {
+        return cachedUserAvatars;
+    }
+
     const response = await fetch('/api/avatars/get', {
         method: 'POST',
         headers: getRequestHeaders({ omitContentType: true }),
@@ -318,6 +324,9 @@ export async function getUserAvatars(doRender = true, openPageAt = '') {
         if (!Array.isArray(allEntities)) {
             return [];
         }
+
+        cachedUserAvatars = allEntities;
+        cachedUserAvatarsAt = Date.now();
 
         if (!doRender) {
             return allEntities;

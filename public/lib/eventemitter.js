@@ -187,6 +187,43 @@ EventEmitter.prototype.emitAndWait = function (event) {
     }
 };
 
+/**
+ * Starts every listener synchronously but lets returned promises finish in the
+ * background. This is useful when listeners must observe the new state before
+ * a paint-critical commit, but their independent I/O must not delay it.
+ * @param {string} event Event name
+ * @returns {Promise<void>} Resolves after all asynchronous listeners settle
+ */
+EventEmitter.prototype.emitInBackground = function (event) {
+    let args = [].slice.call(arguments, 1);
+    if (localStorage.getItem('eventTracing') === 'true') {
+        console.trace('Event emitted in background: ' + event, args);
+    } else {
+        console.debug('Event emitted in background: ' + event);
+    }
+
+    const pending = [];
+    if (typeof this.events[event] === 'object') {
+        const listeners = this.events[event].slice();
+        for (const listener of listeners) {
+            try {
+                pending.push(Promise.resolve(listener.apply(this, args)).catch(err => {
+                    console.error(err);
+                    console.trace('Error in background event listener');
+                }));
+            } catch (err) {
+                console.error(err);
+                console.trace('Error in background event listener');
+            }
+        }
+    }
+
+    if (this.autoFireAfterEmit.has(event)) {
+        this.autoFireLastArgs.set(event, args);
+    }
+    return Promise.all(pending).then(() => undefined);
+};
+
 EventEmitter.prototype.once = function (event, listener) {
     this.on(event, function g() {
         this.removeListener(event, g);
