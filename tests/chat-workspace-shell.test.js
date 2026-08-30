@@ -7,6 +7,7 @@ const shellScript = readFileSync(new URL('../public/scripts/chat-workspace.js', 
 const bridgeScript = readFileSync(new URL('../public/scripts/chat-workspace-bridge.js', import.meta.url), 'utf8');
 const appScript = readFileSync(new URL('../public/script.js', import.meta.url), 'utf8');
 const appCss = readFileSync(new URL('../public/style.css', import.meta.url), 'utf8');
+const powerUserScript = readFileSync(new URL('../public/scripts/power-user.js', import.meta.url), 'utf8');
 const rossModsScript = readFileSync(new URL('../public/scripts/RossAscends-mods.js', import.meta.url), 'utf8');
 
 describe('chat workspace initial loading surface', () => {
@@ -50,6 +51,18 @@ describe('chat workspace initial loading surface', () => {
         expect(appCss).toContain('--workspace-tab-status-size: calc(var(--mainFontSize) * .6)');
         expect(appCss).toContain('width: calc(var(--mainFontSize) * 17)');
         expect(appCss).toContain('.chat_workspace_tab_activity[data-status="saving"]::before');
+    });
+
+    test('only disables iframe animations when the SillyTavern setting requests it', () => {
+        const switchReducedMotion = powerUserScript.slice(
+            powerUserScript.indexOf('function switchReducedMotion'),
+            powerUserScript.indexOf('function switchCompactInputArea'),
+        );
+        expect(switchReducedMotion).not.toContain("matchMedia('(prefers-reduced-motion: reduce)')");
+        expect(switchReducedMotion).toContain('jQuery.fx.off = power_user.reduced_motion');
+        expect(switchReducedMotion).toContain("$('body').toggleClass('reduced-motion', power_user.reduced_motion)");
+        expect(appCss).toContain('body.reduced-motion .chat_workspace_tab_activity');
+        expect(appCss).not.toMatch(/@media\s*\(prefers-reduced-motion:\s*reduce\)\s*\{[^}]*chat_workspace_tab_activity/s);
     });
 
     test('restores child view state without waiting for an occlusion-sensitive animation frame', () => {

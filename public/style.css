@@ -1151,11 +1151,9 @@ body .panelControlBar {
     }
 }
 
-@media (prefers-reduced-motion: reduce) {
-    .chat_workspace_tab_activity,
-    .chat_workspace_tab_activity::before {
-        animation: none;
-    }
+body.reduced-motion .chat_workspace_tab_activity,
+body.reduced-motion .chat_workspace_tab_activity::before {
+    animation: none;
 }
 
 /* special case for desktop Safari to allow #sheld resizing */
