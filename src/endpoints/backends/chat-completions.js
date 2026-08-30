@@ -67,6 +67,11 @@ import {
 } from '../tokenizers.js';
 import { getVertexAIAuth, getProjectIdFromServiceAccount } from '../google.js';
 import { ChatCompletionStreamCollector } from '../../chat-completion-stream.js';
+import {
+    router as openaiCodexRouter,
+    sendCodexChatCompletion,
+    sendCodexStatus,
+} from './openai-codex/index.js';
 
 const API_OPENAI = 'https://api.openai.com/v1';
 const API_CLAUDE = 'https://api.anthropic.com/v1';
@@ -1740,10 +1745,15 @@ async function sendAzureOpenAIRequest(request, response) {
 }
 
 export const router = express.Router();
+router.use('/codex', openaiCodexRouter);
 
 router.post('/status', async function (request, statusResponse) {
     try {
         if (!request.body) return statusResponse.sendStatus(400);
+
+        if (request.body.chat_completion_source === CHAT_COMPLETION_SOURCES.OPENAI_CODEX) {
+            return sendCodexStatus(request, statusResponse);
+        }
 
         let apiUrl = '';
         let apiKey = '';
@@ -2182,6 +2192,7 @@ router.post('/generate', async function (request, response) {
         }
 
         switch (request.body.chat_completion_source) {
+            case CHAT_COMPLETION_SOURCES.OPENAI_CODEX: return await sendCodexChatCompletion(request, response);
             case CHAT_COMPLETION_SOURCES.CLAUDE: return await sendClaudeRequest(request, response);
             case CHAT_COMPLETION_SOURCES.AI21: return await sendAI21Request(request, response);
             case CHAT_COMPLETION_SOURCES.MAKERSUITE: return await sendMakerSuiteRequest(request, response);

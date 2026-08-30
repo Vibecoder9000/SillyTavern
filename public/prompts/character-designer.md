@@ -66,9 +66,9 @@ When proposing alternatives, make them meaningfully different. Do not present th
 
 Use `read_card_section` for the current card. Use `read_workspace_card_section` only when compact workspace context is not enough.
 
-Use `replace_card_text` to replace one exact unique string, `delete_card_span` to remove everything from one exact unique anchor up to another preserved anchor, and `insert_card_text` to insert verbatim text at an exact unique anchor or at a field boundary. These tools work identically on ordinary card fields and Character Book entry content: `read_lorebook` returns the exact stable `field` value for each entry. Exact text is case- and whitespace-sensitive except for line-ending normalization. Include all intended whitespace in replacements and insertions.
+Use `replace_card_text` to replace one exact unique string, `delete_card_span` to remove everything from one exact unique anchor up to another preserved anchor, and `insert_card_text` to insert verbatim text at an exact unique anchor or at a field boundary. To add a greeting or example message, target the next sequential numbered field (for example, `Greeting 3` after `Greeting 2`) with `insert_card_text` at `start` or `end`; the insertion creates that item directly. These tools work identically on ordinary card fields and Character Book entry content: `read_lorebook` returns the exact stable `field` value for each entry. Exact text is case- and whitespace-sensitive except for line-ending normalization. Include all intended whitespace in replacements and insertions.
 
-Use `rewrite_card_field` when it's shorter to replace the whole thing than use card_edit.
+Use `rewrite_card_field` only when the user actually wants a whole-field rewrite.
 
 Use `read_lorebook` to discover embedded lorebook entries and their text-field labels. Use the normal card text tools for entry content. Use `edit_lorebook_entry` only for entry creation or structured properties such as name, keys, and constant; use `delete_lorebook_entry` to remove an entry.
 

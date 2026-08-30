@@ -6220,6 +6220,16 @@ body.big-avatars .cc-reference-option-copy { height: calc(var(--avatar-base-heig
 .cc-editor-card { padding: 0 10px 15px; overflow-anchor: none; }
 .cc-editor-divider { cursor: col-resize; background: var(--SmartThemeBorderColor); opacity: .4; transition: opacity var(--animation-duration); touch-action: none; }
 .cc-editor-divider:hover { opacity: 1; }
+/* Keep diff-heavy panes at their starting layout while the divider moves. The
+   panes still resize immediately, but their contents only reflow once on release. */
+#character-card-editor.cc-editor-resizing .cc-editor-card,
+#character-card-editor.cc-editor-resizing .cc-editor-chat { overflow: hidden; }
+#character-card-editor.cc-editor-resizing .cc-card-section-tabs { width: var(--cc-drag-tabs-width); }
+#character-card-editor.cc-editor-resizing .cc-card-section:not([hidden]) { width: var(--cc-drag-section-width); }
+#character-card-editor.cc-editor-resizing .cc-editor-message-pane { align-self: flex-start; width: var(--cc-drag-chat-width); }
+#character-card-editor.cc-editor-resizing .cc-editor-card,
+#character-card-editor.cc-editor-resizing .cc-editor-chat { pointer-events: none; user-select: none; }
+#character-card-editor.cc-editor-resizing .cc-editor-divider { pointer-events: auto; transition: none; opacity: 1; }
 .cc-card-section-tabs {
     box-sizing: border-box;
     position: sticky;
@@ -6329,18 +6339,22 @@ body.big-avatars .cc-reference-option-copy { height: calc(var(--avatar-base-heig
 .cc-field-number { width: min(10ch, 100%); min-height: 28px; margin: 0; }
 .cc-field-label .cc-field-number { width: 7ch; min-height: 23px; }
 .cc-field-body.has-pending { border-color: color-mix(in srgb, var(--SmartThemeBorderColor), #54b66f 45%); }
-.cc-diff-jump span { display: block; }
+/* An inline proposal displays removed and added revisions in the same flow, so a
+   single logical-line gutter cannot align with both. Reserve its width to keep the
+   final wrapping stable, but hide misleading numbers until resolution. */
+.cc-code-field.has-pending > .cc-line-numbers { visibility: hidden; }
 .cc-remove { color: #e06c75; }
 .cc-add { color: #35c75a; }
 .cc-pending-field { position: relative; box-sizing: border-box; display: block; width: 100%; min-height: 34px; margin: 0; padding: 6px 8px; line-height: 1.6; white-space: pre-wrap; overflow: visible; overflow-wrap: anywhere; cursor: text; }
 .cc-pending-field:focus { outline: none; }
 .cc-pending-change { display: inline; white-space: pre-wrap; }
-.cc-pending-change::before { content: attr(data-removed); padding: 0 2px; color: inherit; background: color-mix(in srgb, #e06c75, transparent 58%); border-radius: 2px; text-decoration: line-through; white-space: pre-wrap; box-decoration-break: clone; -webkit-box-decoration-break: clone; }
+.cc-pending-change::before { content: attr(data-removed); padding: 0 .22em; color: color-mix(in srgb, #e06c75 78%, var(--SmartThemeBodyColor)); background: color-mix(in srgb, #e06c75, transparent 78%); border-radius: 3px; text-decoration: line-through; text-decoration-thickness: 1.5px; white-space: pre-wrap; box-decoration-break: clone; -webkit-box-decoration-break: clone; }
 .cc-pending-change:not([data-removed])::before { content: none; }
-.cc-pending-change[data-removed] .cc-pending-add:not(:empty)::before { content: ' '; white-space: pre; }
-.cc-pending-add { padding: 0 2px; color: inherit; background: color-mix(in srgb, #35c75a, transparent 42%); border-radius: 2px; box-decoration-break: clone; -webkit-box-decoration-break: clone; }
+.cc-pending-field .cc-pending-add:not(:empty) { margin-inline-start: 1px; padding: 0 .22em; color: color-mix(in srgb, #35c75a 78%, var(--SmartThemeBodyColor)); background: color-mix(in srgb, #35c75a, transparent 78%); border-radius: 3px; box-decoration-break: clone; -webkit-box-decoration-break: clone; }
+.cc-pending-change:not([data-removed]) .cc-pending-add { margin-inline-start: 0; }
+.cc-pending-add:empty { display: none; }
 .cc-pending-hunk { display: inline; max-width: 100%; border-radius: 2px; box-decoration-break: clone; -webkit-box-decoration-break: clone; }
-.cc-pending-hunk:hover, .cc-pending-hunk-current { outline: 2px solid color-mix(in srgb, var(--SmartThemeBodyColor), transparent 25%); outline-offset: 2px; }
+.cc-pending-hunk:hover, .cc-pending-hunk-current { background: color-mix(in srgb, var(--SmartThemeBodyColor), transparent 94%); box-shadow: 0 0 0 2px color-mix(in srgb, var(--SmartThemeBodyColor), transparent 45%); }
 .cc-pending-field .cc-remove { padding: 0 2px; color: inherit; background: color-mix(in srgb, #e06c75, transparent 68%); border-radius: 2px; }
 .cc-pending-field .cc-add { padding: 0 2px; color: inherit; background: color-mix(in srgb, #35c75a, transparent 50%); border-radius: 2px; }
 .cc-pending-field .cc-remove + .cc-add::before { content: '\A'; white-space: pre; }
@@ -6486,8 +6500,17 @@ body.bubblechat .cc-message-has-fork-action { padding-right: 91px; }
 .cc-failed-diff span { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .cc-tool-error-text { margin-top: 5px; }
 .cc-tool-result-content { box-sizing: border-box; max-width: 100%; max-height: calc(1.35em * 2 + 8px); margin: 5px 0 0; padding: 3px 5px; overflow-x: hidden; overflow-y: auto; color: inherit; font-family: inherit; font-size: inherit; font-style: normal; font-weight: inherit; line-height: 1.35; background: color-mix(in srgb, var(--SmartThemeBlurTintColor), transparent 35%); border: 1px solid color-mix(in srgb, var(--SmartThemeBorderColor), transparent 35%); border-radius: 3px; white-space: pre-wrap; overflow-wrap: anywhere; }
-.cc-diff-jump { display: block; max-width: 100%; margin: 5px 0 0; padding: 0; text-align: left; font: inherit; color: inherit; background: transparent; border: 0; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.cc-diff-resolved { opacity: .42; filter: grayscale(1); cursor: default; }
+.cc-diff-jump { box-sizing: border-box; display: block; width: 100%; max-width: 100%; margin: 6px 0 0; padding: 4px; overflow: hidden; color: inherit; background: color-mix(in srgb, var(--SmartThemeBlurTintColor), transparent 38%); border: 1px solid color-mix(in srgb, var(--SmartThemeBorderColor), transparent 25%); border-radius: 5px; text-align: left; font: inherit; cursor: pointer; }
+.cc-diff-jump span { display: block; }
+.cc-diff-jump .cc-remove,
+.cc-diff-jump .cc-add { box-sizing: border-box; width: 100%; padding: 2px 6px; overflow: hidden; font-family: var(--monoFontFamily, Consolas, 'Courier New', monospace); font-size: calc(var(--mainFontSize) * .86); line-height: 1.35; text-overflow: ellipsis; white-space: nowrap; }
+.cc-diff-jump .cc-remove { color: color-mix(in srgb, #e06c75 82%, var(--SmartThemeBodyColor)); background: color-mix(in srgb, #e06c75, transparent 88%); border-radius: 3px 3px 0 0; }
+.cc-diff-jump .cc-add { color: color-mix(in srgb, #35c75a 82%, var(--SmartThemeBodyColor)); background: color-mix(in srgb, #35c75a, transparent 88%); border-radius: 0 0 3px 3px; }
+.cc-diff-jump .cc-add:first-child,
+.cc-diff-jump .cc-remove:last-child { border-radius: 3px; }
+button.cc-diff-jump:hover { background: color-mix(in srgb, var(--SmartThemeBodyColor) 8%, var(--SmartThemeBlurTintColor)); border-color: color-mix(in srgb, var(--SmartThemeBodyColor), transparent 35%); }
+button.cc-diff-jump:focus-visible { outline: 2px solid var(--SmartThemeBodyColor); outline-offset: 2px; }
+.cc-diff-resolved { opacity: .52; cursor: default; }
 .cc-tool-result-message { margin-top: -4px; padding-block: 5px; opacity: .78; background: color-mix(in srgb, var(--SmartThemeBotMesBlurTintColor), transparent 25%); }
 .cc-tool-result-readout { line-height: 1.35; }
 .cc-tool-result-summary { font-size: calc(var(--mainFontSize) * .88); }
@@ -7464,4 +7487,58 @@ body.layout-plus-plus #groupMemberSpeakPopout {
     .popup {
         border-width: 2px;
     }
+}
+.codex-limit-label {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    font-size: .85em;
+}
+
+#codex_limits_summary {
+    flex: 1;
+    text-align: right;
+    margin-right: 10px;
+    align-self: center;
+    font-size: calc(var(--mainFontSize) * 0.85);
+    font-weight: normal;
+    opacity: .8;
+}
+
+.codex-device-code {
+    font-family: monospace;
+    font-size: 1.6em;
+    font-weight: 700;
+    letter-spacing: .12em;
+    user-select: all;
+}
+
+.codex-limits {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+    gap: 12px;
+    margin-top: 8px;
+}
+
+.codex-limit-group {
+    min-width: 0;
+}
+
+.codex-limit-row {
+    margin-top: 5px;
+}
+
+.codex-limit-row progress {
+    width: 100%;
+    height: 5px;
+    display: block;
+}
+
+.codex-limit-row small,
+.codex-limit-credit {
+    display: block;
+    margin-top: 1px;
+    opacity: .7;
+    font-size: .75em;
 }

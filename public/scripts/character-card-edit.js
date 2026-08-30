@@ -2,6 +2,16 @@ const CONTEXT_RADIUS = 60;
 
 const normalizeLineEndings = value => String(value ?? '').replace(/\r\n?/g, '\n');
 
+/**
+ * Updates the live side of a reversible card proposal.
+ * @returns {boolean} Whether the proposal still differs from its committed base.
+ */
+export function setPendingCardValue(pending, value) {
+    if (!pending || typeof pending !== 'object') return false;
+    pending.after = structuredClone(value);
+    return JSON.stringify(pending.before) !== JSON.stringify(pending.after);
+}
+
 export function formatLorebookContentField(entryId) {
     return `Character Book Entry [${String(entryId || '')}] Content`;
 }

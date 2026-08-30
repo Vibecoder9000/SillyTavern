@@ -2021,7 +2021,7 @@
                                             </b>
                                         </div>
                                     </div>
-                                    <div class="range-block" data-source="openai,cohere,mistralai,custom,claude,aimlapi,openrouter,groq,siliconflow,minimax,deepseek,makersuite,vertexai,ai21,xai,pollinations,moonshot,fireworks,cometapi,electronhub,chutes,azure_openai,zai,nanogpt,workers_ai">
+                                    <div class="range-block" data-source="openai,openai_codex,cohere,mistralai,custom,claude,aimlapi,openrouter,groq,siliconflow,minimax,deepseek,makersuite,vertexai,ai21,xai,pollinations,moonshot,fireworks,cometapi,electronhub,chutes,azure_openai,zai,nanogpt,workers_ai">
                                         <label for="openai_function_calling" class="checkbox_label flexWrap widthFreeExpand">
                                             <input id="openai_function_calling" type="checkbox" />
                                             <span data-i18n="Enable function calling">Enable function calling</span>
@@ -2050,7 +2050,7 @@
                                             </div>
                                         </div>
                                     </div>
-                                    <div class="range-block" data-source="openrouter,custom">
+                                    <div class="range-block" data-source="openai_codex,openrouter,custom">
                                         <div class="flex-container flexFlowColumn wide100p textAlignCenter marginTop10">
                                             <div class="flex-container oneline-dropdown">
                                                 <label for="tool_reasoning_mode" data-i18n="Interleaved Thinking">
@@ -2074,7 +2074,7 @@
                                             </em>
                                         </div>
                                     </div>
-                                    <div class="range-block" data-source="openai,aimlapi,openrouter,mistralai,makersuite,vertexai,claude,custom,xai,pollinations,moonshot,cohere,cometapi,nanogpt,electronhub,azure_openai,zai,siliconflow,chutes,workers_ai">
+                                    <div class="range-block" data-source="openai,openai_codex,aimlapi,openrouter,mistralai,makersuite,vertexai,claude,custom,xai,pollinations,moonshot,cohere,cometapi,nanogpt,electronhub,azure_openai,zai,siliconflow,chutes,workers_ai">
                                         <label for="openai_media_inlining" class="checkbox_label flexWrap widthFreeExpand">
                                             <input id="openai_media_inlining" type="checkbox" />
                                             <span data-i18n="Send inline media">Send inline media</span>
@@ -2098,7 +2098,7 @@
                                             <strong data-source="makersuite,vertexai" data-i18n="video_inlining_hint_4">Videos must be less than 20 MB and under 1 minute long.</strong>
                                             <strong data-source="makersuite,vertexai" data-i18n="audio_inlining_hint_2">Audio must be less than 20 MB.</strong>
                                         </div>
-                                        <div class="flex-container flexFlowColumn wide100p textAlignCenter marginTop10" data-source="openai,custom,xai,pollinations,cohere,cometapi,nanogpt,moonshot,aimlapi,openrouter,mistralai,electronhub,azure_openai,zai,siliconflow,chutes,makersuite,vertexai,workers_ai">
+                                    <div class="flex-container flexFlowColumn wide100p textAlignCenter marginTop10" data-source="openai,openai_codex,custom,xai,pollinations,cohere,cometapi,nanogpt,moonshot,aimlapi,openrouter,mistralai,electronhub,azure_openai,zai,siliconflow,chutes,makersuite,vertexai,workers_ai">
                                             <div class="flex-container oneline-dropdown">
                                                 <label for="openai_inline_image_quality" data-i18n="Inline Image Quality">
                                                     Inline Image Quality
@@ -2159,7 +2159,7 @@
                                             </div>
                                         </div>
                                     </div>
-                                    <div class="range-block" data-source="deepseek,aimlapi,openrouter,custom,claude,xai,makersuite,vertexai,pollinations,moonshot,mistralai,fireworks,cometapi,electronhub,chutes,azure_openai,nanogpt,zai,workers_ai">
+                                    <div class="range-block" data-source="openai_codex,deepseek,aimlapi,openrouter,custom,claude,xai,makersuite,vertexai,pollinations,moonshot,mistralai,fireworks,cometapi,electronhub,chutes,azure_openai,nanogpt,zai,workers_ai">
                                         <label for="openai_show_thoughts" class="checkbox_label widthFreeExpand">
                                             <input id="openai_show_thoughts" type="checkbox" />
                                             <span data-i18n="Request model reasoning">Request model reasoning</span>
@@ -2173,7 +2173,7 @@
     </strong>
                                         </div>
                                     </div>
-                                    <div class="flex-container flexFlowColumn wide100p textAlignCenter marginTop10" data-source="openai,custom,claude,xai,makersuite,vertexai,aimlapi,openrouter,pollinations,perplexity,cometapi,electronhub,azure_openai,chutes,nanogpt,deepseek">
+                                    <div class="flex-container flexFlowColumn wide100p textAlignCenter marginTop10" data-source="openai,openai_codex,custom,claude,xai,makersuite,vertexai,aimlapi,openrouter,pollinations,perplexity,cometapi,electronhub,azure_openai,chutes,nanogpt,deepseek">
                                         <div class="flex-container oneline-dropdown" title="Constrains effort on reasoning for reasoning models.&#10;Reducing reasoning effort can result in faster responses and fewer tokens used on reasoning in a response." data-i18n="[title]Constrains effort on reasoning for reasoning models.">
                                             <label for="openai_reasoning_effort">
                                                 <span data-i18n="Reasoning Effort">Reasoning Effort</span>
@@ -2185,10 +2185,14 @@
                                                 <option data-i18n="openai_reasoning_effort_low" value="low">Low</option>
                                                 <option data-i18n="openai_reasoning_effort_medium" value="medium">Medium</option>
                                                 <option data-i18n="openai_reasoning_effort_high" value="high">High</option>
+                                                <option data-i18n="openai_reasoning_effort_xhigh" value="xhigh">Extra High</option>
                                                 <option data-i18n="openai_reasoning_effort_maximum" value="max">Maximum</option>
                                             </select>
                                             <div class="toggle-description justifyLeft marginBot5" data-source="openai,custom,xai,aimlapi,openrouter,pollinations,perplexity,cometapi,electronhub,azure_openai,chutes" data-i18n="OpenAI-style options: low, medium, high. Minimum and maximum are aliased to low and high. Auto does not send an effort level.">
                                                 OpenAI-style options: low, medium, high. Minimum and maximum are aliased to low and high. Auto does not send an effort level.
+                                            </div>
+                                            <div class="toggle-description justifyLeft marginBot5" data-source="openai_codex" data-i18n="Codex options: minimal, low, medium, high, extra high, and maximum are sent as-is. Auto does not send an effort level.">
+                                                Codex options: minimal, low, medium, high, extra high, and maximum are sent as-is. Auto does not send an effort level.
                                             </div>
                                             <div class="toggle-description justifyLeft marginBot5" data-source="claude" data-i18n="Allocates a portion of the response length for thinking (min: 1024 tokens, low: 10%, medium: 25%, high: 50%, max: 95%), but minimum 1024 tokens. Auto does not request thinking.">
                                                 Allocates a portion of the response length for thinking (min: 1024 tokens, low: 10%, medium: 25%, high: 50%, max: 95%), but minimum 1024 tokens. Auto does not request thinking.
@@ -2204,7 +2208,7 @@
                                             </div>
                                         </div>
                                     </div>
-                                    <div class="flex-container flexFlowColumn wide100p textAlignCenter marginTop10" data-source="openai,custom,openrouter,claude">
+                                    <div class="flex-container flexFlowColumn wide100p textAlignCenter marginTop10" data-source="openai,openai_codex,custom,openrouter,claude">
                                         <div class="flex-container oneline-dropdown">
                                             <label for="openai_verbosity">
                                                 <span data-i18n="Verbosity">Verbosity</span>
@@ -2920,6 +2924,7 @@
                         <select id="chat_completion_source">
                             <optgroup>
                                 <option value="openai">OpenAI</option>
+                                <option value="openai_codex">OpenAI Codex (ChatGPT subscription)</option>
                                 <option value="custom" data-i18n="Custom (OpenAI-compatible)">Custom (OpenAI-compatible)</option>
                             </optgroup>
                             <optgroup>
@@ -2950,6 +2955,65 @@
                                 <option value="zai">Z.AI (GLM)</option>
                             </optgroup>
                         </select>
+                        <div id="codex_account_panel" data-source="openai_codex">
+                            <h4>ChatGPT Account</h4>
+                            <div id="codex_account_error" class="neutral_warning" style="display:none"></div>
+                            <div id="codex_disconnected_view">
+                                <div class="toggle-description justifyLeft marginTopBot5">Uses your ChatGPT Codex subscription allowance.</div>
+                                <div class="flex-container">
+                                    <button id="codex_browser_signin" type="button" class="menu_button menu_button_icon">Sign in with browser</button>
+                                    <button id="codex_device_signin" type="button" class="menu_button menu_button_icon">Use device code</button>
+                                </div>
+                            </div>
+                            <div id="codex_browser_flow" style="display:none">
+                                <div class="flex-container alignitemscenter marginTopBot5"><i class="fa-solid fa-spinner fa-spin"></i><span>Waiting for ChatGPT sign-in…</span></div>
+                                <div class="flex-container">
+                                    <button id="codex_browser_reopen" type="button" class="menu_button menu_button_icon">Open sign-in page again</button>
+                                    <button id="codex_browser_cancel" type="button" class="menu_button menu_button_icon">Cancel</button>
+                                </div>
+                            </div>
+                            <div id="codex_device_flow" style="display:none">
+                                <div class="marginTopBot5">Enter this code at ChatGPT</div>
+                                <div id="codex_device_code" class="codex-device-code"></div>
+                                <div id="codex_device_expiry" class="toggle-description justifyLeft"></div>
+                                <div class="flex-container marginTopBot5">
+                                    <button id="codex_device_copy" type="button" class="menu_button menu_button_icon">Copy code</button>
+                                    <button id="codex_device_open" type="button" class="menu_button menu_button_icon">Open ChatGPT sign-in</button>
+                                    <button id="codex_device_cancel" type="button" class="menu_button menu_button_icon">Cancel</button>
+                                </div>
+                            </div>
+                            <div id="codex_connected_view" style="display:none">
+                                <select id="codex_account_select" class="text_pole wide100p" aria-label="Active ChatGPT account"></select>
+                                <div id="codex_account_identity" class="toggle-description justifyLeft marginTopBot5"></div>
+                                <div class="flex-container marginTopBot5">
+                                    <button id="codex_add_account" type="button" class="menu_button menu_button_icon">Add account</button>
+                                    <button id="codex_signout" type="button" class="menu_button menu_button_icon">Sign out</button>
+                                </div>
+                                <div id="codex_limits_details" class="inline-drawer wide100p marginTopBot5" style="display:none">
+                                    <div class="inline-drawer-toggle inline-drawer-header">
+                                        <b>Usage limits</b>
+                                        <small id="codex_limits_summary" class="flex1"></small>
+                                        <div class="fa-solid fa-circle-chevron-down inline-drawer-icon down"></div>
+                                    </div>
+                                    <div class="inline-drawer-content">
+                                        <div id="codex_limits" class="codex-limits"></div>
+                                    </div>
+                                </div>
+                            </div>
+                            <h4>Model</h4>
+                            <select id="model_codex_select" class="text_pole wide100p">
+								<option value="gpt-5.6-sol">GPT-5.6 Sol</option>
+								<option value="gpt-5.6-terra">GPT-5.6 Terra</option>
+								<option value="gpt-5.6-luna">GPT-5.6 Luna</option>
+                                <option value="gpt-5.5">GPT-5.5</option>
+								<option value="gpt-5.4">GPT-5.4</option>
+								<option value="gpt-5.4-mini">GPT-5.4 Mini</option>
+                                <option value="__custom__">Custom model ID…</option>
+                            </select>
+                            <div id="codex_custom_model_wrap" class="marginTopBot5" style="display:none">
+                                <input id="codex_custom_model" class="text_pole wide100p" type="text" placeholder="Enter any Codex model ID" autocomplete="off">
+                            </div>
+                        </div>
                         <div class="inline-drawer wide100p" data-source="openai,claude,mistralai,makersuite,vertexai,deepseek,xai,zai,moonshot">
                             <div class="inline-drawer-toggle inline-drawer-header">
                                 <b data-i18n="Reverse Proxy">Reverse Proxy</b>

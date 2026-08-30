@@ -1,5 +1,5 @@
 import { describe, expect, test } from '@jest/globals';
-import { formatLorebookContentField, parseLorebookContentField, resolveDeleteCardSpan, resolveInsertCardText, resolveReplaceCardText, xmlCdata } from '../public/scripts/character-card-edit.js';
+import { formatLorebookContentField, parseLorebookContentField, resolveDeleteCardSpan, resolveInsertCardText, resolveReplaceCardText, setPendingCardValue, xmlCdata } from '../public/scripts/character-card-edit.js';
 
 describe('character card surgical edit helpers', () => {
     test('the same exact edit helpers support localized lorebook content changes', () => {
@@ -12,6 +12,23 @@ describe('character card surgical edit helpers', () => {
 
         const insertion = resolveInsertCardText(source, { content: 'Gate: ', position: 'before', anchor: 'Secret ending' });
         expect(source.slice(0, insertion.start) + insertion.replacement + source.slice(insertion.end)).toContain('Gate: Secret ending');
+    });
+
+    test('an insertion can populate a not-yet-existing numbered greeting or example field', () => {
+        const insertion = resolveInsertCardText('', { content: 'A new opening', position: 'end' });
+        expect(insertion).toMatchObject({ start: 0, end: 0, replacement: 'A new opening', operation: 'insert' });
+    });
+
+    test('manual pending edits remain actionable until they exactly restore the base value', () => {
+        const textPending = { before: 'original', after: 'proposal' };
+        expect(setPendingCardValue(textPending, 'manual revision')).toBe(true);
+        expect(textPending.after).toBe('manual revision');
+        expect(setPendingCardValue(textPending, 'original')).toBe(false);
+
+        const collectionPending = { before: ['first', 'second'], after: ['first', 'proposed second'] };
+        expect(setPendingCardValue(collectionPending, ['first'])).toBe(true);
+        expect(collectionPending.after).toEqual(['first']);
+        expect(setPendingCardValue(collectionPending, ['first', 'second'])).toBe(false);
     });
 
     test('lorebook content is addressed through the same field argument as card text', () => {

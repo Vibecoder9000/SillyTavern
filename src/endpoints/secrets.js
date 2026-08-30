@@ -14,6 +14,7 @@ export const SECRET_KEYS = {
     APHRODITE: 'api_key_aphrodite',
     TABBY: 'api_key_tabby',
     OPENAI: 'api_key_openai',
+    OPENAI_CODEX_OAUTH: 'openai_codex_oauth',
     NOVEL: 'api_key_novel',
     CLAUDE: 'api_key_claude',
     DEEPL: 'deepl',
@@ -220,6 +221,33 @@ export class SecretManager {
 
         this._writeSecretsFile(secrets);
         return secret.id;
+    }
+
+    /**
+     * Replaces the active value for a key without retaining stale credential versions.
+     * Creates the entry when it does not exist.
+     * @param {string} key Secret key
+     * @param {string} value Secret value
+     * @param {string} label Label for the secret
+     * @returns {string} Secret ID
+     */
+    replaceSecret(key, value, label = 'Unlabeled') {
+        const secrets = this._readSecretsFile();
+        const existing = Array.isArray(secrets[key]) ? secrets[key].find(secret => secret.active) : null;
+        const id = existing?.id || uuidv4();
+        secrets[key] = [{ id, value, label, active: true }];
+        this._writeSecretsFile(secrets);
+        return id;
+    }
+
+    /**
+     * Deletes every saved value for a key.
+     * @param {string} key Secret key
+     */
+    deleteSecrets(key) {
+        const secrets = this._readSecretsFile();
+        delete secrets[key];
+        this._writeSecretsFile(secrets);
     }
 
     /**

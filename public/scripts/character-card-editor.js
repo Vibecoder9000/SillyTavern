@@ -7,7 +7,7 @@ import { getTokenCountAsync } from './tokenizers.js';
 import { cancelDebounce, debounce, escapeHtml, getBase64Async, getFileExtension, getStringHash, saveBase64AsFile, uuidv4 } from './utils.js';
 import { morphdom } from '../lib.js';
 import { ToolManager } from './tool-calling.js';
-import { formatLorebookContentField, parseLorebookContentField, resolveDeleteCardSpan, resolveInsertCardText, resolveReplaceCardText, xmlCdata } from './character-card-edit.js';
+import { formatLorebookContentField, parseLorebookContentField, resolveDeleteCardSpan, resolveInsertCardText, resolveReplaceCardText, setPendingCardValue, xmlCdata } from './character-card-edit.js';
 import { computeCharacterCardDiff } from './character-card-diff.js';
 import { loadCharacterDesignerPrompts, renderCharacterDesignerPrompt } from './character-designer-prompt.js';
 import { normalizeCharacterDesignerFieldLabel, resolveCharacterDesignerFieldAlias } from './character-designer-fields.js';
@@ -66,7 +66,7 @@ const CHARACTER_DESIGNER_TOOL_SPECS = [
     { name: 'read_workspace_card_section', kind: 'read', description: 'Read one exact field, numbered Greeting/Example, or Character Book from a read-only reference or explicitly named library card.', properties: { card_id: toolString('Exact card ID or unique card name.'), field: toolString('Card field label; numbered Greeting/Example; or Character Book.') }, required: ['card_id', 'field'] },
     { name: 'replace_card_text', kind: 'edit', description: 'Replace one exact unique string in a card text field, including a Character Book entry content field. Matching is case- and whitespace-sensitive except that CRLF is treated as LF. find may span lines; replace may be empty.', properties: { field: toolField(), find: toolString('Exact unique current text to replace.'), replace: toolString('Verbatim replacement text; may be empty.') }, required: ['field', 'find', 'replace'] },
     { name: 'delete_card_span', kind: 'edit', description: 'Delete an exact span in a text field. Deletion starts at the unique from anchor and stops immediately before the unique until anchor, preserving until.', properties: { field: toolField(), from: toolString('Exact unique starting anchor; included in the deletion.'), until: toolString('Exact unique ending anchor; preserved after the deletion.') }, required: ['field', 'from', 'until'] },
-    { name: 'insert_card_text', kind: 'edit', description: 'Insert text verbatim before or after one exact unique anchor, or at the start or end of a text field. Supply all desired whitespace and newlines.', properties: { field: toolField(), content: toolString('Non-empty text to insert verbatim.'), position: { type: 'string', enum: ['before', 'after', 'start', 'end'], description: 'Insertion position. before and after require anchor; start and end forbid it.' }, anchor: toolString('Exact unique anchor required only for before or after.') }, required: ['field', 'content', 'position'] },
+    { name: 'insert_card_text', kind: 'edit', description: 'Insert text verbatim before or after one exact unique anchor, or at the start or end of a text field. To add a Greeting or Example, target the next sequential numbered item with position start or end; the new item is created by this call. Supply all desired whitespace and newlines.', properties: { field: toolField(), content: toolString('Non-empty text to insert verbatim.'), position: { type: 'string', enum: ['before', 'after', 'start', 'end'], description: 'Insertion position. before and after require anchor; start and end forbid it.' }, anchor: toolString('Exact unique anchor required only for before or after.') }, required: ['field', 'content', 'position'] },
     { name: 'rewrite_card_field', kind: 'edit', description: 'Replace the complete value of exactly one text field, including a Character Book entry content field. Use only for substantial rewrites.', properties: { field: toolField(), content: toolString('Complete replacement value. Depth requires a nonnegative integer string.') }, required: ['field', 'content'] },
     { name: 'read_lorebook', kind: 'lore', description: 'Read all Character Book entries. Each entry includes a stable field label that works with the same card text read, replace, delete, insert, and rewrite tools as ordinary fields.', properties: {} },
     { name: 'edit_lorebook_entry', kind: 'lore', description: 'Create an entry when entry_id is omitted, or update its structured name, keys, or constant flag. Content is also accepted for creation or whole-body replacement, though rewrite_card_field is the semantically uniform text-field tool. Advanced properties are preserved.', properties: { entry_id: toolString('Stable entry ID from read_lorebook.'), name: toolString('Entry name.'), content: toolString('Complete entry content.'), keys: { type: 'array', description: 'Non-empty trigger strings.', items: { type: 'string' } }, constant: { type: 'boolean', description: 'Whether the entry is always active.' } } },
@@ -99,10 +99,15 @@ let redo = [];
 let persistWarningShown = false;
 let focusedEdit = null;
 let resizeStart = null;
+let resizeFrame = 0;
 let autoSizeFrame = 0;
 const pendingAutoSizes = new Map();
 const autoSizeCache = new WeakMap();
 const observedFieldWidths = new WeakMap();
+// Empty rows created by the collection Add buttons are UI drafts, not card data.
+// The card save path normalizes empty examples/alternate greetings away, so putting
+// them in state before the user types makes the newly rendered row appear to revert.
+const collectionDrafts = new Set();
 let lineNumberTimer = 0;
 const pendingLineNumberUpdates = new Set();
 let openRenderFrame = 0;
@@ -124,6 +129,8 @@ const streamRenderCache = new WeakMap();
 // scrolling elsewhere later must not make an already-tall response start following again.
 const streamMessageAutoFollow = new WeakMap();
 const pendingDiffCache = new WeakMap();
+const pendingChangeIndexCache = new WeakMap();
+const collectionPendingDiffCache = new WeakMap();
 const editSummaryCache = new WeakMap();
 const toolParseCache = new Map();
 const historySizeCache = new WeakMap();
@@ -907,7 +914,7 @@ function workspaceMatchesCard() {
     return FIELDS.every(({ id }) => JSON.stringify(state.values[id]) === JSON.stringify(getValue(id)))
         && JSON.stringify(state.lorebook) === JSON.stringify(liveCharacterBook());
 }
-function restoreSnapshot(next) { Object.assign(state, deepCopy(next)); writeWorkspaceToCard(); render(); persist(); }
+function restoreSnapshot(next) { collectionDrafts.clear(); Object.assign(state, deepCopy(next)); writeWorkspaceToCard(); render(); persist(); }
 function customInstructionsValue() { return accountStorage.getItem(CHARACTER_DESIGNER_INSTRUCTIONS_KEY) || ''; }
 function isCustomInstructionsOpen() { return Boolean(activeCustomInstructionsPopup); }
 async function closeCustomInstructionsPopup({ restoreFocus = false } = {}) {
@@ -1260,7 +1267,11 @@ function flushLineNumberUpdates() {
         .filter(input => input.isConnected)
         .map(syncLineNumberCount)
         .filter(Boolean)
-        .map(entry => ({ ...entry, heights: measureWrappedLineHeights(entry.input, entry.lines) || [] }));
+        .map(entry => ({ ...entry, heights: measureWrappedLineHeights(entry.input, entry.lines) }))
+        // A mobile pane or preparing drawer can be connected but have zero width.
+        // Keep the last good geometry until the pane becomes visible and explicitly
+        // schedules another measurement instead of resetting every row to 1.6em.
+        .filter(entry => entry.heights !== null);
     pendingLineNumberUpdates.clear();
     const scrollers = new Map();
     for (const { input } of entries) {
@@ -1276,6 +1287,9 @@ function flushLineNumberUpdates() {
 }
 function scheduleLineNumberUpdate(input, { immediate = false } = {}) {
     if (!(input instanceof HTMLElement)) return;
+    // Pending diffs mix two revisions in one inline flow, so their gutters are
+    // deliberately hidden until resolution and do not need wrapped-line work.
+    if (input.classList.contains('cc-pending-field')) return;
     pendingLineNumberUpdates.add(input);
     // Keep the inexpensive logical line count current while typing. Wrapped-line
     // geometry waits for a short pause, avoiding a full DOM measurement per key.
@@ -1283,14 +1297,31 @@ function scheduleLineNumberUpdate(input, { immediate = false } = {}) {
     clearTimeout(lineNumberTimer);
     lineNumberTimer = setTimeout(flushLineNumberUpdates, immediate ? 0 : 80);
 }
+function indexPendingChanges(parts) {
+    // Transcript messages may each contain many historical diffs. Index the live
+    // changes once so rendering their pending state is linear rather than quadratic.
+    const index = new Map();
+    for (const change of parts.filter(part => part.type === 'hunk').flatMap(hunkChanges)) {
+        let additions = index.get(change.removed);
+        if (!additions) index.set(change.removed, additions = new Set());
+        additions.add(change.added);
+    }
+    return index;
+}
 function diffIsPending(diff) {
     const current = state.pending[diff.field];
     if (!current) return false;
-    const unresolved = pendingDiffParts(current).filter(part => part.type === 'hunk').flatMap(hunkChanges);
+    const beforeText = asText(current.before);
+    const afterText = asText(current.after);
+    const cached = pendingChangeIndexCache.get(current);
+    const unresolved = cached?.before === beforeText && cached?.after === afterText
+        ? cached.index
+        : indexPendingChanges(pendingDiffParts(current));
+    if (unresolved !== cached?.index) pendingChangeIndexCache.set(current, { before: beforeText, after: afterText, index: unresolved });
     return pendingDiffParts(diff)
         .filter(part => part.type === 'hunk')
         .flatMap(hunkChanges)
-        .some(proposed => unresolved.some(part => part.removed === proposed.removed && part.added === proposed.added));
+        .some(proposed => unresolved.get(proposed.removed)?.has(proposed.added));
 }
 function lorebookDiffIsPending(diff) {
     const proposal = state.lorebookProposal;
@@ -1453,12 +1484,13 @@ function collectionControl(id) {
     const values = Array.isArray(effectiveValue(id)) ? effectiveValue(id) : [];
     const beforeValues = Array.isArray(pending?.before) ? pending.before : [];
     const singular = id === 'examples' ? 'Example' : 'Greeting';
-    const count = Math.max(values.length, beforeValues.length, id === 'greetings' ? 1 : 0);
+    const storedCount = Math.max(values.length, beforeValues.length, id === 'greetings' ? 1 : 0);
+    const count = storedCount + (collectionDrafts.has(id) ? 1 : 0);
     return `<div class="cc-collection">${Array.from({ length: count }, (_, index) => {
         const value = collectionItemValue(values, index);
         const beforeValue = collectionItemValue(beforeValues, index);
         const body = pending && beforeValue !== value
-            ? `<div class="cc-field-body cc-code-field has-pending" data-field="${id}" data-index="${index}">${lineNumberGutter(value)}${pendingFieldControl({ field: id, before: beforeValue, after: value }, { index })}</div>`
+            ? `<div class="cc-field-body cc-code-field has-pending" data-field="${id}" data-index="${index}">${lineNumberGutter(value)}${pendingFieldControl({ field: id, before: beforeValue, after: value }, { index, parts: collectionPendingDiffParts(pending, index) })}</div>`
             : `<div class="cc-field-body cc-code-field">${lineNumberGutter(value)}<textarea class="text_pole cc-field-input" data-field="${id}" data-index="${index}" rows="1" wrap="soft">${escapeHtml(value)}</textarea></div>`;
         return `<div class="cc-collection-row"><div class="cc-collection-row-header"><span>${fieldLabel(id, index)}</span><div class="cc-collection-controls"><button class="cc-delete menu_button menu_button_icon" data-collection-action="delete" title="Delete ${singular.toLowerCase()}" type="button"><i class="fa-solid fa-trash-can"></i></button>${fieldTokenCounterHtml(id, index)}</div></div>${body}</div>`;
     }).join('')}</div>`;
@@ -1474,6 +1506,20 @@ function pendingDiffParts(pending) {
     if (cached?.before === beforeText && cached?.after === afterText) return cached.parts;
     const parts = computeCharacterCardDiff(beforeText, afterText);
     if (pending && typeof pending === 'object') pendingDiffCache.set(pending, { before: beforeText, after: afterText, parts });
+    return parts;
+}
+function collectionPendingDiffParts(pending, index) {
+    const before = collectionItemValue(pending.before, index);
+    const after = collectionItemValue(pending.after, index);
+    let entries = collectionPendingDiffCache.get(pending);
+    if (!entries) {
+        entries = new Map();
+        collectionPendingDiffCache.set(pending, entries);
+    }
+    const cached = entries.get(index);
+    if (cached?.before === before && cached?.after === after) return cached.parts;
+    const parts = computeCharacterCardDiff(before, after);
+    entries.set(index, { before, after, parts });
     return parts;
 }
 function lineAt(text, position) {
@@ -1568,8 +1614,8 @@ function pendingChangeHtml(change) {
     const removed = change.removed ? ` data-removed="${escapeHtml(change.removed)}"` : '';
     return `<span class="cc-pending-change"${removed}><span class="cc-add cc-pending-add">${escapeHtml(change.added)}</span></span>`;
 }
-function pendingDiffContentHtml(pending) {
-    return pendingDiffParts(pending).map(part => {
+function pendingDiffContentHtml(pending, parts = pendingDiffParts(pending)) {
+    return parts.map(part => {
         if (part.type === 'equal') return escapeHtml(part.text);
         const content = part.segments.map(segment => segment.type === 'equal' ? escapeHtml(segment.text) : pendingChangeHtml(segment)).join('');
         return `<span class="cc-pending-hunk" data-hunk="${part.index}">${content}</span>`;
@@ -1603,9 +1649,9 @@ function updateKnownCardFields(conversation, fields) {
         conversation.knownCard[id] = deepCopy(liveValue(id));
     }
 }
-function pendingFieldControl(pending, { index = null } = {}) {
+function pendingFieldControl(pending, { index = null, parts = null } = {}) {
     const dataIndex = index === null ? '' : ` data-index="${index}"`;
-    const content = pendingDiffContentHtml(pending);
+    const content = pendingDiffContentHtml(pending, parts || pendingDiffParts(pending));
     return `<div class="text_pole cc-field-input cc-pending-field" data-field="${pending.field}"${dataIndex} contenteditable="plaintext-only" spellcheck="true">${content}</div>`;
 }
 function lorePropertyText(property, value) {
@@ -1689,16 +1735,23 @@ function hunkControlsElement() {
     }
     controls.addEventListener('pointerenter', cancelHunkControlsHide);
     controls.addEventListener('pointerleave', scheduleHunkControlsHide);
-    controls.querySelectorAll('[data-action]').forEach(button => button.addEventListener('click', event => {
-        event.preventDefault();
-        event.stopPropagation();
-        const field = activeHunk?.isConnected ? activeHunk.closest('.cc-pending-field') : null;
-        if (field?.classList.contains('cc-lore-pending-field')) {
-            resolveLorePending(field.dataset.loreEntry, field.dataset.loreProperty, Number(activeHunk.dataset.hunk), button.dataset.action);
-        } else if (field) {
-            resolvePending(field.dataset.field, Number(activeHunk.dataset.hunk), button.dataset.action, field.dataset.index === undefined ? null : Number(field.dataset.index));
-        }
-    }));
+    controls.querySelectorAll('[data-action]').forEach(button => {
+        // Do not move focus out of an edited pending field on press. Its blur handler
+        // rebuilds the card (and removes these floating buttons) before click fires.
+        button.addEventListener('pointerdown', event => {
+            if (event.button === 0) event.preventDefault();
+        });
+        button.addEventListener('click', event => {
+            event.preventDefault();
+            event.stopPropagation();
+            const field = activeHunk?.isConnected ? activeHunk.closest('.cc-pending-field') : null;
+            if (field?.classList.contains('cc-lore-pending-field')) {
+                resolveLorePending(field.dataset.loreEntry, field.dataset.loreProperty, Number(activeHunk.dataset.hunk), button.dataset.action);
+            } else if (field) {
+                resolvePending(field.dataset.field, Number(activeHunk.dataset.hunk), button.dataset.action, field.dataset.index === undefined ? null : Number(field.dataset.index));
+            }
+        });
+    });
     document.body.append(controls);
     return controls;
 }
@@ -1901,7 +1954,9 @@ function bindLorebookControls(card) {
                 pushHistory(undo, input._loreEditSnapshot); redo = [];
                 checkpoint(`${loreEntryLabel(loreEntry(input.dataset.loreEntry), loreEntryIndex(input.dataset.loreEntry))} ${lorePropertyLabel(input.dataset.loreProperty)} manual edit`, input._loreEditSnapshot, changeContent(loreValueText(input._loreEditBefore), loreValueText(after)));
             }
-            if (input.classList.contains('cc-lore-pending-field') || input.classList.contains('cc-lore-content')) { renderCard(); renderChat(); }
+            if (input.classList.contains('cc-lore-pending-field') || input.classList.contains('cc-lore-content')) {
+                renderCard(); renderChat(); renderPendingActions();
+            }
         });
         input.addEventListener('change', () => { if (!input.classList.contains('cc-lore-content')) renderCard(); });
     });
@@ -2082,7 +2137,7 @@ function cardNodeKey(node) {
     if (node.id) return node.id;
     if (node.dataset.loreEntry && node.dataset.loreProperty) return `lore-input:${node.dataset.loreEntry}:${node.dataset.loreProperty}`;
     if (node.dataset.entryId) return `lore-entry:${node.dataset.entryId}`;
-    if (node.dataset.field && node.matches('textarea, input, [contenteditable="true"]')) return `field:${node.dataset.field}:${node.dataset.index ?? 'main'}:${node.tagName}`;
+    if (node.dataset.field && node.matches('textarea, input, [contenteditable]')) return `field:${node.dataset.field}:${node.dataset.index ?? 'main'}:${node.tagName}`;
     return undefined;
 }
 function renderCard() {
@@ -2116,7 +2171,9 @@ function renderCard() {
             observedFieldWidths.set(entry.target, width);
             // Autosizing changes height. Only width changes affect wrapping, line
             // geometry, and scrollHeight, so ignore our own resize notification.
-            if (previousWidth === undefined || previousWidth === width) continue;
+            // The first observer notification may be the first nonzero width after a
+            // hidden mobile pane is revealed, so it must not be discarded.
+            if (!width || previousWidth === width) continue;
             scheduleLineNumberUpdate(entry.target);
             if (entry.target instanceof HTMLTextAreaElement) autoSize(entry.target);
         }
@@ -2132,17 +2189,10 @@ function renderCard() {
             autoSize(input);
         }
         if (input.classList.contains('cc-field-input')) {
-            // Incremental DOM updates can replace the gutter while preserving the
-            // textarea. Refresh every visible gutter even when autoSize correctly
-            // skips an unchanged textarea from its measurement cache.
-            scheduleLineNumberUpdate(input, { immediate: true });
-            // A pending field lays out both its generated removed text and its
-            // editable proposed text, while its gutter intentionally measures only
-            // the proposed value. Observing that intrinsically-sized contenteditable
-            // creates a resize -> gutter measurement -> resize feedback loop in
-            // Firefox on large diffs. Pending gutters are refreshed by input and by
-            // the render after blur; stable textareas can keep live resize tracking.
             if (!input.classList.contains('cc-pending-field')) {
+                // Incremental DOM updates can replace the gutter while preserving
+                // the textarea, so refresh every visible stable field on render.
+                scheduleLineNumberUpdate(input, { immediate: true });
                 fieldLineNumberObserver.observe(input);
             }
         }
@@ -2160,7 +2210,7 @@ function renderCard() {
         });
         input.addEventListener('input', () => onFieldInput(input));
         input.addEventListener('blur', () => {
-            const hadPending = Boolean(state.pending[input.dataset.field]);
+            const wasPendingControl = input.classList.contains('cc-pending-field');
             if (focusedEdit) {
                 const edit = focusedEdit;
                 focusedEdit = null;
@@ -2175,7 +2225,8 @@ function renderCard() {
             }
             if (input instanceof HTMLTextAreaElement) autoSize(input);
             persist();
-            if (hadPending) renderCard();
+            if (wasPendingControl) renderCard();
+            renderPendingActions();
         });
     });
     card.querySelectorAll('[data-collection-action]').forEach(button => {
@@ -2186,7 +2237,7 @@ function renderCard() {
     card.querySelectorAll('[data-add-collection]').forEach(button => {
         if (button.dataset.addCollectionBound === 'true') return;
         button.dataset.addCollectionBound = 'true';
-        button.addEventListener('click', () => { const id = button.dataset.addCollection; record(); checkpoint(fieldLabel(id), snapshot(), asText(state.values[id])); state.values[id].push(''); setCardValue(id, state.values[id]); saveCharacterDebounced(); renderCard(); persist(); });
+        button.addEventListener('click', () => addCollectionDraft(button.dataset.addCollection));
     });
     bindLorebookControls(card);
     void updateCardTokenCounts();
@@ -2209,12 +2260,15 @@ function onFieldInput(input) {
         ? collectionItemValue(effectiveValue(id), input.dataset.index)
         : asText(effectiveValue(id));
     if (isCollection(id)) {
-        const values = [...effectiveValue(id)]; values[Number(input.dataset.index)] = inputValue;
+        const index = Number(input.dataset.index);
+        const values = [...effectiveValue(id)];
+        if (collectionDrafts.has(id) && index === values.length) collectionDrafts.delete(id);
+        values[index] = inputValue;
         state.values[id] = values; setCardValue(id, values); saveCharacterDebounced();
-        if (state.pending[id]) { state.pending[id].after = deepCopy(values); syncToolCall(state.pending[id]); }
+        if (state.pending[id]) updatePendingAfter(id, values);
     } else if (state.pending[id]) {
         state.values[id] = inputValue; setCardValue(id, inputValue); saveCharacterDebounced();
-        state.pending[id].after = inputValue; syncToolCall(state.pending[id]);
+        updatePendingAfter(id, inputValue);
     }
     else { state.values[id] = inputValue; setCardValue(id, inputValue); saveCharacterDebounced(); }
     scheduleLineNumberUpdate(input);
@@ -2222,10 +2276,43 @@ function onFieldInput(input) {
     updateCardTokenCountsDebounced();
     persist();
 }
+function updatePendingAfter(id, value) {
+    const pending = state.pending[id];
+    if (!pending) return false;
+    const unresolved = setPendingCardValue(pending, value);
+    syncToolCall(pending);
+    if (unresolved) return true;
+    // A manual edit that exactly restores the committed base has resolved the
+    // proposal. Do not leave an empty green pending field with no actionable hunk.
+    delete state.pending[id];
+    return false;
+}
+function focusCollectionRow(id, index) {
+    requestAnimationFrame(() => {
+        const input = document.querySelector(`#cc-field-${CSS.escape(id)} [data-field="${CSS.escape(id)}"][data-index="${index}"]`);
+        input?.scrollIntoView({ block: 'nearest' });
+        input?.focus({ preventScroll: true });
+    });
+}
+function addCollectionDraft(id) {
+    const values = Array.isArray(effectiveValue(id)) ? effectiveValue(id) : [];
+    const index = Math.max(values.length, id === 'greetings' ? 1 : 0);
+    if (!collectionDrafts.has(id)) {
+        collectionDrafts.add(id);
+        renderCard();
+    }
+    focusCollectionRow(id, index);
+}
 async function collectionAction(button) {
     const row = button.closest('.cc-collection-row');
     const id = row.querySelector('[data-field]').dataset.field;
     const index = Number(row.querySelector('[data-index]').dataset.index);
+    const values = Array.isArray(effectiveValue(id)) ? effectiveValue(id) : [];
+    if (collectionDrafts.has(id) && index === values.length) {
+        collectionDrafts.delete(id);
+        renderCard();
+        return;
+    }
     if (button.dataset.collectionAction === 'delete') {
         const confirmed = await Popup.show.confirm(
             `Delete ${fieldLabel(id, index)}?`,
@@ -2235,20 +2322,24 @@ async function collectionAction(button) {
         if (confirmed !== POPUP_RESULT.AFFIRMATIVE) return;
     }
     record();
-    checkpoint(fieldLabel(id, index), snapshot(), changeContent(String(state.values[id][index] ?? ''), ''));
-    const values = [...state.values[id]];
-    if (button.dataset.collectionAction === 'delete') values.splice(index, 1);
-    if (id === 'greetings' && values.length === 0) values.push('');
-    state.values[id] = values;
-    setCardValue(id, values);
+    checkpoint(fieldLabel(id, index), snapshot(), changeContent(String(values[index] ?? ''), ''));
+    const nextValues = [...values];
+    if (button.dataset.collectionAction === 'delete') nextValues.splice(index, 1);
+    if (id === 'greetings' && nextValues.length === 0) nextValues.push('');
+    state.values[id] = nextValues;
+    setCardValue(id, nextValues);
+    if (state.pending[id]) updatePendingAfter(id, nextValues);
     saveCharacterDebounced();
     renderCard();
+    renderChat();
+    renderPendingActions();
     persist();
 }
 function resolvePending(id, hunkIndex, action, index = null) {
     const pending = state.pending[id]; if (!pending) return;
     const target = index === null ? pending : { field: id, before: collectionItemValue(pending.before, index), after: collectionItemValue(pending.after, index) };
-    const hunk = pendingDiffParts(target).find(part => part.type === 'hunk' && part.index === hunkIndex);
+    const parts = index === null ? pendingDiffParts(target) : collectionPendingDiffParts(pending, index);
+    const hunk = parts.find(part => part.type === 'hunk' && part.index === hunkIndex);
     if (!hunk) return;
     // The displayed hunk is calculated from the committed base and the current live
     // value, so its ranges are already the authoritative inverse. A hunk can contain
@@ -3008,7 +3099,7 @@ function pendingEditTargets() {
                 const before = Array.isArray(pending.before) ? pending.before : [];
                 const after = Array.isArray(pending.after) ? pending.after : [];
                 for (let index = 0; index < Math.max(before.length, after.length); index++) {
-                    const parts = pendingDiffParts({ before: String(before[index] ?? ''), after: String(after[index] ?? '') });
+                    const parts = collectionPendingDiffParts(pending, index);
                     for (const part of parts.filter(item => item.type === 'hunk')) {
                         targets.push({ key: `field:${field}:${index}:${part.index}`, section: section.id, field, index, hunk: part.index });
                     }
@@ -3042,6 +3133,7 @@ function showCardPane() {
     if (!editor) return;
     editor.dataset.mobilePane = 'card';
     document.querySelectorAll('.cc-editor-mobile-tabs button').forEach(button => button.classList.toggle('selected', button.dataset.pane === 'card'));
+    requestAnimationFrame(refreshFieldLayoutAfterResize);
 }
 function scrollToPendingHunk(hunk) {
     const card = $('#cc-editor-card');
@@ -3142,6 +3234,7 @@ function renderPendingActions() {
 // The shared drawer handler opens this panel whether or not a character is selected,
 // so there has to be something coherent to show when there is no card to edit.
 function renderNoCharacter() {
+    collectionDrafts.clear();
     void closeCustomInstructionsPopup();
     closeReferencePicker();
     $('#cc-editor-name').textContent = 'No character selected';
@@ -3387,9 +3480,13 @@ function parseEditBatch(blocks, sourceValues = {}) {
         }
         const sourceValuesForField = baseValues[id];
         const collectionLength = Array.isArray(sourceValuesForField) ? sourceValuesForField.length : 0;
-        if (index !== null && (index > collectionLength || (!isRewrite && index === collectionLength))) {
-            const detail = index === collectionLength
-                ? `${label} does not exist yet. Only rewrite_card_field can create the next sequential ${id === 'greetings' ? 'Greeting' : 'Example'}.`
+        let availableCollectionLength = collectionLength;
+        while (patchGroups.has(`${id}:${availableCollectionLength}`)) availableCollectionLength++;
+        const createsNextCollectionItem = index !== null && index === availableCollectionLength;
+        const canCreateCollectionItem = isRewrite || block.name === 'insert_card_text';
+        if (index !== null && (index > availableCollectionLength || (createsNextCollectionItem && !canCreateCollectionItem))) {
+            const detail = index === availableCollectionLength
+                ? `${label} does not exist yet. Use insert_card_text with position start or end to create this next sequential ${id === 'greetings' ? 'Greeting' : 'Example'}.`
                 : `${label} is not available. Use the next sequential item after the last existing ${id === 'greetings' ? 'Greeting' : 'Example'}.`;
             throw editToolFailure('unknown-field', detail, { tool: block.name, field: id, label, index }, `${label} edit not applied`);
         }
@@ -3853,11 +3950,11 @@ function toolFailureResult(error) {
     const field = error?.proposal?.label ? `\n<field>${xmlText(error.proposal.label)}</field>` : '';
     const tool = error?.tool || error?.proposal?.tool || (error?.proposal?.rewrite ? 'rewrite_card_field' : 'replace_card_text');
     const currentContext = failureContextResult(error);
-    const contextInstruction = currentContext
-        ? 'Correct only this failed call using the nearby current text supplied below.'
-        : 'Correct only this failed call. Use read_card_section first if you need current text.';
+    const retryContext = currentContext
+        ? 'using the nearby current text supplied below'
+        : 'after using read_card_section if current text is needed';
     const code = error?.code ? `\n<code>${xmlText(error.code)}</code>` : '';
-    return `<result>\n<tool>${xmlText(tool)}</tool>\n<status>error</status>${field}${code}\n<error>${xmlText(detail)}</error>\n<instruction>This call was not applied. Other valid calls in the response were kept. ${contextInstruction} Exact anchors must occur once; use rewrite_card_field only for a genuine whole-field rewrite.</instruction>\n</result>${currentContext ? `\n${currentContext}` : ''}`;
+    return `<result>\n<tool>${xmlText(tool)}</tool>\n<status>error</status>${field}${code}\n<error>${xmlText(detail)}</error>\n<instruction>This call was not applied. Other valid calls in the response were kept and must not be repeated or rewritten. If this edit is still needed, issue a new call ${retryContext}. Exact anchors must occur once; use rewrite_card_field only for a genuine whole-field rewrite.</instruction>\n</result>${currentContext ? `\n${currentContext}` : ''}`;
 }
 function isPartialResponseContinuation(continuation) {
     return continuation?.kind === PARTIAL_RESPONSE_CONTINUATION && typeof continuation.messageId === 'string';
@@ -4267,15 +4364,81 @@ function showHistory() {
     }));
     void popup.show();
 }
+function freezeDividerContents(editor) {
+    const card = $('#cc-editor-card');
+    const chatPane = $('#cc-editor-chat .cc-editor-message-pane');
+    const tabs = card?.querySelector('.cc-card-section-tabs');
+    const section = card?.querySelector('.cc-card-section:not([hidden])');
+    if (tabs) editor.style.setProperty('--cc-drag-tabs-width', `${tabs.getBoundingClientRect().width}px`);
+    if (section) editor.style.setProperty('--cc-drag-section-width', `${section.getBoundingClientRect().width}px`);
+    if (chatPane) editor.style.setProperty('--cc-drag-chat-width', `${chatPane.getBoundingClientRect().width}px`);
+    editor.classList.add('cc-editor-resizing');
+    removeFloatingHunkControls();
+    fieldLineNumberObserver?.disconnect();
+    clearTimeout(lineNumberTimer);
+    lineNumberTimer = 0;
+    pendingLineNumberUpdates.clear();
+    card?.querySelectorAll('textarea').forEach(input => pendingAutoSizes.delete(input));
+    if (!pendingAutoSizes.size) {
+        cancelAnimationFrame(autoSizeFrame);
+        autoSizeFrame = 0;
+    }
+}
+function applyDividerResize() {
+    resizeFrame = 0;
+    if (!resizeStart || !state) return;
+    const cardWidth = resizeStart.width + ((resizeStart.latestX - resizeStart.x) / resizeStart.workspaceWidth * 100);
+    state.cardWidth = Math.min(78, Math.max(45, cardWidth));
+    $('#character-card-editor')?.style.setProperty('--cc-card-width', `${state.cardWidth}%`);
+}
+function scheduleDividerResize(clientX) {
+    if (!resizeStart) return;
+    resizeStart.latestX = clientX;
+    if (!resizeFrame) resizeFrame = requestAnimationFrame(applyDividerResize);
+}
+function refreshFieldLayoutAfterResize() {
+    const inputs = $('#cc-editor-card')?.querySelectorAll('.cc-field-input') || [];
+    for (const input of inputs) {
+        const width = input.clientWidth;
+        if (!width) continue;
+        observedFieldWidths.set(input, width);
+        scheduleLineNumberUpdate(input, { immediate: true });
+        if (input instanceof HTMLTextAreaElement) {
+            autoSize(input);
+            fieldLineNumberObserver?.observe(input);
+        }
+    }
+    positionPendingControls();
+}
+function finishDividerResize(clientX) {
+    if (!resizeStart) return;
+    resizeStart.latestX = Number.isFinite(clientX) ? clientX : resizeStart.latestX;
+    cancelAnimationFrame(resizeFrame);
+    resizeFrame = 0;
+    applyDividerResize();
+    resizeStart = null;
+    const editor = $('#character-card-editor');
+    editor?.classList.remove('cc-editor-resizing');
+    for (const property of ['--cc-drag-tabs-width', '--cc-drag-section-width', '--cc-drag-chat-width']) {
+        editor?.style.removeProperty(property);
+    }
+    requestAnimationFrame(refreshFieldLayoutAfterResize);
+    persist();
+}
 function setupDivider() {
     const divider = $('#cc-editor-divider');
-    divider.addEventListener('pointerdown', event => { if (!state) return; resizeStart = { x: event.clientX, width: state.cardWidth }; divider.setPointerCapture(event.pointerId); });
-    divider.addEventListener('pointermove', event => { if (!resizeStart) return; const area = $('.cc-editor-workspace'); state.cardWidth = Math.min(78, Math.max(45, resizeStart.width + ((event.clientX - resizeStart.x) / area.clientWidth * 100))); $('#character-card-editor').style.setProperty('--cc-card-width', `${state.cardWidth}%`); positionPendingControls(); });
-    divider.addEventListener('pointerup', () => {
-        resizeStart = null;
-        $('#cc-editor-card')?.querySelectorAll('.cc-pending-field').forEach(input => scheduleLineNumberUpdate(input));
-        persist();
+    divider.addEventListener('pointerdown', event => {
+        if (!state || event.button !== 0) return;
+        const workspaceWidth = $('.cc-editor-workspace')?.clientWidth || 0;
+        if (!workspaceWidth) return;
+        resizeStart = { x: event.clientX, latestX: event.clientX, width: state.cardWidth, workspaceWidth };
+        freezeDividerContents($('#character-card-editor'));
+        divider.setPointerCapture(event.pointerId);
     });
+    divider.addEventListener('pointermove', event => scheduleDividerResize(event.clientX));
+    divider.addEventListener('pointerup', event => finishDividerResize(event.clientX));
+    divider.addEventListener('pointercancel', () => finishDividerResize());
+    divider.addEventListener('lostpointercapture', () => finishDividerResize());
 }
 // Text controls keep their own native undo stack. A card-wide undo triggered from inside
 // one would rebuild the whole card and drop the caret mid-word.
@@ -4353,6 +4516,7 @@ export async function initCharacterCardEditor() {
             return;
         }
         workspaceAvatarUrl = avatarUrl;
+        collectionDrafts.clear();
         state = createState(savedWorkspace); undo = []; redo = []; focusedEdit = null; snappedEditKey = null;
         if (state.lorebookProposal && JSON.stringify(state.lorebook) !== JSON.stringify(liveCharacterBook())) {
             writeLorebookToCard();
@@ -4368,7 +4532,7 @@ export async function initCharacterCardEditor() {
             // only after every textarea has its final height.
             openRenderFrame = requestAnimationFrame(() => {
                 editor.classList.remove('cc-editor-preparing');
-                positionPendingControls();
+                refreshFieldLayoutAfterResize();
                 openRenderFrame = 0;
             });
         };
@@ -4450,7 +4614,11 @@ export async function initCharacterCardEditor() {
         const targetMessage = event.target?.closest?.('.cc-user-message');
         void uploadImageAttachments(Array.from(event.dataTransfer?.files || []), targetMessage?.dataset.messageId || null);
     });
-    document.querySelectorAll('.cc-editor-mobile-tabs button').forEach(button => button.addEventListener('click', () => { $('#character-card-editor').dataset.mobilePane = button.dataset.pane; document.querySelectorAll('.cc-editor-mobile-tabs button').forEach(item => item.classList.toggle('selected', item === button)); requestAnimationFrame(positionPendingControls); }));
+    document.querySelectorAll('.cc-editor-mobile-tabs button').forEach(button => button.addEventListener('click', () => {
+        $('#character-card-editor').dataset.mobilePane = button.dataset.pane;
+        document.querySelectorAll('.cc-editor-mobile-tabs button').forEach(item => item.classList.toggle('selected', item === button));
+        requestAnimationFrame(button.dataset.pane === 'card' ? refreshFieldLayoutAfterResize : positionPendingControls);
+    }));
     const card = $('#cc-editor-card');
     // Scroll events do not bubble. Capture them so the floating controls also
     // follow a hunk while its capped field is the element being scrolled.
@@ -4479,8 +4647,7 @@ export async function initCharacterCardEditor() {
     window.addEventListener('resize', () => {
         syncEditorViewportBounds();
         updateMessageNavigationButtons();
-        $('#cc-editor-card')?.querySelectorAll('.cc-pending-field').forEach(input => scheduleLineNumberUpdate(input));
-        positionPendingControls();
+        requestAnimationFrame(refreshFieldLayoutAfterResize);
     });
     // The editor closes through any drawer the app opens, not only its own toggle,
     // and its controls live on document.body where a stale one would float over
@@ -4524,7 +4691,9 @@ async function refreshExternalCardState() {
     // transcript first so rebuilding card state cannot roll back recent messages.
     await persistWorkspace();
     try {
-        state = createState(await loadStoredWorkspace());
+        const savedWorkspace = await loadStoredWorkspace();
+        collectionDrafts.clear();
+        state = createState(savedWorkspace);
     } catch (error) {
         console.error('Character card editor: could not refresh the workspace.', error);
         toastr.error('The Character Designer workspace file could not be refreshed.', 'Character card editor');

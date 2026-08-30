@@ -23,6 +23,7 @@ export const SECRET_KEYS = {
     APHRODITE: 'api_key_aphrodite',
     TABBY: 'api_key_tabby',
     OPENAI: 'api_key_openai',
+    OPENAI_CODEX_OAUTH: 'openai_codex_oauth',
     NOVEL: 'api_key_novel',
     CLAUDE: 'api_key_claude',
     DEEPL: 'deepl',

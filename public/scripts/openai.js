@@ -174,6 +174,7 @@ export let model_list = [];
 
 export const chat_completion_sources = {
     OPENAI: 'openai',
+    OPENAI_CODEX: 'openai_codex',
     CLAUDE: 'claude',
     OPENROUTER: 'openrouter',
     AI21: 'ai21',
@@ -241,6 +242,7 @@ export const reasoning_effort_types = {
     high: 'high',
     min: 'min',
     max: 'max',
+    xhigh: 'xhigh',
 };
 
 export const verbosity_levels = {
@@ -264,6 +266,7 @@ export const tool_result_roles = {
 
 // Providers that support interleaved reasoning forwarding in tool-call chains.
 const interleaved_reasoning_providers = [
+    chat_completion_sources.OPENAI_CODEX,
     chat_completion_sources.OPENROUTER,
     chat_completion_sources.CUSTOM,
 ];
@@ -320,6 +323,8 @@ export const settingsToUpdate = {
     group_models: ['#cc_group_models', 'group_models', true, true],
     sort_models: ['#cc_sort_models', 'sort_models', false, true],
     openai_model: ['#model_openai_select', 'openai_model', false, true],
+    codex_model: ['#model_codex_select', 'codex_model', false, true],
+    codex_custom_model: ['#codex_custom_model', 'codex_custom_model', false, true],
     claude_model: ['#model_claude_select', 'claude_model', false, true],
     openrouter_model: ['#model_openrouter_select', 'openrouter_model', false, true],
     openrouter_use_fallback: ['#openrouter_use_fallback', 'openrouter_use_fallback', true, true],
@@ -446,6 +451,8 @@ const default_settings = {
     sort_models: 'alphabetically',
     group_models: false,
     openai_model: 'gpt-4-turbo',
+    codex_model: 'gpt-5.6-sol',
+    codex_custom_model: '',
     claude_model: 'claude-sonnet-4-5',
     google_model: 'gemini-2.5-pro',
     vertexai_model: 'gemini-2.5-pro',
@@ -1808,6 +1815,8 @@ export function getChatCompletionModel(settings = null) {
             return settings.claude_model;
         case chat_completion_sources.OPENAI:
             return settings.openai_model;
+        case chat_completion_sources.OPENAI_CODEX:
+            return settings.codex_model === '__custom__' ? settings.codex_custom_model.trim() : settings.codex_model;
         case chat_completion_sources.MAKERSUITE:
             return settings.google_model;
         case chat_completion_sources.VERTEXAI:
@@ -2669,6 +2678,7 @@ function getReasoningEffort(settings = null, model = null) {
     // These sources expect the effort as string.
     const reasoningEffortSources = [
         chat_completion_sources.OPENAI,
+        chat_completion_sources.OPENAI_CODEX,
         chat_completion_sources.AZURE_OPENAI,
         chat_completion_sources.CUSTOM,
         chat_completion_sources.XAI,
@@ -2687,6 +2697,13 @@ function getReasoningEffort(settings = null, model = null) {
     }
 
     function resolveReasoningEffort() {
+        if (settings.chat_completion_source === chat_completion_sources.OPENAI_CODEX) {
+            if (settings.reasoning_effort === reasoning_effort_types.auto) return undefined;
+            if (settings.reasoning_effort === reasoning_effort_types.min) return 'minimal';
+            if (settings.reasoning_effort === reasoning_effort_types.max) return 'max';
+            return settings.reasoning_effort;
+        }
+
         if (settings.chat_completion_source === chat_completion_sources.DEEPSEEK) {
             switch (settings.reasoning_effort) {
                 case reasoning_effort_types.auto:
@@ -2736,6 +2753,9 @@ function getReasoningEffort(settings = null, model = null) {
 
                 return reasoning_effort_types.low;
             case reasoning_effort_types.max:
+                return reasoning_effort_types.high;
+            case reasoning_effort_types.xhigh:
+                // Extra High is only accepted by the Codex provider, which returns earlier.
                 return reasoning_effort_types.high;
             default:
                 return settings.reasoning_effort;
@@ -2794,6 +2814,7 @@ export async function createGenerationParameters(settings, model, type, messages
     // "OpenAI-like" sources
     const gptSources = [
         chat_completion_sources.OPENAI,
+        chat_completion_sources.OPENAI_CODEX,
         chat_completion_sources.AZURE_OPENAI,
         chat_completion_sources.OPENROUTER,
     ];
@@ -2909,6 +2930,16 @@ export async function createGenerationParameters(settings, model, type, messages
         'custom_prompt_post_processing': settings.custom_prompt_post_processing,
         'verbosity': getVerbosity(settings),
     };
+
+    if (settings.chat_completion_source === chat_completion_sources.OPENAI_CODEX) {
+        generate_data.n = undefined;
+        delete generate_data.temperature;
+        delete generate_data.top_p;
+        delete generate_data.frequency_penalty;
+        delete generate_data.presence_penalty;
+        delete generate_data.logit_bias;
+        delete generate_data.seed;
+    }
 
     if (settings.chat_completion_source === chat_completion_sources.AZURE_OPENAI) {
         generate_data.azure_base_url = settings.azure_base_url;
@@ -3255,9 +3286,15 @@ async function sendOpenAIRequest(type, messages, signal, { jsonSchema = null, fo
             const state = { reasoning: '', images: [], messageCost: null, providerReport: null, toolSignatures: {}, signature: null };
             while (true) {
                 const { done, value } = await reader.read();
-                if (done) return;
+                if (done) {
+                    if (oai_settings.chat_completion_source === chat_completion_sources.OPENAI_CODEX) void refreshCodexAuthStatus();
+                    return;
+                }
                 const rawData = value.data;
-                if (rawData === '[DONE]') return;
+                if (rawData === '[DONE]') {
+                    if (oai_settings.chat_completion_source === chat_completion_sources.OPENAI_CODEX) void refreshCodexAuthStatus();
+                    return;
+                }
                 tryParseStreamingError(response, rawData);
                 const parsed = JSON.parse(rawData);
 
@@ -3301,6 +3338,7 @@ async function sendOpenAIRequest(type, messages, signal, { jsonSchema = null, fo
             delay(1).then(() => saveLogprobsForActiveMessage(logprobs, null));
         }
 
+        if (oai_settings.chat_completion_source === chat_completion_sources.OPENAI_CODEX) void refreshCodexAuthStatus();
         return data;
     }
 }
@@ -3344,7 +3382,7 @@ export function getStreamingReply(data, state, { chatCompletionSource = null, ov
             state.reasoning += (data.choices?.filter(x => x?.delta?.reasoning_content)?.[0]?.delta?.reasoning_content || '');
         }
         return data.choices?.[0]?.delta?.content || '';
-    } else if (chat_completion_source === chat_completion_sources.OPENROUTER) {
+    } else if ([chat_completion_sources.OPENROUTER, chat_completion_sources.OPENAI_CODEX].includes(chat_completion_source)) {
         const imageUrls = data?.choices?.[0]?.delta?.images?.filter(x => x.type === 'image_url')?.map(x => x?.image_url?.url) || [];
         if (Array.isArray(imageUrls) && imageUrls.length > 0) {
             state.images.push(...imageUrls.filter(isDataURL));
@@ -4662,6 +4700,189 @@ function setToolReasoningControls() {
     $('#openrouter_interleaved_thinking_disabled_hint').toggle(!isEnabled);
 }
 
+let codexAuthPollTimer = null;
+let codexAuthFlow = null;
+
+function codexRequest(path, options = {}) {
+    return fetch(`/api/backends/chat-completions/codex${path}`, {
+        ...options,
+        headers: getRequestHeaders(),
+        body: options.body === undefined ? undefined : JSON.stringify(options.body),
+    }).then(async response => {
+        const data = response.status === 204 ? {} : await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(data?.error?.message || response.statusText);
+        return data;
+    });
+}
+
+function stopCodexAuthPolling() {
+    if (codexAuthPollTimer) clearTimeout(codexAuthPollTimer);
+    codexAuthPollTimer = null;
+}
+
+function formatCodexWindow(minutes) {
+    const value = Number(minutes);
+    if (!Number.isFinite(value) || value <= 0) return 'Usage window';
+    if (value % 10080 === 0) return `${value / 10080}-week window`;
+    if (value % 1440 === 0) return `${value / 1440}-day window`;
+    if (value % 60 === 0) return `${value / 60}-hour window`;
+    return `${value}-minute window`;
+}
+
+function appendCodexLimitWindow($parent, window) {
+    if (!window) return;
+    const used = Math.max(0, Math.min(100, Number(window.usedPercent) || 0));
+    const reset = window.resetsAt ? new Date(Number(window.resetsAt) * 1000).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' }) : null;
+    const $row = $('<div>').addClass('codex-limit-row');
+    const $label = $('<div>').addClass('codex-limit-label');
+    $label.append($('<span>').text(formatCodexWindow(window.windowMinutes)));
+    $label.append($('<strong>').text(`${used}%`));
+    $row.append($label);
+    $row.append($('<progress>').attr({ max: 100, value: used }));
+    if (reset) $row.append($('<small>').text(`Resets ${reset}`));
+    $parent.append($row);
+}
+
+function renderCodexLimits(limits) {
+    const $limits = $('#codex_limits').empty();
+    const $details = $('#codex_limits_details');
+    if (!Array.isArray(limits) || limits.length === 0) {
+        $details.hide();
+        return;
+    }
+    $('#codex_limits_summary').text(`${limits.length} ${limits.length === 1 ? 'pool' : 'pools'}`);
+    $details.show();
+    for (const limit of limits) {
+        const $group = $('<div>').addClass('codex-limit-group');
+        $group.append($('<strong>').text(limit.limitName || (limit.limitId === 'codex' ? 'Codex' : limit.limitId)));
+        appendCodexLimitWindow($group, limit.primary);
+        appendCodexLimitWindow($group, limit.secondary);
+        if (limit.credits?.unlimited === true) $group.append($('<small>').addClass('codex-limit-credit').text('Unlimited credits'));
+        else if (limit.credits?.balance != null) $group.append($('<small>').addClass('codex-limit-credit').text(`${limit.credits.balance} credits`));
+        $limits.append($group);
+    }
+}
+
+function renderCodexAuthStatus(status) {
+    const accounts = Array.isArray(status?.accounts) ? status.accounts : [];
+    const active = accounts.find(account => account.accountId === status.activeAccountId) || accounts[0] || null;
+    const reconnect = Boolean(active?.reconnectRequired);
+    $('#codex_account_error').hide().text('');
+    $('#codex_browser_signin').prop('disabled', !status?.browserAvailable)
+        .attr('title', status?.browserAvailable ? '' : 'Browser sign-in is available only when SillyTavern is running on this device.');
+    $('#codex_add_account').data('browser-available', Boolean(status?.browserAvailable));
+    $('#codex_connected_view').toggle(Boolean(active));
+    $('#codex_disconnected_view').toggle(!active || reconnect);
+    $('#codex_browser_flow, #codex_device_flow').hide();
+
+    if (!active) {
+        renderCodexLimits([]);
+        return;
+    }
+    const $select = $('#codex_account_select').empty();
+    for (const account of accounts) {
+        const label = account.email || account.workspaceName || account.accountId;
+        $select.append($('<option>').val(account.accountId).text(label));
+    }
+    $select.val(active.accountId);
+    const identity = [active.workspaceName, active.planType, active.accountId].filter(Boolean).join(' · ');
+    $('#codex_account_identity').text(identity);
+    if (reconnect && active.lastError) $('#codex_account_error').text(active.lastError).show();
+    renderCodexLimits(active.limits);
+}
+
+async function refreshCodexAuthStatus() {
+    if (oai_settings.chat_completion_source !== chat_completion_sources.OPENAI_CODEX) return null;
+    try {
+        const status = await codexRequest('/auth/status');
+        renderCodexAuthStatus(status);
+        setOnlineStatus(status.connected ? t`Valid` : 'no_connection');
+        return status;
+    } catch (error) {
+        $('#codex_account_error').text(error.message).show();
+        return null;
+    }
+}
+
+function showCodexFlowError(message) {
+    stopCodexAuthPolling();
+    codexAuthFlow = null;
+    $('#codex_browser_flow, #codex_device_flow').hide();
+    $('#codex_disconnected_view').show();
+    $('#codex_account_error').text(message).show();
+}
+
+function pollCodexFlow(type, flowId, interval = 1500) {
+    stopCodexAuthPolling();
+    codexAuthPollTimer = setTimeout(async () => {
+        try {
+            const result = await codexRequest(`/auth/${type}/${encodeURIComponent(flowId)}`);
+            if (result.status === 'complete') {
+                stopCodexAuthPolling();
+                codexAuthFlow = null;
+                await refreshCodexAuthStatus();
+                reconnectOpenAi();
+                return;
+            }
+            if (result.status === 'failed' || result.status === 'expired') {
+                showCodexFlowError(result.error || 'ChatGPT sign-in expired.');
+                return;
+            }
+            pollCodexFlow(type, flowId, Math.max(interval, Number(result.retryAfter || 0) * 1000));
+        } catch (error) {
+            showCodexFlowError(error.message);
+        }
+    }, interval);
+}
+
+async function startCodexBrowserSignIn() {
+    const authWindow = window.open('about:blank', '_blank');
+    try {
+        const flow = await codexRequest('/auth/browser/start', { method: 'POST' });
+        codexAuthFlow = { type: 'browser', ...flow };
+        $('#codex_account_error, #codex_disconnected_view, #codex_connected_view, #codex_device_flow').hide();
+        $('#codex_browser_flow').show();
+        if (authWindow) {
+            authWindow.opener = null;
+            authWindow.location.replace(flow.authorizationUrl);
+        } else {
+            window.open(flow.authorizationUrl, '_blank', 'noopener,noreferrer');
+        }
+        pollCodexFlow('browser', flow.flowId);
+    } catch (error) {
+        authWindow?.close();
+        showCodexFlowError(error.message);
+    }
+}
+
+async function startCodexDeviceSignIn() {
+    try {
+        const flow = await codexRequest('/auth/device/start', { method: 'POST' });
+        codexAuthFlow = { type: 'device', ...flow };
+        $('#codex_account_error, #codex_disconnected_view, #codex_connected_view, #codex_browser_flow').hide();
+        $('#codex_device_flow').show();
+        $('#codex_device_code').text(flow.userCode);
+        const updateExpiry = () => {
+            if (codexAuthFlow?.flowId !== flow.flowId) return;
+            const seconds = Math.max(0, Math.ceil((flow.expiresAt - Date.now()) / 1000));
+            $('#codex_device_expiry').text(`Expires in ${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`);
+            if (seconds > 0) setTimeout(updateExpiry, 1000);
+        };
+        updateExpiry();
+        pollCodexFlow('device', flow.flowId, Number(flow.interval || 5) * 1000);
+    } catch (error) {
+        showCodexFlowError(error.message);
+    }
+}
+
+async function cancelCodexFlow() {
+    const flowId = codexAuthFlow?.flowId;
+    stopCodexAuthPolling();
+    codexAuthFlow = null;
+    if (flowId) await codexRequest('/auth/cancel', { method: 'POST', body: { flowId } }).catch(() => {});
+    await refreshCodexAuthStatus();
+}
+
 async function getStatusOpen() {
     const noValidateSources = [
         chat_completion_sources.CLAUDE,
@@ -4758,6 +4979,8 @@ async function getStatusOpen() {
         }
 
         const responseData = await response.json();
+
+        if (responseData.codex) renderCodexAuthStatus(responseData.codex);
 
         if ('data' in responseData && Array.isArray(responseData.data)) {
             saveModelList(responseData.data);
@@ -5672,6 +5895,11 @@ async function onModelChange() {
         oai_settings.openai_model = value;
     }
 
+    if ($(this).is('#model_codex_select')) {
+        oai_settings.codex_model = value;
+        $('#codex_custom_model_wrap').toggle(value === '__custom__');
+    }
+
     if ($(this).is('#model_openrouter_select')) {
         if (!value || !hasModelsLoaded) {
             console.debug('Null OR model selected. Ignoring.');
@@ -5925,6 +6153,12 @@ async function onModelChange() {
 
         oai_settings.temp_openai = Math.min(claude_max_temp, oai_settings.temp_openai);
         $('#temp_openai').attr('max', claude_max_temp).val(oai_settings.temp_openai).trigger('input');
+    }
+
+    if (oai_settings.chat_completion_source === chat_completion_sources.OPENAI_CODEX) {
+        $('#openai_max_context').attr('max', getMaxContextOpenAI(getChatCompletionModel()));
+        oai_settings.openai_max_context = Math.min(oai_settings.openai_max_context, Number($('#openai_max_context').attr('max')));
+        $('#openai_max_context').val(oai_settings.openai_max_context).trigger('input');
     }
 
     if ([chat_completion_sources.AZURE_OPENAI, chat_completion_sources.OPENAI].includes(oai_settings.chat_completion_source)) {
@@ -6286,6 +6520,9 @@ function toggleChatCompletionForms() {
         } else {
             $('#model_openai_select').trigger('change');
         }
+    } else if (oai_settings.chat_completion_source == chat_completion_sources.OPENAI_CODEX) {
+        $('#model_codex_select').trigger('change');
+        void refreshCodexAuthStatus();
     } else if (oai_settings.chat_completion_source == chat_completion_sources.MAKERSUITE) {
         $('#model_google_select').trigger('change');
     } else if (oai_settings.chat_completion_source == chat_completion_sources.VERTEXAI) {
@@ -6481,10 +6718,11 @@ export function isImageInliningSupported() {
 
     switch (oai_settings.chat_completion_source) {
         case chat_completion_sources.OPENAI:
+        case chat_completion_sources.OPENAI_CODEX:
         case chat_completion_sources.AZURE_OPENAI: {
             const modelToCheck = oai_settings.chat_completion_source === chat_completion_sources.AZURE_OPENAI
                 ? oai_settings.azure_openai_model
-                : oai_settings.openai_model;
+                : getChatCompletionModel();
             return visionSupportedModels.some(model =>
                 modelToCheck.includes(model)
                 && ['gpt-4-turbo-preview', 'o1-mini', 'o3-mini'].some(x => !modelToCheck.includes(x)),
@@ -6651,6 +6889,7 @@ function getEffectiveToolReasoningMode(settings = oai_settings) {
  * @returns {boolean} True if reasoning signatures should be included in the request
  */
 export function isReasoningSignatureSupported(settings = oai_settings) {
+    if (settings.chat_completion_source === chat_completion_sources.OPENAI_CODEX) return true;
     // If it's Vertex AI or Makersuite, that's OK - convertGooglePrompt() will handle it later
     const isGoogle = [chat_completion_sources.VERTEXAI, chat_completion_sources.MAKERSUITE].includes(settings.chat_completion_source);
     // Need a more crunchy check for OpenRouter: look for Gemini models
@@ -7514,6 +7753,38 @@ export function initOpenAI() {
     $('#api_button_openai').on('click', onConnectButtonClick);
     $('#openai_reverse_proxy').on('input', onReverseProxyInput);
     $('#model_openai_select').on('change', onModelChange);
+    $('#model_codex_select').on('change', onModelChange);
+    $('#codex_custom_model').on('input', function () {
+        oai_settings.codex_custom_model = String($(this).val()).trim();
+        if (oai_settings.chat_completion_source === chat_completion_sources.OPENAI_CODEX) {
+            $('#openai_max_context').attr('max', getMaxContextOpenAI(oai_settings.codex_custom_model));
+            oai_settings.openai_max_context = Math.min(oai_settings.openai_max_context, Number($('#openai_max_context').attr('max')));
+            $('#openai_max_context').val(oai_settings.openai_max_context).trigger('input');
+        }
+        saveSettingsDebounced();
+    });
+    $('#codex_browser_signin').on('click', startCodexBrowserSignIn);
+    $('#codex_device_signin').on('click', startCodexDeviceSignIn);
+    $('#codex_browser_reopen').on('click', () => codexAuthFlow?.authorizationUrl && window.open(codexAuthFlow.authorizationUrl, '_blank', 'noopener,noreferrer'));
+    $('#codex_device_open').on('click', () => codexAuthFlow?.verificationUrl && window.open(codexAuthFlow.verificationUrl, '_blank', 'noopener,noreferrer'));
+    $('#codex_device_copy').on('click', async () => {
+        if (codexAuthFlow?.userCode) await navigator.clipboard.writeText(codexAuthFlow.userCode);
+    });
+    $('#codex_browser_cancel, #codex_device_cancel').on('click', cancelCodexFlow);
+    $('#codex_add_account').on('click', async function () {
+        if ($(this).data('browser-available')) await startCodexBrowserSignIn();
+        else await startCodexDeviceSignIn();
+    });
+    $('#codex_account_select').on('change', async function () {
+        await codexRequest('/auth/activate', { method: 'POST', body: { accountId: String($(this).val()) } });
+        await refreshCodexAuthStatus();
+        reconnectOpenAi();
+    });
+    $('#codex_signout').on('click', async () => {
+        await codexRequest('/auth/logout', { method: 'POST', body: { accountId: String($('#codex_account_select').val() || '') } });
+        await refreshCodexAuthStatus();
+        reconnectOpenAi();
+    });
     $('#model_claude_select').on('change', onModelChange);
     $('#model_google_select').on('change', onModelChange);
     $('#model_vertexai_select').on('change', onModelChange);
