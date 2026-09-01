@@ -85,7 +85,7 @@ describe('chat workspace activation fast path', () => {
         for (const stage of ['characterLoad', 'chatFetch', 'chatParse', 'chatApply', 'itemizedPrompts', 'messageRender', 'ownerUi', 'chatEvents']) {
             expect(characterLoad).toContain(`'${stage}'`);
         }
-        expect(bridgeScript).toContain('bridgeApi.openIdentity(identity, measureNavigationStage)');
+        expect(bridgeScript).toContain('bridgeApi.openIdentity(identity, measureNavigationStage, { showOwnerUi })');
         expect(bridgeScript).not.toContain("measureNavigationStage('identityLoad'");
     });
 
@@ -145,20 +145,19 @@ describe('chat workspace activation fast path', () => {
         expect(onChatChanged).toContain('revision !== tokenCounterUpdateRevision');
     });
 
-    test('rebuilds a changed character editor only after the chat commit', () => {
+    test('refreshes a changed character editor before the chat commit', () => {
         const openIdentity = appScript.slice(
             appScript.indexOf('async function openWorkspaceIdentity'),
             appScript.indexOf('function restoreWorkspaceView'),
         );
         expect(openIdentity).toContain('refreshOwnerUi: false');
-        expect(openIdentity).toContain('pendingWorkspaceOwnerUiIdentity = { ...identity }');
+        expect(openIdentity).toContain('select_selected_character(characterId, { switchMenu: false })');
         const postCommit = appScript.slice(
             appScript.indexOf('async function persistWorkspacePostCommit'),
             appScript.indexOf('async function openWorkspaceIdentity'),
         );
         expect(postCommit).toContain('await delay(0)');
         expect(postCommit).toContain("restoredDraftInput?.dispatchEvent(new Event('input', { bubbles: true }))");
-        expect(postCommit).toContain('select_selected_character(characterId, { switchMenu: false })');
         expect(postCommit).toContain('select_group_chats(identity.ownerId, true)');
         expect(openIdentity).toContain('openGroupById(group.id, { openInWorkspace: false, loadChat: false, refreshOwnerUi: false, measureStage })');
         expect(groupScript).toContain('refreshOwnerUi = true');

@@ -184,9 +184,32 @@ hr {
     position: absolute;
     width: 100%;
     top: 0;
-    bottom: calc(var(--bottomFormBlockSize) + 2px);
+    bottom: 0;
     height: auto;
-    transition: background-image var(--animation-duration-3x) ease-in-out;
+    transition: none;
+}
+
+body.layout-plus-plus #bg1,
+body.layout-plus-plus #bg_custom {
+    bottom: calc(var(--bottomFormBlockSize) + 2px);
+}
+
+#bg1 .background-transition-layer {
+    position: absolute;
+    inset: 0;
+    z-index: 1;
+    background-repeat: inherit;
+    background-attachment: inherit;
+    background-size: inherit;
+    background-position: inherit;
+    opacity: 0;
+    pointer-events: none;
+    will-change: opacity;
+    transition: opacity var(--animation-duration-3x) ease-in-out;
+}
+
+#bg1 .background-transition-layer.visible {
+    opacity: 1;
 }
 
 /* Background fitting options */
@@ -225,6 +248,10 @@ hr {
 
 body.reduced-motion #bg1,
 body.reduced-motion #bg_custom {
+    transition: none;
+}
+
+body.reduced-motion #bg1 .background-transition-layer {
     transition: none;
 }
 
@@ -979,6 +1006,10 @@ body .panelControlBar {
     display: none;
 }
 
+body.chat-workspace-tabs-disabled #chat_workspace_tabs {
+    display: none;
+}
+
 .chat_workspace_tab {
     display: grid;
     grid-template-columns: minmax(0, 1fr) auto;
@@ -1023,6 +1054,30 @@ body .panelControlBar {
     cursor: pointer;
     touch-action: manipulation;
     user-select: none;
+}
+
+@media screen and (min-width: 1001px) and (pointer: fine) {
+    .chat_workspace_tab_select {
+        position: relative;
+    }
+
+    .chat_workspace_tab_select[data-workspace-shortcut]::after {
+        position: absolute;
+        top: 0;
+        right: 0;
+        bottom: 0;
+        display: flex;
+        align-items: center;
+        padding: 0 calc(var(--mainFontSize) * .27) 0 calc(var(--mainFontSize) * .8);
+        color: color-mix(in srgb, var(--SmartThemeBodyColor) 58%, transparent);
+        background: linear-gradient(to right, transparent, color-mix(in srgb, var(--SmartThemeBlurTintColor) 92%, transparent) 35%);
+        content: attr(data-workspace-shortcut);
+        font-size: calc(var(--mainFontSize) * .55);
+        font-weight: 600;
+        line-height: 1;
+        pointer-events: none;
+        white-space: nowrap;
+    }
 }
 
 .chat_workspace_tab_select:active,
@@ -1966,6 +2021,14 @@ body.hideAllSwipeButtons :is(.swipe_left, .swipe_right),
     border: 1px solid var(--SmartThemeBorderColor);
     /*--black30a*/
     box-shadow: 0 0 5px var(--black50a);
+}
+
+/* Failed or intentionally empty avatar sources should leave a blank slot,
+   rather than exposing the browser's broken-image rendering. */
+#avatar_load_preview:not([src]),
+#avatar_load_preview[src=""],
+.avatar-image-load-failed {
+    display: none !important;
 }
 
 .bogus_folder_select .avatar,
@@ -6108,6 +6171,23 @@ body:has(#character_popup.open) #top-settings-holder:has(.drawer-content.openDra
     }
 }
 
+/* Left navigation panel reveals use transform/opacity in script.js. Avoid
+   Firefox's generic height/display transition for this interaction. */
+#top-settings-holder > .drawer > .drawer-content {
+    transition: none;
+}
+
+/* Keep an exiting side panel above the chat while Layout++ expands underneath
+   it. The incoming panel gets the higher layer so tab switches always show the
+   new tab's motion regardless of DOM order. */
+#top-settings-holder > .drawer > .drawer-content.left-tab-closing {
+    z-index: 3001 !important;
+}
+
+#top-settings-holder > .drawer > .drawer-content.left-tab-opening {
+    z-index: 3002 !important;
+}
+
 /* Focused Character Card Editor ------------------------------------------------ */
 #character-card-editor {
     /* JS measures the rendered left sidebar, which can be restyled completely
@@ -6228,6 +6308,22 @@ body.big-avatars .cc-reference-option-copy { height: calc(var(--avatar-base-heig
 #character-card-editor.cc-editor-resizing .cc-editor-card,
 #character-card-editor.cc-editor-resizing .cc-editor-chat { pointer-events: none; user-select: none; }
 #character-card-editor.cc-editor-resizing .cc-editor-divider { pointer-events: auto; transition: none; opacity: 1; }
+
+@keyframes cc-character-text-fade-in {
+    from { opacity: 0; }
+    to { opacity: 1; }
+}
+
+#description_textarea.cc-character-text-fade-in,
+#firstmessage_textarea.cc-character-text-fade-in {
+    animation: cc-character-text-fade-in var(--cc-character-text-fade-duration, 180ms) ease-in-out both;
+}
+
+body.reduced-motion #description_textarea.cc-character-text-fade-in,
+body.reduced-motion #firstmessage_textarea.cc-character-text-fade-in {
+    animation: none;
+}
+
 .cc-card-section-tabs {
     box-sizing: border-box;
     position: sticky;
@@ -6598,6 +6694,17 @@ body:not(.movingUI) .drawer-content.maximized {
     }
 }
 
+/* Keep character-list scrolling inside the list. */
+.fillRight.openDrawer {
+    overflow-y: hidden;
+}
+
+/* Layout++ inserts this surface to animate the right panel. Outside that
+   layout it must be transparent to flex layout, including after a live toggle. */
+.left-tab-motion-inner {
+    display: contents;
+}
+
 /*
 .fillRight #rm_print_characters_block {
     overflow-y: hidden;
@@ -6855,6 +6962,15 @@ body:not(.movingUI) .drawer-content.maximized {
     width: 100%;
     object-fit: contain !important;
     border-radius: 10px;
+}
+
+/* Character image transition overlay. */
+#character-image-transition-overlay {
+    position: fixed !important;
+    inset: 0 !important;
+    z-index: 2147483647 !important;
+    pointer-events: none !important;
+    overflow: visible !important;
 }
 
 /* Hide scrollbar for Chrome, Safari and Opera */

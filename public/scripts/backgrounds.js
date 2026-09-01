@@ -6,6 +6,7 @@ import { flashHighlight, stringFormat, debounce, createThumbnail, getBase64Async
 import { t, translate } from './i18n.js';
 import { Popup } from './popup.js';
 import { getAnimatedWebpDuration } from './util/animated-webp.js';
+import { areBackgroundImagesEqual, getEffectiveBackgroundImage } from './util/background-image.js';
 
 const PNG_PIXEL_B64 = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
 const FOLDER_LIMIT = 100;
@@ -39,6 +40,8 @@ let backgroundLoadPromise = null;
 let backgroundNameMap = null;
 let firefoxWebpResetTimer = null;
 let firefoxWebpResetAbortController = null;
+const backgroundTransitionLayers = new Set();
+let backgroundTransitionId = 0;
 const thumbnailElementsByFile = new Map();
 const selectedThumbnailElements = new Set();
 const lockedThumbnailElements = new Set();
@@ -134,9 +137,91 @@ async function startFirefoxWebpDecoderReset(cssUrl) {
     }
 }
 
+function getTransitionDurationMs(element) {
+    if (typeof getComputedStyle !== 'function') return 0;
+
+    const duration = getComputedStyle(element).transitionDuration.split(',')[0].trim();
+    const value = Number.parseFloat(duration);
+    if (!Number.isFinite(value)) return 0;
+
+    return duration.endsWith('ms') ? value : value * 1000;
+}
+
+function isNoBackgroundUrl(cssUrl) {
+    if (cssUrl === 'none') return true;
+
+    const source = getCssUrlSource(cssUrl);
+    return source?.endsWith('/__transparent.png') || source === '__transparent.png';
+}
+
+function clearBackgroundTransitionLayers() {
+    for (const layer of backgroundTransitionLayers) {
+        layer.remove();
+    }
+    backgroundTransitionLayers.clear();
+}
+
 function applyMainBackground(cssUrl) {
-    $('#bg1').css('background-image', cssUrl);
-    void startFirefoxWebpDecoderReset(cssUrl);
+    const background = document.getElementById('bg1');
+    if (!background) return;
+
+    const currentBackgroundImage = getComputedStyle(background).backgroundImage;
+    const transitionImages = Array.from(backgroundTransitionLayers)
+        .filter(layer => layer.isConnected && layer.parentElement === background)
+        .map(layer => layer.style.backgroundImage)
+        .filter(Boolean);
+    const effectiveBackgroundImage = getEffectiveBackgroundImage(currentBackgroundImage, transitionImages);
+    if (areBackgroundImagesEqual(effectiveBackgroundImage, cssUrl)) return;
+
+    const transitionId = ++backgroundTransitionId;
+    const hasCurrentBackground = currentBackgroundImage !== 'none' && !isNoBackgroundUrl(currentBackgroundImage);
+    const oldLayer = hasCurrentBackground ? document.createElement('div') : null;
+    const newLayer = document.createElement('div');
+
+    // Cross-fade both images at the same rate. Keeping the base clear prevents
+    // the target from appearing fully formed underneath the outgoing image,
+    // which is especially noticeable when switching between orientations.
+    newLayer.className = 'background-transition-layer';
+    newLayer.style.backgroundImage = cssUrl;
+    if (oldLayer) {
+        oldLayer.className = 'background-transition-layer visible';
+        oldLayer.style.backgroundImage = currentBackgroundImage;
+        background.appendChild(oldLayer);
+        backgroundTransitionLayers.add(oldLayer);
+    }
+    background.appendChild(newLayer);
+    backgroundTransitionLayers.add(newLayer);
+
+    cancelFirefoxWebpDecoderReset();
+    if (hasCurrentBackground) $(background).css('background-image', 'none');
+
+    const finishTransition = () => {
+        // A newer background is already fading in. Leave this layer in place
+        // until the newest transition finishes so it remains underneath it.
+        if (transitionId !== backgroundTransitionId) return;
+
+        $(background).css('background-image', cssUrl);
+        clearBackgroundTransitionLayers();
+        void startFirefoxWebpDecoderReset(cssUrl);
+    };
+
+    const durationMs = getTransitionDurationMs(newLayer);
+    if (durationMs === 0) {
+        finishTransition();
+        return;
+    }
+
+    newLayer.addEventListener('transitionend', event => {
+        if (event.propertyName === 'opacity') finishTransition();
+    }, { once: true });
+
+    // Keep the fallback for browsers that do not dispatch transitionend when
+    // a background layer is removed or the page is being throttled.
+    setTimeout(finishTransition, durationMs + 50);
+    requestAnimationFrame(() => {
+        oldLayer?.classList.remove('visible');
+        newLayer.classList.add('visible');
+    });
 }
 
 globalThis.addEventListener('pagehide', cancelFirefoxWebpDecoderReset);

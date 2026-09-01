@@ -2,6 +2,7 @@ import {
     SESSION_STATUS,
     createWorkspaceSession,
     createWorkspaceId,
+    collapseWorkspaceSessions,
     findSessionByIdentity,
     getIdentityKey,
     hasPersistedSessionChanged,
@@ -33,6 +34,7 @@ let startupLocationClaimed = false;
 let rollbackReloadAttempted = false;
 let lastBootStage = 'starting';
 let bootTimeout = null;
+const ownerUiActivationSessions = new Set();
 
 function setLoaderMessage(message, { error = false } = {}) {
     const messageElement = loaderElement?.querySelector('.splash-message');
@@ -213,6 +215,7 @@ function postAssignment(slot, { sessionId = slot.targetSessionId, requestId = sl
         restore: { draft: session.draft, scrollTop: session.scrollTop },
         settingsRevision: globalSettingsRevision,
         personaAvatar: session.personaAvatar || activePersonaAvatar,
+        showOwnerUi: ownerUiActivationSessions.has(sessionId),
     });
 }
 
@@ -313,7 +316,7 @@ function isOpeningBlocked() {
     return true;
 }
 
-function openSession(identity, presentation) {
+function openSession(identity, presentation, { showOwnerUi = false } = {}) {
     if (isOpeningBlocked()) return null;
     const normalized = normalizeIdentity(identity);
     if (!normalized) return null;
@@ -322,7 +325,9 @@ function openSession(identity, presentation) {
         session = createWorkspaceSession(normalized, getInitialPresentation(presentation));
         sessions.push(session);
     }
-    requestActivation(session.id);
+    if (showOwnerUi) ownerUiActivationSessions.add(session.id);
+    const activation = requestActivation(session.id);
+    if (activation.type === 'active') ownerUiActivationSessions.delete(session.id);
     persist();
     return session;
 }
@@ -418,6 +423,22 @@ function closeSession(sessionId, { discardDraft = false } = {}) {
     }
 }
 
+function collapseWorkspaceToActive() {
+    if (runtimeController.pendingSessionId) {
+        return { accepted: false, reason: 'pending' };
+    }
+
+    const result = collapseWorkspaceSessions(sessions, runtimeController.activeSessionId);
+    if (!result.accepted) return result;
+
+    sessions.splice(0, sessions.length, ...result.sessions);
+    pendingNewChatSessionId = null;
+    for (const session of result.removedSessions) newChatTransitions.delete(session.id);
+    persist();
+    broadcastTabsState();
+    return { accepted: true };
+}
+
 function receiveWorkspaceChildMessage(message, source, origin) {
     if (origin !== location.origin) return;
     if (!message || message.source !== 'sillytavern-chat-workspace') return;
@@ -456,13 +477,25 @@ function receiveWorkspaceChildMessage(message, source, origin) {
     if (message.type === 'prepared') {
         const session = sessions.find(candidate => candidate.id === message.targetSessionId);
         if (!session || !runtimeController.markPrepared(slot.id, message.requestId, message.targetSessionId)) return;
+        ownerUiActivationSessions.delete(message.targetSessionId);
         clearTimeout(bootTimeout);
         applyChildState(session, message.state);
+        return;
+    }
+    if (message.type === 'disable-tabs') {
+        if (message.sessionId !== runtimeController.activeSessionId || slot.sessionId !== runtimeController.activeSessionId) return;
+        const result = collapseWorkspaceToActive();
+        postToSlot(slot, 'tabs-disable-result', {
+            requestId: message.requestId,
+            accepted: result.accepted,
+            reason: result.reason,
+        });
         return;
     }
     if (message.type === 'navigation-error') {
         const failure = runtimeController.fail(slot.id, message.requestId, message.targetSessionId);
         if (!failure) return;
+        ownerUiActivationSessions.delete(failure.sessionId);
         if (pendingNewChatSessionId === failure.sessionId) pendingNewChatSessionId = null;
         const failedSession = sessions.find(candidate => candidate.id === failure.sessionId);
         if (failedSession && !failure.recovering) failedSession.status = SESSION_STATUS.ERROR;
@@ -498,7 +531,7 @@ function receiveWorkspaceChildMessage(message, source, origin) {
     }
     if (message.type === 'open-chat') {
         if (message.state) applyChildState(session, message.state);
-        openSession(message.identity, message.presentation);
+        openSession(message.identity, message.presentation, { showOwnerUi: message.showOwnerUi });
         return;
     }
     if (message.type === 'open-new-chat') {

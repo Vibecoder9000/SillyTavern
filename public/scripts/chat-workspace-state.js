@@ -75,6 +75,27 @@ export function isSessionNavigationBlocked(session) {
     return isSessionGenerating(session) && !session?.canNavigateWhileGenerating;
 }
 
+/**
+ * Determines whether the workspace can be reduced to its active session.
+ * This only changes logical workspace sessions; it never deletes chat files.
+ * @param {Array<object>} sessions Workspace sessions
+ * @param {string|null} activeSessionId Active session ID
+ * @returns {{accepted: boolean, reason?: 'failed'|'busy', sessions: Array<object>, removedSessions: Array<object>}}
+ */
+export function collapseWorkspaceSessions(sessions, activeSessionId) {
+    const activeSession = sessions.find(session => session.id === activeSessionId);
+    if (!activeSession) {
+        return { accepted: false, reason: 'failed', sessions, removedSessions: [] };
+    }
+
+    const removedSessions = sessions.filter(session => session.id !== activeSession.id);
+    if (removedSessions.some(isSessionBusy)) {
+        return { accepted: false, reason: 'busy', sessions, removedSessions: [] };
+    }
+
+    return { accepted: true, sessions: [activeSession], removedSessions };
+}
+
 export function findSessionByIdentity(sessions, identity) {
     const key = getIdentityKey(identity);
     return key ? sessions.find(session => getIdentityKey(session.identity) === key) ?? null : null;

@@ -1,6 +1,7 @@
 import { describe, expect, test } from '@jest/globals';
 import {
     SESSION_STATUS,
+    collapseWorkspaceSessions,
     createWorkspaceSession,
     createWorkspaceId,
     findSessionByIdentity,
@@ -66,6 +67,30 @@ describe('chat workspace state', () => {
         session.status = SESSION_STATUS.ERROR;
         expect(isSessionBusy(session)).toBe(false);
         expect(isSessionGenerating(session)).toBe(false);
+    });
+
+    test('collapses only idle non-active sessions without deleting chat history', () => {
+        const active = createWorkspaceSession(characterChat, { id: 'active', draft: 'keep this draft' });
+        const closed = createWorkspaceSession(groupChat, { id: 'closed', draft: 'discard this draft' });
+
+        const result = collapseWorkspaceSessions([active, closed], 'active');
+
+        expect(result).toMatchObject({ accepted: true });
+        expect(result.sessions).toEqual([active]);
+        expect(result.removedSessions).toEqual([closed]);
+        expect(closed.identity).toEqual({ kind: 'group', ownerId: '0', chatId: 'Group Chat' });
+    });
+
+    test('refuses to collapse while a non-active session is busy', () => {
+        const active = createWorkspaceSession(characterChat, { id: 'active' });
+        const generating = createWorkspaceSession(groupChat, { id: 'generating' });
+        generating.status = SESSION_STATUS.GENERATING;
+
+        const result = collapseWorkspaceSessions([active, generating], 'active');
+
+        expect(result).toMatchObject({ accepted: false, reason: 'busy' });
+        expect(result.sessions).toHaveLength(2);
+        expect(result.removedSessions).toEqual([]);
     });
 
     test('only detachable generation permits workspace navigation', () => {

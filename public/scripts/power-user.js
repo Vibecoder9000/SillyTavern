@@ -67,6 +67,7 @@ import { IMAGE_OVERSWIPE, MEDIA_DISPLAY } from './constants.js';
 import { t } from './i18n.js';
 import { getBackgroundPath, isCustomBackgroundUrl } from './backgrounds.js';
 import { persona_description_positions as _persona_description_positions } from './personas.js';
+import { getChatWorkspaceTabCount, requestWorkspaceTabsDisable, setChatWorkspaceTabsEnabled } from './chat-workspace-bridge.js';
 
 export const toastPositionClasses = [
     'toast-top-left',
@@ -160,6 +161,7 @@ export const power_user = {
     stream_fade_in: false,
 
     fast_ui_mode: true,
+    chat_workspace_tabs_enabled: true,
     avatar_style: avatar_styles.ROUND,
     chat_display: chat_styles.DEFAULT,
     toastr_position: defaultToastPosition,
@@ -357,6 +359,7 @@ export const power_user = {
     restore_user_input: true,
     llamacpp_jspace_analyzer: false,
     reduced_motion: false,
+    left_tab_animation_speed: 'medium',
     compact_input_area: true,
     show_swipe_num_all_messages: false,
     auto_connect: false,
@@ -388,6 +391,7 @@ export const power_user = {
 
 let themes = [];
 let movingUIPresets = [];
+let workspaceTabsTogglePending = false;
 /** @type {ContextSettings[]} */
 export let context_presets = [];
 
@@ -514,6 +518,11 @@ export function fixMarkdown(text, forDisplay) {
 function switchHotswap() {
     $('body').toggleClass('no-hotswap', !power_user.hotswap_enabled);
     $('#hotswapEnabled').prop('checked', power_user.hotswap_enabled);
+}
+
+function switchChatWorkspaceTabs() {
+    setChatWorkspaceTabsEnabled(power_user.chat_workspace_tabs_enabled);
+    $('#chat_workspace_tabs_enabled').prop('checked', power_user.chat_workspace_tabs_enabled);
 }
 
 function switchTimer() {
@@ -1636,6 +1645,7 @@ async function showDebugMenu() {
 
 export function applyPowerUserSettings() {
     switchUiMode();
+    switchChatWorkspaceTabs();
     applyFontScale('forced');
     applyThemeColor();
     applyChatWidth('forced');
@@ -1752,6 +1762,10 @@ export async function loadPowerUserSettings(settings, data) {
         ? Math.min(Math.max(Math.trunc(Number(power_user.tool_max_stop_sequences)), 0), 64)
         : 0;
     power_user.llamacpp_jspace_analyzer = !!power_user.llamacpp_jspace_analyzer;
+    power_user.left_tab_animation_speed = ['fast', 'medium', 'slow', 'instant'].includes(power_user.left_tab_animation_speed)
+        ? power_user.left_tab_animation_speed
+        : 'medium';
+    power_user.chat_workspace_tabs_enabled = power_user.chat_workspace_tabs_enabled !== false;
 
     if (power_user.stscript === undefined) {
         power_user.stscript = defaultStscript;
@@ -1972,6 +1986,8 @@ export async function loadPowerUserSettings(settings, data) {
     $('#shadow-color-picker').attr('color', power_user.shadow_color);
     $('#border-color-picker').attr('color', power_user.border_color);
     $('#reduced_motion').prop('checked', power_user.reduced_motion);
+    $('#chat_workspace_tabs_enabled').prop('checked', power_user.chat_workspace_tabs_enabled);
+    $('#left_tab_animation_speed').val(power_user.left_tab_animation_speed);
     $('#auto-connect-checkbox').prop('checked', power_user.auto_connect);
     $('#auto-load-chat-checkbox').prop('checked', power_user.auto_load_chat);
     $('#forbid_external_media').prop('checked', power_user.forbid_external_media);
@@ -4248,6 +4264,47 @@ jQuery(() => {
     $('#reduced_motion').on('input', function () {
         power_user.reduced_motion = !!$(this).prop('checked');
         switchReducedMotion();
+        saveSettingsDebounced();
+    });
+
+    $('#chat_workspace_tabs_enabled').on('input', async function () {
+        if (workspaceTabsTogglePending) {
+            $(this).prop('checked', power_user.chat_workspace_tabs_enabled);
+            return;
+        }
+
+        const enabled = !!$(this).prop('checked');
+        if (enabled) {
+            power_user.chat_workspace_tabs_enabled = true;
+            switchChatWorkspaceTabs();
+            saveSettingsDebounced();
+            return;
+        }
+
+        workspaceTabsTogglePending = true;
+        $(this).prop('checked', true);
+        try {
+            if (getChatWorkspaceTabCount() > 1) {
+                const confirmed = await callGenericPopup(
+                    t`Disable chat tabs and close all other open chats? Unsaved drafts in those chats will be discarded. Chat history will not be deleted.`,
+                    POPUP_TYPE.CONFIRM,
+                );
+                if (!confirmed) return;
+            }
+
+            if (!await requestWorkspaceTabsDisable()) return;
+            power_user.chat_workspace_tabs_enabled = false;
+            switchChatWorkspaceTabs();
+            saveSettingsDebounced();
+        } finally {
+            workspaceTabsTogglePending = false;
+            $('#chat_workspace_tabs_enabled').prop('checked', power_user.chat_workspace_tabs_enabled);
+        }
+    });
+
+    $('#left_tab_animation_speed').on('change', function () {
+        const speed = String($(this).val());
+        power_user.left_tab_animation_speed = ['fast', 'medium', 'slow', 'instant'].includes(speed) ? speed : 'medium';
         saveSettingsDebounced();
     });
 

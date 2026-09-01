@@ -5243,6 +5243,19 @@
                                     <input id="reduced_motion" type="checkbox" />
                                     <small data-i18n="Reduced Motion">Reduced Motion</small>
                                 </label>
+                                <label for="chat_workspace_tabs_enabled" class="checkbox_label" title="Allow multiple character and group chats to stay open as tabs." data-i18n="[title]Allow multiple character and group chats to stay open as tabs.">
+                                    <input id="chat_workspace_tabs_enabled" type="checkbox" />
+                                    <small data-i18n="Chat Workspace Tabs">Chat Workspace Tabs</small>
+                                </label>
+                                <label for="left_tab_animation_speed" class="flex-container flexFlowColumn alignitemsstart" title="Choose how quickly app animations run." data-i18n="[title]Choose how quickly app animations run.">
+                                    <small data-i18n="Animation Speed">Animation Speed</small>
+                                    <select id="left_tab_animation_speed">
+                                        <option value="fast" data-i18n="Fast">Fast</option>
+                                        <option value="medium" data-i18n="Medium">Medium</option>
+                                        <option value="slow" data-i18n="Slow">Slow</option>
+                                        <option value="instant" data-i18n="Instant">Instant</option>
+                                    </select>
+                                </label>
                                 <label for="fast_ui_mode" class="checkbox_label" title="Remove blur from window backgrounds, for faster rendering." data-i18n="[title]removes blur from window backgrounds">
                                     <input id="fast_ui_mode" type="checkbox" />
                                     <small data-i18n="No Blur Effect">No Blur Effect</small>
@@ -6444,7 +6457,7 @@
                 <div id="rightNavDrawerIcon" class="drawer-icon fa-solid fa-address-card fa-fw closedIcon" title="Character Management" data-i18n="[title]Character Management">
                 </div>
             </div>
-            <nav id="right-nav-panel" class="drawer-content closedDrawer fillRight">
+            <nav id="right-nav-panel" class="drawer-content closedDrawer fillRight" data-menu-type="characters">
                 <div id="right-nav-panelheader" class="fa-solid fa-grip drag-grabber">
                 </div>
                 <div id="CharListButtonAndHotSwaps" class="flex-container flexnowrap">
@@ -6502,7 +6515,7 @@
                                 <div class="flex-container flexFlowColumn expander flexNoGap">
                                     <div id="avatar_div" class="avatar_div buttons_block alignitemsflexstart justifySpaceBetween flexnowrap">
                                         <label id="avatar_div_div" class="add_avatar avatar" for="add_avatar_button" title="Click to select a new avatar for this character" data-i18n="[title]Click to select a new avatar for this character">
-                                            <img id="avatar_load_preview" src="img/ai4.png" alt="avatar">
+                                            <img id="avatar_load_preview" src="img/ai4.png" alt="">
                                             <input hidden type="file" id="add_avatar_button" name="avatar" accept="image/*">
                                         </label>
                                         <div class="flex-container" id="avatar_controls">

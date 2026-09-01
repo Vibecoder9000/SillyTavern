@@ -20,7 +20,11 @@ let themeStateTimer = null;
 let navigationRequestPending = false;
 let navigationTiming = null;
 let bootStage = 'starting';
+let workspaceTabsEnabled = true;
+let tabsDisableRequestSequence = 0;
+let pendingTabsDisableRequest = null;
 const TRANSIENT_ACTIVITY_DELAY = 400;
+const TABS_DISABLE_REQUEST_TIMEOUT = 10000;
 const statusLabels = {
     saving: 'saving',
     opening: 'opening',
@@ -74,6 +78,42 @@ export function isChatWorkspaceInteractionActive() {
 
 export function getChatWorkspaceSessionId() {
     return assignedSessionId;
+}
+
+export function getChatWorkspaceTabCount() {
+    return latestTabsState?.sessions?.length || 0;
+}
+
+export function setChatWorkspaceTabsEnabled(enabled) {
+    workspaceTabsEnabled = enabled !== false;
+    document.body.classList.toggle('chat-workspace-tabs-disabled', !workspaceTabsEnabled);
+
+    const container = document.querySelector('#chat_workspace_tabs');
+    if (!container) return;
+    if (latestTabsState) {
+        renderTabs(latestTabsState);
+    } else if (!workspaceTabsEnabled) {
+        container.hidden = true;
+        container.removeAttribute('aria-keyshortcuts');
+    }
+}
+
+export function requestWorkspaceTabsDisable() {
+    if (!isChatWorkspaceChild() || !initialized || !workspaceActive || getChatWorkspaceTabCount() < 2) {
+        return Promise.resolve(true);
+    }
+
+    const requestId = ++tabsDisableRequestSequence;
+    return new Promise(resolve => {
+        const timeout = setTimeout(() => {
+            if (pendingTabsDisableRequest?.requestId !== requestId) return;
+            pendingTabsDisableRequest = null;
+            globalThis.toastr?.error?.('Could not disable chat tabs. Please try again.');
+            resolve(false);
+        }, TABS_DISABLE_REQUEST_TIMEOUT);
+        pendingTabsDisableRequest = { requestId, resolve, timeout };
+        post('disable-tabs', { requestId });
+    });
 }
 
 function isWorkspaceNavigationCommand() {
@@ -189,7 +229,8 @@ function finishNavigationTiming(outcome) {
 }
 
 function queueWorkspaceNavigation(type, payload, optimisticSessionId = null) {
-    if (!workspaceActive
+    if (!workspaceTabsEnabled
+        || !workspaceActive
         || !latestTabsState
         || navigationRequestPending
         || latestTabsState.pendingSessionId
@@ -214,7 +255,7 @@ function queueWorkspaceNavigation(type, payload, optimisticSessionId = null) {
 }
 
 function requestTabActivation(targetSessionId) {
-    if (!workspaceActive || !latestTabsState) return false;
+    if (!workspaceTabsEnabled || !workspaceActive || !latestTabsState) return false;
     const selectedSessionId = latestTabsState.pendingSessionId || latestTabsState.activeSessionId;
     if (targetSessionId === selectedSessionId) return false;
     return queueWorkspaceNavigation('activate-chat', { targetSessionId }, targetSessionId);
@@ -240,14 +281,14 @@ function setWorkspaceActive(active) {
 }
 
 function activateAdjacentChat(direction) {
-    if (!workspaceActive || !latestTabsState) return false;
+    if (!workspaceTabsEnabled || !workspaceActive || !latestTabsState) return false;
     const currentSessionId = latestTabsState.pendingSessionId || latestTabsState.activeSessionId;
     const targetSessionId = getAdjacentSessionId(latestTabsState.sessions, currentSessionId, direction);
     return targetSessionId ? requestTabActivation(targetSessionId) : false;
 }
 
 function handleWorkspaceShortcut(event) {
-    if (event.isComposing || event.defaultPrevented) return;
+    if (!workspaceTabsEnabled || event.isComposing || event.defaultPrevented) return;
     const key = event.key.toLowerCase();
     if (!['z', 'x'].includes(key)) return;
 
@@ -262,8 +303,12 @@ function renderTabs(tabs) {
     if (!container) return;
     latestTabsState = tabs;
     if (!tabs.pendingSessionId && tabs.activeSessionId === assignedSessionId) navigationRequestPending = false;
-    container.hidden = tabs.sessions.length < 2;
-    container.setAttribute('aria-keyshortcuts', 'Alt+Z Alt+X');
+    container.hidden = !workspaceTabsEnabled || tabs.sessions.length < 2;
+    if (workspaceTabsEnabled) {
+        container.setAttribute('aria-keyshortcuts', 'Alt+Z Alt+X');
+    } else {
+        container.removeAttribute('aria-keyshortcuts');
+    }
     const liveSessionIds = new Set(tabs.sessions.map(session => session.id));
 
     for (const [sessionId, elements] of tabElements) {
@@ -271,6 +316,9 @@ function renderTabs(tabs) {
         if (elements.activityTimer) clearTimeout(elements.activityTimer);
         elements.tab.remove();
         tabElements.delete(sessionId);
+    }
+    for (const elements of tabElements.values()) {
+        elements.select.removeAttribute('data-workspace-shortcut');
     }
 
     let nextElement = container.firstElementChild;
@@ -296,7 +344,7 @@ function renderTabs(tabs) {
                 requestTabActivation(session.id);
             });
             select.addEventListener('keydown', event => {
-                if (!workspaceActive || !latestTabsState) return;
+                if (!workspaceTabsEnabled || !workspaceActive || !latestTabsState) return;
                 const currentSessionId = latestTabsState.pendingSessionId || latestTabsState.activeSessionId;
                 let targetSessionId = null;
                 if (event.key === 'ArrowLeft') {
@@ -389,19 +437,33 @@ function renderTabs(tabs) {
         nextElement = tab.nextElementSibling;
     }
 
-    const revealedSessionId = tabs.pendingSessionId || tabs.activeSessionId;
+    const selectedSessionId = tabs.pendingSessionId || tabs.activeSessionId;
+    const shortcutTargets = new Map();
+    const addShortcut = (sessionId, shortcut) => {
+        if (!sessionId || shortcutTargets.has(sessionId)) return;
+        shortcutTargets.set(sessionId, shortcut);
+    };
+    addShortcut(getAdjacentSessionId(tabs.sessions, selectedSessionId, -1), 'Alt+Z');
+    addShortcut(getAdjacentSessionId(tabs.sessions, selectedSessionId, 1), 'Alt+X');
+    for (const [sessionId, shortcut] of shortcutTargets) {
+        tabElements.get(sessionId)?.select.setAttribute('data-workspace-shortcut', shortcut);
+    }
+
+    const revealedSessionId = selectedSessionId;
     if (revealedSessionId && revealedSessionId !== lastRevealedSessionId) {
         tabElements.get(revealedSessionId)?.tab.scrollIntoView({ block: 'nearest', inline: 'nearest' });
         lastRevealedSessionId = revealedSessionId;
     }
 }
 
-export function requestWorkspaceOpen(identity, presentation = null) {
-    if (!isChatWorkspaceChild() || !initialized || !workspaceActive || isWorkspaceNavigationCommand()) return false;
-    if (!queueWorkspaceNavigation('open-chat', { identity, presentation })) {
+export function requestWorkspaceOpen(identity, presentation = null, { showOwnerUi = false, onAccepted = null } = {}) {
+    if (!workspaceTabsEnabled || !isChatWorkspaceChild() || !initialized || !workspaceActive || isWorkspaceNavigationCommand()) return false;
+    if (!queueWorkspaceNavigation('open-chat', { identity, presentation, showOwnerUi })) {
         globalThis.toastr?.warning?.(latestTabsState?.navigationBlocked
             ? 'Wait for generation to finish before switching chats.'
             : 'A chat is already being opened.');
+    } else if (typeof onAccepted === 'function') {
+        onAccepted();
     }
     // Consume workspace navigation requests even when blocked so callers do not
     // fall back to mutating the currently assigned runtime in place.
@@ -409,7 +471,7 @@ export function requestWorkspaceOpen(identity, presentation = null) {
 }
 
 export function requestWorkspaceNewChat(identity, presentation = null) {
-    if (!isChatWorkspaceChild() || !initialized || !workspaceActive || isWorkspaceNavigationCommand() || !identity) return false;
+    if (!workspaceTabsEnabled || !isChatWorkspaceChild() || !initialized || !workspaceActive || isWorkspaceNavigationCommand() || !identity) return false;
     if (!queueWorkspaceNavigation('open-new-chat', { identity, presentation })) {
         globalThis.toastr?.warning?.(latestTabsState?.navigationBlocked
             ? 'Wait for generation to finish before creating another chat.'
@@ -419,7 +481,7 @@ export function requestWorkspaceNewChat(identity, presentation = null) {
 }
 
 export function beginWorkspaceNewChat(identity) {
-    if (!isChatWorkspaceChild() || !initialized || !workspaceActive || isWorkspaceNavigationCommand() || !identity) return false;
+    if (!workspaceTabsEnabled || !isChatWorkspaceChild() || !initialized || !workspaceActive || isWorkspaceNavigationCommand() || !identity) return false;
     post('new-chat-starting', { identity });
     return true;
 }
@@ -458,7 +520,7 @@ export function notifyWorkspaceExtensionChange() {
     post('extensions-changed');
 }
 
-async function navigate(requestId, targetSessionId, identity, restore = {}, personaAvatar = null, previousSessionId = assignedSessionId) {
+async function navigate(requestId, targetSessionId, identity, restore = {}, personaAvatar = null, previousSessionId = assignedSessionId, showOwnerUi = false) {
     navigationDepth++;
     try {
         if (navigationTiming) {
@@ -472,7 +534,7 @@ async function navigate(requestId, targetSessionId, identity, restore = {}, pers
         }
         assignedSessionId = targetSessionId;
         assignedIdentity = identity;
-        if (identity) await bridgeApi.openIdentity(identity, measureNavigationStage);
+        if (identity) await bridgeApi.openIdentity(identity, measureNavigationStage, { showOwnerUi });
         await measureNavigationStage('viewRestore', () => bridgeApi.restoreView(restore));
         await measureNavigationStage('personaActivation', () => bridgeApi.onActivated(personaAvatar));
         await measureNavigationStage('generationResume', () => bridgeApi.resumeWorkspaceGeneration?.(targetSessionId));
@@ -514,11 +576,21 @@ export function initChatWorkspaceBridge(api) {
             settingsRevision = message.settingsRevision;
             pendingPersonaAvatar = message.personaAvatar || pendingPersonaAvatar;
             setWorkspaceActive(false);
-            void navigate(message.requestId, message.sessionId, message.identity, message.restore, pendingPersonaAvatar, previousSessionId).finally(() => {
+            void navigate(message.requestId, message.sessionId, message.identity, message.restore, pendingPersonaAvatar, previousSessionId, message.showOwnerUi).finally(() => {
                 pendingPersonaAvatar = null;
             });
         }
         if (message.type === 'tabs-state') renderTabs(message.tabs);
+        if (message.type === 'tabs-disable-result') {
+            if (pendingTabsDisableRequest?.requestId !== message.requestId) return;
+            const pendingRequest = pendingTabsDisableRequest;
+            pendingTabsDisableRequest = null;
+            clearTimeout(pendingRequest.timeout);
+            if (!message.accepted && message.reason === 'busy') {
+                globalThis.toastr?.warning?.('Finish the other chat before disabling chat tabs.');
+            }
+            pendingRequest.resolve(message.accepted === true);
+        }
         if (message.type === 'activation-blocked') {
             navigationRequestPending = false;
             if (latestTabsState) renderTabs({ ...latestTabsState, pendingSessionId: null });

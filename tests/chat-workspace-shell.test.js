@@ -5,6 +5,7 @@ const shellHtml = readFileSync(new URL('../public/chat-workspace.html', import.m
 const shellCss = readFileSync(new URL('../public/css/chat-workspace.css', import.meta.url), 'utf8');
 const shellScript = readFileSync(new URL('../public/scripts/chat-workspace.js', import.meta.url), 'utf8');
 const bridgeScript = readFileSync(new URL('../public/scripts/chat-workspace-bridge.js', import.meta.url), 'utf8');
+const indexHtml = readFileSync(new URL('../public/index.html', import.meta.url), 'utf8');
 const appScript = readFileSync(new URL('../public/script.js', import.meta.url), 'utf8');
 const appCss = readFileSync(new URL('../public/style.css', import.meta.url), 'utf8');
 const powerUserScript = readFileSync(new URL('../public/scripts/power-user.js', import.meta.url), 'utf8');
@@ -51,6 +52,43 @@ describe('chat workspace initial loading surface', () => {
         expect(appCss).toContain('--workspace-tab-status-size: calc(var(--mainFontSize) * .6)');
         expect(appCss).toContain('width: calc(var(--mainFontSize) * 17)');
         expect(appCss).toContain('.chat_workspace_tab_activity[data-status="saving"]::before');
+    });
+
+    test('supports disabling workspace tabs and falls back to single-chat navigation', () => {
+        expect(powerUserScript).toContain('chat_workspace_tabs_enabled: true');
+        expect(indexHtml).toContain('id="chat_workspace_tabs_enabled"');
+        expect(powerUserScript).toContain('requestWorkspaceTabsDisable()');
+        expect(bridgeScript).toContain('workspaceTabsEnabled = true');
+        expect(bridgeScript).toContain("container.hidden = !workspaceTabsEnabled || tabs.sessions.length < 2");
+        expect(bridgeScript).toContain("post('disable-tabs'");
+        expect(bridgeScript).toContain("message.type === 'tabs-disable-result'");
+        expect(bridgeScript).toContain('if (!workspaceTabsEnabled || !isChatWorkspaceChild()');
+        expect(bridgeScript).toContain('if (!workspaceTabsEnabled || !workspaceActive || !latestTabsState) return false;');
+        expect(bridgeScript).toContain('if (!workspaceTabsEnabled || event.isComposing || event.defaultPrevented) return;');
+        expect(bridgeScript).toContain('if (!workspaceTabsEnabled || !workspaceActive || !latestTabsState) return;');
+        expect(shellScript).toContain('collapseWorkspaceSessions(sessions, runtimeController.activeSessionId)');
+        expect(shellScript).toContain("message.type === 'disable-tabs'");
+        expect(shellScript).toContain('accepted: result.accepted');
+        expect(shellScript).not.toContain('...result,');
+        expect(appCss).toContain('body.chat-workspace-tabs-disabled #chat_workspace_tabs');
+    });
+
+    test('shows desktop shortcut hints on the tabs adjacent to the effective selection', () => {
+        const renderTabs = bridgeScript.slice(
+            bridgeScript.indexOf('function renderTabs'),
+            bridgeScript.indexOf('export function requestWorkspaceOpen'),
+        );
+        expect(renderTabs).toContain("elements.select.removeAttribute('data-workspace-shortcut')");
+        expect(renderTabs).toContain('const selectedSessionId = tabs.pendingSessionId || tabs.activeSessionId');
+        expect(renderTabs).toContain('getAdjacentSessionId(tabs.sessions, selectedSessionId, -1)');
+        expect(renderTabs).toContain('getAdjacentSessionId(tabs.sessions, selectedSessionId, 1)');
+        expect(renderTabs).toContain("addShortcut(getAdjacentSessionId(tabs.sessions, selectedSessionId, -1), 'Alt+Z')");
+        expect(renderTabs).toContain("addShortcut(getAdjacentSessionId(tabs.sessions, selectedSessionId, 1), 'Alt+X')");
+        expect(renderTabs).toContain('shortcutTargets.has(sessionId)');
+        expect(renderTabs).toContain("setAttribute('data-workspace-shortcut', shortcut)");
+        expect(appCss).toContain('@media screen and (min-width: 1001px) and (pointer: fine)');
+        expect(appCss).toContain('.chat_workspace_tab_select[data-workspace-shortcut]::after');
+        expect(appCss).toContain('pointer-events: none;');
     });
 
     test('only disables iframe animations when the SillyTavern setting requests it', () => {

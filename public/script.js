@@ -1051,7 +1051,7 @@ const workspaceMirrorWriter = createCoalescedWriter(async snapshot => {
     await syncWorkspaceLastChat(snapshot.chat, snapshot.workspace);
 }, { delay: 0 });
 
-let pendingWorkspaceOwnerUiIdentity = null;
+let pendingWorkspaceOwnerUiRequest = null;
 let pendingWorkspaceChatEvents = Promise.resolve();
 let pendingWorkspaceDraftInput = null;
 const workspaceComposerGenerationPendingSessions = new Set();
@@ -1136,15 +1136,15 @@ async function persistWorkspacePostCommit(identity) {
         restoredDraftInput?.dispatchEvent(new Event('input', { bubbles: true }));
     }
 
-    if (workspaceIdentityEquals(identity, pendingWorkspaceOwnerUiIdentity)) {
+    if (workspaceIdentityEquals(identity, pendingWorkspaceOwnerUiRequest?.identity)) {
         if (!workspaceIdentityEquals(identity, getWorkspaceChatIdentity())) return;
         const characterId = characters.findIndex(character => String(character.avatar) === String(identity.ownerId));
         if (identity.kind === 'character' && characterId >= 0) {
-            select_selected_character(characterId, { switchMenu: false });
+            select_selected_character(characterId, { switchMenu: pendingWorkspaceOwnerUiRequest.switchMenu });
         } else if (identity.kind === 'group') {
             select_group_chats(identity.ownerId, true);
         }
-        pendingWorkspaceOwnerUiIdentity = null;
+        pendingWorkspaceOwnerUiRequest = null;
     }
 
     let snapshot;
@@ -1167,7 +1167,7 @@ async function persistWorkspacePostCommit(identity) {
     }
 }
 
-async function openWorkspaceIdentity(identity, measureStage = null) {
+async function openWorkspaceIdentity(identity, measureStage = null, { showOwnerUi = false } = {}) {
     if (!identity) return;
 
     const openIdentity = async () => {
@@ -1175,6 +1175,14 @@ async function openWorkspaceIdentity(identity, measureStage = null) {
             const characterId = characters.findIndex(character => String(character.avatar) === String(identity.ownerId));
             if (characterId < 0) throw new Error(`Character not found: ${identity.ownerId}`);
             const selectionClearedChat = Boolean(selected_group) || String(this_chid) !== String(characterId);
+            if (showOwnerUi) {
+                // Show the editor structure immediately; the character data
+                // can arrive while the workspace chat is being prepared.
+                const avatarUrl = characters[characterId].avatar !== 'none'
+                    ? getThumbnailUrl('avatar', characters[characterId].avatar)
+                    : default_avatar;
+                showCharacterEditorShell(avatarUrl);
+            }
             await selectCharacterById(characterId, {
                 switchMenu: false,
                 openInWorkspace: false,
@@ -1191,7 +1199,17 @@ async function openWorkspaceIdentity(identity, measureStage = null) {
                 backgroundChatEvents: true,
                 measureStage,
             });
-            if (selectionClearedChat) pendingWorkspaceOwnerUiIdentity = { ...identity };
+            if (showOwnerUi) {
+                // The workspace tab is not committed until preparation returns.
+                // Populate the editor before commit without replaying its fade.
+                select_selected_character(characterId, { switchMenu: false });
+            } else if (selectionClearedChat) {
+                // The destination iframe is still covered by the workspace
+                // loader, so refresh the editor before the shell commits it.
+                // Otherwise the old character's form remains visible briefly
+                // after activation.
+                select_selected_character(characterId, { switchMenu: false });
+            }
             return;
         }
 
@@ -1209,7 +1227,9 @@ async function openWorkspaceIdentity(identity, measureStage = null) {
                 backgroundChatEvents: true,
                 measureStage,
             });
-            if (selectionClearedChat) pendingWorkspaceOwnerUiIdentity = { ...identity };
+            if (selectionClearedChat) {
+                pendingWorkspaceOwnerUiRequest = { identity: { ...identity }, switchMenu: false };
+            }
         }
     };
 
@@ -1365,10 +1385,11 @@ export function resultCheckStatus() {
  * @param {boolean} [options.openInWorkspace=true] Whether user navigation may open the character in another workspace tab.
  * @param {boolean} [options.loadChat=true] Whether switching characters should load the selected character's current chat.
  * @param {boolean} [options.refreshOwnerUi=true] Whether selecting the current character should repopulate its editor UI.
+ * @param {boolean} [options.showWorkspaceOwnerUi=false] Whether workspace navigation should show the selected character in the right menu after activation.
  * @param {Function|null} [options.measureStage=null] Optional workspace stage measurement callback.
  * @returns {Promise<boolean>} Whether the requested character is selected.
  */
-export async function selectCharacterById(id, { switchMenu = true, openInWorkspace = true, loadChat = true, refreshOwnerUi = true, measureStage = null } = {}) {
+export async function selectCharacterById(id, { switchMenu = true, openInWorkspace = true, loadChat = true, refreshOwnerUi = true, showWorkspaceOwnerUi = false, measureStage = null } = {}) {
     if (characters[id] === undefined) {
         return false;
     }
@@ -1376,14 +1397,40 @@ export async function selectCharacterById(id, { switchMenu = true, openInWorkspa
     const targetIdentity = characters[id]?.chat
         ? { kind: 'character', ownerId: String(characters[id].avatar), chatId: String(characters[id].chat) }
         : null;
+    const targetAvatarUrl = characters[id]?.avatar !== 'none'
+        ? getThumbnailUrl('avatar', characters[id].avatar)
+        : default_avatar;
     const targetPresentation = characters[id]
         ? {
             title: characters[id].name,
             avatar: characters[id].avatar !== 'none' ? getThumbnailUrl('avatar', characters[id].avatar) : '',
         }
         : null;
-    if (openInWorkspace && targetIdentity && !workspaceIdentityEquals(targetIdentity, getWorkspaceChatIdentity()) && requestWorkspaceOpen(targetIdentity, targetPresentation)) {
-        return true;
+    if (openInWorkspace && targetIdentity && !workspaceIdentityEquals(targetIdentity, getWorkspaceChatIdentity())) {
+        const workspaceRequestConsumed = requestWorkspaceOpen(targetIdentity, targetPresentation, {
+            showOwnerUi: showWorkspaceOwnerUi,
+            // Layout++ measures its final panel geometry in a queued microtask.
+            // Reveal the blank editor shell synchronously once navigation is
+            // accepted so the measurement sees the list-to-editor width change.
+            onAccepted: showWorkspaceOwnerUi && switchMenu
+                ? () => showCharacterEditorShell(targetAvatarUrl)
+                : null,
+        });
+        if (workspaceRequestConsumed) return true;
+    }
+
+    let switchingCharacter = selected_group || String(this_chid) !== String(id);
+    if (switchingCharacter) {
+        if (is_send_press) return false;
+        if (selected_group && is_group_generating) return false;
+        if (isCharacterDesignerGenerating()) {
+            toastr.info(t`Please wait until the Character Designer response finishes before switching characters.`, t`Character Designer is still generating...`);
+            return false;
+        }
+        if (isChatSaving) {
+            toastr.info(t`Please wait until the chat is saved before switching characters.`, t`Your chat is still saving...`);
+            return false;
+        }
     }
 
     await flushPendingChatSave();
@@ -1392,18 +1439,22 @@ export async function selectCharacterById(id, { switchMenu = true, openInWorkspa
         return false;
     }
 
-    if (selected_group && is_group_generating) {
+    // Recheck guards after the save flush in case the active selection or a
+    // generation state changed while the pending save was being finalized.
+    switchingCharacter = selected_group || String(this_chid) !== String(id);
+    if (switchingCharacter && is_send_press) {
         return false;
     }
-
-    if ((selected_group || String(this_chid) !== String(id)) && isCharacterDesignerGenerating()) {
+    if (switchingCharacter && selected_group && is_group_generating) {
+        return false;
+    }
+    if (switchingCharacter && isCharacterDesignerGenerating()) {
         toastr.info(t`Please wait until the Character Designer response finishes before switching characters.`, t`Character Designer is still generating...`);
         return false;
     }
 
-    if (selected_group || String(this_chid) !== String(id)) {
+    if (switchingCharacter) {
         //if clicked on a different character from what was currently selected
-        if (is_send_press) return false;
         setCharacterId(undefined);
         setCharacterName('');
         resetSelectedGroup({ hideMemberSpeakPopout: true });
@@ -1413,7 +1464,20 @@ export async function selectCharacterById(id, { switchMenu = true, openInWorkspa
         selected_button = 'character_edit';
         setCharacterId(id);
         chat_metadata = {};
-        if (loadChat) await getChat(undefined, { measureStage });
+        if (switchMenu) showCharacterEditorShell(targetAvatarUrl);
+        if (loadChat) {
+            let ownerUiLoaded = false;
+            try {
+                await runMeasuredStage(measureStage, 'characterLoad', () => unshallowCharacter(this_chid));
+                if (refreshOwnerUi && !characters[this_chid]?.shallow) {
+                    await runMeasuredStage(measureStage, 'ownerUi', () => select_selected_character(this_chid));
+                    ownerUiLoaded = true;
+                }
+            } catch (error) {
+                console.warn('Could not preload the selected character', error);
+            }
+            await getChat(undefined, { measureStage, refreshOwnerUi: refreshOwnerUi && !ownerUiLoaded });
+        }
     } else if (refreshOwnerUi) {
         //if clicked on character that was already selected
         switchMenu && (selected_button = 'character_edit');
@@ -1424,6 +1488,84 @@ export async function selectCharacterById(id, { switchMenu = true, openInWorkspa
         await runMeasuredStage(measureStage, 'ownerUi', updateOwnerUi);
     }
     return true;
+}
+
+/**
+ * Shows the character editor without touching character-specific fields.
+ * This keeps the panel responsive while the selected character is fetched.
+ */
+function showCharacterEditorShell(avatarUrl = '') {
+    selected_button = 'character_edit';
+    setMenuType('character_edit');
+    selectRightMenuWithAnimation('rm_ch_create_block', { animate: false });
+    clearCharacterEditorFields(avatarUrl);
+}
+
+/**
+ * Removes character-specific presentation immediately during a switch.
+ * The selected character is filled back in after its complete data loads.
+ */
+function clearCharacterEditorFields(avatarUrl = '') {
+    resetCharacterEditorTextFade();
+    const fields = [
+        '#character_name_pole',
+        '#description_textarea',
+        '#character_world',
+        '#creator_notes_textarea',
+        '#character_version_textarea',
+        '#system_prompt_textarea',
+        '#post_history_instructions_textarea',
+        '#tags_textarea',
+        '#creator_textarea',
+        '#personality_textarea',
+        '#firstmessage_textarea',
+        '#scenario_pole',
+        '#depth_prompt_prompt',
+        '#depth_prompt_depth',
+        '#depth_prompt_role',
+        '#talkativeness_slider',
+        '#mes_example_textarea',
+        '#selected_chat_pole',
+        '#create_date_pole',
+        '#avatar_url_pole',
+        '#chat_import_avatar_url',
+        '#chat_import_character_name',
+        '#character_json_data',
+    ];
+    $(fields.join(', ')).val('');
+    $('#rm_button_selected_ch').children('h2').text('');
+    $('#character_popup-button-h3').text('');
+    $('#creator_notes_spoiler').empty();
+    $('#rm_ch_create_block [data-token-counter]').text('');
+    $('#result_info_total_tokens, #result_info_permanent_tokens').text('');
+    $('#result_info_text').removeClass('neutral_warning');
+    $('#chartokenwarning').hide();
+    // Clear the old preview, then show the lightweight avatar target while
+    // the rest of the character data is loading.
+    const avatarPreview = document.getElementById('avatar_load_preview');
+    bindAvatarImageFailureHandling(avatarPreview);
+    if (avatarPreview) {
+        avatarPreview.removeAttribute('src');
+        avatarPreview.classList.remove(AVATAR_IMAGE_LOAD_FAILED_CLASS);
+        if (avatarUrl) avatarPreview.src = avatarUrl;
+    }
+    updateFavButtonState(false);
+}
+
+function resetCharacterEditorTextFade() {
+    $('#description_textarea, #firstmessage_textarea').removeClass('cc-character-text-fade-in');
+}
+
+function animateCharacterEditorTextIn() {
+    const duration = getAnimationDuration();
+    $('#description_textarea, #firstmessage_textarea').each(function () {
+        this.classList.remove('cc-character-text-fade-in');
+        this.style.setProperty('--cc-character-text-fade-duration', `${duration}ms`);
+        if (!duration) return;
+        // Force a reflow so repeated character switches restart the animation.
+        void this.offsetWidth;
+        this.classList.add('cc-character-text-fade-in');
+    });
 }
 
 function getBackBlock() {
@@ -1498,6 +1640,381 @@ function getCharacterBlock(item, id) {
 
     // Add to the list
     return template;
+}
+
+const CHARACTER_IMAGE_TRANSITION_OVERLAY_ID = 'character-image-transition-overlay';
+const CHARACTER_IMAGE_TRANSITION_EASING = 'cubic-bezier(.65, 0, .35, 1)';
+// Do not hold the source image while a hidden or slow destination is being
+// rendered. If the destination is not measurable shortly after the switch,
+// let the normal image render win instead of playing a late flight.
+const CHARACTER_IMAGE_TRANSITION_WAIT_DURATION = 120;
+const AVATAR_IMAGE_LOAD_FAILED_CLASS = 'avatar-image-load-failed';
+const avatarImageFailureHandlers = new WeakSet();
+let activeCharacterImageAnimation = null;
+
+function bindAvatarImageFailureHandling(image) {
+    if (!(image instanceof HTMLImageElement) || avatarImageFailureHandlers.has(image)) return;
+
+    avatarImageFailureHandlers.add(image);
+    image.addEventListener('error', () => image.classList.add(AVATAR_IMAGE_LOAD_FAILED_CLASS));
+    image.addEventListener('load', () => image.classList.remove(AVATAR_IMAGE_LOAD_FAILED_CLASS));
+    if (image.complete && image.currentSrc && image.naturalWidth === 0) {
+        image.classList.add(AVATAR_IMAGE_LOAD_FAILED_CLASS);
+    }
+}
+
+function getCharacterImageTransitionOverlay() {
+    let overlay = document.getElementById(CHARACTER_IMAGE_TRANSITION_OVERLAY_ID);
+    if (overlay) return overlay;
+
+    overlay = document.createElement('div');
+    overlay.id = CHARACTER_IMAGE_TRANSITION_OVERLAY_ID;
+    overlay.setAttribute('aria-hidden', 'true');
+    document.body.appendChild(overlay);
+    return overlay;
+}
+
+function getCharacterImageRect(characterElement) {
+    const image = characterElement instanceof HTMLImageElement
+        ? characterElement
+        : characterElement?.querySelector('.avatar img');
+    if (!(image instanceof Element)) return null;
+
+    const rect = image.getBoundingClientRect();
+    if (!rect.width || !rect.height) return null;
+
+    return {
+        left: rect.left,
+        top: rect.top,
+        right: rect.right,
+        bottom: rect.bottom,
+    };
+}
+
+function waitForCharacterRect(getRect) {
+    let animationFrame;
+    let settled = false;
+    let resolveWait;
+    const startedAt = performance.now();
+    let previousRect;
+    let stableFrames = 0;
+
+    const finish = rect => {
+        if (settled) return;
+        settled = true;
+        if (animationFrame !== undefined) cancelAnimationFrame(animationFrame);
+        resolveWait(rect);
+    };
+
+    const sample = () => {
+        if (settled) return;
+        const rect = getRect();
+        if (rect) {
+            stableFrames = characterRectsDiffer(previousRect, rect) ? 0 : stableFrames + 1;
+            previousRect = rect;
+            if (stableFrames >= 1) {
+                finish(rect);
+                return;
+            }
+        }
+
+        if (performance.now() - startedAt >= CHARACTER_IMAGE_TRANSITION_WAIT_DURATION) {
+            // A rectangle from an earlier render is stale if the destination
+            // disappeared again. Never animate toward that old position.
+            finish(rect);
+            return;
+        }
+
+        animationFrame = requestAnimationFrame(sample);
+    };
+
+    const promise = new Promise(resolve => {
+        resolveWait = resolve;
+        animationFrame = requestAnimationFrame(sample);
+    });
+
+    return {
+        promise,
+        cancel: () => finish(null),
+    };
+}
+
+function createCharacterImageTransition(sourceElement, getDestinationRect, getDestinationImage = null) {
+    const sourceImage = sourceElement?.querySelector('.avatar img');
+    if (!(sourceImage instanceof HTMLImageElement)) return null;
+
+    bindAvatarImageFailureHandling(sourceImage);
+    const sourceRect = getCharacterImageRect(sourceElement);
+    if (!sourceRect) return null;
+
+    const image = sourceImage.cloneNode(false);
+    bindAvatarImageFailureHandling(image);
+    if (sourceImage.classList.contains(AVATAR_IMAGE_LOAD_FAILED_CLASS)) {
+        image.classList.add(AVATAR_IMAGE_LOAD_FAILED_CLASS);
+    }
+    const computedStyle = getComputedStyle(sourceImage);
+    const sourceVisibility = sourceImage.style.visibility;
+    image.removeAttribute('id');
+    image.setAttribute('aria-hidden', 'true');
+    image.style.position = 'absolute';
+    image.style.left = `${sourceRect.left}px`;
+    image.style.top = `${sourceRect.top}px`;
+    const sourceWidth = sourceRect.right - sourceRect.left;
+    const sourceHeight = sourceRect.bottom - sourceRect.top;
+    image.style.width = `${sourceWidth}px`;
+    image.style.height = `${sourceHeight}px`;
+    image.style.margin = '0';
+    image.style.objectFit = computedStyle.objectFit;
+    image.style.objectPosition = computedStyle.objectPosition;
+    image.style.borderRadius = computedStyle.borderRadius;
+    image.style.border = computedStyle.border;
+    image.style.boxShadow = computedStyle.boxShadow;
+    image.style.filter = computedStyle.filter;
+    image.style.opacity = computedStyle.opacity;
+    image.style.background = computedStyle.background;
+    image.style.padding = computedStyle.padding;
+    image.style.outline = computedStyle.outline;
+    image.style.pointerEvents = 'none';
+    image.style.zIndex = '2147483647';
+    image.style.transformOrigin = 'top left';
+    image.style.willChange = 'transform';
+    getCharacterImageTransitionOverlay().appendChild(image);
+
+    let destinationImage = null;
+    let destinationVisibility = '';
+    const hideDestinationImage = () => {
+        const nextDestinationImage = getDestinationImage?.();
+        if (!(nextDestinationImage instanceof HTMLImageElement) || nextDestinationImage === sourceImage) return;
+        bindAvatarImageFailureHandling(nextDestinationImage);
+        if (destinationImage !== nextDestinationImage) {
+            if (destinationImage) destinationImage.style.visibility = destinationVisibility;
+            destinationImage = nextDestinationImage;
+            destinationVisibility = destinationImage.style.visibility;
+        }
+        destinationImage.style.visibility = 'hidden';
+    };
+    hideDestinationImage();
+
+    const restoreSourceImage = () => {
+        sourceImage.style.visibility = sourceVisibility;
+    };
+    const restoreDestinationImage = () => {
+        if (destinationImage) destinationImage.style.visibility = 'visible';
+        const currentDestinationImage = getDestinationImage?.();
+        if (currentDestinationImage instanceof HTMLImageElement && currentDestinationImage !== sourceImage) {
+            currentDestinationImage.style.visibility = 'visible';
+        }
+    };
+
+    let animation;
+    let borderRadiusAnimation;
+    let destinationWait;
+    let animationPromise;
+    let cancelled = false;
+    let cleanedUp = false;
+    const cleanup = () => {
+        if (cleanedUp) return;
+        cleanedUp = true;
+        image.remove();
+        restoreSourceImage();
+        restoreDestinationImage();
+    };
+    const run = async () => {
+        try {
+            const readDestinationRect = () => {
+                // The destination can be replaced while the list/editor is
+                // being rendered, so keep hiding the current destination
+                // before every measurement until the moving image has
+                // finished.
+                hideDestinationImage();
+                return getDestinationRect();
+            };
+            // Capture the final destination geometry before the queued Layout++
+            // panel transform starts. The destination is inside that panel, so
+            // waiting for two stable frames would otherwise serialize the
+            // avatar flight behind the panel animation.
+            const initialDestinationRect = readDestinationRect();
+            destinationWait = initialDestinationRect
+                ? { promise: Promise.resolve(initialDestinationRect), cancel: () => {} }
+                : waitForCharacterRect(readDestinationRect);
+            const settledDestinationRect = await destinationWait.promise;
+            if (cancelled || !settledDestinationRect) return;
+
+            // Keep the source visible until the destination has been rendered
+            // and measured. The menu switch can take a frame (or longer when
+            // the character list is being rebuilt), and hiding the source
+            // earlier creates a visible blank gap.
+            sourceImage.style.visibility = 'hidden';
+
+            // Let the source clone paint at its starting position before the
+            // browser begins the visible movement.
+            await new Promise(resolve => requestAnimationFrame(resolve));
+            if (cancelled) return;
+            const destinationRect = settledDestinationRect;
+
+            const destinationWidth = destinationRect.right - destinationRect.left;
+            const destinationHeight = destinationRect.bottom - destinationRect.top;
+            const destinationImage = getDestinationImage?.();
+            const destinationBorderRadius = destinationImage instanceof HTMLImageElement
+                ? getComputedStyle(destinationImage).borderRadius
+                : computedStyle.borderRadius;
+            // Pull the midpoint a little above and to the right of the
+            // straight line to give the image a visible, gentle arc.
+            const deltaX = destinationRect.left - sourceRect.left;
+            const deltaY = destinationRect.top - sourceRect.top;
+            const arcX = Math.min(36, Math.max(18, Math.abs(deltaX) * 0.12));
+            const arcY = -Math.min(42, Math.max(22, Math.abs(deltaY) * 0.1));
+            // Sample continuous curves rather than using a triangular arc and
+            // stepped shrink. The old midpoint reversal was most visible where
+            // the timing curve is moving fastest.
+            const keyframes = Array.from({ length: 17 }, (_, index) => index / 16).map(offset => {
+                const arcAmount = Math.sin(Math.PI * offset);
+                const midFlightShrink = 1 - (0.06 * arcAmount);
+                const baseLeft = sourceRect.left + deltaX * offset;
+                const baseTop = sourceRect.top + deltaY * offset;
+                const baseWidth = sourceWidth + (destinationWidth - sourceWidth) * offset;
+                const baseHeight = sourceHeight + (destinationHeight - sourceHeight) * offset;
+                const width = baseWidth * midFlightShrink;
+                const height = baseHeight * midFlightShrink;
+                const left = baseLeft + (baseWidth - width) / 2 + arcX * arcAmount;
+                const top = baseTop + (baseHeight - height) / 2 + arcY * arcAmount;
+                const scaleX = width / sourceWidth;
+                const scaleY = height / sourceHeight;
+
+                return {
+                    offset,
+                    transform: `translate3d(${left - sourceRect.left}px, ${top - sourceRect.top}px, 0) scale(${scaleX}, ${scaleY})`,
+                };
+            });
+
+            const animationOptions = {
+                duration: getAnimationDuration(),
+                easing: CHARACTER_IMAGE_TRANSITION_EASING,
+                fill: 'forwards',
+            };
+            animation = image.animate(keyframes, animationOptions);
+            // Keep the corners stable while the image leaves and arrives, and
+            // interpolate the list/editor radius during the middle of flight.
+            // Otherwise the destination radius becomes visible as a late snap
+            // after the image has already reached its final position.
+            borderRadiusAnimation = image.animate([
+                { offset: 0, borderRadius: computedStyle.borderRadius },
+                { offset: 0.3, borderRadius: computedStyle.borderRadius },
+                { offset: 0.7, borderRadius: destinationBorderRadius },
+                { offset: 1, borderRadius: destinationBorderRadius },
+            ], animationOptions);
+
+            await Promise.all([
+                animation.finished.catch(() => undefined),
+                borderRadiusAnimation.finished.catch(() => undefined),
+            ]);
+        } catch (error) {
+            if (!cancelled) console.debug('Character image transition skipped', error);
+        } finally {
+            cleanup();
+        }
+    };
+
+    return {
+        start() {
+            if (!animationPromise) animationPromise = run();
+            return animationPromise;
+        },
+        async finish(selectionSucceeded) {
+            if (!selectionSucceeded) {
+                this.cancel();
+                await animationPromise;
+                return;
+            }
+            await this.start();
+        },
+        cancel() {
+            cancelled = true;
+            destinationWait?.cancel();
+            animation?.cancel();
+            borderRadiusAnimation?.cancel();
+            cleanup();
+        },
+    };
+}
+
+function cancelActiveCharacterImageAnimation() {
+    const active = activeCharacterImageAnimation;
+    activeCharacterImageAnimation = null;
+    active?.imageTransition?.cancel();
+}
+
+function registerCharacterImageAnimation(imageTransition) {
+    cancelActiveCharacterImageAnimation();
+    const animation = { imageTransition };
+    activeCharacterImageAnimation = animation;
+    return animation;
+}
+
+function clearCharacterImageAnimation(animation) {
+    if (activeCharacterImageAnimation === animation) activeCharacterImageAnimation = null;
+}
+
+function returnToCharacterMenuWithImageTransition() {
+    cancelActiveCharacterImageAnimation();
+    const characterPanelLayoutTransition = beginCharacterPanelLayoutTransition();
+    const characterId = this_chid;
+    const imageTransition = createCharacterImageTransition(
+        document.getElementById('avatar_div_div'),
+        () => getCharacterImageRect(findCharacterListElement(characterId, null)),
+        () => findCharacterListElement(characterId, null)?.querySelector('.avatar img'),
+    );
+
+    selected_button = 'characters';
+    if (!imageTransition) {
+        select_rm_characters();
+        endLeftTabLayoutTransition(characterPanelLayoutTransition);
+        return;
+    }
+
+    const activeAnimation = registerCharacterImageAnimation(imageTransition);
+    // The existing list can be shown immediately. Rebuilding filters,
+    // pagination, and every character card synchronously here blocks the
+    // first animation frames, so refresh it after the visual transition.
+    select_rm_characters({
+        deferPrint: true,
+        animationDuration: getAnimationDuration(),
+        animationEasing: CHARACTER_IMAGE_TRANSITION_EASING,
+    });
+    const imageAnimation = imageTransition.start();
+    void imageAnimation.finally(() => {
+        clearCharacterImageAnimation(activeAnimation);
+        endLeftTabLayoutTransition(characterPanelLayoutTransition);
+    });
+}
+
+/**
+ * Starts the Layout++ panel-width transition used by character image flights.
+ * The editor and character grid intentionally use different panel widths, so
+ * the panel must be part of the same measured transition as the chat shell.
+ * @returns {number|null} Transition generation, or null outside Layout++.
+ */
+function beginCharacterPanelLayoutTransition() {
+    if (!document.body.classList.contains('layout-plus-plus')) return null;
+
+    finishLeftTabLayoutTransition();
+    return beginLeftTabLayoutTransition(
+        getAnimationDuration(),
+        CHARACTER_IMAGE_TRANSITION_EASING,
+        // Keep the panel transform synchronized with the avatar flight. The
+        // image transition snapshots the destination rect before this queued
+        // transform starts, so it does not have to wait for stable frames.
+        { includeCharacterPanel: true },
+    );
+}
+
+function characterRectsDiffer(previous, next) {
+    if (!previous || !next) return true;
+    return ['left', 'top', 'right', 'bottom'].some(key => Math.abs(previous[key] - next[key]) > 0.25);
+}
+
+function findCharacterListElement(chid, fallback) {
+    return document.querySelector(`#rm_print_characters_block .character_select[data-chid="${String(chid)}"]`) || fallback;
 }
 
 /**
@@ -11928,7 +12445,11 @@ async function displayChats(searchQuery, currentChat, displayName, avatarImg, se
     }
 }
 
-export function selectRightMenuWithAnimation(selectedMenuId) {
+export function selectRightMenuWithAnimation(selectedMenuId, {
+    animate = true,
+    duration = animation_duration,
+    easing = animation_easing,
+} = {}) {
     const displayModes = {
         'rm_group_chats_block': 'flex',
         'rm_api_block': 'grid',
@@ -11941,13 +12462,17 @@ export function selectRightMenuWithAnimation(selectedMenuId) {
         if (selectedMenuId && selectedMenuId.replace('#', '') === menu.id) {
             const mode = displayModes[menu.id] ?? 'block';
             $(menu).css('display', mode);
-            $(menu).css('opacity', 0.0);
-            $(menu).transition({
-                opacity: 1.0,
-                duration: animation_duration,
-                easing: animation_easing,
-                complete: function () { },
-            });
+            if (animate) {
+                $(menu).css('opacity', 0.0);
+                $(menu).transition({
+                    opacity: 1.0,
+                    duration,
+                    easing,
+                    complete: function () { },
+                });
+            } else {
+                $(menu).stop(true, true).css('opacity', 1.0);
+            }
         }
     });
 }
@@ -12098,6 +12623,7 @@ export function select_selected_character(chid, { switchMenu = true } = {}) {
     $('#character_version_textarea').val(characters[chid].data?.character_version || '');
     $('#personality_textarea').val(characters[chid].personality);
     $('#firstmessage_textarea').val(characters[chid].first_mes);
+    animateCharacterEditorTextIn();
     $('#scenario_pole').val(characters[chid].scenario);
     $('#depth_prompt_prompt').val(characters[chid].data?.extensions?.depth_prompt?.prompt ?? '');
     $('#depth_prompt_depth').val(characters[chid].data?.extensions?.depth_prompt?.depth ?? depth_prompt_depth_default);
@@ -12114,6 +12640,7 @@ export function select_selected_character(chid, { switchMenu = true } = {}) {
     updateFavButtonState(characters[chid].fav || characters[chid].fav == 'true');
 
     const avatarUrl = characters[chid].avatar != 'none' ? getThumbnailUrl('avatar', characters[chid].avatar) : default_avatar;
+    bindAvatarImageFailureHandling(document.getElementById('avatar_load_preview'));
     $('#avatar_load_preview').attr('src', avatarUrl);
     $('.open_alternate_greetings').data('chid', chid);
     $('#set_character_world').data('chid', chid);
@@ -12146,6 +12673,7 @@ export function select_selected_character(chid, { switchMenu = true } = {}) {
  * @param {boolean} [options.switchMenu=true] Whether to switch the menu
  */
 function select_rm_create({ switchMenu = true } = {}) {
+    resetCharacterEditorTextFade();
     switchMenu && setMenuType('create');
 
     //console.log('select_rm_Create() -- selected button: '+selected_button);
@@ -12205,11 +12733,27 @@ function select_rm_create({ switchMenu = true } = {}) {
     $('#character_open_media_overrides').hide();
 }
 
-function select_rm_characters() {
+function select_rm_characters({
+    deferPrint = false,
+    animationDuration = animation_duration,
+    animationEasing = animation_easing,
+} = {}) {
     const doFullRefresh = menu_type === 'characters';
     setMenuType('characters');
-    selectRightMenuWithAnimation('rm_characters_block');
-    printCharacters(doFullRefresh);
+    selectRightMenuWithAnimation('rm_characters_block', {
+        duration: animationDuration,
+        easing: animationEasing,
+    });
+    const refresh = () => {
+        void printCharacters(doFullRefresh);
+    };
+    if (deferPrint) {
+        // Give the already-rendered list a chance to paint before the refresh
+        // performs its synchronous filtering and DOM construction work.
+        setTimeout(refresh, getAnimationDuration());
+    } else {
+        refresh();
+    }
 }
 
 /**
@@ -14248,6 +14792,408 @@ function doDrawerOpenClick() {
     doNavbarIconClick.call(drawerToggle);
 }
 
+const ANIMATION_DURATIONS = Object.freeze({
+    fast: 150,
+    medium: 240,
+    slow: 400,
+    instant: 0,
+});
+const LEFT_TAB_OPEN_EASING = 'cubic-bezier(0.22, 1, 0.36, 1)';
+const LEFT_TAB_CLOSE_EASING = 'cubic-bezier(0.4, 0, 0.6, 1)';
+const leftTabDrawerAnimations = new WeakMap();
+let leftTabLayoutTransitionGeneration = 0;
+let leftTabLayoutAnimations = [];
+
+/**
+ * Returns the inner surface so Layout++ can keep the outer panel as a static
+ * clip window while the contents slide.
+ * @param {HTMLElement} drawer Drawer content element.
+ * @returns {HTMLElement} Element the slide animation must target.
+ */
+function getLeftTabMotionTarget(drawer) {
+    const layoutPlusPlus = document.body.classList.contains('layout-plus-plus');
+    if (drawer.id !== 'right-nav-panel' || !layoutPlusPlus || typeof drawer.animate !== 'function') {
+        return drawer;
+    }
+    let inner = drawer.querySelector(':scope > .left-tab-motion-inner');
+    if (!inner) {
+        inner = document.createElement('div');
+        inner.className = 'left-tab-motion-inner';
+        while (drawer.firstChild) {
+            inner.appendChild(drawer.firstChild);
+        }
+        drawer.appendChild(inner);
+    }
+    return inner;
+}
+
+function getAnimationDuration() {
+    if (power_user.reduced_motion) {
+        return 0;
+    }
+
+    return ANIMATION_DURATIONS[power_user.left_tab_animation_speed] ?? ANIMATION_DURATIONS.medium;
+}
+
+/**
+ * Whether a top navigation drawer changes the Layout++ chat geometry.
+ * @param {Element|undefined} drawer Drawer content element.
+ * @returns {boolean}
+ */
+function isSideMountedLeftTabDrawer(drawer) {
+    return drawer?.id === 'left-nav-panel' || drawer?.id === 'right-nav-panel';
+}
+
+/**
+ * Enables synchronized Layout++ transitions before drawer state changes.
+ * @param {number} duration Transition duration in milliseconds.
+ * @param {string} easing CSS easing function for the layout transition.
+ * @param {object} [options] Additional transition targets.
+ * @param {boolean} [options.includeCharacterPanel=false] Whether to animate
+ * the Layout++ character panel width along with the chat surfaces.
+ * @returns {number} Generation token used to safely clean up after rapid tab changes.
+ */
+function beginLeftTabLayoutTransition(duration, easing, { includeCharacterPanel = false } = {}) {
+    const generation = ++leftTabLayoutTransitionGeneration;
+    const body = document.body;
+    const layoutTargets = [
+        ...(includeCharacterPanel
+            // The character grid is a layout-heavy surface. Keep its final
+            // width stable and animate only the panel's compositor transform;
+            // animating width here would reflow the grid on every frame.
+            ? [{ element: document.getElementById('right-nav-panel'), animateWidth: false, centerWhenNarrower: false }]
+            : []),
+        { element: document.getElementById('chat'), animateWidth: false, centerWhenNarrower: false },
+        { element: document.getElementById('chat_workspace_tabs'), animateWidth: true, centerWhenNarrower: false },
+        { element: document.getElementById('send_form'), animateWidth: true, centerWhenNarrower: true },
+    ].filter(target => target.element);
+    const startRects = new Map(layoutTargets.map(target => [target.element, target.element.getBoundingClientRect()]));
+
+    for (const animation of leftTabLayoutAnimations) {
+        animation.cancel();
+    }
+    leftTabLayoutAnimations = [];
+    for (const { element } of layoutTargets) {
+        element.style.removeProperty('transform-origin');
+        element.style.removeProperty('will-change');
+    }
+
+    if (!body.classList.contains('layout-plus-plus') || !duration || !layoutTargets.length) {
+        body.classList.remove('left-tab-layout-transitioning');
+        body.style.removeProperty('--left-tab-transition-duration');
+        body.style.removeProperty('--left-tab-transition-easing');
+        return generation;
+    }
+
+    body.style.setProperty('--left-tab-transition-duration', `${duration}ms`);
+    body.style.setProperty('--left-tab-transition-easing', easing);
+    body.classList.add('left-tab-layout-transitioning');
+
+    // Drawer state changes synchronously after this function returns. Resolve
+    // the new layout once, then visually interpolate from the previously
+    // rendered rectangles. The message list stays compositor-only because
+    // animating its width makes Firefox reflow every message per frame.
+    queueMicrotask(() => {
+        if (generation !== leftTabLayoutTransitionGeneration) {
+            return;
+        }
+
+        const animations = [];
+        for (const { element, animateWidth, centerWhenNarrower } of layoutTargets) {
+            const startRect = startRects.get(element);
+            const endRect = element.getBoundingClientRect();
+            const translateX = startRect.left - endRect.left;
+            const scaleX = endRect.width ? startRect.width / endRect.width : 1;
+            const widthChanged = Math.abs(startRect.width - endRect.width) >= 0.5;
+            if (Math.abs(translateX) < 0.5 && !widthChanged) {
+                continue;
+            }
+
+            // Animate each visible surface from its own measured geometry. In
+            // particular, a max-width chat often does not resize when the shell
+            // does, so scaling #sheld would distort messages that never moved.
+            element.style.transformOrigin = 'left top';
+            element.style.willChange = animateWidth ? 'transform, width' : 'transform';
+            // Tabs and the composer are small enough to animate their actual
+            // widths. Keeping their contents at natural scale makes their edges
+            // track the panel without stretching controls or scroll positions.
+            // #send_form has auto horizontal margins, so a temporary pixel width
+            // would otherwise center it and move its unaffected left edge.
+            const widthTranslateX = centerWhenNarrower && startRect.width < endRect.width
+                ? translateX - ((endRect.width - startRect.width) / 2)
+                : translateX;
+            const keyframes = animateWidth
+                ? [
+                    { transform: `translate3d(${widthTranslateX}px, 0, 0)`, width: `${startRect.width}px` },
+                    { transform: 'translate3d(0, 0, 0)', width: `${endRect.width}px` },
+                ]
+                : [
+                    { transform: `translate3d(${translateX}px, 0, 0) scaleX(${scaleX})` },
+                    { transform: 'translate3d(0, 0, 0) scaleX(1)' },
+                ];
+            const animation = element.animate(keyframes, {
+                duration,
+                easing,
+                fill: 'both',
+            });
+            animations.push(animation);
+            animation.finished.then(() => {
+                if (!leftTabLayoutAnimations.includes(animation)) {
+                    return;
+                }
+
+                animation.cancel();
+                leftTabLayoutAnimations = leftTabLayoutAnimations.filter(item => item !== animation);
+                element.style.removeProperty('transform-origin');
+                element.style.removeProperty('will-change');
+            }, () => {});
+        }
+        leftTabLayoutAnimations = animations;
+    });
+    return generation;
+}
+
+/**
+ * Removes temporary Layout++ transition styles unless a newer interaction owns them.
+ * @param {number} generation Generation returned by beginLeftTabLayoutTransition.
+ */
+function endLeftTabLayoutTransition(generation) {
+    if (generation !== leftTabLayoutTransitionGeneration) {
+        return;
+    }
+
+    leftTabLayoutTransitionGeneration++;
+    for (const animation of leftTabLayoutAnimations) {
+        animation.cancel();
+    }
+    leftTabLayoutAnimations = [];
+    for (const element of [
+        document.getElementById('right-nav-panel'),
+        document.getElementById('chat'),
+        document.getElementById('chat_workspace_tabs'),
+        document.getElementById('send_form'),
+    ]) {
+        element?.style.removeProperty('transform-origin');
+        element?.style.removeProperty('will-change');
+    }
+    document.body.classList.remove('left-tab-layout-transitioning');
+    document.body.style.removeProperty('--left-tab-transition-duration');
+    document.body.style.removeProperty('--left-tab-transition-easing');
+}
+
+/**
+ * Completes an in-flight Layout++ transition before handling an impatient
+ * click. The next click then starts from a settled layout instead of trying
+ * to reverse a partially animated one.
+ */
+function finishLeftTabLayoutTransition() {
+    for (const animation of leftTabLayoutAnimations) {
+        try {
+            animation.finish();
+        } catch {
+            // The animation may already have been canceled by the browser.
+        }
+    }
+    endLeftTabLayoutTransition(leftTabLayoutTransitionGeneration);
+}
+
+function clearLeftTabDrawerState(drawer, open) {
+    drawer.classList.toggle('openDrawer', open);
+    drawer.classList.toggle('closedDrawer', !open);
+    drawer.classList.remove('left-tab-closing');
+    drawer.classList.remove('left-tab-opening');
+    drawer.style.removeProperty('--left-tab-closing-width');
+}
+
+/**
+ * Completes an in-flight drawer transition and applies its final classes.
+ * @param {HTMLElement} drawer Drawer content element.
+ * @returns {boolean|null} The settled open state, or null if idle.
+ */
+function finishLeftTabDrawerAnimation(drawer) {
+    const current = leftTabDrawerAnimations.get(drawer);
+    if (!current) return null;
+
+    try {
+        current.animation.finish();
+    } catch {
+        // The animation may already have been canceled by the browser.
+    }
+    current.animation.cancel();
+    if (leftTabDrawerAnimations.get(drawer) === current) {
+        leftTabDrawerAnimations.delete(drawer);
+    }
+
+    const motion = getLeftTabMotionTarget(drawer);
+    motion.style.removeProperty('will-change');
+    motion.style.removeProperty('backdrop-filter');
+    clearLeftTabDrawerState(drawer, current.open);
+    return current.open;
+}
+
+/**
+ * Opens or closes a top navigation drawer using only compositor-friendly properties.
+ * In-flight animations are completed before a new transition starts.
+ * @param {HTMLElement} drawer Drawer content element.
+ * @param {boolean} open Whether the drawer should be open after the animation.
+ * @param {number} duration Animation duration in milliseconds.
+ * @returns {Promise<boolean>} Whether this animation completed without being superseded.
+ */
+async function animateLeftTabDrawer(drawer, open, duration) {
+    const motion = getLeftTabMotionTarget(drawer);
+    finishLeftTabDrawerAnimation(drawer);
+
+    let closingWidth = 0;
+    if (open) {
+        drawer.classList.remove('left-tab-closing');
+        drawer.classList.add('left-tab-opening');
+        drawer.style.removeProperty('--left-tab-closing-width');
+        drawer.classList.replace('closedDrawer', 'openDrawer');
+    } else {
+        drawer.classList.remove('left-tab-opening');
+        // Measure while the panel is still fully laid out. The frozen width
+        // stops the Layout++ chat from squeezing it, and the pixel figure
+        // drives the close keyframes: pure-px values interpolate everywhere,
+        // while calc(percentage + px) forms fail on Firefox.
+        if (isSideMountedLeftTabDrawer(drawer)) {
+            closingWidth = drawer.getBoundingClientRect().width;
+        }
+        if (document.body.classList.contains('layout-plus-plus') && isSideMountedLeftTabDrawer(drawer)) {
+            drawer.style.setProperty('--left-tab-closing-width', `${closingWidth}px`);
+        } else {
+            drawer.style.removeProperty('--left-tab-closing-width');
+        }
+        drawer.classList.add('left-tab-closing');
+    }
+
+    if (!duration || typeof drawer.animate !== 'function') {
+        clearLeftTabDrawerState(drawer, open);
+        drawer.style.removeProperty('will-change');
+        leftTabDrawerAnimations.delete(drawer);
+        return true;
+    }
+
+    // The into-the-bar side travel only exists in Layout++, where the panels
+    // mount against the vertical nav bar. Stock layouts render these drawers
+    // as centered dropdowns below the top bar, where a full-width slide would
+    // fling the panel across the screen; they fall back to the generic
+    // drift-and-fade below.
+    const layoutPlusPlus = document.body.classList.contains('layout-plus-plus');
+    const navBarWidth = layoutPlusPlus && drawer.id === 'right-nav-panel'
+        ? (parseFloat(getComputedStyle(document.body).getPropertyValue('--nav-bar-width')) || 0)
+        : 0;
+    const sidePanelCloseTravel = !layoutPlusPlus
+        ? null
+        : drawer.id === 'left-nav-panel'
+            ? `translate3d(${closingWidth}px, 0, 0)`
+            : drawer.id === 'right-nav-panel'
+                // Pure-px travel: the frozen full width plus the nav bar strip
+                // the panel mounts against, so it clears the bar entirely.
+                ? `translate3d(${-(closingWidth + navBarWidth)}px, 0, 0)`
+                : null;
+    // A closing side panel must reach its mounted edge before closedDrawer
+    // removes it. Using the short reveal offset here left most of the drawer
+    // on-screen and made the final state change look like a 30%-to-100% jump.
+    const travel = !open && sidePanelCloseTravel
+        ? sidePanelCloseTravel
+        : drawer.id === 'left-nav-panel'
+            ? 'translate3d(14px, 0, 0)'
+            : drawer.id === 'right-nav-panel'
+                ? 'translate3d(-14px, 0, 0)'
+                : 'translate3d(0, -12px, 0)';
+    // The character panel mounts flush against the nav bar, so its slide would
+    // cross the bar strip. The panel itself is a static overflow clip window
+    // (see getLeftTabMotionTarget): only the inner surface moves, so the
+    // panel's own edge cuts it off at the bar with no animated clip involved.
+    const keyframes = open
+        ? [
+            { opacity: 0, transform: travel },
+            { opacity: 1, transform: 'translate3d(0, 0, 0)' },
+        ]
+        : [
+            { opacity: 1, transform: 'translate3d(0, 0, 0)' },
+            // The panel still dissolves across the slide so its exit reads as
+            // continuous with the expanding chat underneath it.
+            { opacity: 0, transform: travel },
+        ];
+    let animation;
+    try {
+        animation = motion.animate(keyframes, {
+            duration,
+            easing: open ? LEFT_TAB_OPEN_EASING : LEFT_TAB_CLOSE_EASING,
+            fill: 'both',
+        });
+    } catch (error) {
+        motion.style.removeProperty('will-change');
+        motion.style.removeProperty('backdrop-filter');
+        clearLeftTabDrawerState(drawer, open);
+        throw error;
+    }
+    motion.style.willChange = 'transform, opacity';
+    // Firefox also fails to sync backdrop-filter with the clip, and the panel
+    // is fading out anyway; drop the blur for the slide and restore it in
+    // cleanup.
+    if (!open && motion !== drawer) {
+        motion.style.backdropFilter = 'none';
+    }
+    const current = { animation, open };
+    leftTabDrawerAnimations.set(drawer, current);
+
+    let completed = false;
+    let superseded = false;
+    try {
+        await animation.finished;
+        completed = true;
+    } catch {
+    } finally {
+        if (leftTabDrawerAnimations.get(drawer) === current) {
+            leftTabDrawerAnimations.delete(drawer);
+            motion.style.removeProperty('will-change');
+            motion.style.removeProperty('backdrop-filter');
+        } else {
+            superseded = true;
+        }
+    }
+
+    if (!completed && !superseded) {
+        clearLeftTabDrawerState(drawer, open);
+    }
+
+    if (superseded || !completed) {
+        return false;
+    }
+
+    clearLeftTabDrawerState(drawer, open);
+    animation.cancel();
+    return true;
+}
+
+/**
+ * Closes top-navigation drawers with one coordinated Layout++ transition.
+ * Used by both their toggle buttons and the app-wide outside-click handler.
+ * @param {HTMLElement[]} drawers Open top-navigation drawer elements.
+ * @param {number} duration Close duration in milliseconds.
+ * @returns {Promise<void>}
+ */
+async function closeLeftTabDrawers(drawers, duration) {
+    const topNavigationDrawers = drawers.filter(drawer => drawer.closest('#top-settings-holder'));
+    if (!topNavigationDrawers.length) {
+        return;
+    }
+
+    const affectsChatLayout = topNavigationDrawers.some(isSideMountedLeftTabDrawer);
+    const layoutTransitionGeneration = affectsChatLayout
+        ? beginLeftTabLayoutTransition(duration, LEFT_TAB_CLOSE_EASING)
+        : null;
+    try {
+        await Promise.all(topNavigationDrawers.map(drawer => animateLeftTabDrawer(drawer, false, duration)));
+    } finally {
+        if (layoutTransitionGeneration !== null) {
+            endLeftTabLayoutTransition(layoutTransitionGeneration);
+        }
+    }
+}
+
 /**
  * Event handler to open or close a navbar drawer when a navbar icon is clicked.
  * Handles click events on .drawer-toggle elements.
@@ -14256,23 +15202,70 @@ function doDrawerOpenClick() {
 export async function doNavbarIconClick() {
     const icon = $(this).find('.drawer-icon');
     const drawer = $(this).parent().find('.drawer-content');
-    const drawerWasOpenAlready = $(this).parent().find('.drawer-content').hasClass('openDrawer');
     const targetDrawerID = $(this).parent().find('.drawer-content').attr('id');
+    const isLeftTab = $(this).closest('#top-settings-holder').length > 0;
+    const baseDuration = getAnimationDuration();
+    if (isLeftTab) {
+        // A repeated click means "finish the current state, then toggle".
+        // This keeps the impatient path deliberately boring and prevents a
+        // partially animated drawer from becoming the next animation's start.
+        finishLeftTabLayoutTransition();
+        for (const drawerElement of document.querySelectorAll('#top-settings-holder .drawer-content')) {
+            finishLeftTabDrawerAnimation(drawerElement);
+        }
+    }
+
+    const drawerWasOpenAlready = drawer.hasClass('openDrawer');
 
     if (!drawerWasOpenAlready) {
         const $openDrawers = $('.openDrawer:not(.pinnedOpen)');
         const $openIcons = $('.openIcon:not(.drawerPinnedOpen)');
         for (const iconEl of $openIcons) {
-            $(iconEl).toggleClass('closedIcon openIcon');
+            $(iconEl).removeClass('openIcon').addClass('closedIcon');
         }
-        for (const el of $openDrawers) {
-            $(el).toggleClass('closedDrawer openDrawer');
+
+        if (isLeftTab) {
+            const openDrawerElements = Array.from($openDrawers);
+            const openingAffectsChatLayout = isSideMountedLeftTabDrawer(drawer[0]);
+            const closingAffectsChatLayout = openDrawerElements.some(isSideMountedLeftTabDrawer);
+            const affectsChatLayout = openingAffectsChatLayout || closingAffectsChatLayout;
+            // If the incoming tab is an overlay (for example API Connections),
+            // the outgoing side panel is solely responsible for the geometry
+            // change, so the chat must use that panel's closing curve.
+            const layoutEasing = openingAffectsChatLayout ? LEFT_TAB_OPEN_EASING : LEFT_TAB_CLOSE_EASING;
+            const layoutTransitionGeneration = affectsChatLayout
+                ? beginLeftTabLayoutTransition(baseDuration, layoutEasing)
+                : null;
+            const closingAnimations = openDrawerElements.map(element => element.closest('#top-settings-holder')
+                ? animateLeftTabDrawer(element, false, baseDuration)
+                : Promise.resolve($(element).removeClass('openDrawer').addClass('closedDrawer')));
+            icon.removeClass('closedIcon').addClass('openIcon');
+            let animationResults;
+            try {
+                animationResults = await Promise.all([...closingAnimations, animateLeftTabDrawer(drawer[0], true, baseDuration)]);
+            } finally {
+                if (layoutTransitionGeneration !== null) {
+                    endLeftTabLayoutTransition(layoutTransitionGeneration);
+                }
+            }
+            if (!animationResults.at(-1)) {
+                return;
+            }
+        } else {
+            for (const el of $openDrawers) {
+                $(el).removeClass('openDrawer').addClass('closedDrawer');
+            }
+            if ($openDrawers.length && animation_duration) {
+                await delay(animation_duration);
+            }
+            icon.removeClass('closedIcon').addClass('openIcon');
+            drawer.removeClass('closedDrawer').addClass('openDrawer');
         }
-        if ($openDrawers.length && animation_duration) {
-            await delay(animation_duration);
+
+        // A newer tab click may have closed this drawer while its opening animation ran.
+        if (!drawer.hasClass('openDrawer')) {
+            return;
         }
-        icon.toggleClass('openIcon closedIcon');
-        drawer.toggleClass('openDrawer closedDrawer');
 
         if (targetDrawerID === 'right-nav-panel') {
             favsToHotswap();
@@ -14287,8 +15280,13 @@ export async function doNavbarIconClick() {
             }
         }
     } else if (drawerWasOpenAlready) {
-        icon.toggleClass('closedIcon openIcon');
-        drawer.toggleClass('closedDrawer openDrawer');
+        icon.removeClass('openIcon').addClass('closedIcon');
+        if (isLeftTab) {
+            const closeDuration = Math.round(baseDuration * 0.8);
+            await closeLeftTabDrawers([drawer[0]], closeDuration);
+        } else {
+            drawer.removeClass('openDrawer').addClass('closedDrawer');
+        }
     }
 }
 
@@ -14467,22 +15465,19 @@ jQuery(async function () {
     //menu buttons setup
 
     $('#rm_button_settings').on('click', function () {
+        cancelActiveCharacterImageAnimation();
         selected_button = 'settings';
         selectRightMenuWithAnimation('rm_api_block');
     });
-    $('#rm_button_characters').on('click', function () {
-        selected_button = 'characters';
-        select_rm_characters();
-    });
-    $('#rm_button_back').on('click', function () {
-        selected_button = 'characters';
-        select_rm_characters();
-    });
+    $('#rm_button_characters').on('click', returnToCharacterMenuWithImageTransition);
+    $('#rm_button_back').on('click', returnToCharacterMenuWithImageTransition);
     $('#rm_button_create').on('click', function () {
+        cancelActiveCharacterImageAnimation();
         selected_button = 'create';
         select_rm_create();
     });
     $('#rm_button_selected_ch').on('click', function () {
+        cancelActiveCharacterImageAnimation();
         if (selected_group) {
             select_group_chats(selected_group, false);
         } else {
@@ -14493,8 +15488,54 @@ jQuery(async function () {
     });
 
     $(document).on('click', '.character_select', async function () {
+        const selectedFromCharacterMenu = $(this).closest('#rm_print_characters_block').length > 0;
         const id = Number($(this).attr('data-chid'));
-        await selectCharacterById(id);
+        // Release any previous transition before touching this image. If the
+        // previous destination is the newly clicked source, its cleanup must
+        // not restore the source after this transition has hidden it.
+        cancelActiveCharacterImageAnimation();
+        const characterPanelLayoutTransition = selectedFromCharacterMenu
+            ? beginCharacterPanelLayoutTransition()
+            : null;
+        const destinationUrl = characters[id]?.avatar && characters[id].avatar !== 'none'
+            ? getThumbnailUrl('avatar', characters[id].avatar)
+            : default_avatar;
+        const getDestinationImage = () => {
+            const image = document.getElementById('avatar_load_preview');
+            return image instanceof HTMLImageElement && image.getAttribute('src') === destinationUrl ? image : null;
+        };
+        const imageTransition = selectedFromCharacterMenu
+            ? createCharacterImageTransition(
+                this,
+                () => getCharacterImageRect(getDestinationImage()),
+                getDestinationImage,
+            )
+            : null;
+        const activeAnimation = imageTransition
+            ? registerCharacterImageAnimation(imageTransition)
+            : null;
+        let selectionSucceeded = false;
+        let imageAnimation;
+        try {
+            const selectionPromise = selectCharacterById(id, { showWorkspaceOwnerUi: selectedFromCharacterMenu });
+            imageAnimation = imageTransition?.start();
+            selectionSucceeded = await selectionPromise;
+        } finally {
+            try {
+                if (imageTransition && activeCharacterImageAnimation === activeAnimation) {
+                    try {
+                        await imageTransition.finish(selectionSucceeded);
+                    } finally {
+                        clearCharacterImageAnimation(activeAnimation);
+                    }
+                } else {
+                    imageTransition?.cancel();
+                    await imageAnimation;
+                }
+            } finally {
+                endLeftTabLayoutTransition(characterPanelLayoutTransition);
+            }
+        }
     });
 
     $(document).on('click', '.bogus_folder_select', function () {
@@ -15490,11 +16531,18 @@ jQuery(async function () {
         // This autocloses open drawers that are not pinned if a click happens inside the app which does not target them.
         const targetParentHasOpenDrawer = clickTarget.parents('.openDrawer').length;
         if (!clickTarget.hasClass('drawer-icon') && !clickTarget.hasClass('openDrawer')) {
-            const $openDrawers = $('.openDrawer').not('.pinnedOpen');
+            const $openDrawers = $('.openDrawer:not(.left-tab-closing)').not('.pinnedOpen');
             if ($openDrawers.length && targetParentHasOpenDrawer === 0) {
-                // Toggle icon and drawer classes
-                $('.openIcon').not('.drawerPinnedOpen').toggleClass('closedIcon openIcon');
-                $openDrawers.toggleClass('closedDrawer openDrawer');
+                $('.openIcon').not('.drawerPinnedOpen').removeClass('openIcon').addClass('closedIcon');
+                const openDrawerElements = Array.from($openDrawers);
+                const topNavigationDrawers = openDrawerElements.filter(drawer => drawer.closest('#top-settings-holder'));
+                const otherDrawers = openDrawerElements.filter(drawer => !drawer.closest('#top-settings-holder'));
+                for (const drawer of otherDrawers) {
+                    drawer.classList.remove('openDrawer');
+                    drawer.classList.add('closedDrawer');
+                }
+                        const closeDuration = Math.round(getAnimationDuration() * 0.8);
+                await closeLeftTabDrawers(topNavigationDrawers, closeDuration);
             }
         }
     });
