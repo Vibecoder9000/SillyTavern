@@ -49,6 +49,12 @@ export function getWorkspaceChatSnapshot(identity) {
     return cloneValue(snapshot);
 }
 
+export function hasWorkspaceChatSnapshot(identity) {
+    const store = getWorkspaceCacheStore();
+    const key = getChatCacheKey(identity);
+    return Boolean(store && key && store.chats.has(key));
+}
+
 /**
  * Keeps the latest in-memory form of a chat available for a warm tab switch.
  * @param {{kind: string, ownerId: string, chatId: string}} identity Chat identity

@@ -2,6 +2,7 @@ import { afterEach, describe, expect, jest, test } from '@jest/globals';
 import {
     getWorkspaceCachedValue,
     getWorkspaceChatSnapshot,
+    hasWorkspaceChatSnapshot,
     invalidateWorkspaceCachedValue,
     runOncePerWorkspace,
     setWorkspaceCachedValue,
@@ -79,6 +80,8 @@ describe('chat workspace cache', () => {
         const parent = useWorkspaceWindow();
         const identity = { kind: 'character', ownerId: 'avatar.png', chatId: 'chat-a' };
         setWorkspaceChatSnapshot(identity, { persona: 'one.png' }, [{ mes: 'hello' }]);
+        expect(hasWorkspaceChatSnapshot(identity)).toBe(true);
+        expect(hasWorkspaceChatSnapshot({ ...identity, chatId: 'missing' })).toBe(false);
 
         const first = getWorkspaceChatSnapshot(identity);
         first.metadata.persona = 'mutated.png';

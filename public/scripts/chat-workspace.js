@@ -35,6 +35,68 @@ let rollbackReloadAttempted = false;
 let lastBootStage = 'starting';
 let bootTimeout = null;
 const ownerUiActivationSessions = new Set();
+let shellNavigationTiming = null;
+
+function getTimingNow() {
+    return globalThis.performance?.now?.() ?? Date.now();
+}
+
+function roundTiming(value) {
+    return Number(value.toFixed(1));
+}
+
+function logShellNavigationTiming(phase, details = {}) {
+    if (!shellNavigationTiming) return;
+    console.info('[Chat workspace] Tab switch timing', JSON.stringify({
+        phase,
+        timingId: shellNavigationTiming.timingId,
+        requestId: shellNavigationTiming.requestId,
+        targetSessionId: shellNavigationTiming.targetSessionId,
+        elapsedMs: roundTiming(getTimingNow() - shellNavigationTiming.startedAt),
+        ...details,
+    }));
+}
+
+function beginShellNavigationTiming(message) {
+    shellNavigationTiming = {
+        timingId: message.timingId ?? null,
+        requestId: null,
+        targetSessionId: message.targetSessionId,
+        startedAt: getTimingNow(),
+        stages: {},
+    };
+    logShellNavigationTiming('shell-handoff-received', {
+        activeSessionId: runtimeController.activeSessionId,
+    });
+}
+
+function finishShellNavigationTiming(outcome) {
+    if (!shellNavigationTiming) return;
+    const finishedAt = getTimingNow();
+    logShellNavigationTiming('shell-complete', {
+        outcome,
+        stagesMs: Object.fromEntries(Object.entries(shellNavigationTiming.stages)
+            .map(([name, duration]) => [name, roundTiming(duration)])),
+        totalMs: roundTiming(finishedAt - shellNavigationTiming.startedAt),
+    });
+    shellNavigationTiming = null;
+}
+
+function measureShellNavigationStage(name, callback) {
+    const startedAt = getTimingNow();
+    try {
+        return callback();
+    } finally {
+        if (shellNavigationTiming) {
+            const duration = getTimingNow() - startedAt;
+            shellNavigationTiming.stages[name] = (shellNavigationTiming.stages[name] || 0) + duration;
+            logShellNavigationTiming('stage-complete', {
+                stage: name,
+                durationMs: roundTiming(duration),
+            });
+        }
+    }
+}
 
 function setLoaderMessage(message, { error = false } = {}) {
     const messageElement = loaderElement?.querySelector('.splash-message');
@@ -184,7 +246,12 @@ const runtimeController = new WorkspaceRuntimeController({
         // draft, and scroll position have all been restored.
         slot.frame.classList.add('active');
         loaderElement.hidden = true;
+        logShellNavigationTiming('commit', { sessionId });
         postToSlot(slot, 'active', { active: true });
+        postToSlot(slot, 'prewarm-chats', {
+            identities: sessions.filter(candidate => candidate.id !== sessionId).map(candidate => candidate.identity).filter(Boolean),
+        });
+        finishShellNavigationTiming('success');
         rollbackReloadAttempted = false;
         const session = sessions.find(candidate => candidate.id === sessionId);
         if (session) session.unread = false;
@@ -206,6 +273,10 @@ const runtimeController = new WorkspaceRuntimeController({
 function postAssignment(slot, { sessionId = slot.targetSessionId, requestId = slot.requestId } = {}) {
     const session = sessions.find(candidate => candidate.id === sessionId);
     if (!session || slot.targetSessionId !== sessionId || slot.requestId !== requestId) return;
+    if (shellNavigationTiming) {
+        shellNavigationTiming.requestId = requestId;
+        logShellNavigationTiming('assignment-posted', { appReady: slot.appReady });
+    }
     postToSlot(slot, 'assign', {
         // Override postToSlot's committed session identity while this target is
         // still pending. The child must echo the target identity in prepared.
@@ -451,6 +522,7 @@ function receiveWorkspaceChildMessage(message, source, origin) {
         lastBootStage = 'opening the selected chat';
         setLoaderMessage('Opening chat...');
         armBootTimeout();
+        logShellNavigationTiming('runtime-ready');
         if (slot.targetSessionId && slot.requestId) postAssignment(slot);
         return;
     }
@@ -476,7 +548,12 @@ function receiveWorkspaceChildMessage(message, source, origin) {
     }
     if (message.type === 'prepared') {
         const session = sessions.find(candidate => candidate.id === message.targetSessionId);
-        if (!session || !runtimeController.markPrepared(slot.id, message.requestId, message.targetSessionId)) return;
+        if (!session) return;
+        logShellNavigationTiming('prepared-received', {
+            requestId: message.requestId,
+            targetSessionId: message.targetSessionId,
+        });
+        if (!runtimeController.markPrepared(slot.id, message.requestId, message.targetSessionId)) return;
         ownerUiActivationSessions.delete(message.targetSessionId);
         clearTimeout(bootTimeout);
         applyChildState(session, message.state);
@@ -493,8 +570,13 @@ function receiveWorkspaceChildMessage(message, source, origin) {
         return;
     }
     if (message.type === 'navigation-error') {
+        logShellNavigationTiming('navigation-error', {
+            requestId: message.requestId,
+            targetSessionId: message.targetSessionId,
+        });
         const failure = runtimeController.fail(slot.id, message.requestId, message.targetSessionId);
         if (!failure) return;
+        finishShellNavigationTiming('error');
         ownerUiActivationSessions.delete(failure.sessionId);
         if (pendingNewChatSessionId === failure.sessionId) pendingNewChatSessionId = null;
         const failedSession = sessions.find(candidate => candidate.id === failure.sessionId);
@@ -525,8 +607,14 @@ function receiveWorkspaceChildMessage(message, source, origin) {
     const session = sessions.find(candidate => candidate.id === message.sessionId);
     if (!session || session.id !== runtimeController.activeSessionId || slot.sessionId !== session.id) return;
     if (message.type === 'activate-chat') {
-        if (message.state) applyChildState(session, message.state);
-        requestActivation(message.targetSessionId);
+        beginShellNavigationTiming(message);
+        if (message.state) measureShellNavigationStage('outgoingStateApply', () => applyChildState(session, message.state));
+        const activation = measureShellNavigationStage('activationRequest', () => requestActivation(message.targetSessionId));
+        if (shellNavigationTiming) {
+            shellNavigationTiming.requestId = activation.requestId;
+            logShellNavigationTiming('activation-requested', { outcome: activation.type });
+        }
+        if (activation.type === 'blocked-generating') finishShellNavigationTiming('blocked');
         return;
     }
     if (message.type === 'open-chat') {

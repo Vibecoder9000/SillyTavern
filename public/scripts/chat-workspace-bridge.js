@@ -13,16 +13,19 @@ let initialized = false;
 let bridgeApi = null;
 let stateTimer = null;
 const tabElements = new Map();
-let lastRevealedSessionId = null;
 let pendingPersonaAvatar = null;
 let latestTabsState = null;
 let themeStateTimer = null;
 let navigationRequestPending = false;
+let desiredSessionId = null;
+let scheduledTabDispatchFrame = null;
+let dispatchedTabTarget = null;
 let navigationTiming = null;
 let bootStage = 'starting';
 let workspaceTabsEnabled = true;
 let tabsDisableRequestSequence = 0;
 let pendingTabsDisableRequest = null;
+let navigationTimingSequence = 0;
 const TRANSIENT_ACTIVITY_DELAY = 400;
 const TABS_DISABLE_REQUEST_TIMEOUT = 10000;
 const statusLabels = {
@@ -86,6 +89,7 @@ export function getChatWorkspaceTabCount() {
 
 export function setChatWorkspaceTabsEnabled(enabled) {
     workspaceTabsEnabled = enabled !== false;
+    if (!workspaceTabsEnabled) clearTabIntent();
     document.body.classList.toggle('chat-workspace-tabs-disabled', !workspaceTabsEnabled);
 
     const container = document.querySelector('#chat_workspace_tabs');
@@ -192,9 +196,39 @@ function getTimingNow() {
     return globalThis.performance?.now?.() ?? Date.now();
 }
 
+function roundTiming(value) {
+    return Number(value.toFixed(1));
+}
+
+function logNavigationTiming(phase, details = {}) {
+    if (!navigationTiming) return;
+    console.info('[Chat workspace] Tab switch timing', JSON.stringify({
+        phase,
+        timingId: navigationTiming.id,
+        type: navigationTiming.type,
+        requestId: navigationTiming.requestId,
+        targetSessionId: navigationTiming.targetSessionId,
+        elapsedMs: roundTiming(getTimingNow() - navigationTiming.startedAt),
+        ...details,
+    }));
+}
+
+function logTabSelection(targetSessionId, input) {
+    console.info('[Chat workspace] Tab switch timing', JSON.stringify({
+        phase: 'tab-selection',
+        control: 'chat_workspace_tab_select',
+        input,
+        targetSessionId,
+        selectedSessionId: getSelectedSessionId(),
+        workspaceActive,
+    }));
+}
+
 function beginNavigationTiming(type, targetSessionId) {
     navigationTiming = {
+        id: ++navigationTimingSequence,
         type,
+        requestId: null,
         targetSessionId,
         startedAt: getTimingNow(),
         handoffStartedAt: null,
@@ -205,11 +239,22 @@ function beginNavigationTiming(type, targetSessionId) {
 
 async function measureNavigationStage(name, callback) {
     const startedAt = getTimingNow();
+    let failed = false;
     try {
-        return await callback();
+        const result = callback();
+        return result && typeof result.then === 'function' ? await result : result;
+    } catch (error) {
+        failed = true;
+        throw error;
     } finally {
         if (navigationTiming) {
-            navigationTiming.stages[name] = (navigationTiming.stages[name] || 0) + getTimingNow() - startedAt;
+            const duration = getTimingNow() - startedAt;
+            navigationTiming.stages[name] = (navigationTiming.stages[name] || 0) + duration;
+            logNavigationTiming('stage-complete', {
+                stage: name,
+                durationMs: roundTiming(duration),
+                failed,
+            });
         }
     }
 }
@@ -218,14 +263,85 @@ function finishNavigationTiming(outcome) {
     if (!navigationTiming) return;
     const finishedAt = getTimingNow();
     const stages = Object.fromEntries(Object.entries(navigationTiming.stages)
-        .map(([name, duration]) => [name, Number(duration.toFixed(1))]));
-    console.info('[Chat workspace] Tab switch timing', {
+        .map(([name, duration]) => [name, roundTiming(duration)]));
+    console.info('[Chat workspace] Tab switch timing', JSON.stringify({
+        phase: 'complete',
+        timingId: navigationTiming.id,
         type: navigationTiming.type,
+        requestId: navigationTiming.requestId,
+        targetSessionId: navigationTiming.targetSessionId,
         outcome,
         stagesMs: stages,
-        totalMs: Number((finishedAt - navigationTiming.startedAt).toFixed(1)),
-    });
+        totalMs: roundTiming(finishedAt - navigationTiming.startedAt),
+    }));
     navigationTiming = null;
+}
+
+function getSelectedSessionId(tabs = latestTabsState) {
+    return desiredSessionId || tabs?.pendingSessionId || tabs?.activeSessionId || null;
+}
+
+function canRequestTabIntent() {
+    return workspaceTabsEnabled
+        && latestTabsState
+        && (workspaceActive || navigationRequestPending);
+}
+
+function clearTabIntent({ render = false } = {}) {
+    if (scheduledTabDispatchFrame !== null) {
+        cancelAnimationFrame(scheduledTabDispatchFrame);
+        scheduledTabDispatchFrame = null;
+    }
+    desiredSessionId = null;
+    dispatchedTabTarget = null;
+    if (render && latestTabsState) renderTabs(latestTabsState);
+}
+
+function restoreCommittedTabSelection() {
+    clearTabIntent();
+    if (!latestTabsState) return;
+    latestTabsState = { ...latestTabsState, pendingSessionId: null };
+    renderTabs(latestTabsState);
+}
+
+function revealDesiredTab() {
+    if (!desiredSessionId) return;
+    const container = document.querySelector('#chat_workspace_tabs');
+    const tab = tabElements.get(desiredSessionId)?.tab;
+    if (!container || !tab) return;
+    const containerRect = container.getBoundingClientRect();
+    const tabRect = tab.getBoundingClientRect();
+    if (tabRect.left < containerRect.left || tabRect.right > containerRect.right) {
+        tab.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    }
+}
+
+function scheduleDesiredTabDispatch() {
+    if (scheduledTabDispatchFrame !== null || navigationRequestPending || !desiredSessionId) return;
+    scheduledTabDispatchFrame = requestAnimationFrame(() => {
+        scheduledTabDispatchFrame = null;
+        revealDesiredTab();
+        const targetSessionId = desiredSessionId;
+        if (!targetSessionId || navigationRequestPending || !latestTabsState) return;
+        if (!latestTabsState.sessions.some(session => session.id === targetSessionId)) {
+            clearTabIntent({ render: true });
+            return;
+        }
+        if (targetSessionId === latestTabsState.activeSessionId) {
+            desiredSessionId = null;
+            renderTabs(latestTabsState);
+            return;
+        }
+        if (!workspaceActive || latestTabsState.navigationBlocked) {
+            clearTabIntent({ render: true });
+            globalThis.toastr?.warning?.('Wait for generation to finish before switching chats.');
+            return;
+        }
+        dispatchedTabTarget = targetSessionId;
+        if (!queueWorkspaceNavigation('activate-chat', { targetSessionId }, targetSessionId)) {
+            clearTabIntent({ render: true });
+        }
+    });
 }
 
 function queueWorkspaceNavigation(type, payload, optimisticSessionId = null) {
@@ -233,20 +349,29 @@ function queueWorkspaceNavigation(type, payload, optimisticSessionId = null) {
         || !workspaceActive
         || !latestTabsState
         || navigationRequestPending
-        || latestTabsState.pendingSessionId
         || latestTabsState.navigationBlocked) return false;
     navigationRequestPending = true;
     beginNavigationTiming(type, optimisticSessionId);
-    blurWorkspaceFocus();
-    if (optimisticSessionId) renderTabs({ ...latestTabsState, pendingSessionId: optimisticSessionId });
+    logNavigationTiming('queued', { optimistic: Boolean(optimisticSessionId) });
+    measureNavigationStage('focusBlur', () => blurWorkspaceFocus());
+    if (optimisticSessionId) {
+        measureNavigationStage('optimisticTabRender', () => renderTabs(latestTabsState));
+    }
     void (async () => {
         await measureNavigationStage('pause', () => bridgeApi.pauseWorkspaceGeneration?.(assignedSessionId));
         await measureNavigationStage('chatFlush', () => bridgeApi.flushPendingChat());
+        const state = await measureNavigationStage('stateCapture', () => bridgeApi.getState());
         if (navigationTiming) navigationTiming.handoffStartedAt = getTimingNow();
-        post(type, { ...payload, state: bridgeApi.getState() });
+        logNavigationTiming('handoff-start', { messageType: type });
+        await measureNavigationStage('handoffPost', () => post(type, {
+            ...payload,
+            state,
+            timingId: navigationTiming?.id,
+        }));
+        logNavigationTiming('handoff-posted', { messageType: type });
     })().catch(error => {
         navigationRequestPending = false;
-        if (latestTabsState) renderTabs({ ...latestTabsState, pendingSessionId: null });
+        clearTabIntent({ render: true });
         void bridgeApi.resumeWorkspaceGeneration?.(assignedSessionId);
         finishNavigationTiming('error');
         reportNavigationError(error);
@@ -255,10 +380,13 @@ function queueWorkspaceNavigation(type, payload, optimisticSessionId = null) {
 }
 
 function requestTabActivation(targetSessionId) {
-    if (!workspaceTabsEnabled || !workspaceActive || !latestTabsState) return false;
-    const selectedSessionId = latestTabsState.pendingSessionId || latestTabsState.activeSessionId;
+    if (!canRequestTabIntent() || !latestTabsState.sessions.some(session => session.id === targetSessionId)) return false;
+    const selectedSessionId = getSelectedSessionId();
     if (targetSessionId === selectedSessionId) return false;
-    return queueWorkspaceNavigation('activate-chat', { targetSessionId }, targetSessionId);
+    desiredSessionId = targetSessionId;
+    renderTabs(latestTabsState);
+    scheduleDesiredTabDispatch();
+    return true;
 }
 
 function getWorkspaceThemeState() {
@@ -281,8 +409,8 @@ function setWorkspaceActive(active) {
 }
 
 function activateAdjacentChat(direction) {
-    if (!workspaceTabsEnabled || !workspaceActive || !latestTabsState) return false;
-    const currentSessionId = latestTabsState.pendingSessionId || latestTabsState.activeSessionId;
+    if (!canRequestTabIntent()) return false;
+    const currentSessionId = getSelectedSessionId();
     const targetSessionId = getAdjacentSessionId(latestTabsState.sessions, currentSessionId, direction);
     return targetSessionId ? requestTabActivation(targetSessionId) : false;
 }
@@ -302,7 +430,8 @@ function renderTabs(tabs) {
     const container = document.querySelector('#chat_workspace_tabs');
     if (!container) return;
     latestTabsState = tabs;
-    if (!tabs.pendingSessionId && tabs.activeSessionId === assignedSessionId) navigationRequestPending = false;
+    if (desiredSessionId && !tabs.sessions.some(session => session.id === desiredSessionId)) clearTabIntent();
+    container.setAttribute('aria-busy', navigationRequestPending || Boolean(tabs.pendingSessionId) ? 'true' : 'false');
     container.hidden = !workspaceTabsEnabled || tabs.sessions.length < 2;
     if (workspaceTabsEnabled) {
         container.setAttribute('aria-keyshortcuts', 'Alt+Z Alt+X');
@@ -336,16 +465,22 @@ function renderTabs(tabs) {
             select.type = 'button';
             select.className = 'chat_workspace_tab_select';
             select.setAttribute('role', 'tab');
-            select.addEventListener('pointerdown', stopWorkspaceTabPropagation);
+            select.addEventListener('pointerdown', event => {
+                stopWorkspaceTabPropagation(event);
+                if (!event.isPrimary || event.button !== 0) return;
+                logTabSelection(session.id, 'pointer');
+                requestTabActivation(session.id);
+            });
             select.addEventListener('click', event => {
                 event.preventDefault();
                 event.stopPropagation();
-                document.querySelector('#send_textarea')?.blur();
+                if (event.detail !== 0) return;
+                logTabSelection(session.id, 'keyboard');
                 requestTabActivation(session.id);
             });
             select.addEventListener('keydown', event => {
-                if (!workspaceTabsEnabled || !workspaceActive || !latestTabsState) return;
-                const currentSessionId = latestTabsState.pendingSessionId || latestTabsState.activeSessionId;
+                if (!canRequestTabIntent()) return;
+                const currentSessionId = getSelectedSessionId();
                 let targetSessionId = null;
                 if (event.key === 'ArrowLeft') {
                     targetSessionId = getAdjacentSessionId(latestTabsState.sessions, currentSessionId, -1);
@@ -359,6 +494,7 @@ function renderTabs(tabs) {
                 if (!targetSessionId || targetSessionId === currentSessionId) return;
                 event.preventDefault();
                 event.stopPropagation();
+                logTabSelection(targetSessionId, 'keyboard');
                 requestTabActivation(targetSessionId);
             });
             avatar.className = 'chat_workspace_tab_avatar';
@@ -387,18 +523,17 @@ function renderTabs(tabs) {
 
         const { tab, select, avatar, title, activity, close } = elements;
         tab.className = 'chat_workspace_tab';
-        tab.classList.toggle('active', session.id === tabs.activeSessionId);
-        tab.classList.toggle('pending', session.id === tabs.pendingSessionId);
+        const selectedSessionId = getSelectedSessionId(tabs);
+        tab.classList.toggle('active', session.id === selectedSessionId);
         tab.classList.toggle('saving', Boolean(session.saving));
         tab.classList.toggle('generating', session.status === 'generating');
         tab.classList.toggle('waiting', session.status === 'waiting');
         tab.classList.toggle('error', session.status === 'error');
         tab.classList.toggle('unread', Boolean(session.unread));
-        select.setAttribute('aria-selected', session.id === tabs.activeSessionId ? 'true' : 'false');
-        select.tabIndex = session.id === (tabs.pendingSessionId || tabs.activeSessionId) ? 0 : -1;
-        select.disabled = Boolean(tabs.pendingSessionId)
-            || Boolean(tabs.navigationBlocked && session.id !== tabs.activeSessionId);
-        select.setAttribute('aria-disabled', select.disabled ? 'true' : 'false');
+        select.setAttribute('aria-selected', session.id === selectedSessionId ? 'true' : 'false');
+        select.tabIndex = session.id === selectedSessionId ? 0 : -1;
+        select.disabled = false;
+        select.setAttribute('aria-disabled', 'false');
         avatar.classList.toggle('empty', !session.avatar);
         if (session.avatar && avatar.dataset.src !== session.avatar) {
             avatar.src = session.avatar;
@@ -420,7 +555,7 @@ function renderTabs(tabs) {
         activity.textContent = '';
         setTabActivity(elements, statusKey);
 
-        close.disabled = Boolean(session.busy || tabs.pendingSessionId);
+        close.disabled = Boolean(session.busy);
         const closeLabel = session.busy
             ? `Cannot close ${session.title || 'chat'} while it is busy`
             : `Close ${session.title || 'chat'}`;
@@ -437,7 +572,7 @@ function renderTabs(tabs) {
         nextElement = tab.nextElementSibling;
     }
 
-    const selectedSessionId = tabs.pendingSessionId || tabs.activeSessionId;
+    const selectedSessionId = getSelectedSessionId(tabs);
     const shortcutTargets = new Map();
     const addShortcut = (sessionId, shortcut) => {
         if (!sessionId || shortcutTargets.has(sessionId)) return;
@@ -449,11 +584,6 @@ function renderTabs(tabs) {
         tabElements.get(sessionId)?.select.setAttribute('data-workspace-shortcut', shortcut);
     }
 
-    const revealedSessionId = selectedSessionId;
-    if (revealedSessionId && revealedSessionId !== lastRevealedSessionId) {
-        tabElements.get(revealedSessionId)?.tab.scrollIntoView({ block: 'nearest', inline: 'nearest' });
-        lastRevealedSessionId = revealedSessionId;
-    }
 }
 
 export function requestWorkspaceOpen(identity, presentation = null, { showOwnerUi = false, onAccepted = null } = {}) {
@@ -524,9 +654,14 @@ async function navigate(requestId, targetSessionId, identity, restore = {}, pers
     navigationDepth++;
     try {
         if (navigationTiming) {
+            navigationTiming.requestId = requestId;
             navigationTiming.targetSessionId = targetSessionId;
+            logNavigationTiming('assignment-received', { previousSessionId });
             if (navigationTiming.handoffStartedAt !== null) {
                 navigationTiming.stages.shellHandoff = getTimingNow() - navigationTiming.handoffStartedAt;
+                logNavigationTiming('shell-handoff-complete', {
+                    durationMs: roundTiming(navigationTiming.stages.shellHandoff),
+                });
             }
         }
         if (previousSessionId && previousSessionId !== targetSessionId) {
@@ -543,8 +678,9 @@ async function navigate(requestId, targetSessionId, identity, restore = {}, pers
         // for an animation or popup lifecycle even after its DOM is gone; it
         // must not hold the shell loader open.
         void runInBackground(() => bridgeApi.hideLoader(), 'Could not finish hiding the child loader');
-        const state = bridgeApi.getState();
+        const state = await measureNavigationStage('preparedStateCapture', () => bridgeApi.getState());
         if (navigationTiming) navigationTiming.preparedAt = getTimingNow();
+        logNavigationTiming('prepared', { stateCaptured: true });
         post('prepared', {
             requestId,
             targetSessionId,
@@ -553,6 +689,8 @@ async function navigate(requestId, targetSessionId, identity, restore = {}, pers
         });
     } catch (error) {
         console.error('Could not open chat workspace session', error);
+        navigationRequestPending = false;
+        restoreCommittedTabSelection();
         post('navigation-error', {
             requestId,
             targetSessionId,
@@ -581,6 +719,9 @@ export function initChatWorkspaceBridge(api) {
             });
         }
         if (message.type === 'tabs-state') renderTabs(message.tabs);
+        if (message.type === 'prewarm-chats' && Array.isArray(message.identities)) {
+            bridgeApi.prewarmIdentities?.(message.identities);
+        }
         if (message.type === 'tabs-disable-result') {
             if (pendingTabsDisableRequest?.requestId !== message.requestId) return;
             const pendingRequest = pendingTabsDisableRequest;
@@ -592,8 +733,9 @@ export function initChatWorkspaceBridge(api) {
             pendingRequest.resolve(message.accepted === true);
         }
         if (message.type === 'activation-blocked') {
+            logNavigationTiming('activation-blocked', { reason: message.reason });
             navigationRequestPending = false;
-            if (latestTabsState) renderTabs({ ...latestTabsState, pendingSessionId: null });
+            restoreCommittedTabSelection();
             void bridgeApi.resumeWorkspaceGeneration?.(assignedSessionId);
             finishNavigationTiming('blocked');
             const text = message.reason === 'generating'
@@ -606,18 +748,28 @@ export function initChatWorkspaceBridge(api) {
         if (message.type === 'active') {
             setWorkspaceActive(message.active);
             if (message.active) {
+                navigationRequestPending = false;
+                dispatchedTabTarget = null;
+                if (latestTabsState) {
+                    latestTabsState = { ...latestTabsState, activeSessionId: assignedSessionId, pendingSessionId: null };
+                }
                 if (navigationTiming && navigationTiming.preparedAt !== null) {
                     navigationTiming.stages.commitHandshake = getTimingNow() - navigationTiming.preparedAt;
                 }
+                logNavigationTiming('commit-acknowledged');
                 finishNavigationTiming('success');
                 void runInBackground(() => bridgeApi.onCommitted?.(assignedIdentity), 'Could not finish post-commit workspace persistence');
                 void runInBackground(() => bridgeApi.flushGlobalSettings(), 'Could not flush workspace settings after committing the tab');
+                if (desiredSessionId === assignedSessionId) desiredSessionId = null;
+                if (latestTabsState) renderTabs(latestTabsState);
+                scheduleDesiredTabDispatch();
                 globalThis.toastr?.clear?.(undefined, { force: true });
             }
         }
         if (message.type === 'persona-state' && typeof message.avatar === 'string') pendingPersonaAvatar = message.avatar;
         if (message.type === 'request-state') notifyWorkspaceState();
         if (message.type === 'extensions-reload') {
+            clearTabIntent();
             globalThis.location.reload();
         }
         if (message.type === 'confirm-close') {
@@ -662,6 +814,7 @@ export function initChatWorkspaceBridge(api) {
         attributeFilter: ['style'],
     });
     globalThis.addEventListener('pagehide', () => {
+        clearTabIntent();
         clearTimeout(stateTimer);
         post('state', { state: bridgeApi.getState() });
         post('unloading');

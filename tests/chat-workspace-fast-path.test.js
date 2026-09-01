@@ -82,11 +82,22 @@ describe('chat workspace activation fast path', () => {
             appScript.indexOf('export async function getChat'),
             appScript.indexOf('function getFirstMessage'),
         );
-        for (const stage of ['characterLoad', 'chatFetch', 'chatParse', 'chatApply', 'itemizedPrompts', 'messageRender', 'ownerUi', 'chatEvents']) {
+        for (const stage of ['chatPrewarm', 'characterLoad', 'chatFetch', 'chatParse', 'chatApply', 'itemizedPrompts', 'messageRender', 'ownerUi', 'chatEvents', 'chatLoadedDispatch']) {
             expect(characterLoad).toContain(`'${stage}'`);
         }
         expect(bridgeScript).toContain('bridgeApi.openIdentity(identity, measureNavigationStage, { showOwnerUi })');
         expect(bridgeScript).not.toContain("measureNavigationStage('identityLoad'");
+        expect(bridgeScript).toContain("measureNavigationStage('preparedStateCapture', () => bridgeApi.getState())");
+        expect(bridgeScript).toContain("typeof result.then === 'function' ? await result : result");
+    });
+
+    test('defers hidden character editor refresh until after commit', () => {
+        const openIdentity = appScript.slice(
+            appScript.indexOf('async function openWorkspaceIdentity'),
+            appScript.indexOf('function restoreWorkspaceView'),
+        );
+        expect(openIdentity.match(/runMeasuredStage\(measureStage, 'ownerUi'/g)).toHaveLength(1);
+        expect(openIdentity).toContain('pendingWorkspaceOwnerUiRequest = { identity: { ...identity }, switchMenu: false }');
     });
 
     test('avoids duplicate owner and persona UI work during workspace activation', () => {
@@ -145,7 +156,7 @@ describe('chat workspace activation fast path', () => {
         expect(onChatChanged).toContain('revision !== tokenCounterUpdateRevision');
     });
 
-    test('refreshes a changed character editor before the chat commit', () => {
+    test('refreshes visible owner UI before commit and hidden owner UI after commit', () => {
         const openIdentity = appScript.slice(
             appScript.indexOf('async function openWorkspaceIdentity'),
             appScript.indexOf('function restoreWorkspaceView'),
@@ -156,8 +167,16 @@ describe('chat workspace activation fast path', () => {
             appScript.indexOf('async function persistWorkspacePostCommit'),
             appScript.indexOf('async function openWorkspaceIdentity'),
         );
-        expect(postCommit).toContain('await delay(0)');
+        expect(postCommit).toContain("requestIdleCallback(() => resolve(), { timeout: 250 })");
         expect(postCommit).toContain("restoredDraftInput?.dispatchEvent(new Event('input', { bubbles: true }))");
+        expect(postCommit).toContain('void eventSource.emitInBackground(event_types.CHAT_LOADED, event)');
+        expect(postCommit.indexOf("restoredDraftInput?.dispatchEvent(new Event('input', { bubbles: true }))"))
+            .toBeLessThan(postCommit.indexOf('await new Promise'));
+        expect(postCommit.indexOf('eventSource.emitInBackground(event_types.CHAT_LOADED, event)'))
+            .toBeLessThan(postCommit.indexOf('await new Promise'));
+        expect(postCommit.indexOf('snapshot = captureWorkspacePostCommit(identity)'))
+            .toBeLessThan(postCommit.indexOf('await new Promise'));
+        expect(postCommit).toContain('workspaceIdentityEquals(identity, getWorkspaceChatIdentity())');
         expect(postCommit).toContain('select_group_chats(identity.ownerId, true)');
         expect(openIdentity).toContain('openGroupById(group.id, { openInWorkspace: false, loadChat: false, refreshOwnerUi: false, measureStage })');
         expect(groupScript).toContain('refreshOwnerUi = true');
@@ -175,12 +194,56 @@ describe('chat workspace activation fast path', () => {
     test('keeps bounded cloned chat snapshots for warm character and group switches', () => {
         expect(workspaceCacheScript).toContain('const MAX_CACHED_CHATS = 12');
         expect(workspaceCacheScript).toContain('export function getWorkspaceChatSnapshot');
+        expect(workspaceCacheScript).toContain('export function hasWorkspaceChatSnapshot');
         expect(workspaceCacheScript).toContain('export function setWorkspaceChatSnapshot');
         expect(workspaceCacheScript).toContain('return cloneValue(snapshot)');
         expect(appScript).toContain("runMeasuredStage(measureStage, 'chatCache'");
         expect(appScript).toContain('setWorkspaceChatSnapshot(getWorkspaceChatIdentity(), chat_metadata, chat)');
         expect(groupScript).toContain("kind: 'group'");
         expect(groupScript).toContain("runMeasuredStage(measureStage, 'chatCache'");
+    });
+
+    test('reuses detached rendered messages only for a matching chat snapshot', () => {
+        expect(appScript).toContain('const workspaceRenderedChats = new Map()');
+        expect(appScript).toContain('cached.chatLength !== chat.length');
+        expect(appScript).toContain('fragment.append(...children)');
+        expect(appScript).toContain('element.append(cached.fragment)');
+        expect(appScript).toContain('if (restoreWorkspaceRenderedChat()) return');
+        expect(appScript).toContain('cacheWorkspaceRenderedChat(previousIdentity)');
+    });
+
+    test('cancels a pending automatic scroll before restoring workspace scroll state', () => {
+        const restoreView = appScript.slice(
+            appScript.indexOf('function restoreWorkspaceView'),
+            appScript.indexOf('function initInAppChatWorkspace'),
+        );
+        const scrollToBottom = appScript.slice(
+            appScript.indexOf('function cancelPendingScrollChatToBottom'),
+            appScript.indexOf('/**\n * @deprecated Function is not needed anymore'),
+        );
+        expect(restoreView).toContain('cancelPendingScrollChatToBottom();');
+        expect(restoreView.indexOf('cancelPendingScrollChatToBottom();')).toBeLessThan(restoreView.indexOf('chatView.scrollTop'));
+        expect(scrollToBottom).toContain('cancelAnimationFrame(pendingScrollChatToBottomRequestId)');
+        expect(scrollToBottom).toContain('pendingScrollChatToBottomRequestId = requestAnimationFrame');
+    });
+
+    test('prewarms inactive tab snapshots during idle time', () => {
+        expect(shellScript).toContain("postToSlot(slot, 'prewarm-chats'");
+        expect(bridgeScript).toContain("message.type === 'prewarm-chats'");
+        expect(appScript).toContain('prewarmIdentities: scheduleWorkspacePrewarm');
+        expect(appScript).toContain("requestIdleCallback(run, { timeout: 500 })");
+        expect(appScript).toContain('hasWorkspaceChatSnapshot(identity)');
+        expect(appScript).toContain("runMeasuredStage(measureStage, 'chatPrewarm'");
+    });
+
+    test('loads cold character and chat data concurrently', () => {
+        const getChat = appScript.slice(
+            appScript.indexOf('export async function getChat'),
+            appScript.indexOf('function getFirstMessage'),
+        );
+        expect(getChat).toContain('const characterLoad = runMeasuredStage');
+        expect(getChat).toContain('const chatFetch = runMeasuredStage');
+        expect(getChat).toContain('await Promise.all([characterLoad, chatFetch])');
     });
 
     test('reuses the sandbox workspace inventory during chat event processing', () => {
@@ -204,6 +267,8 @@ describe('chat workspace activation fast path', () => {
         expect(openIdentity.match(/backgroundChatEvents: true/g)).toHaveLength(2);
         expect(appScript).toContain('pendingWorkspaceChatEvents = delay(0)');
         expect(appScript).toContain('eventSource.emitInBackground(event_types.CHAT_CHANGED, chatId)');
+        expect(appScript).toContain('pendingWorkspaceChatLoadedEvent = { identity: { ...identity }, event }');
+        expect(appScript).toContain('eventSource.emitInBackground(event_types.CHAT_LOADED, event)');
         expect(flushPending).toContain('await pendingWorkspaceChatEvents');
     });
 

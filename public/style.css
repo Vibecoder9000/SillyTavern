@@ -1031,11 +1031,6 @@ body.chat-workspace-tabs-disabled #chat_workspace_tabs {
     background: color-mix(in srgb, var(--SmartThemeQuoteColor) 18%, var(--SmartThemeBlurTintColor));
 }
 
-.chat_workspace_tab.pending:not(.active) {
-    border-color: var(--SmartThemeQuoteColor);
-    opacity: .8;
-}
-
 .chat_workspace_tab.unread:not(.active) {
     box-shadow: inset 0 0 0 var(--workspace-tab-border-width) var(--SmartThemeQuoteColor);
 }
@@ -1083,11 +1078,6 @@ body.chat-workspace-tabs-disabled #chat_workspace_tabs {
 .chat_workspace_tab_select:active,
 .chat_workspace_tab_close:active {
     background: color-mix(in srgb, var(--SmartThemeQuoteColor) 45%, transparent);
-}
-
-.chat_workspace_tab_select:disabled {
-    cursor: not-allowed;
-    opacity: .6;
 }
 
 .chat_workspace_tab_avatar {

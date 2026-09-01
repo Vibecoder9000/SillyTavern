@@ -311,7 +311,7 @@ import {
     reportWorkspaceBootProgress,
     requestWorkspaceOpen,
 } from './scripts/chat-workspace-bridge.js';
-import { getWorkspaceCachedValue, getWorkspaceChatSnapshot, setWorkspaceCachedValue, setWorkspaceChatSnapshot, WORKSPACE_CACHE_KEYS } from './scripts/chat-workspace-cache.js';
+import { getWorkspaceCachedValue, getWorkspaceChatSnapshot, hasWorkspaceChatSnapshot, setWorkspaceCachedValue, setWorkspaceChatSnapshot, WORKSPACE_CACHE_KEYS } from './scripts/chat-workspace-cache.js';
 import { createCoalescedWriter, createKeyedCoalescedWriter } from './scripts/chat-workspace-persistence.js';
 
 export { isCharacterDesignerGenerating };
@@ -1053,8 +1053,134 @@ const workspaceMirrorWriter = createCoalescedWriter(async snapshot => {
 
 let pendingWorkspaceOwnerUiRequest = null;
 let pendingWorkspaceChatEvents = Promise.resolve();
+let pendingWorkspaceChatLoadedEvent = null;
 let pendingWorkspaceDraftInput = null;
 const workspaceComposerGenerationPendingSessions = new Set();
+const workspaceRenderedChats = new Map();
+const MAX_WORKSPACE_RENDERED_CHATS = 12;
+const workspacePrewarmInFlight = new Map();
+const workspaceCharacterPrewarmInFlight = new Map();
+let pendingScrollChatToBottomRequestId = null;
+
+function getWorkspaceIdentityCacheKey(identity) {
+    if (!identity?.kind || !identity?.ownerId || !identity?.chatId) return null;
+    return `${identity.kind}:${identity.ownerId}:${identity.chatId}`;
+}
+
+function cacheWorkspaceRenderedChat(identity = getWorkspaceChatIdentity()) {
+    const key = getWorkspaceIdentityCacheKey(identity);
+    const element = chatElement?.[0];
+    if (!isChatWorkspaceChild() || !key || !element || element.children.length === 0) return;
+
+    const fragment = document.createDocumentFragment();
+    const children = Array.from(element.children);
+    const renderedMessageCount = children.reduce((count, child) => count + Number(child.classList.contains('mes')), 0);
+    // Move the existing nodes as one variadic DOM operation. Their order,
+    // identity, handlers, and direct-child relationship are preserved for
+    // extensions when the fragment is restored.
+    fragment.append(...children);
+    workspaceRenderedChats.delete(key);
+    workspaceRenderedChats.set(key, { fragment, chatLength: chat.length, renderedMessageCount });
+    while (workspaceRenderedChats.size > MAX_WORKSPACE_RENDERED_CHATS) {
+        workspaceRenderedChats.delete(workspaceRenderedChats.keys().next().value);
+    }
+}
+
+function restoreWorkspaceRenderedChat(identity = getWorkspaceChatIdentity()) {
+    const key = getWorkspaceIdentityCacheKey(identity);
+    const element = chatElement?.[0];
+    const cached = key ? workspaceRenderedChats.get(key) : null;
+    if (!cached || !element) return false;
+    const cachedMessageCount = Array.from(cached.fragment.children).filter(child => child.classList.contains('mes')).length;
+    if (cached.chatLength !== chat.length || cachedMessageCount !== cached.renderedMessageCount) {
+        workspaceRenderedChats.delete(key);
+        return false;
+    }
+
+    workspaceRenderedChats.delete(key);
+    element.append(cached.fragment);
+    refreshSwipeButtons(false, false);
+    applyStylePins();
+    updateEditArrowClasses();
+    return true;
+}
+
+function prewarmWorkspaceIdentity(identity) {
+    const key = getWorkspaceIdentityCacheKey(identity);
+    if (!key || hasWorkspaceChatSnapshot(identity)) return Promise.resolve();
+    if (workspacePrewarmInFlight.has(key)) return workspacePrewarmInFlight.get(key);
+
+    const task = (async () => {
+        if (identity.kind === 'character') {
+            const character = characters.find(item => String(item.avatar) === String(identity.ownerId));
+            if (!character) return;
+            let characterLoad = Promise.resolve();
+            if (character.shallow) {
+                const avatar = String(identity.ownerId);
+                characterLoad = workspaceCharacterPrewarmInFlight.get(avatar);
+                if (!characterLoad) {
+                    characterLoad = getOneCharacter(avatar).finally(() => workspaceCharacterPrewarmInFlight.delete(avatar));
+                    workspaceCharacterPrewarmInFlight.set(avatar, characterLoad);
+                }
+            }
+            const chatLoad = fetch('/api/chats/get', {
+                method: 'POST',
+                headers: getRequestHeaders(),
+                cache: 'no-cache',
+                body: JSON.stringify({
+                    ch_name: character.name,
+                    file_name: identity.chatId,
+                    avatar_url: identity.ownerId,
+                }),
+            });
+            const [, response] = await Promise.all([characterLoad, chatLoad]);
+            if (!response.ok) return;
+            const data = await response.json();
+            const header = Array.isArray(data) && data.length > 0 ? data.shift() : null;
+            setWorkspaceChatSnapshot(identity, header?.chat_metadata || {}, Array.isArray(data) ? data : []);
+            return;
+        }
+
+        if (identity.kind === 'group') {
+            const response = await fetch('/api/chats/group/get', {
+                method: 'POST',
+                headers: getRequestHeaders(),
+                body: JSON.stringify({ id: identity.chatId }),
+            });
+            if (!response.ok) return;
+            const data = await response.json();
+            if (!Array.isArray(data)) return;
+            const hasHeader = data.length > 0 && Object.hasOwn(data[0], 'chat_metadata');
+            setWorkspaceChatSnapshot(identity, hasHeader ? data[0].chat_metadata : {}, hasHeader ? data.slice(1) : data);
+        }
+    })().catch(error => console.debug('Could not prewarm workspace chat', error)).finally(() => {
+        workspacePrewarmInFlight.delete(key);
+    });
+    workspacePrewarmInFlight.set(key, task);
+    return task;
+}
+
+function scheduleWorkspacePrewarm(identities = []) {
+    const unique = new Map();
+    for (const identity of identities) {
+        const key = getWorkspaceIdentityCacheKey(identity);
+        if (key && !workspaceIdentityEquals(identity, getWorkspaceChatIdentity())) unique.set(key, identity);
+    }
+    const targets = Array.from(unique.values());
+    if (!targets.length) return;
+    const run = () => {
+        const queue = [...targets];
+        const worker = async () => {
+            while (queue.length) await prewarmWorkspaceIdentity(queue.shift());
+        };
+        void Promise.all(Array.from({ length: Math.min(2, queue.length) }, worker));
+    };
+    if (typeof requestIdleCallback === 'function') {
+        requestIdleCallback(run, { timeout: 500 });
+    } else {
+        setTimeout(run, 0);
+    }
+}
 
 /**
  * Returns whether the chat currently displayed by the workspace is generating.
@@ -1128,16 +1254,38 @@ function captureWorkspacePostCommit(identity) {
 async function persistWorkspacePostCommit(identity) {
     const restoredDraftInput = pendingWorkspaceDraftInput;
     pendingWorkspaceDraftInput = null;
-    // Let the committed chat paint before broadcasting programmatic draft
-    // restoration. Input observers update secondary UI and can be relatively
-    // expensive, while the textarea value itself is already correct.
-    await delay(0);
-    if (workspaceIdentityEquals(identity, getWorkspaceChatIdentity())) {
-        restoredDraftInput?.dispatchEvent(new Event('input', { bubbles: true }));
+    const isCurrent = workspaceIdentityEquals(identity, getWorkspaceChatIdentity());
+    if (!isCurrent) return;
+
+    // Start extension-facing notifications synchronously. A queued tab intent
+    // may begin mutating chat globals on the next animation frame.
+    restoredDraftInput?.dispatchEvent(new Event('input', { bubbles: true }));
+    if (workspaceIdentityEquals(identity, pendingWorkspaceChatLoadedEvent?.identity)) {
+        const event = pendingWorkspaceChatLoadedEvent.event;
+        pendingWorkspaceChatLoadedEvent = null;
+        void eventSource.emitInBackground(event_types.CHAT_LOADED, event);
     }
 
-    if (workspaceIdentityEquals(identity, pendingWorkspaceOwnerUiRequest?.identity)) {
-        if (!workspaceIdentityEquals(identity, getWorkspaceChatIdentity())) return;
+    // Capture persistence inputs before yielding so a queued activation cannot
+    // replace the globals they describe. The writers still coalesce the work.
+    let snapshot;
+    try {
+        snapshot = captureWorkspacePostCommit(identity);
+    } catch (error) {
+        console.warn('Could not capture post-commit workspace persistence', error);
+        return;
+    }
+
+    await new Promise(resolve => {
+        if (typeof requestIdleCallback === 'function') {
+            requestIdleCallback(() => resolve(), { timeout: 250 });
+        } else {
+            setTimeout(resolve, 0);
+        }
+    });
+
+    if (workspaceIdentityEquals(identity, getWorkspaceChatIdentity())
+        && workspaceIdentityEquals(identity, pendingWorkspaceOwnerUiRequest?.identity)) {
         const characterId = characters.findIndex(character => String(character.avatar) === String(identity.ownerId));
         if (identity.kind === 'character' && characterId >= 0) {
             select_selected_character(characterId, { switchMenu: pendingWorkspaceOwnerUiRequest.switchMenu });
@@ -1145,14 +1293,6 @@ async function persistWorkspacePostCommit(identity) {
             select_group_chats(identity.ownerId, true);
         }
         pendingWorkspaceOwnerUiRequest = null;
-    }
-
-    let snapshot;
-    try {
-        snapshot = captureWorkspacePostCommit(identity);
-    } catch (error) {
-        console.warn('Could not capture post-commit workspace persistence', error);
-        return;
     }
 
     void workspaceMirrorWriter.flush(snapshot.mirror).catch(error => {
@@ -1169,6 +1309,13 @@ async function persistWorkspacePostCommit(identity) {
 
 async function openWorkspaceIdentity(identity, measureStage = null, { showOwnerUi = false } = {}) {
     if (!identity) return;
+
+    const previousIdentity = getWorkspaceChatIdentity();
+    if (!workspaceIdentityEquals(previousIdentity, identity)) {
+        closeMessageEditor();
+        if (is_delete_mode) $('#dialogue_del_mes_cancel').trigger('click');
+        cacheWorkspaceRenderedChat(previousIdentity);
+    }
 
     const openIdentity = async () => {
         if (identity.kind === 'character') {
@@ -1202,13 +1349,11 @@ async function openWorkspaceIdentity(identity, measureStage = null, { showOwnerU
             if (showOwnerUi) {
                 // The workspace tab is not committed until preparation returns.
                 // Populate the editor before commit without replaying its fade.
-                select_selected_character(characterId, { switchMenu: false });
+                await runMeasuredStage(measureStage, 'ownerUi', () => select_selected_character(characterId, { switchMenu: false }));
             } else if (selectionClearedChat) {
-                // The destination iframe is still covered by the workspace
-                // loader, so refresh the editor before the shell commits it.
-                // Otherwise the old character's form remains visible briefly
-                // after activation.
-                select_selected_character(characterId, { switchMenu: false });
+                // Direct tab switches do not expose the character editor.
+                // Populate it after commit instead of delaying the visible chat.
+                pendingWorkspaceOwnerUiRequest = { identity: { ...identity }, switchMenu: false };
             }
             return;
         }
@@ -1253,6 +1398,11 @@ function restoreWorkspaceView(restore = {}) {
     // presentation frame here: an opaque workspace loader can make browsers
     // defer animation callbacks for the covered child and deadlock the
     // shell's wait for the `prepared` response.
+    // A cold print schedules an automatic bottom-scroll for the next frame.
+    // This workspace restore is authoritative, so cancel that competing read
+    // of scrollHeight before applying the saved position. Besides preventing
+    // an incorrect late jump, this avoids a redundant forced layout.
+    cancelPendingScrollChatToBottom();
     const chatView = document.querySelector('#chat');
     if (chatView) chatView.scrollTop = restore.scrollTop || 0;
 }
@@ -1270,6 +1420,7 @@ function initInAppChatWorkspace(initLoaderHandle) {
         flushGlobalSettings: flushPendingSettingsSave,
         pauseWorkspaceGeneration,
         resumeWorkspaceGeneration,
+        prewarmIdentities: scheduleWorkspacePrewarm,
         onCommitted: persistWorkspacePostCommit,
         confirmClose: () => Popup.show.confirm(
             t`Discard unsent draft?`,
@@ -2510,6 +2661,8 @@ export async function showMoreMessages(messagesToLoad = null) {
 }
 
 export async function printMessages() {
+    if (restoreWorkspaceRenderedChat()) return;
+
     let startIndex = 0;
     let count = power_user.chat_truncation || Number.MAX_SAFE_INTEGER;
 
@@ -5939,7 +6092,11 @@ function formatMessageCost(cost) {
     return '';
 }
 
-let requestId = null;
+function cancelPendingScrollChatToBottom() {
+    if (pendingScrollChatToBottomRequestId === null) return;
+    cancelAnimationFrame(pendingScrollChatToBottomRequestId);
+    pendingScrollChatToBottomRequestId = null;
+}
 
 /**
  * Scrolls the chat to the bottom if configured to do so.
@@ -5963,13 +6120,11 @@ export function scrollChatToBottom({ waitForFrame } = {}) {
         }
 
         chatElement.scrollTop(position);
-        requestId = null;
+        pendingScrollChatToBottomRequestId = null;
     };
 
-    // Do not check truthiness. requestId can loop to zero.
-    if (requestId !== null) {
-        cancelAnimationFrame(requestId);
-    }
+    // Do not check truthiness. A request ID can loop to zero.
+    cancelPendingScrollChatToBottom();
 
     if (!waitForFrame) {
         doScroll();
@@ -5979,7 +6134,7 @@ export function scrollChatToBottom({ waitForFrame } = {}) {
     // This prevents layout thrashing.
     // https://developer.mozilla.org/en-US/docs/Web/API/Window/requestAnimationFrame#return_value
     // https://gist.github.com/paulirish/5d52fb081b3570c81e3a#file-what-forces-layout-md
-    requestId = requestAnimationFrame(() => doScroll());
+    pendingScrollChatToBottomRequestId = requestAnimationFrame(() => doScroll());
 }
 
 /**
@@ -11370,22 +11525,24 @@ export async function getChat(initialMetadata, { measureStage = null, refreshOwn
     const preparedItemizedPrompts = prepareItemizedPrompts(getCurrentChatId());
     const identity = getWorkspaceChatIdentity();
     try {
-        await runMeasuredStage(measureStage, 'characterLoad', () => unshallowCharacter(this_chid));
+        await runMeasuredStage(measureStage, 'chatPrewarm', () => workspacePrewarmInFlight.get(getWorkspaceIdentityCacheKey(identity)));
         const cachedSnapshot = await runMeasuredStage(measureStage, 'chatCache', () => getWorkspaceChatSnapshot(identity));
+        const characterLoad = runMeasuredStage(measureStage, 'characterLoad', () => unshallowCharacter(this_chid));
         let loadedMetadata = cachedSnapshot?.metadata;
         let loadedMessages = cachedSnapshot?.messages;
 
         if (!cachedSnapshot) {
-            const response = await runMeasuredStage(measureStage, 'chatFetch', () => fetch('/api/chats/get', {
+            const chatFetch = runMeasuredStage(measureStage, 'chatFetch', () => fetch('/api/chats/get', {
                 method: 'POST',
                 headers: getRequestHeaders(),
                 cache: 'no-cache',
                 body: JSON.stringify({
                     ch_name: characters[this_chid].name,
-                    file_name: characters[this_chid].chat,
+                    file_name: identity.chatId,
                     avatar_url: characters[this_chid].avatar,
                 }),
             }));
+            const [, response] = await Promise.all([characterLoad, chatFetch]);
 
             if (!response.ok) {
                 throw new Error('Chat could not be loaded');
@@ -11401,6 +11558,8 @@ export async function getChat(initialMetadata, { measureStage = null, refreshOwn
                 loadedMetadata = {};
                 loadedMessages = [];
             }
+        } else {
+            await characterLoad;
         }
 
         await runMeasuredStage(measureStage, 'chatApply', () => {
@@ -11419,7 +11578,14 @@ export async function getChat(initialMetadata, { measureStage = null, refreshOwn
         });
         setWorkspaceChatSnapshot(identity, chat_metadata, chat);
         await getChatResult(measureStage, { preparedItemizedPrompts, refreshOwnerUi, backgroundChatEvents });
-        eventSource.emit(event_types.CHAT_LOADED, { detail: { id: this_chid, character: characters[this_chid] } });
+        await runMeasuredStage(measureStage, 'chatLoadedDispatch', () => {
+            const event = { detail: { id: this_chid, character: characters[this_chid] } };
+            if (backgroundChatEvents) {
+                pendingWorkspaceChatLoadedEvent = { identity: { ...identity }, event };
+            } else {
+                void eventSource.emit(event_types.CHAT_LOADED, event);
+            }
+        });
 
         // Workspace-controlled loads must not open the software keyboard after a tab tap.
         if (!isChatWorkspaceChild()) {

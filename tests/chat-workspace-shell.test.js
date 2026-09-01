@@ -63,9 +63,10 @@ describe('chat workspace initial loading surface', () => {
         expect(bridgeScript).toContain("post('disable-tabs'");
         expect(bridgeScript).toContain("message.type === 'tabs-disable-result'");
         expect(bridgeScript).toContain('if (!workspaceTabsEnabled || !isChatWorkspaceChild()');
-        expect(bridgeScript).toContain('if (!workspaceTabsEnabled || !workspaceActive || !latestTabsState) return false;');
+        expect(bridgeScript).toContain('function canRequestTabIntent()');
+        expect(bridgeScript).toContain('(workspaceActive || navigationRequestPending)');
         expect(bridgeScript).toContain('if (!workspaceTabsEnabled || event.isComposing || event.defaultPrevented) return;');
-        expect(bridgeScript).toContain('if (!workspaceTabsEnabled || !workspaceActive || !latestTabsState) return;');
+        expect(bridgeScript).toContain('if (!canRequestTabIntent()) return;');
         expect(shellScript).toContain('collapseWorkspaceSessions(sessions, runtimeController.activeSessionId)');
         expect(shellScript).toContain("message.type === 'disable-tabs'");
         expect(shellScript).toContain('accepted: result.accepted');
@@ -79,7 +80,7 @@ describe('chat workspace initial loading surface', () => {
             bridgeScript.indexOf('export function requestWorkspaceOpen'),
         );
         expect(renderTabs).toContain("elements.select.removeAttribute('data-workspace-shortcut')");
-        expect(renderTabs).toContain('const selectedSessionId = tabs.pendingSessionId || tabs.activeSessionId');
+        expect(renderTabs).toContain('const selectedSessionId = getSelectedSessionId(tabs)');
         expect(renderTabs).toContain('getAdjacentSessionId(tabs.sessions, selectedSessionId, -1)');
         expect(renderTabs).toContain('getAdjacentSessionId(tabs.sessions, selectedSessionId, 1)');
         expect(renderTabs).toContain("addShortcut(getAdjacentSessionId(tabs.sessions, selectedSessionId, -1), 'Alt+Z')");
@@ -89,6 +90,49 @@ describe('chat workspace initial loading surface', () => {
         expect(appCss).toContain('@media screen and (min-width: 1001px) and (pointer: fine)');
         expect(appCss).toContain('.chat_workspace_tab_select[data-workspace-shortcut]::after');
         expect(appCss).toContain('pointer-events: none;');
+    });
+
+    test('coalesces existing-tab intent while keeping selection immediate and operable', () => {
+        const intent = bridgeScript.slice(
+            bridgeScript.indexOf('function getSelectedSessionId'),
+            bridgeScript.indexOf('function getWorkspaceThemeState'),
+        );
+        const renderTabs = bridgeScript.slice(
+            bridgeScript.indexOf('function renderTabs'),
+            bridgeScript.indexOf('export function requestWorkspaceOpen'),
+        );
+        const activeHandler = bridgeScript.slice(
+            bridgeScript.indexOf("if (message.type === 'active')"),
+            bridgeScript.indexOf("if (message.type === 'persona-state')"),
+        );
+        expect(intent).toContain('desiredSessionId || tabs?.pendingSessionId || tabs?.activeSessionId');
+        expect(intent).toContain('scheduledTabDispatchFrame = requestAnimationFrame');
+        expect(intent).toContain('if (scheduledTabDispatchFrame !== null || navigationRequestPending || !desiredSessionId) return;');
+        expect(intent).toContain('dispatchedTabTarget = targetSessionId');
+        expect(intent).toContain('desiredSessionId = targetSessionId');
+        expect(bridgeScript).toContain('function restoreCommittedTabSelection()');
+        expect(bridgeScript).toContain("latestTabsState = { ...latestTabsState, pendingSessionId: null }");
+        expect(bridgeScript.match(/restoreCommittedTabSelection\(\)/g)).toHaveLength(3);
+        expect(intent.indexOf('renderTabs(latestTabsState)')).toBeLessThan(intent.lastIndexOf('scheduleDesiredTabDispatch()'));
+        expect(activeHandler.indexOf('bridgeApi.onCommitted')).toBeLessThan(activeHandler.indexOf('scheduleDesiredTabDispatch()'));
+        expect(renderTabs).toContain("container.setAttribute('aria-busy'");
+        expect(renderTabs).toContain('select.disabled = false');
+        expect(renderTabs).toContain("select.setAttribute('aria-selected', session.id === selectedSessionId ? 'true' : 'false')");
+        expect(renderTabs).not.toContain("tab.classList.toggle('pending'");
+        expect(renderTabs).not.toContain("document.querySelector('#send_textarea')?.blur()\n                requestTabActivation");
+        expect(appCss).not.toContain('.chat_workspace_tab.pending');
+        expect(appCss).not.toContain('.chat_workspace_tab_select:disabled');
+    });
+
+    test('reveals only an offscreen final desired tab', () => {
+        const reveal = bridgeScript.slice(
+            bridgeScript.indexOf('function revealDesiredTab'),
+            bridgeScript.indexOf('function queueWorkspaceNavigation'),
+        );
+        expect(reveal).toContain('if (!desiredSessionId) return;');
+        expect(reveal).toContain('tabRect.left < containerRect.left || tabRect.right > containerRect.right');
+        expect(reveal).toContain("tab.scrollIntoView({ block: 'nearest', inline: 'nearest' })");
+        expect(reveal.lastIndexOf('revealDesiredTab()')).toBeGreaterThan(reveal.indexOf('requestAnimationFrame'));
     });
 
     test('only disables iframe animations when the SillyTavern setting requests it', () => {
