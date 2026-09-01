@@ -96,6 +96,11 @@ import {
     applyPowerUserSettings,
     generatedTextFiltered,
     applyStylePins,
+    applyLayoutPlusPlusPanelWidths,
+    getLayoutPlusPlusCharacterWidthKey,
+    setLayoutPlusPlusPanelWidth,
+    LAYOUT_PLUS_PLUS_PANEL_MIN_WIDTH,
+    getLayoutPlusPlusEffectivePanelMaxWidth,
 } from './scripts/power-user.js';
 
 import {
@@ -2119,7 +2124,7 @@ function returnToCharacterMenuWithImageTransition() {
     selected_button = 'characters';
     if (!imageTransition) {
         select_rm_characters();
-        endLeftTabLayoutTransition(characterPanelLayoutTransition);
+        setTimeout(() => endLeftTabLayoutTransition(characterPanelLayoutTransition), getAnimationDuration());
         return;
     }
 
@@ -2155,7 +2160,7 @@ function beginCharacterPanelLayoutTransition() {
         // Keep the panel transform synchronized with the avatar flight. The
         // image transition snapshots the destination rect before this queued
         // transform starts, so it does not have to wait for stable frames.
-        { includeCharacterPanel: true },
+        { includeCharacterPanel: true, deferMeasurement: true },
     );
 }
 
@@ -10978,6 +10983,8 @@ export function setMenuType(value) {
     menu_type = value;
     // Allow custom CSS to see which menu type is active
     document.getElementById('right-nav-panel').dataset.menuType = menu_type;
+    applyLayoutPlusPlusPanelWidths();
+    commitLeftTabLayoutTransition();
 }
 
 export function setExternalAbortController(controller) {
@@ -14807,9 +14814,14 @@ export async function updateRemoteChatName(characterId, newName) {
 
 
 function doCharListDisplaySwitch() {
+    cancelActiveCharacterImageAnimation();
+    const characterPanelLayoutTransition = beginCharacterPanelLayoutTransition();
     power_user.charListGrid = !power_user.charListGrid;
     document.body.classList.toggle('charListGrid', power_user.charListGrid);
+    applyLayoutPlusPlusPanelWidths();
+    commitLeftTabLayoutTransition();
     saveSettingsDebounced();
+    setTimeout(() => endLeftTabLayoutTransition(characterPanelLayoutTransition), getAnimationDuration());
 }
 
 /**
@@ -14969,6 +14981,7 @@ const LEFT_TAB_CLOSE_EASING = 'cubic-bezier(0.4, 0, 0.6, 1)';
 const leftTabDrawerAnimations = new WeakMap();
 let leftTabLayoutTransitionGeneration = 0;
 let leftTabLayoutAnimations = [];
+let pendingLeftTabLayoutTransition = null;
 
 /**
  * Returns the inner surface so Layout++ can keep the outer panel as a static
@@ -15017,10 +15030,13 @@ function isSideMountedLeftTabDrawer(drawer) {
  * @param {object} [options] Additional transition targets.
  * @param {boolean} [options.includeCharacterPanel=false] Whether to animate
  * the Layout++ character panel width along with the chat surfaces.
+ * @param {boolean} [options.deferMeasurement=false] Wait for an explicit
+ * commit when an asynchronous state change determines the final geometry.
  * @returns {number} Generation token used to safely clean up after rapid tab changes.
  */
-function beginLeftTabLayoutTransition(duration, easing, { includeCharacterPanel = false } = {}) {
+function beginLeftTabLayoutTransition(duration, easing, { includeCharacterPanel = false, deferMeasurement = false } = {}) {
     const generation = ++leftTabLayoutTransitionGeneration;
+    pendingLeftTabLayoutTransition = null;
     const body = document.body;
     const layoutTargets = [
         ...(includeCharacterPanel
@@ -15055,14 +15071,11 @@ function beginLeftTabLayoutTransition(duration, easing, { includeCharacterPanel 
     body.style.setProperty('--left-tab-transition-easing', easing);
     body.classList.add('left-tab-layout-transitioning');
 
-    // Drawer state changes synchronously after this function returns. Resolve
-    // the new layout once, then visually interpolate from the previously
-    // rendered rectangles. The message list stays compositor-only because
-    // animating its width makes Firefox reflow every message per frame.
-    queueMicrotask(() => {
+    const measureFinalLayout = () => {
         if (generation !== leftTabLayoutTransitionGeneration) {
             return;
         }
+        pendingLeftTabLayoutTransition = null;
 
         const animations = [];
         for (const { element, animateWidth, centerWhenNarrower } of layoutTargets) {
@@ -15115,8 +15128,24 @@ function beginLeftTabLayoutTransition(duration, easing, { includeCharacterPanel 
             }, () => {});
         }
         leftTabLayoutAnimations = animations;
-    });
+    };
+
+    // Drawer class changes are synchronous, while character selection can
+    // cross async save/load boundaries. Character transitions explicitly
+    // commit after data-menu-type changes so the final width is measured.
+    if (deferMeasurement) {
+        pendingLeftTabLayoutTransition = { generation, measureFinalLayout };
+    } else {
+        queueMicrotask(measureFinalLayout);
+    }
     return generation;
+}
+
+function commitLeftTabLayoutTransition() {
+    const pending = pendingLeftTabLayoutTransition;
+    if (!pending || pending.generation !== leftTabLayoutTransitionGeneration) return;
+    pendingLeftTabLayoutTransition = null;
+    queueMicrotask(pending.measureFinalLayout);
 }
 
 /**
@@ -15129,6 +15158,7 @@ function endLeftTabLayoutTransition(generation) {
     }
 
     leftTabLayoutTransitionGeneration++;
+    pendingLeftTabLayoutTransition = null;
     for (const animation of leftTabLayoutAnimations) {
         animation.cancel();
     }
@@ -15161,6 +15191,114 @@ function finishLeftTabLayoutTransition() {
         }
     }
     endLeftTabLayoutTransition(leftTabLayoutTransitionGeneration);
+}
+
+const LAYOUT_PLUS_PLUS_PANEL_KEYBOARD_STEP = 16;
+let layoutPlusPlusPanelResize = null;
+let layoutPlusPlusPanelResizeFrame = 0;
+
+function getLayoutPlusPlusPanelResizeDescriptor(handle) {
+    if (handle?.id === 'layout-plus-plus-settings-resize-handle') {
+        return { handle, panel: document.getElementById('left-nav-panel'), key: 'settings', direction: -1 };
+    }
+    if (handle?.id === 'layout-plus-plus-character-resize-handle') {
+        return { handle, panel: document.getElementById('right-nav-panel'), key: getLayoutPlusPlusCharacterWidthKey(), direction: 1 };
+    }
+    return null;
+}
+
+function prepareLayoutPlusPlusPanelResize(descriptor) {
+    if (!descriptor?.panel
+        || !document.body.classList.contains('layout-plus-plus-desktop')
+        || !window.matchMedia('(pointer: fine)').matches) return false;
+    cancelActiveCharacterImageAnimation();
+    finishLeftTabLayoutTransition();
+    finishLeftTabDrawerAnimation(descriptor.panel);
+    return descriptor.panel.classList.contains('openDrawer')
+        && !descriptor.panel.classList.contains('left-tab-opening')
+        && !descriptor.panel.classList.contains('left-tab-closing');
+}
+
+function applyPendingLayoutPlusPlusPanelResize() {
+    layoutPlusPlusPanelResizeFrame = 0;
+    if (!layoutPlusPlusPanelResize) return;
+    const delta = (layoutPlusPlusPanelResize.latestX - layoutPlusPlusPanelResize.startX) * layoutPlusPlusPanelResize.direction;
+    setLayoutPlusPlusPanelWidth(layoutPlusPlusPanelResize.key, layoutPlusPlusPanelResize.startWidth + delta);
+}
+
+function scheduleLayoutPlusPlusPanelResize(clientX) {
+    if (!layoutPlusPlusPanelResize) return;
+    layoutPlusPlusPanelResize.latestX = clientX;
+    if (!layoutPlusPlusPanelResizeFrame) {
+        layoutPlusPlusPanelResizeFrame = requestAnimationFrame(applyPendingLayoutPlusPlusPanelResize);
+    }
+}
+
+function finishLayoutPlusPlusPanelResize(pointerId) {
+    if (!layoutPlusPlusPanelResize || (pointerId !== undefined && pointerId !== layoutPlusPlusPanelResize.pointerId)) return;
+    cancelAnimationFrame(layoutPlusPlusPanelResizeFrame);
+    layoutPlusPlusPanelResizeFrame = 0;
+    applyPendingLayoutPlusPlusPanelResize();
+    layoutPlusPlusPanelResize.panel.classList.remove('resizing');
+    document.body.classList.remove('layout-plus-plus-panel-resizing');
+    layoutPlusPlusPanelResize = null;
+    applyLayoutPlusPlusPanelWidths();
+    saveSettingsDebounced();
+}
+
+function beginLayoutPlusPlusPanelResize(event) {
+    if (event.button !== 0 || layoutPlusPlusPanelResize) return;
+    const descriptor = getLayoutPlusPlusPanelResizeDescriptor(event.currentTarget);
+    if (!prepareLayoutPlusPlusPanelResize(descriptor)) return;
+
+    event.preventDefault();
+    event.stopPropagation();
+    const width = descriptor.panel.getBoundingClientRect().width;
+    layoutPlusPlusPanelResize = {
+        ...descriptor,
+        pointerId: event.pointerId,
+        startX: event.clientX,
+        latestX: event.clientX,
+        startWidth: width,
+    };
+    descriptor.panel.classList.add('resizing');
+    document.body.classList.add('layout-plus-plus-panel-resizing');
+    descriptor.handle.setPointerCapture(event.pointerId);
+}
+
+function resizeLayoutPlusPlusPanelWithKeyboard(event) {
+    if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+    const descriptor = getLayoutPlusPlusPanelResizeDescriptor(event.currentTarget);
+    if (!prepareLayoutPlusPlusPanelResize(descriptor)) return;
+
+    event.preventDefault();
+    event.stopPropagation();
+    const currentWidth = power_user.layout_plus_plus_panel_widths[descriptor.key];
+    const nextWidth = event.key === 'Home'
+        ? LAYOUT_PLUS_PLUS_PANEL_MIN_WIDTH
+        : event.key === 'End'
+            ? getLayoutPlusPlusEffectivePanelMaxWidth()
+            : currentWidth + (event.key === 'ArrowRight' ? 1 : -1) * descriptor.direction * LAYOUT_PLUS_PLUS_PANEL_KEYBOARD_STEP;
+    setLayoutPlusPlusPanelWidth(descriptor.key, nextWidth);
+    saveSettingsDebounced();
+}
+
+function setupLayoutPlusPlusPanelResizing() {
+    const handles = document.querySelectorAll('.layout-plus-plus-panel-resize-handle');
+    for (const handle of handles) {
+        handle.addEventListener('pointerdown', beginLayoutPlusPlusPanelResize);
+        handle.addEventListener('pointermove', event => scheduleLayoutPlusPlusPanelResize(event.clientX));
+        handle.addEventListener('pointerup', event => {
+            scheduleLayoutPlusPlusPanelResize(event.clientX);
+            finishLayoutPlusPlusPanelResize(event.pointerId);
+        });
+        handle.addEventListener('pointercancel', event => finishLayoutPlusPlusPanelResize(event.pointerId));
+        handle.addEventListener('lostpointercapture', event => finishLayoutPlusPlusPanelResize(event.pointerId));
+        handle.addEventListener('keydown', resizeLayoutPlusPlusPanelWithKeyboard);
+        handle.addEventListener('mousedown', event => event.stopPropagation());
+        handle.addEventListener('click', event => event.stopPropagation());
+    }
+    applyLayoutPlusPlusPanelWidths();
 }
 
 function clearLeftTabDrawerState(drawer, open) {
@@ -15566,6 +15704,7 @@ function initCharacterSearch() {
 
 // MARK: DOM Handlers Start
 jQuery(async function () {
+    setupLayoutPlusPlusPanelResizing();
     setTimeout(function () {
         $('#groupControlsToggle').trigger('click');
         $('#groupCurrentMemberListToggle .inline-drawer-icon').trigger('click');

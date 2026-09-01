@@ -130,6 +130,78 @@ const DEFAULT_LAYOUT_PLUS_PLUS_MODES = Object.freeze({
     desktop: true,
     mobile: false,
 });
+export const LAYOUT_PLUS_PLUS_PANEL_MIN_WIDTH = 280;
+export const LAYOUT_PLUS_PLUS_PANEL_MAX_WIDTH = 1600;
+const LAYOUT_PLUS_PLUS_PANEL_VIEWPORT_MARGIN = 24;
+const DEFAULT_LAYOUT_PLUS_PLUS_PANEL_WIDTHS = Object.freeze({
+    settings: 360,
+    characterDetail: 360,
+    characterGrid: 700,
+});
+
+function normalizeLayoutPlusPlusPanelWidths(widths) {
+    const normalized = { ...DEFAULT_LAYOUT_PLUS_PLUS_PANEL_WIDTHS };
+    if (!widths || typeof widths !== 'object' || Array.isArray(widths)) return normalized;
+
+    for (const key of Object.keys(normalized)) {
+        const width = widths[key];
+        if (typeof width === 'number' && Number.isFinite(width)) {
+            normalized[key] = Math.min(LAYOUT_PLUS_PLUS_PANEL_MAX_WIDTH, Math.max(LAYOUT_PLUS_PLUS_PANEL_MIN_WIDTH, Math.round(width)));
+        }
+    }
+    return normalized;
+}
+
+export function getLayoutPlusPlusEffectivePanelMaxWidth() {
+    const viewportWidth = document.documentElement?.clientWidth || window.innerWidth || LAYOUT_PLUS_PLUS_PANEL_MAX_WIDTH;
+    const navBarWidth = parseFloat(getComputedStyle(document.body).getPropertyValue('--nav-bar-width')) || 50;
+    return Math.max(
+        LAYOUT_PLUS_PLUS_PANEL_MIN_WIDTH,
+        Math.min(LAYOUT_PLUS_PLUS_PANEL_MAX_WIDTH, Math.floor(viewportWidth - navBarWidth - LAYOUT_PLUS_PLUS_PANEL_VIEWPORT_MARGIN)),
+    );
+}
+
+export function getLayoutPlusPlusCharacterWidthKey() {
+    const panel = document.getElementById('right-nav-panel');
+    return document.body.classList.contains('charListGrid') && panel?.dataset.menuType === 'characters'
+        ? 'characterGrid'
+        : 'characterDetail';
+}
+
+export function applyLayoutPlusPlusPanelWidths() {
+    power_user.layout_plus_plus_panel_widths = normalizeLayoutPlusPlusPanelWidths(power_user.layout_plus_plus_panel_widths);
+    const desktopLayout = document.body.classList.contains('layout-plus-plus-desktop');
+    const effectiveMaxWidth = getLayoutPlusPlusEffectivePanelMaxWidth();
+    const settingsWidth = Math.min(power_user.layout_plus_plus_panel_widths.settings, effectiveMaxWidth);
+    const characterDetailWidth = Math.min(power_user.layout_plus_plus_panel_widths.characterDetail, effectiveMaxWidth);
+    const characterGridWidth = Math.min(power_user.layout_plus_plus_panel_widths.characterGrid, effectiveMaxWidth);
+
+    document.body.style.setProperty('--layout-plus-plus-settings-panel-width', desktopLayout ? `${settingsWidth}px` : '360px');
+    document.body.style.setProperty('--layout-plus-plus-character-detail-width', desktopLayout ? `${characterDetailWidth}px` : '360px');
+    document.body.style.setProperty('--layout-plus-plus-character-grid-width', desktopLayout ? `${characterGridWidth}px` : '700px');
+
+    const settingsHandle = document.getElementById('layout-plus-plus-settings-resize-handle');
+    const characterHandle = document.getElementById('layout-plus-plus-character-resize-handle');
+    settingsHandle?.setAttribute('aria-valuemax', String(effectiveMaxWidth));
+    characterHandle?.setAttribute('aria-valuemax', String(effectiveMaxWidth));
+    settingsHandle?.setAttribute('aria-valuenow', String(settingsWidth));
+    const activeCharacterWidth = getLayoutPlusPlusCharacterWidthKey() === 'characterGrid' ? characterGridWidth : characterDetailWidth;
+    characterHandle?.setAttribute('aria-valuenow', String(activeCharacterWidth));
+}
+
+export function setLayoutPlusPlusPanelWidth(key, width) {
+    power_user.layout_plus_plus_panel_widths = normalizeLayoutPlusPlusPanelWidths(power_user.layout_plus_plus_panel_widths);
+    const normalizedWidth = Math.min(getLayoutPlusPlusEffectivePanelMaxWidth(), Math.max(LAYOUT_PLUS_PLUS_PANEL_MIN_WIDTH, Math.round(Number(width))));
+    if (!Object.hasOwn(power_user.layout_plus_plus_panel_widths, key) || !Number.isFinite(normalizedWidth)) return null;
+    power_user.layout_plus_plus_panel_widths[key] = normalizedWidth;
+    applyLayoutPlusPlusPanelWidths();
+    return normalizedWidth;
+}
+
+export function resetLayoutPlusPlusPanelWidths() {
+    power_user.layout_plus_plus_panel_widths = { ...DEFAULT_LAYOUT_PLUS_PLUS_PANEL_WIDTHS };
+    applyLayoutPlusPlusPanelWidths();
+}
 
 export const persona_description_positions = _persona_description_positions;
 
@@ -371,6 +443,7 @@ export const power_user = {
     click_to_edit: false,
     layout_plus_plus: true,
     layout_plus_plus_modes: { ...DEFAULT_LAYOUT_PLUS_PLUS_MODES },
+    layout_plus_plus_panel_widths: { ...DEFAULT_LAYOUT_PLUS_PLUS_PANEL_WIDTHS },
     hide_tool_messages: false,
     auto_list_directory_context: false,
     enable_dangerous_tools: false,
@@ -673,6 +746,7 @@ function switchLayoutPlusPlus() {
         .toggleClass('layout-plus-plus-mobile', enabled && mobileViewport)
         .toggleClass('layout-plus-plus-desktop', enabled && !mobileViewport);
     $('#layout_plus_plus').prop('checked', enabled);
+    applyLayoutPlusPlusPanelWidths();
     void applyLayoutPlusPlusStyles(enabled).catch(error => console.warn('Failed to apply Layout++ styles:', error));
 }
 
@@ -1741,6 +1815,7 @@ export async function loadPowerUserSettings(settings, data) {
     }
 
     power_user.layout_plus_plus_modes = normalizeLayoutPlusPlusModes(power_user.layout_plus_plus_modes, power_user.layout_plus_plus);
+    power_user.layout_plus_plus_panel_widths = normalizeLayoutPlusPlusPanelWidths(power_user.layout_plus_plus_panel_widths);
     syncLayoutPlusPlusForViewport();
 
     power_user.tool_click_to_execute = power_user.tool_click_to_execute !== undefined
@@ -4350,6 +4425,11 @@ jQuery(() => {
     $('#layout_plus_plus').on('input', function () {
         setLayoutPlusPlusForViewport(!!$(this).prop('checked'));
         switchLayoutPlusPlus();
+        saveSettingsDebounced();
+    });
+
+    $('#layout_plus_plus_panel_widths_reset').on('click', function () {
+        resetLayoutPlusPlusPanelWidths();
         saveSettingsDebounced();
     });
 
