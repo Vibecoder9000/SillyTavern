@@ -6,10 +6,8 @@ import { getAccessAccount, getAuthStatus, startBrowserFlow, pollBrowserFlow, sta
 import { CODEX_MODELS, CODEX_RESPONSES_ENDPOINT } from './constants.js';
 import { parseCodexErrorResponse } from './error-response.js';
 import { updateObservedLimitsFromEvent, updateObservedLimitsFromHeaders } from './limits.js';
-import { sanitizeCodexLogValue } from './log-sanitizer.js';
-import { convertChatCompletionRequest } from './request-converter.js';
-import { CodexResponseConverter, createChatCompletionAccumulator } from './response-converter.js';
-import { SseParser } from './sse-parser.js';
+import { sanitizeResponsesLogValue } from '../openai-responses/log-sanitizer.js';
+import { convertChatCompletionRequest, proxyResponsesAsChatCompletion } from '../openai-responses/index.js';
 
 export const router = express.Router();
 
@@ -73,80 +71,41 @@ async function fetchCodex(request, account, body, signal) {
     });
 }
 
-function writeSse(response, chunk) {
-    response.write(`data: ${JSON.stringify(chunk)}\n\n`);
-}
-
 export async function sendCodexChatCompletion(request, response) {
-    const controller = new AbortController();
-    let clientClosed = false;
-    const abortOnClose = () => {
-        clientClosed = true;
-        controller.abort();
-    };
-    request.socket.once('close', abortOnClose);
-    let account = await getAccessAccount(request);
-    const codexBody = convertChatCompletionRequest({ ...request.body, n: 1 });
-    console.debug('OpenAI Codex request:', sanitizeCodexLogValue(codexBody));
-    let upstream = await fetchCodex(request, account, codexBody, controller.signal);
-    if (upstream.status === 401) {
-        account = await getAccessAccount(request, { forceRefresh: true });
-        upstream = await fetchCodex(request, account, codexBody, controller.signal);
-        if (upstream.status === 401) requireReconnect(request, account.accountId, 'ChatGPT rejected the refreshed credentials. Sign in again.');
-    }
-    updateObservedLimitsFromHeaders(request.user.profile.handle, account.accountId, upstream.headers);
-    if (!upstream.ok) {
-        const errorText = await upstream.text();
-        const { message, logValue } = parseCodexErrorResponse(errorText, upstream.statusText);
-        console.debug('OpenAI Codex error response:', upstream.status, sanitizeCodexLogValue(logValue));
-        return response.status(upstream.status).json({ error: { message }, quota_error: upstream.status === 429 });
-    }
-
-    const converter = new CodexResponseConverter({ model: codexBody.model, stop: request.body.stop });
-    const accumulator = createChatCompletionAccumulator(codexBody.model);
-    if (request.body.stream) {
-        response.status(200);
-        response.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
-        response.setHeader('Cache-Control', 'no-cache');
-        response.setHeader('Connection', 'keep-alive');
-    }
-    const handleEvent = async event => {
-        if (event.type === 'codex.rate_limits') {
-            updateObservedLimitsFromEvent(request.user.profile.handle, account.accountId, event);
-            return;
-        }
-        for (const chunk of converter.convert(event)) {
-            accumulator.push(chunk);
-            if (request.body.stream) {
-                if (!clientClosed) writeSse(response, chunk);
+    let account;
+    const codexBody = convertChatCompletionRequest({ ...request.body, n: 1 }, {
+        store: false,
+        forceStream: true,
+        encryptedReasoning: true,
+    });
+    return proxyResponsesAsChatCompletion({
+        request,
+        response,
+        convertOptions: { model: codexBody.model, stop: request.body.stop, fallbackId: 'chatcmpl-codex', errorMessage: 'Codex generation failed' },
+        fetchUpstream: async signal => {
+            account = await getAccessAccount(request);
+            console.debug('OpenAI Codex request:', sanitizeResponsesLogValue(codexBody));
+            let upstream = await fetchCodex(request, account, codexBody, signal);
+            if (upstream.status === 401) {
+                account = await getAccessAccount(request, { forceRefresh: true });
+                upstream = await fetchCodex(request, account, codexBody, signal);
+                if (upstream.status === 401) requireReconnect(request, account.accountId, 'ChatGPT rejected the refreshed credentials. Sign in again.');
             }
-        }
-        if (converter.stopped && !controller.signal.aborted) controller.abort();
-    };
-    const parser = new SseParser(handleEvent);
-    try {
-        for await (const chunk of upstream.body) await parser.push(chunk);
-        await parser.push('', true);
-        if (!converter.state.completed) {
-            for (const chunk of converter.finish()) {
-                accumulator.push(chunk);
-                if (request.body.stream) {
-                    if (!clientClosed) writeSse(response, chunk);
-                }
+            return upstream;
+        },
+        onHeaders: headers => updateObservedLimitsFromHeaders(request.user.profile.handle, account.accountId, headers),
+        onEvent: event => {
+            if (event.type === 'codex.rate_limits') {
+                updateObservedLimitsFromEvent(request.user.profile.handle, account.accountId, event);
+                return true;
             }
-        }
-    } catch (error) {
-        if (!converter.stopped && error.name !== 'AbortError') throw error;
-    }
-    request.socket.off('close', abortOnClose);
-    if (clientClosed) return;
-    const completion = accumulator.finish();
-    console.debug('OpenAI Codex response:', sanitizeCodexLogValue(completion));
-    if (request.body.stream) {
-        response.write('data: [DONE]\n\n');
-        return response.end();
-    }
-    return response.json(completion);
+            return false;
+        },
+        normalizeError: ({ text, status, statusText }) => {
+            const { message, logValue } = parseCodexErrorResponse(text, statusText);
+            console.debug('OpenAI Codex error response:', status, sanitizeResponsesLogValue(logValue));
+            return { error: { message }, quota_error: status === 429 };
+        },
+        onCompletion: completion => console.debug('OpenAI Codex response:', sanitizeResponsesLogValue(completion)),
+    });
 }
-
-export { convertChatCompletionRequest, CodexResponseConverter, createChatCompletionAccumulator, SseParser };

@@ -755,6 +755,10 @@ export function getTokenizerModel() {
         return oai_settings.custom_model;
     }
 
+    if (oai_settings.chat_completion_source == chat_completion_sources.OPENAI_RESPONSES) {
+        return oai_settings.openai_responses_model;
+    }
+
     if (oai_settings.chat_completion_source === chat_completion_sources.PERPLEXITY) {
         if (oai_settings.perplexity_model.includes('sonar-reasoning') || oai_settings.perplexity_model.includes('r1-1776')) {
             return deepseekTokenizer;

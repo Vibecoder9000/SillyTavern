@@ -113,6 +113,7 @@ function recordStartupPhase(name, phaseStart, phaseEnd, cpuMs, status) {
 function reportStartupProfile(result) {
     if (!startupPhaseTimings) return result;
 
+    globalThis.STARTUP_TIMING_COMPLETE = true;
     const totalMs = Math.round(performance.now() - serverStartTime);
     const isSlow = totalMs > startupSlowThresholdMs;
     const status = isSlow ? 'SLOW' : 'Healthy';
@@ -212,7 +213,7 @@ if (cliArgs.listen && cliArgs.basicAuthMode) {
 }
 
 if (cliArgs.whitelistMode) {
-    const whitelistMiddleware = await getWhitelistMiddleware();
+    const whitelistMiddleware = await timeStartupPhase('initialize host whitelist middleware', getWhitelistMiddleware);
     app.use(whitelistMiddleware);
 }
 

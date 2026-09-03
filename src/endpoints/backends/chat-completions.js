@@ -72,6 +72,7 @@ import {
     sendCodexChatCompletion,
     sendCodexStatus,
 } from './openai-codex/index.js';
+import { sendOpenAIResponsesChatCompletion } from './openai-responses/index.js';
 
 const API_OPENAI = 'https://api.openai.com/v1';
 const API_CLAUDE = 'https://api.anthropic.com/v1';
@@ -1778,6 +1779,10 @@ router.post('/status', async function (request, statusResponse) {
             apiKey = readSecret(request.user.directories, SECRET_KEYS.CUSTOM, request.body.secret_id);
             headers = {};
             mergeObjectWithYaml(headers, request.body.custom_include_headers);
+        } else if (request.body.chat_completion_source === CHAT_COMPLETION_SOURCES.OPENAI_RESPONSES) {
+            apiUrl = request.body.openai_responses_url;
+            apiKey = readSecret(request.user.directories, SECRET_KEYS.OPENAI_RESPONSES, request.body.secret_id);
+            headers = {};
         } else if (request.body.chat_completion_source === CHAT_COMPLETION_SOURCES.COHERE) {
             apiUrl = API_COHERE_V1;
             apiKey = readSecret(request.user.directories, SECRET_KEYS.COHERE, request.body.secret_id);
@@ -1999,7 +2004,10 @@ router.post('/status', async function (request, statusResponse) {
             return statusResponse.status(400).send({ error: true });
         }
 
-        if (!apiKey && !request.body.reverse_proxy && request.body.chat_completion_source !== CHAT_COMPLETION_SOURCES.CUSTOM) {
+        if (!apiKey && !request.body.reverse_proxy && ![
+            CHAT_COMPLETION_SOURCES.CUSTOM,
+            CHAT_COMPLETION_SOURCES.OPENAI_RESPONSES,
+        ].includes(request.body.chat_completion_source)) {
             console.warn('Chat Completion API key is missing.');
             return statusResponse.status(400).send({ error: true });
         }
@@ -2011,7 +2019,9 @@ router.post('/status', async function (request, statusResponse) {
         const response = await fetch(modelsUrl, {
             method: 'GET',
             headers: {
-                'Authorization': 'Bearer ' + apiKey,
+                ...(request.body.chat_completion_source === CHAT_COMPLETION_SOURCES.OPENAI_RESPONSES && !apiKey
+                    ? {}
+                    : { 'Authorization': 'Bearer ' + apiKey }),
                 ...headers,
             },
         });
@@ -2193,6 +2203,7 @@ router.post('/generate', async function (request, response) {
 
         switch (request.body.chat_completion_source) {
             case CHAT_COMPLETION_SOURCES.OPENAI_CODEX: return await sendCodexChatCompletion(request, response);
+            case CHAT_COMPLETION_SOURCES.OPENAI_RESPONSES: return await sendOpenAIResponsesChatCompletion(request, response);
             case CHAT_COMPLETION_SOURCES.CLAUDE: return await sendClaudeRequest(request, response);
             case CHAT_COMPLETION_SOURCES.AI21: return await sendAI21Request(request, response);
             case CHAT_COMPLETION_SOURCES.MAKERSUITE: return await sendMakerSuiteRequest(request, response);

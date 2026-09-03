@@ -75,7 +75,11 @@ function convertToolChoice(choice) {
     return undefined;
 }
 
-export function convertChatCompletionRequest(body) {
+export function convertChatCompletionRequest(body, {
+    store = false,
+    forceStream = true,
+    encryptedReasoning = false,
+} = {}) {
     const messages = Array.isArray(body.messages) ? body.messages : [];
     const instructionMessages = [];
     let firstConversationIndex = 0;
@@ -91,9 +95,9 @@ export function convertChatCompletionRequest(body) {
         model: String(body.model || ''),
         instructions,
         input,
-        store: false,
-        stream: true,
-        include: ['reasoning.encrypted_content'],
+        store,
+        stream: forceStream ? true : body.stream,
+        include: encryptedReasoning ? ['reasoning.encrypted_content'] : undefined,
         tools: convertTools(body.tools),
         tool_choice: convertToolChoice(body.tool_choice),
     };

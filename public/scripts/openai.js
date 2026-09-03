@@ -175,6 +175,7 @@ export let model_list = [];
 export const chat_completion_sources = {
     OPENAI: 'openai',
     OPENAI_CODEX: 'openai_codex',
+    OPENAI_RESPONSES: 'openai_responses',
     CLAUDE: 'claude',
     OPENROUTER: 'openrouter',
     AI21: 'ai21',
@@ -295,6 +296,7 @@ const sensitiveFields = [
     'reverse_proxy',
     'proxy_password',
     'custom_url',
+    'openai_responses_url',
     'custom_include_body',
     'custom_exclude_body',
     'custom_include_headers',
@@ -325,6 +327,8 @@ export const settingsToUpdate = {
     openai_model: ['#model_openai_select', 'openai_model', false, true],
     codex_model: ['#model_codex_select', 'codex_model', false, true],
     codex_custom_model: ['#codex_custom_model', 'codex_custom_model', false, true],
+    openai_responses_model: ['#openai_responses_model_id', 'openai_responses_model', false, true],
+    openai_responses_url: ['#openai_responses_api_url_text', 'openai_responses_url', false, true],
     claude_model: ['#model_claude_select', 'claude_model', false, true],
     openrouter_model: ['#model_openrouter_select', 'openrouter_model', false, true],
     openrouter_use_fallback: ['#openrouter_use_fallback', 'openrouter_use_fallback', true, true],
@@ -453,6 +457,8 @@ const default_settings = {
     openai_model: 'gpt-4-turbo',
     codex_model: 'gpt-5.6-sol',
     codex_custom_model: '',
+    openai_responses_model: '',
+    openai_responses_url: '',
     claude_model: 'claude-sonnet-4-5',
     google_model: 'gemini-2.5-pro',
     vertexai_model: 'gemini-2.5-pro',
@@ -1817,6 +1823,8 @@ export function getChatCompletionModel(settings = null) {
             return settings.openai_model;
         case chat_completion_sources.OPENAI_CODEX:
             return settings.codex_model === '__custom__' ? settings.codex_custom_model.trim() : settings.codex_model;
+        case chat_completion_sources.OPENAI_RESPONSES:
+            return settings.openai_responses_model;
         case chat_completion_sources.MAKERSUITE:
             return settings.google_model;
         case chat_completion_sources.VERTEXAI:
@@ -2205,6 +2213,23 @@ function saveModelList(data) {
 
         if (!oai_settings.custom_model && model_list.length > 0) {
             $('#model_custom_select').val(model_list[0].id).trigger('change');
+        }
+    }
+
+    if (oai_settings.chat_completion_source == chat_completion_sources.OPENAI_RESPONSES) {
+        $('.model_openai_responses_select').empty();
+        $('.model_openai_responses_select').append('<option value="">None</option>');
+        model_list.forEach((model) => {
+            $('.model_openai_responses_select').append(
+                $('<option>', {
+                    value: model.id,
+                    text: model.id,
+                    selected: model.id == oai_settings.openai_responses_model,
+                }));
+        });
+
+        if (!oai_settings.openai_responses_model && model_list.length > 0) {
+            $('#model_openai_responses_select').val(model_list[0].id).trigger('change');
         }
     }
 
@@ -2679,6 +2704,7 @@ function getReasoningEffort(settings = null, model = null) {
     const reasoningEffortSources = [
         chat_completion_sources.OPENAI,
         chat_completion_sources.OPENAI_CODEX,
+        chat_completion_sources.OPENAI_RESPONSES,
         chat_completion_sources.AZURE_OPENAI,
         chat_completion_sources.CUSTOM,
         chat_completion_sources.XAI,
@@ -2697,7 +2723,7 @@ function getReasoningEffort(settings = null, model = null) {
     }
 
     function resolveReasoningEffort() {
-        if (settings.chat_completion_source === chat_completion_sources.OPENAI_CODEX) {
+        if ([chat_completion_sources.OPENAI_CODEX, chat_completion_sources.OPENAI_RESPONSES].includes(settings.chat_completion_source)) {
             if (settings.reasoning_effort === reasoning_effort_types.auto) return undefined;
             if (settings.reasoning_effort === reasoning_effort_types.min) return 'minimal';
             if (settings.reasoning_effort === reasoning_effort_types.max) return 'max';
@@ -2755,7 +2781,7 @@ function getReasoningEffort(settings = null, model = null) {
             case reasoning_effort_types.max:
                 return reasoning_effort_types.high;
             case reasoning_effort_types.xhigh:
-                // Extra High is only accepted by the Codex provider, which returns earlier.
+                // Extra High is only accepted by the Responses-based providers, which return earlier.
                 return reasoning_effort_types.high;
             default:
                 return settings.reasoning_effort;
@@ -3048,6 +3074,10 @@ export async function createGenerationParameters(settings, model, type, messages
         generate_data.custom_include_body = substituteParams(settings.custom_include_body);
         generate_data.custom_exclude_body = substituteParams(settings.custom_exclude_body);
         generate_data.custom_include_headers = substituteParams(settings.custom_include_headers);
+    }
+
+    if (settings.chat_completion_source === chat_completion_sources.OPENAI_RESPONSES) {
+        generate_data.openai_responses_url = settings.openai_responses_url;
     }
 
     if (settings.chat_completion_source === chat_completion_sources.COHERE) {
@@ -3412,7 +3442,7 @@ export function getStreamingReply(data, state, { chatCompletionSource = null, ov
             }
         });
         return data.choices?.[0]?.delta?.content ?? data.choices?.[0]?.message?.content ?? data.choices?.[0]?.text ?? '';
-    } else if ([chat_completion_sources.CUSTOM, chat_completion_sources.POLLINATIONS, chat_completion_sources.AIMLAPI, chat_completion_sources.MOONSHOT, chat_completion_sources.COMETAPI, chat_completion_sources.ELECTRONHUB, chat_completion_sources.NANOGPT, chat_completion_sources.ZAI, chat_completion_sources.SILICONFLOW, chat_completion_sources.CHUTES, chat_completion_sources.WORKERS_AI].includes(chat_completion_source)) {
+    } else if ([chat_completion_sources.CUSTOM, chat_completion_sources.OPENAI_RESPONSES, chat_completion_sources.POLLINATIONS, chat_completion_sources.AIMLAPI, chat_completion_sources.MOONSHOT, chat_completion_sources.COMETAPI, chat_completion_sources.ELECTRONHUB, chat_completion_sources.NANOGPT, chat_completion_sources.ZAI, chat_completion_sources.SILICONFLOW, chat_completion_sources.CHUTES, chat_completion_sources.WORKERS_AI].includes(chat_completion_source)) {
         if (show_thoughts) {
             state.reasoning +=
                 data.choices?.filter(x => x?.delta?.reasoning_content)?.[0]?.delta?.reasoning_content ??
@@ -4905,6 +4935,12 @@ async function getStatusOpen() {
         return resultCheckStatus();
     }
 
+    if (oai_settings.chat_completion_source === chat_completion_sources.OPENAI_RESPONSES && !isValidUrl(oai_settings.openai_responses_url)) {
+        console.debug('Invalid endpoint URL of Custom OpenAI Responses API:', oai_settings.openai_responses_url);
+        setOnlineStatus(t`Invalid endpoint URL. Requests may fail.`);
+        return resultCheckStatus();
+    }
+
     if (oai_settings.chat_completion_source === chat_completion_sources.AZURE_OPENAI && !isValidUrl(oai_settings.azure_base_url)) {
         console.debug('Invalid endpoint URL of Azure OpenAI API:', oai_settings.azure_base_url);
         setOnlineStatus(t`Invalid Azure endpoint URL. Requests may fail.`);
@@ -4938,6 +4974,10 @@ async function getStatusOpen() {
         data.custom_include_headers = substituteParams(oai_settings.custom_include_headers);
     }
 
+    if (oai_settings.chat_completion_source === chat_completion_sources.OPENAI_RESPONSES) {
+        data.openai_responses_url = oai_settings.openai_responses_url;
+    }
+
     if (oai_settings.chat_completion_source === chat_completion_sources.AZURE_OPENAI) {
         data.azure_base_url = oai_settings.azure_base_url;
         data.azure_deployment_name = oai_settings.azure_deployment_name;
@@ -4960,7 +5000,8 @@ async function getStatusOpen() {
         data.pollinations_endpoint = oai_settings.pollinations_endpoint || POLLINATIONS_ENDPOINT.AUTHENTICATED;
     }
 
-    const canBypass = (oai_settings.chat_completion_source === chat_completion_sources.OPENAI && oai_settings.bypass_status_check) || oai_settings.chat_completion_source === chat_completion_sources.CUSTOM;
+    const canBypass = (oai_settings.chat_completion_source === chat_completion_sources.OPENAI && oai_settings.bypass_status_check)
+        || [chat_completion_sources.CUSTOM, chat_completion_sources.OPENAI_RESPONSES].includes(oai_settings.chat_completion_source);
     if (canBypass) {
         setOnlineStatus(t`Status check bypassed`);
     }
@@ -6028,6 +6069,12 @@ async function onModelChange() {
         $('#custom_model_id').val(value).trigger('input');
     }
 
+    if (value && $(this).is('#model_openai_responses_select')) {
+        console.log('Custom OpenAI Responses model changed to', value);
+        oai_settings.openai_responses_model = value;
+        $('#openai_responses_model_id').val(value).trigger('input');
+    }
+
     if (value && $(this).is('#model_pollinations_select')) {
         console.log('Pollinations model changed to', value);
         oai_settings.pollinations_model = value;
@@ -6243,7 +6290,7 @@ async function onModelChange() {
         $('#temp_openai').attr('max', oai_max_temp).val(oai_settings.temp_openai).trigger('input');
     }
 
-    if (oai_settings.chat_completion_source == chat_completion_sources.CUSTOM) {
+    if ([chat_completion_sources.CUSTOM, chat_completion_sources.OPENAI_RESPONSES].includes(oai_settings.chat_completion_source)) {
         $('#openai_max_context').attr('max', unlocked_max);
         oai_settings.openai_max_context = Math.min(Number($('#openai_max_context').attr('max')), oai_settings.openai_max_context);
         $('#openai_max_context').val(oai_settings.openai_max_context).trigger('input');
@@ -6456,6 +6503,7 @@ async function onConnectButtonClick(e) {
         [chat_completion_sources.MAKERSUITE]: { key: SECRET_KEYS.MAKERSUITE, selector: '#api_key_makersuite', proxy: true },
         [chat_completion_sources.CLAUDE]: { key: SECRET_KEYS.CLAUDE, selector: '#api_key_claude', proxy: true },
         [chat_completion_sources.OPENAI]: { key: SECRET_KEYS.OPENAI, selector: '#api_key_openai', proxy: true },
+        [chat_completion_sources.OPENAI_RESPONSES]: { key: SECRET_KEYS.OPENAI_RESPONSES, selector: '#api_key_openai_responses', proxy: false, keyless: true },
         [chat_completion_sources.AI21]: { key: SECRET_KEYS.AI21, selector: '#api_key_ai21', proxy: false },
         [chat_completion_sources.MISTRALAI]: { key: SECRET_KEYS.MISTRALAI, selector: '#api_key_mistralai', proxy: true },
         [chat_completion_sources.CUSTOM]: { key: SECRET_KEYS.CUSTOM, selector: '#api_key_custom', proxy: false, keyless: true },
@@ -6553,6 +6601,8 @@ function toggleChatCompletionForms() {
         $('#model_nanogpt_select').trigger('change');
     } else if (oai_settings.chat_completion_source == chat_completion_sources.CUSTOM) {
         $('#model_custom_select').trigger('change');
+    } else if (oai_settings.chat_completion_source == chat_completion_sources.OPENAI_RESPONSES) {
+        $('#model_openai_responses_select').trigger('change');
     } else if (oai_settings.chat_completion_source == chat_completion_sources.DEEPSEEK) {
         $('#model_deepseek_select').trigger('change');
     } else if (oai_settings.chat_completion_source == chat_completion_sources.AIMLAPI) {
@@ -6737,6 +6787,7 @@ export function isImageInliningSupported() {
         case chat_completion_sources.OPENROUTER:
             return (Array.isArray(model_list) && model_list.find(m => m.id === oai_settings.openrouter_model)?.architecture?.input_modalities?.includes('image'));
         case chat_completion_sources.CUSTOM:
+        case chat_completion_sources.OPENAI_RESPONSES:
             return true;
         case chat_completion_sources.MISTRALAI:
             return (Array.isArray(model_list) && model_list.find(m => m.id === oai_settings.mistralai_model)?.capabilities?.vision);
@@ -7532,6 +7583,16 @@ export function initOpenAI() {
         saveSettingsDebounced();
     });
 
+    $('#openai_responses_api_url_text').on('input', function () {
+        oai_settings.openai_responses_url = String($(this).val());
+        saveSettingsDebounced();
+    });
+
+    $('#openai_responses_model_id').on('input', function () {
+        oai_settings.openai_responses_model = String($(this).val());
+        saveSettingsDebounced();
+    });
+
     $('#custom_prompt_post_processing').on('change', function () {
         oai_settings.custom_prompt_post_processing = String($(this).val());
         updateFeatureSupportFlags();
@@ -7836,6 +7897,7 @@ export function initOpenAI() {
     $('#model_deepseek_select').on('change', onModelChange);
     $('#model_aimlapi_select').on('change', onModelChange);
     $('#model_custom_select').on('change', onModelChange);
+    $('#model_openai_responses_select').on('change', onModelChange);
     $('#model_xai_select').on('change', onModelChange);
     $('#model_pollinations_select').on('change', onModelChange);
     $('#model_cometapi_select').on('change', onModelChange);

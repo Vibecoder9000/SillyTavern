@@ -217,6 +217,7 @@ export const VERTEX_SAFETY = [
 export const CHAT_COMPLETION_SOURCES = {
     OPENAI: 'openai',
     OPENAI_CODEX: 'openai_codex',
+    OPENAI_RESPONSES: 'openai_responses',
     CLAUDE: 'claude',
     OPENROUTER: 'openrouter',
     AI21: 'ai21',

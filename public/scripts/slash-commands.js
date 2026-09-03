@@ -3143,6 +3143,7 @@ export function initDefaultSlashCommands() {
                 typeList: [ARGUMENT_TYPE.STRING],
                 enumList: [
                     new SlashCommandEnumValue('custom', 'custom OpenAI-compatible', enumTypes.getBasedOnIndex(UNIQUE_APIS.findIndex(x => x === 'openai')), 'O'),
+                    new SlashCommandEnumValue('openai_responses', 'custom OpenAI Responses-compatible', enumTypes.getBasedOnIndex(UNIQUE_APIS.findIndex(x => x === 'openai')), 'R'),
                     new SlashCommandEnumValue('zai', 'Z.AI', enumTypes.getBasedOnIndex(UNIQUE_APIS.findIndex(x => x === 'zai')), 'Z'),
                     new SlashCommandEnumValue('vertexai', 'Google Vertex AI', enumTypes.getBasedOnIndex(UNIQUE_APIS.findIndex(x => x === 'vertexai')), 'V'),
                     new SlashCommandEnumValue('siliconflow', 'SiliconFlow', enumTypes.getBasedOnIndex(UNIQUE_APIS.findIndex(x => x === 'siliconflow')), 'S'),
@@ -6267,6 +6268,7 @@ function getModelOptions(quiet) {
         { id: 'model_vertexai_select', api: 'openai', type: chat_completion_sources.VERTEXAI },
         { id: 'model_mistralai_select', api: 'openai', type: chat_completion_sources.MISTRALAI },
         { id: 'custom_model_id', api: 'openai', type: chat_completion_sources.CUSTOM },
+        { id: 'openai_responses_model_id', api: 'openai', type: chat_completion_sources.OPENAI_RESPONSES },
         { id: 'model_cohere_select', api: 'openai', type: chat_completion_sources.COHERE },
         { id: 'model_perplexity_select', api: 'openai', type: chat_completion_sources.PERPLEXITY },
         { id: 'model_groq_select', api: 'openai', type: chat_completion_sources.GROQ },
@@ -6625,6 +6627,26 @@ async function setApiUrlCallback({ api = null, connect = 'true', quiet = 'false'
         }
 
         $('#custom_api_url_text').val(url).trigger('input');
+
+        if (autoConnect) {
+            $('#api_button_openai').trigger('click');
+        }
+
+        return url;
+    }
+
+    const isCurrentlyOpenaiResponses = main_api === 'openai' && oai_settings.chat_completion_source === chat_completion_sources.OPENAI_RESPONSES;
+    if (api === chat_completion_sources.OPENAI_RESPONSES || (!api && isCurrentlyOpenaiResponses)) {
+        if (!url) {
+            return oai_settings.openai_responses_url ?? '';
+        }
+
+        if (!isCurrentlyOpenaiResponses && autoConnect) {
+            toastr.warning(t`Custom OpenAI Responses API is not the currently selected API, so we cannot do an auto-connect. Consider switching to it via /api beforehand.`);
+            return '';
+        }
+
+        $('#openai_responses_api_url_text').val(url).trigger('input');
 
         if (autoConnect) {
             $('#api_button_openai').trigger('click');

@@ -444,6 +444,7 @@ export class ConnectionManagerRequestService {
                         chat_completion_source: selectedApiMap.source,
                         secret_id: profile['secret-id'],
                         custom_url: profile['api-url'],
+                        ...(selectedApiMap.source === chat_completion_sources.OPENAI_RESPONSES ? { openai_responses_url: profile['api-url'] } : {}),
                         vertexai_region: profile['api-url'],
                         zai_endpoint: profile['api-url'],
                         siliconflow_endpoint: profile['api-url'],

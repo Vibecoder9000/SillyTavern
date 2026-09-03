@@ -1,12 +1,14 @@
 import { describe, expect, test } from '@jest/globals';
 
 import { parseCodexErrorResponse } from '../src/endpoints/backends/openai-codex/error-response';
-import { convertChatCompletionRequest } from '../src/endpoints/backends/openai-codex/request-converter';
-import { CodexResponseConverter, createChatCompletionAccumulator } from '../src/endpoints/backends/openai-codex/response-converter';
+import { convertChatCompletionRequest } from '../src/endpoints/backends/openai-responses/request-converter';
+import { ResponsesResponseConverter, createChatCompletionAccumulator } from '../src/endpoints/backends/openai-responses/response-converter';
 import { clearObservedLimits, readObservedLimits, updateObservedLimitsFromEvent, updateObservedLimitsFromHeaders } from '../src/endpoints/backends/openai-codex/limits';
-import { sanitizeCodexLogValue } from '../src/endpoints/backends/openai-codex/log-sanitizer';
+import { sanitizeResponsesLogValue } from '../src/endpoints/backends/openai-responses/log-sanitizer';
 import { ChatCompletionStreamCollector } from '../src/chat-completion-stream';
-import { SseParser } from '../src/endpoints/backends/openai-codex/sse-parser';
+import { SseParser } from '../src/endpoints/backends/openai-responses/sse-parser';
+
+const codexRequestOptions = { store: false, forceStream: true, encryptedReasoning: true };
 
 describe('OpenAI Codex request conversion', () => {
     test('converts instructions, multimodal messages, tools, schema, and settings', () => {
@@ -26,7 +28,7 @@ describe('OpenAI Codex request conversion', () => {
             reasoning_effort: 'max',
             verbosity: 'high',
             json_schema: { name: 'answer', strict: true, value: { type: 'object' } },
-        });
+        }, codexRequestOptions);
 
         expect(result).toMatchObject({
             model: 'gpt-5.6-sol',
@@ -51,6 +53,12 @@ describe('OpenAI Codex request conversion', () => {
         expect(convertChatCompletionRequest({ model: 'x', messages: [], reasoning_effort: 'min' }).reasoning.effort).toBe('minimal');
         expect(convertChatCompletionRequest({ model: 'x', messages: [], reasoning_effort: 'auto', verbosity: 'auto' })).not.toHaveProperty('reasoning');
     });
+
+    test('only includes encrypted reasoning when the transport enables it', () => {
+        expect(convertChatCompletionRequest({ model: 'x', messages: [] })).not.toHaveProperty('include');
+        expect(convertChatCompletionRequest({ model: 'x', messages: [] }, codexRequestOptions).include)
+            .toEqual(['reasoning.encrypted_content']);
+    });
 });
 
 describe('OpenAI Codex error handling', () => {
@@ -66,12 +74,12 @@ describe('OpenAI Codex error handling', () => {
     test('omits base64 from parsed and raw error logs without mutating the input', () => {
         const dataUrl = `data:image/png;base64,${'A'.repeat(512)}`;
         const payload = { error: { message: 'Invalid image', request: { image_url: dataUrl } } };
-        const sanitizedPayload = sanitizeCodexLogValue(payload);
+        const sanitizedPayload = sanitizeResponsesLogValue(payload);
         expect(sanitizedPayload.error.request.image_url).toBe('[base64 omitted]');
         expect(payload.error.request.image_url).toBe(dataUrl);
 
         const rawError = JSON.stringify(payload);
-        const sanitizedText = sanitizeCodexLogValue(rawError);
+        const sanitizedText = sanitizeResponsesLogValue(rawError);
         expect(sanitizedText).toContain('[base64 omitted]');
         expect(sanitizedText).not.toContain('A'.repeat(64));
     });
@@ -79,7 +87,7 @@ describe('OpenAI Codex error handling', () => {
 
 describe('OpenAI Codex response conversion', () => {
     test('normalizes text, reasoning, tools, signatures, usage, and split stop strings', () => {
-        const converter = new CodexResponseConverter({ model: 'gpt-5.6-sol', stop: ['STOP'] });
+        const converter = new ResponsesResponseConverter({ model: 'gpt-5.6-sol', stop: ['STOP'] });
         const accumulator = createChatCompletionAccumulator('gpt-5.6-sol');
         const events = [
             { type: 'response.created', response: { id: 'resp_1', model: 'gpt-5.6-sol' } },
@@ -102,7 +110,7 @@ describe('OpenAI Codex response conversion', () => {
     });
 
     test('produces ordinary SSE chunks consumable by the existing collector', () => {
-        const converter = new CodexResponseConverter({ model: 'gpt-5.5' });
+        const converter = new ResponsesResponseConverter({ model: 'gpt-5.5' });
         const chunks = [
             ...converter.convert({ type: 'response.output_text.delta', delta: 'Hello' }),
             ...converter.finish(),
@@ -131,13 +139,27 @@ describe('OpenAI Codex response conversion', () => {
     });
 
     test('uses completed tool arguments and reports incomplete output as length', () => {
-        const converter = new CodexResponseConverter({ model: 'gpt-5.5' });
+        const converter = new ResponsesResponseConverter({ model: 'gpt-5.5' });
         const chunks = [
             ...converter.convert({ type: 'response.output_item.added', output_index: 0, item: { type: 'function_call', call_id: 'call_1', name: 'lookup', arguments: '{"x":1}' } }),
             ...converter.convert({ type: 'response.incomplete', response: { usage: { input_tokens: 1, output_tokens: 2 } } }),
         ];
         expect(chunks[0].choices[0].delta.tool_calls[0].function.arguments).toBe('{"x":1}');
         expect(chunks.at(-1).choices[0].finish_reason).toBe('length');
+    });
+
+    test('preserves encrypted reasoning for the next request and keeps Codex failure text', () => {
+        const converter = new ResponsesResponseConverter({ model: 'gpt-5.5' });
+        const [encryptedChunk] = converter.convert({ type: 'response.output_item.done', item: { type: 'reasoning', id: 'rs_1', encrypted_content: 'secret' } });
+        const signature = encryptedChunk.choices[0].delta.reasoning_details[0].data;
+        const nextRequest = convertChatCompletionRequest({ model: 'gpt-5.5', messages: [{ role: 'assistant', content: 'previous', signature }] });
+
+        expect(nextRequest.input).toEqual([
+            { type: 'reasoning', encrypted_content: 'secret', summary: [] },
+            { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'previous' }] },
+        ]);
+        expect(() => new ResponsesResponseConverter({ model: 'gpt-5.5' }).convert({ type: 'response.failed' }))
+            .toThrow('Responses generation failed');
     });
 });
 

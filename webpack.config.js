@@ -7,6 +7,26 @@ import webpack from 'webpack';
 import { serverDirectory } from './src/server-directory.js';
 import { getVersion, color } from './src/util.js';
 
+function startupTimingEnabled() {
+    return globalThis.STARTUP_TIMING_ENABLED === true;
+}
+
+function startupOffset() {
+    return typeof globalThis.SERVER_START_TIME === 'number'
+        ? `+${Math.round(performance.now() - globalThis.SERVER_START_TIME)}ms`
+        : 'unknown';
+}
+
+function processCpuMilliseconds(cpu) {
+    return Math.round((cpu.user + cpu.system) / 1000);
+}
+
+function reportWebpackTiming(name, start, cpuStart, extra = '') {
+    if (!startupTimingEnabled() || start === null || cpuStart === null) return;
+    const cpu = process.cpuUsage(cpuStart);
+    console.log(`[startup:webpack] ${name} completed at ${startupOffset()} (${Math.round(performance.now() - start)}ms wall, ${processCpuMilliseconds(cpu)}ms CPU${extra})`);
+}
+
 /**
  * Generate a cache version string based on the application version, Git revision, and Webpack version.
  * @returns {string} The cache version string.
@@ -24,21 +44,29 @@ function getWebpackCacheVersion() {
  */
 function pruneWebpackCache(webpackRoot, currentCacheVersion) {
     try {
+        const enumerationStart = startupTimingEnabled() ? performance.now() : null;
+        const enumerationCpuStart = startupTimingEnabled() ? process.cpuUsage() : null;
         if (!fs.existsSync(webpackRoot)) {
+            reportWebpackTiming('Cache-directory enumeration', enumerationStart, enumerationCpuStart, ', 0 directories');
             return;
         }
 
         const cacheDirectories = fs.readdirSync(webpackRoot, { withFileTypes: true })
             .filter(dirent => dirent.isDirectory())
             .map(dirent => dirent.name);
+        reportWebpackTiming('Cache-directory enumeration', enumerationStart, enumerationCpuStart, `, ${cacheDirectories.length} directories`);
 
         for (const dir of cacheDirectories) {
             const dirPath = path.join(webpackRoot, dir);
             if (dir !== currentCacheVersion) {
+                const deletionStart = performance.now();
+                const deletionCpuStart = process.cpuUsage();
                 try {
                     fs.rmSync(dirPath, { recursive: true, force: true });
                     console.debug(`Removed outdated cache directory: ${color.yellow(dir)}`);
+                    reportWebpackTiming(`Delete obsolete cache directory ${dir}`, deletionStart, deletionCpuStart);
                 } catch (error) {
+                    reportWebpackTiming(`Delete obsolete cache directory ${dir} (failed)`, deletionStart, deletionCpuStart, `, error ${error?.name ?? 'unknown'}`);
                     console.error(`Failed to remove Webpack cache directory: ${color.red(dir)}`, error);
                 }
             }
@@ -61,6 +89,8 @@ const appVersion = await getVersion();
  * @throws {Error} If the DATA_ROOT variable is not set.
  * */
 export default function getPublicLibConfig({ forceDist = false, pruneCache = false } = {}) {
+    const preparationStart = startupTimingEnabled() ? performance.now() : null;
+    const preparationCpuStart = startupTimingEnabled() ? process.cpuUsage() : null;
     function getWebpackRoot() {
         if (forceDist || isDocker()) {
             return path.resolve(process.cwd(), 'dist', '_webpack');
@@ -85,6 +115,7 @@ export default function getPublicLibConfig({ forceDist = false, pruneCache = fal
     const cacheVersion = getWebpackCacheVersion();
     const cacheDirectory = getCacheDirectory();
     const outputDirectory = getOutputDirectory();
+    reportWebpackTiming('Configuration/cache-key preparation', preparationStart, preparationCpuStart, `, cache ${cacheVersion}`);
 
     if (pruneCache) {
         pruneWebpackCache(webpackRoot, cacheVersion);

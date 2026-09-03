@@ -360,6 +360,7 @@ function queueWorkspaceNavigation(type, payload, optimisticSessionId = null) {
     void (async () => {
         await measureNavigationStage('pause', () => bridgeApi.pauseWorkspaceGeneration?.(assignedSessionId));
         await measureNavigationStage('chatFlush', () => bridgeApi.flushPendingChat());
+        await measureNavigationStage('characterFlush', () => bridgeApi.flushPendingCharacter?.());
         const state = await measureNavigationStage('stateCapture', () => bridgeApi.getState());
         if (navigationTiming) navigationTiming.handoffStartedAt = getTimingNow();
         logNavigationTiming('handoff-start', { messageType: type });

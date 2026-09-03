@@ -189,6 +189,8 @@ logging:
   enableAccessLog: true
   # Minimum log level to display in the terminal (DEBUG = 0, INFO = 1, WARN = 2, ERROR = 3)
   minLogLevel: 0
+  # Log the translated request and completed upstream object for OpenAI Responses debugging
+  enableResponsesProtocolLogging: false
 # -- RATE LIMITING CONFIGURATION --
 rateLimiting:
   # Use any of the enabled headers in the `forwardedHeaders` section to identify the client IP for rate limiting.

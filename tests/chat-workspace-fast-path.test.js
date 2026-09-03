@@ -11,6 +11,7 @@ const personaScript = readFileSync(new URL('../public/scripts/personas.js', impo
 const authorsNoteScript = readFileSync(new URL('../public/scripts/authors-note.js', import.meta.url), 'utf8');
 const workspaceCacheScript = readFileSync(new URL('../public/scripts/chat-workspace-cache.js', import.meta.url), 'utf8');
 const toolCallingScript = readFileSync(new URL('../public/scripts/tool-calling.js', import.meta.url), 'utf8');
+const characterCardEditorScript = readFileSync(new URL('../public/scripts/character-card-editor.js', import.meta.url), 'utf8');
 
 describe('chat workspace activation fast path', () => {
     test('clears once and defers character and group selection persistence', () => {
@@ -53,6 +54,35 @@ describe('chat workspace activation fast path', () => {
         expect(activeHandler.indexOf('finishNavigationTiming')).toBeLessThan(activeHandler.indexOf('bridgeApi.onCommitted'));
         expect(activeHandler).toContain('void runInBackground(() => bridgeApi.onCommitted?.(assignedIdentity)');
         expect(activeHandler).not.toContain('await bridgeApi.onCommitted');
+    });
+
+    test('never retargets a stale character form during tab persistence', () => {
+        const capture = appScript.slice(
+            appScript.indexOf('function captureWorkspaceCharacterSelection'),
+            appScript.indexOf('function captureWorkspacePostCommit'),
+        );
+        expect(capture).toContain('const formData = new FormData();');
+        expect(capture).not.toContain('new FormData(form)');
+        expect(capture).toContain("formData.set('json_data', character.json_data");
+        expect(capture).toContain("formData.set('avatar_url', character.avatar)");
+    });
+
+    test('flushes pending character edits before changing workspace identity', () => {
+        const navigation = bridgeScript.slice(
+            bridgeScript.indexOf('function queueWorkspaceNavigation'),
+            bridgeScript.indexOf('function requestTabActivation'),
+        );
+        expect(navigation.indexOf("measureNavigationStage('chatFlush'"))
+            .toBeLessThan(navigation.indexOf("measureNavigationStage('characterFlush'"));
+        expect(navigation.indexOf("measureNavigationStage('characterFlush'"))
+            .toBeLessThan(navigation.indexOf("measureNavigationStage('stateCapture'"));
+        expect(appScript).toContain('flushPendingCharacter: flushPendingCharacterSave');
+    });
+
+    test('keeps an open card editor bound to its avatar while a tab changes', () => {
+        expect(characterCardEditorScript).toContain('return editorOpen ? characterByCardId(workspaceAvatarUrl) : selectedCharacter();');
+        expect(characterCardEditorScript).toContain('if (!editorOwnsCharacterForm()) return;');
+        expect(characterCardEditorScript).toContain('event_types.CHAT_CHANGED, () => void syncOpenEditorCharacter()');
     });
 
     test('flushes the background mirror before capturing a new-chat snapshot', () => {

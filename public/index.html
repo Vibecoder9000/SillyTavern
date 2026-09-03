@@ -2026,7 +2026,7 @@
                                             </b>
                                         </div>
                                     </div>
-                                    <div class="range-block" data-source="openai,openai_codex,cohere,mistralai,custom,claude,aimlapi,openrouter,groq,siliconflow,minimax,deepseek,makersuite,vertexai,ai21,xai,pollinations,moonshot,fireworks,cometapi,electronhub,chutes,azure_openai,zai,nanogpt,workers_ai">
+                                    <div class="range-block" data-source="openai,openai_codex,openai_responses,cohere,mistralai,custom,claude,aimlapi,openrouter,groq,siliconflow,minimax,deepseek,makersuite,vertexai,ai21,xai,pollinations,moonshot,fireworks,cometapi,electronhub,chutes,azure_openai,zai,nanogpt,workers_ai">
                                         <label for="openai_function_calling" class="checkbox_label flexWrap widthFreeExpand">
                                             <input id="openai_function_calling" type="checkbox" />
                                             <span data-i18n="Enable function calling">Enable function calling</span>
@@ -2079,7 +2079,7 @@
                                             </em>
                                         </div>
                                     </div>
-                                    <div class="range-block" data-source="openai,openai_codex,aimlapi,openrouter,mistralai,makersuite,vertexai,claude,custom,xai,pollinations,moonshot,cohere,cometapi,nanogpt,electronhub,azure_openai,zai,siliconflow,chutes,workers_ai">
+                                    <div class="range-block" data-source="openai,openai_codex,openai_responses,aimlapi,openrouter,mistralai,makersuite,vertexai,claude,custom,xai,pollinations,moonshot,cohere,cometapi,nanogpt,electronhub,azure_openai,zai,siliconflow,chutes,workers_ai">
                                         <label for="openai_media_inlining" class="checkbox_label flexWrap widthFreeExpand">
                                             <input id="openai_media_inlining" type="checkbox" />
                                             <span data-i18n="Send inline media">Send inline media</span>
@@ -2103,7 +2103,7 @@
                                             <strong data-source="makersuite,vertexai" data-i18n="video_inlining_hint_4">Videos must be less than 20 MB and under 1 minute long.</strong>
                                             <strong data-source="makersuite,vertexai" data-i18n="audio_inlining_hint_2">Audio must be less than 20 MB.</strong>
                                         </div>
-                                    <div class="flex-container flexFlowColumn wide100p textAlignCenter marginTop10" data-source="openai,openai_codex,custom,xai,pollinations,cohere,cometapi,nanogpt,moonshot,aimlapi,openrouter,mistralai,electronhub,azure_openai,zai,siliconflow,chutes,makersuite,vertexai,workers_ai">
+                                    <div class="flex-container flexFlowColumn wide100p textAlignCenter marginTop10" data-source="openai,openai_codex,openai_responses,custom,xai,pollinations,cohere,cometapi,nanogpt,moonshot,aimlapi,openrouter,mistralai,electronhub,azure_openai,zai,siliconflow,chutes,makersuite,vertexai,workers_ai">
                                             <div class="flex-container oneline-dropdown">
                                                 <label for="openai_inline_image_quality" data-i18n="Inline Image Quality">
                                                     Inline Image Quality
@@ -2164,7 +2164,7 @@
                                             </div>
                                         </div>
                                     </div>
-                                    <div class="range-block" data-source="openai_codex,deepseek,aimlapi,openrouter,custom,claude,xai,makersuite,vertexai,pollinations,moonshot,mistralai,fireworks,cometapi,electronhub,chutes,azure_openai,nanogpt,zai,workers_ai">
+                                    <div class="range-block" data-source="openai_codex,openai_responses,deepseek,aimlapi,openrouter,custom,claude,xai,makersuite,vertexai,pollinations,moonshot,mistralai,fireworks,cometapi,electronhub,chutes,azure_openai,nanogpt,zai,workers_ai">
                                         <label for="openai_show_thoughts" class="checkbox_label widthFreeExpand">
                                             <input id="openai_show_thoughts" type="checkbox" />
                                             <span data-i18n="Request model reasoning">Request model reasoning</span>
@@ -2178,7 +2178,7 @@
     </strong>
                                         </div>
                                     </div>
-                                    <div class="flex-container flexFlowColumn wide100p textAlignCenter marginTop10" data-source="openai,openai_codex,custom,claude,xai,makersuite,vertexai,aimlapi,openrouter,pollinations,perplexity,cometapi,electronhub,azure_openai,chutes,nanogpt,deepseek">
+                                    <div class="flex-container flexFlowColumn wide100p textAlignCenter marginTop10" data-source="openai,openai_codex,openai_responses,custom,claude,xai,makersuite,vertexai,aimlapi,openrouter,pollinations,perplexity,cometapi,electronhub,azure_openai,chutes,nanogpt,deepseek">
                                         <div class="flex-container oneline-dropdown" title="Constrains effort on reasoning for reasoning models.&#10;Reducing reasoning effort can result in faster responses and fewer tokens used on reasoning in a response." data-i18n="[title]Constrains effort on reasoning for reasoning models.">
                                             <label for="openai_reasoning_effort">
                                                 <span data-i18n="Reasoning Effort">Reasoning Effort</span>
@@ -2196,8 +2196,8 @@
                                             <div class="toggle-description justifyLeft marginBot5" data-source="openai,custom,xai,aimlapi,openrouter,pollinations,perplexity,cometapi,electronhub,azure_openai,chutes" data-i18n="OpenAI-style options: low, medium, high. Minimum and maximum are aliased to low and high. Auto does not send an effort level.">
                                                 OpenAI-style options: low, medium, high. Minimum and maximum are aliased to low and high. Auto does not send an effort level.
                                             </div>
-                                            <div class="toggle-description justifyLeft marginBot5" data-source="openai_codex" data-i18n="Codex options: minimal, low, medium, high, extra high, and maximum are sent as-is. Auto does not send an effort level.">
-                                                Codex options: minimal, low, medium, high, extra high, and maximum are sent as-is. Auto does not send an effort level.
+                                            <div class="toggle-description justifyLeft marginBot5" data-source="openai_codex,openai_responses" data-i18n="Responses options: minimal, low, medium, high, extra high, and maximum are sent as-is. Auto does not send an effort level.">
+                                                Responses options: minimal, low, medium, high, extra high, and maximum are sent as-is. Auto does not send an effort level.
                                             </div>
                                             <div class="toggle-description justifyLeft marginBot5" data-source="claude" data-i18n="Allocates a portion of the response length for thinking (min: 1024 tokens, low: 10%, medium: 25%, high: 50%, max: 95%), but minimum 1024 tokens. Auto does not request thinking.">
                                                 Allocates a portion of the response length for thinking (min: 1024 tokens, low: 10%, medium: 25%, high: 50%, max: 95%), but minimum 1024 tokens. Auto does not request thinking.
@@ -2213,7 +2213,7 @@
                                             </div>
                                         </div>
                                     </div>
-                                    <div class="flex-container flexFlowColumn wide100p textAlignCenter marginTop10" data-source="openai,openai_codex,custom,openrouter,claude">
+                                    <div class="flex-container flexFlowColumn wide100p textAlignCenter marginTop10" data-source="openai,openai_codex,openai_responses,custom,openrouter,claude">
                                         <div class="flex-container oneline-dropdown">
                                             <label for="openai_verbosity">
                                                 <span data-i18n="Verbosity">Verbosity</span>
@@ -2931,6 +2931,7 @@
                                 <option value="openai">OpenAI</option>
                                 <option value="openai_codex">OpenAI Codex (ChatGPT subscription)</option>
                                 <option value="custom" data-i18n="Custom (OpenAI-compatible)">Custom (OpenAI-compatible)</option>
+                                <option value="openai_responses" data-i18n="Custom (OpenAI Responses-compatible)">Custom (OpenAI Responses-compatible)</option>
                             </optgroup>
                             <optgroup>
                                 <option value="ai21">AI21</option>
@@ -3902,6 +3903,37 @@
                             <h4 data-i18n="Available Models">Available Models</h4>
                             <div class="flex-container">
                                 <select id="model_custom_select" class="text_pole model_custom_select"></select>
+                            </div>
+                        </form>
+                        <form id="openai_responses_form" data-source="openai_responses">
+                            <h4 data-i18n="API URL">API URL</h4>
+                            <div class="flex-container">
+                                <input id="openai_responses_api_url_text" class="text_pole wide100p" value="" autocomplete="off" data-i18n="[placeholder]Example: https://example.com/v1" placeholder="Example: https://example.com/v1">
+                            </div>
+                            <div>
+                                <small>
+                                    <span data-i18n="Uses the OpenAI Responses API (/responses).">Uses the OpenAI Responses API (<code>/responses</code>).</span>
+                                </small>
+                            </div>
+                            <h4>
+                                <span data-i18n="Custom OpenAI Responses API Key">Custom OpenAI Responses API Key</span>
+                                <small data-i18n="(Optional)">(Optional)</small>
+                            </h4>
+                            <div class="flex-container">
+                                <input id="api_key_openai_responses" name="api_key_openai_responses" class="text_pole flex1" value="" type="text" autocomplete="off">
+                                <div title="Manage API keys" data-i18n="[title]Manage API keys" class="menu_button fa-solid fa-key fa-fw manage-api-keys" data-key="api_key_openai_responses"></div>
+                            </div>
+                            <div data-for="api_key_openai_responses" class="neutral_warning" data-i18n="For privacy reasons, your API key will be hidden after you click 'Connect'.">
+                                For privacy reasons, your API key will be hidden after you click 'Connect'.
+                            </div>
+                            <h4 data-i18n="Enter a Model ID">Enter a Model ID</h4>
+                            <div class="flex-container">
+                                <input list="model_openai_responses_select_fill" id="openai_responses_model_id" class="text_pole wide100p" value="" autocomplete="off" data-i18n="[placeholder]Example: gpt-4o" placeholder="Example: gpt-4o">
+                                <datalist id="model_openai_responses_select_fill" class="text_pole model_openai_responses_select"></datalist>
+                            </div>
+                            <h4 data-i18n="Available Models">Available Models</h4>
+                            <div class="flex-container">
+                                <select id="model_openai_responses_select" class="text_pole model_openai_responses_select"></select>
                             </div>
                         </form>
                         <div id="xai_form" data-source="xai">

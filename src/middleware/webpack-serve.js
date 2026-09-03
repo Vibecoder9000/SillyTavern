@@ -38,7 +38,13 @@ export default function getWebpackServeMiddleware() {
         const setupStart = performance.now();
         const setupCpuStart = process.cpuUsage();
         const publicLibConfig = getPublicLibConfig({ forceDist, pruneCache });
+        const compilerStart = startupTimingEnabled ? performance.now() : null;
+        const compilerCpuStart = startupTimingEnabled ? process.cpuUsage() : null;
         const compiler = webpack(publicLibConfig);
+        if (startupTimingEnabled) {
+            const compilerCpu = process.cpuUsage(compilerCpuStart);
+            console.log(`[startup:webpack] Compiler construction completed in ${Math.round(performance.now() - compilerStart)}ms wall, ${Math.round((compilerCpu.user + compilerCpu.system) / 1000)}ms CPU.`);
+        }
         const setupCpu = process.cpuUsage(setupCpuStart);
         if (startupTimingEnabled) {
             console.log(`[startup:webpack] Compiler setup completed in ${Math.round(performance.now() - setupStart)}ms wall, ${Math.round((setupCpu.user + setupCpu.system) / 1000)}ms CPU.`);

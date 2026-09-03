@@ -172,7 +172,19 @@ let lastCardMaskSelection = null;
 const $ = selector => document.querySelector(selector);
 const deepCopy = value => structuredClone(value);
 const normalizeLineEndings = value => String(value ?? '').replace(/\r\n?/g, '\n');
-const currentCharacter = () => this_chid === undefined ? null : characters[this_chid] || null;
+const selectedCharacter = () => this_chid === undefined ? null : characters[this_chid] || null;
+const currentCharacter = () => {
+    const editorOpen = state && workspaceAvatarUrl && $('#character-card-editor')?.classList.contains('openDrawer');
+    return editorOpen ? characterByCardId(workspaceAvatarUrl) : selectedCharacter();
+};
+function editorOwnsCharacterForm() {
+    const character = currentCharacter();
+    return Boolean(character?.avatar && String($('#avatar_url_pole')?.value || '') === String(character.avatar));
+}
+function saveEditorCharacterDebounced() {
+    if (!editorOwnsCharacterForm()) return;
+    saveCharacterDebounced();
+}
 function removeLegacyWorkspaceSettings() {
     for (const key of Object.keys(accountStorage.getState())) {
         if (key.startsWith(WORKSPACE_PREFIX)) accountStorage.removeItem(key);
@@ -530,8 +542,7 @@ function parseStoredWorkspace(raw) {
         return null;
     }
 }
-async function loadStoredWorkspace() {
-    const avatarUrl = currentCharacter()?.avatar;
+async function loadStoredWorkspace(avatarUrl = currentCharacter()?.avatar) {
     if (!avatarUrl) return null;
 
     const response = await fetch('/api/character-designer/load', {
@@ -635,7 +646,7 @@ function setCardValue(id, value) {
         const greetings = Array.isArray(value) && value.length ? value.map(String) : [''];
         data().first_mes = greetings[0] || '';
         data().alternate_greetings = greetings.slice(1);
-        const input = $('#firstmessage_textarea');
+        const input = editorOwnsCharacterForm() ? $('#firstmessage_textarea') : null;
         if (input) input.value = data().first_mes;
         return;
     }
@@ -645,7 +656,7 @@ function setCardValue(id, value) {
     if (id === 'tags') stored = String(value).split(',').map(tag => tag.trim()).filter(Boolean);
     setPath(data(), field.path, stored);
     const inputs = { description: '#description_textarea', systemPrompt: '#system_prompt_textarea', summary: '#personality_textarea', scenario: '#scenario_pole', characterNote: '#depth_prompt_prompt', postHistory: '#post_history_instructions_textarea', depth: '#depth_prompt_depth', examples: '#mes_example_textarea', createdBy: '#creator_textarea', creatorNotes: '#creator_notes_textarea', tags: '#tags_textarea', version: '#character_version_textarea' };
-    const input = $(inputs[id]);
+    const input = editorOwnsCharacterForm() ? $(inputs[id]) : null;
     if (input) input.value = id === 'tags' ? stored.join(', ') : String(stored ?? '');
 }
 function liveCharacterBook() {
@@ -654,7 +665,7 @@ function liveCharacterBook() {
 }
 function syncLorebookToCharacterJson() {
     const character = currentCharacter();
-    const input = $('#character_json_data');
+    const input = editorOwnsCharacterForm() ? $('#character_json_data') : null;
     const raw = input?.value || character?.json_data;
     if (!raw) return;
     try {
@@ -677,7 +688,7 @@ function writeLorebookToCard() {
     // live character object. Keep both representations in lockstep or the server
     // response restores the stale embedded book and invalidates pending proposals.
     syncLorebookToCharacterJson();
-    saveCharacterDebounced();
+    saveEditorCharacterDebounced();
 }
 function normalizeLoreEntry(entry = {}) {
     return { ...deepCopy(LORE_ENTRY_DEFAULTS), ...deepCopy(entry), keys: Array.isArray(entry.keys) ? entry.keys.map(String) : [], secondary_keys: Array.isArray(entry.secondary_keys) ? entry.secondary_keys.map(String) : [], extensions: entry.extensions && typeof entry.extensions === 'object' ? deepCopy(entry.extensions) : {} };
@@ -1035,7 +1046,7 @@ function backupContentHtml(content) {
 function writeWorkspaceToCard() {
     for (const { id } of FIELDS) setCardValue(id, state.values[id]);
     writeLorebookToCard();
-    saveCharacterDebounced();
+    saveEditorCharacterDebounced();
 }
 function workspaceMatchesCard() {
     return FIELDS.every(({ id }) => JSON.stringify(state.values[id]) === JSON.stringify(getValue(id)))
@@ -2399,13 +2410,13 @@ function onFieldInput(input) {
         const values = [...effectiveValue(id)];
         if (collectionDrafts.has(id) && index === values.length) collectionDrafts.delete(id);
         values[index] = inputValue;
-        state.values[id] = values; setCardValue(id, values); saveCharacterDebounced();
+        state.values[id] = values; setCardValue(id, values); saveEditorCharacterDebounced();
         if (state.pending[id]) updatePendingAfter(id, values);
     } else if (state.pending[id]) {
-        state.values[id] = inputValue; setCardValue(id, inputValue); saveCharacterDebounced();
+        state.values[id] = inputValue; setCardValue(id, inputValue); saveEditorCharacterDebounced();
         updatePendingAfter(id, inputValue);
     }
-    else { state.values[id] = inputValue; setCardValue(id, inputValue); saveCharacterDebounced(); }
+    else { state.values[id] = inputValue; setCardValue(id, inputValue); saveEditorCharacterDebounced(); }
     scheduleLineNumberUpdate(input);
     autoSize(input, false, String(inputValue).length < previousValue.length);
     updateCardTokenCountsDebounced();
@@ -2475,7 +2486,7 @@ async function collectionAction(button) {
     state.values[id] = nextValues;
     setCardValue(id, nextValues);
     if (state.pending[id]) updatePendingAfter(id, nextValues);
-    saveCharacterDebounced();
+    saveEditorCharacterDebounced();
     renderCard();
     renderChat();
     renderPendingActions();
@@ -2502,7 +2513,7 @@ function resolvePending(id, hunkIndex, action, index = null) {
             pending.after = valueFromText(id, `${after.slice(0, hunk.afterStart)}${hunk.removed}${after.slice(hunk.afterEnd)}`);
             state.values[id] = deepCopy(pending.after);
             setCardValue(id, pending.after);
-            saveCharacterDebounced();
+            saveEditorCharacterDebounced();
         }
     } else {
         if (action === 'accept') {
@@ -2515,7 +2526,7 @@ function resolvePending(id, hunkIndex, action, index = null) {
             pending.after[index] = `${after.slice(0, hunk.afterStart)}${hunk.removed}${after.slice(hunk.afterEnd)}`;
             state.values[id] = [...pending.after];
             setCardValue(id, state.values[id]);
-            saveCharacterDebounced();
+            saveEditorCharacterDebounced();
         }
     }
     if (!pendingDiffParts(pending).some(part => part.type === 'hunk')) delete state.pending[id];
@@ -2559,7 +2570,7 @@ function resolveAllPending(action) {
         }
         state.pending = {};
         if (hasLoreProposal) resolveLorebookProposal('reject', { renderAfter: false });
-        saveCharacterDebounced();
+        saveEditorCharacterDebounced();
         if (hasLoreProposal) labels.push('Character Book');
         toastr.info(`Card changes reverted: ${labels.join(', ')}`, 'Character card editor');
     }
@@ -2609,7 +2620,7 @@ function applyLiveEdit(edit) {
         setMaskRanges(key, index === null ? value : value[index], ranges);
     }
     setCardValue(edit.field, value);
-    saveCharacterDebounced();
+    saveEditorCharacterDebounced();
 }
 function addPendingEdit(edit) {
     const existing = state.pending[edit.field];
@@ -3470,7 +3481,7 @@ async function setAvatarFromAttachment(parameters, signal) {
     form.append('avatar_url', currentCharacter()?.avatar || '');
     const upload = await fetch('/api/characters/edit-avatar', { method: 'POST', headers: getRequestHeaders({ omitContentType: true }), body: form, signal });
     if (!upload.ok) throw new Error(await upload.text() || 'Could not save the character avatar.');
-    saveCharacterDebounced();
+    saveEditorCharacterDebounced();
     toastr.success('Avatar updated from editor attachment.', 'Character Designer');
     return 'Avatar updated.';
 }
@@ -4924,6 +4935,7 @@ export async function initCharacterCardEditor() {
         }
         void refreshExternalCardState();
     });
+    eventSource.on(event_types.CHAT_CHANGED, () => void syncOpenEditorCharacter());
 }
 
 async function refreshExternalCardState() {
@@ -4943,4 +4955,50 @@ async function refreshExternalCardState() {
     focusedEdit = null;
     render();
     persist();
+}
+
+async function syncOpenEditorCharacter() {
+    const editor = $('#character-card-editor');
+    if (!state || !editor?.classList.contains('openDrawer')) return;
+    const selected = selectedCharacter();
+    const avatarUrl = selected?.avatar || null;
+    if (avatarUrl === workspaceAvatarUrl) return;
+
+    // Finish the old avatar-keyed workspace before changing the editor owner.
+    // Card writes are independently guarded by editorOwnsCharacterForm while the
+    // tab switch and this asynchronous load are in flight.
+    cancelDebounce(persist);
+    rememberCardSectionScroll();
+    persistWorkspace();
+    const loadToken = ++workspaceLoadToken;
+    removeFloatingHunkControls();
+    if (!selected || !avatarUrl) {
+        state = null;
+        workspaceAvatarUrl = null;
+        renderNoCharacter();
+        return;
+    }
+
+    editor.classList.add('cc-editor-preparing');
+    let savedWorkspace = null;
+    try {
+        savedWorkspace = await loadStoredWorkspace(avatarUrl);
+    } catch (error) {
+        console.error('Character card editor: could not switch workspaces.', error);
+        toastr.error('The Character Designer workspace file could not be loaded. Starting with a fresh workspace.', 'Character card editor');
+    }
+    if (loadToken !== workspaceLoadToken || selectedCharacter()?.avatar !== avatarUrl || !editor.classList.contains('openDrawer')) return;
+
+    workspaceAvatarUrl = avatarUrl;
+    collectionDrafts.clear();
+    state = createState(savedWorkspace);
+    undo = [];
+    redo = [];
+    focusedEdit = null;
+    snappedEditKey = null;
+    lastCardMaskSelection = null;
+    persist();
+    render();
+    editor.classList.remove('cc-editor-preparing');
+    requestAnimationFrame(refreshFieldLayoutAfterResize);
 }

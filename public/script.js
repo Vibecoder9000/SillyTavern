@@ -563,7 +563,45 @@ export async function flushPendingSettingsSave() {
     const saved = await saveSettings();
     if (!saved) throw new Error('Could not flush pending settings');
 }
-export const saveCharacterDebounced = debounce(() => $('#create_button').trigger('click'), DEFAULT_SAVE_EDIT_TIMEOUT);
+let pendingCharacterSaveTarget = null;
+
+function captureCharacterSaveTarget() {
+    const actionType = String($('#form_create').attr('actiontype') || '');
+    const avatar = actionType === 'editcharacter' ? String($('#avatar_url_pole').val() || '') : '';
+    return { actionType, avatar };
+}
+
+function characterSaveTargetMatches(target) {
+    const current = captureCharacterSaveTarget();
+    return current.actionType === target?.actionType && current.avatar === target?.avatar;
+}
+
+async function runPendingCharacterSave(target) {
+    if (pendingCharacterSaveTarget === target) pendingCharacterSaveTarget = null;
+    if (!characterSaveTargetMatches(target)) {
+        console.warn('Skipped a stale character save because the editor now belongs to another card.');
+        return;
+    }
+    await createOrEditCharacter();
+}
+
+const saveCharacterDebounceImpl = debounce(target => void runPendingCharacterSave(target), DEFAULT_SAVE_EDIT_TIMEOUT);
+
+export function saveCharacterDebounced() {
+    pendingCharacterSaveTarget = captureCharacterSaveTarget();
+    saveCharacterDebounceImpl(pendingCharacterSaveTarget);
+}
+
+export async function flushPendingCharacterSave() {
+    const target = pendingCharacterSaveTarget;
+    if (!target) return;
+    cancelDebounce(saveCharacterDebounceImpl);
+    pendingCharacterSaveTarget = null;
+    if (!characterSaveTargetMatches(target)) {
+        throw new Error('The pending character save belongs to a different card.');
+    }
+    await createOrEditCharacter();
+}
 
 /**
  * Prints the character list in a debounced fashion without blocking, with a delay of 100 milliseconds.
@@ -1222,18 +1260,39 @@ export function emitChatChanged(chatId, { background = false } = {}) {
 function captureWorkspaceCharacterSelection(identity) {
     const characterId = characters.findIndex(character => String(character.avatar) === String(identity.ownerId));
     const character = characters[characterId];
-    const form = /** @type {HTMLFormElement|null} */ (document.querySelector('#form_create'));
-    if (!character || !form) throw new Error(`Character selection could not be captured: ${identity.ownerId}`);
+    if (!character) throw new Error(`Character selection could not be captured: ${identity.ownerId}`);
 
-    const formData = new FormData(form);
-    formData.set('fav', String(fav_ch_checked));
+    // The owner UI is intentionally refreshed after a workspace tab commits. Its
+    // form can therefore still contain the previous character here. Building this
+    // request from that form and merely replacing avatar_url retargets the entire
+    // previous card onto the newly selected one.
+    const data = character.data || character;
+    const extensions = data.extensions || {};
+    const depthPrompt = extensions.depth_prompt || {};
+    const formData = new FormData();
     formData.set('avatar_url', character.avatar);
     formData.set('ch_name', character.name);
     formData.set('chat', identity.chatId);
-    // Selection persistence must not apply a pending avatar upload or crop.
-    formData.delete('avatar');
-    formData.delete('alternate_greetings');
-    for (const value of character.data?.alternate_greetings || []) {
+    formData.set('create_date', character.create_date || '');
+    formData.set('json_data', character.json_data || JSON.stringify(character));
+    formData.set('description', data.description || '');
+    formData.set('personality', data.personality || '');
+    formData.set('scenario', data.scenario || '');
+    formData.set('first_mes', data.first_mes || '');
+    formData.set('mes_example', data.mes_example || '');
+    formData.set('creator_notes', data.creator_notes || character.creatorcomment || '');
+    formData.set('system_prompt', data.system_prompt || '');
+    formData.set('post_history_instructions', data.post_history_instructions || '');
+    formData.set('tags', Array.isArray(data.tags) ? data.tags.join(', ') : (data.tags || ''));
+    formData.set('creator', data.creator || '');
+    formData.set('character_version', data.character_version || '');
+    formData.set('talkativeness', String(extensions.talkativeness ?? character.talkativeness ?? talkativeness_default));
+    formData.set('fav', String(extensions.fav ?? character.fav ?? false));
+    formData.set('world', extensions.world || '');
+    formData.set('depth_prompt_prompt', depthPrompt.prompt || '');
+    formData.set('depth_prompt_depth', String(depthPrompt.depth ?? depth_prompt_depth_default));
+    formData.set('depth_prompt_role', depthPrompt.role ?? depth_prompt_role_default);
+    for (const value of data.alternate_greetings || []) {
         formData.append('alternate_greetings', value);
     }
 
@@ -1422,6 +1481,7 @@ function initInAppChatWorkspace(initLoaderHandle) {
         hideLoader: () => initLoaderHandle.hide(),
         createNewChat: () => doNewChat({ deleteCurrentChat: false, openInWorkspace: true }),
         flushPendingChat: flushWorkspacePendingChat,
+        flushPendingCharacter: flushPendingCharacterSave,
         flushGlobalSettings: flushPendingSettingsSave,
         pauseWorkspaceGeneration,
         resumeWorkspaceGeneration,

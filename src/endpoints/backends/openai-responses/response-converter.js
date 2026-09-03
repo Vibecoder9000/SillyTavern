@@ -1,6 +1,6 @@
 function createChunk(state, delta, finishReason = null, usage = undefined) {
     return {
-        id: state.id || 'chatcmpl-codex',
+        id: state.id || state.fallbackId,
         object: 'chat.completion.chunk',
         created: state.created,
         model: state.model,
@@ -20,10 +20,11 @@ function normalizeUsage(usage) {
     };
 }
 
-export class CodexResponseConverter {
-    constructor({ model, stop = [] } = {}) {
+export class ResponsesResponseConverter {
+    constructor({ model, stop = [], fallbackId = 'chatcmpl-responses', errorMessage = 'Responses generation failed' } = {}) {
         this.state = {
             id: null,
+            fallbackId,
             model,
             created: Math.floor(Date.now() / 1000),
             toolIndexes: new Map(),
@@ -31,6 +32,7 @@ export class CodexResponseConverter {
             sawToolCall: false,
             completed: false,
         };
+        this.errorMessage = errorMessage;
         this.stop = Array.isArray(stop) ? stop.filter(value => typeof value === 'string' && value.length > 0) : [];
         this.stopTail = '';
         this.stopped = false;
@@ -151,15 +153,15 @@ export class CodexResponseConverter {
             }
             case 'response.failed':
             case 'error':
-                throw new Error(event.response?.error?.message || event.error?.message || event.message || 'Codex generation failed');
+                throw new Error(event.response?.error?.message || event.error?.message || event.message || this.errorMessage);
         }
         return chunks;
     }
 }
 
-export function createChatCompletionAccumulator(model) {
+export function createChatCompletionAccumulator(model, { fallbackId = 'chatcmpl-responses' } = {}) {
     const result = {
-        id: 'chatcmpl-codex',
+        id: fallbackId,
         object: 'chat.completion',
         created: Math.floor(Date.now() / 1000),
         model,

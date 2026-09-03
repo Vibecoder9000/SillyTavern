@@ -19,7 +19,7 @@ export class SseParser {
             try {
                 await this.onEvent(JSON.parse(data));
             } catch (error) {
-                if (error instanceof SyntaxError) console.warn('Ignoring malformed Codex SSE event:', data.slice(0, 200));
+                if (error instanceof SyntaxError) console.warn('Ignoring malformed Responses SSE event:', data.slice(0, 200));
                 else throw error;
             }
         }
