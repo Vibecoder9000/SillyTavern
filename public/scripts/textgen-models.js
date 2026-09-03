@@ -232,7 +232,7 @@ const NANOGPT_PROVIDERS = [
     },
     {
         'id': 'ionet',
-        'label': 'Io Net',
+        'label': 'io.net',
     },
     {
         'id': 'inceptron',
@@ -276,7 +276,7 @@ const NANOGPT_PROVIDERS = [
     },
     {
         'id': 'neuralwatt',
-        'label': 'Neuralwatt',
+        'label': 'NeuralWatt',
     },
     {
         'id': 'tensorix',
@@ -327,8 +327,16 @@ const NANOGPT_PROVIDERS = [
         'label': 'Together',
     },
     {
+        'id': 'uomi',
+        'label': 'UOMI',
+    },
+    {
         'id': 'venice',
         'label': 'Venice',
+    },
+    {
+        'id': 'wafer',
+        'label': 'Wafer',
     },
     {
         'id': 'wandb',
@@ -618,15 +626,37 @@ export function loadGenericModels(data) {
         return;
     }
 
-    data.sort((a, b) => a.id.localeCompare(b.id));
+    const models = data
+        .filter(model => model && typeof model.id === 'string' && model.id.length > 0)
+        .sort((a, b) => a.id.localeCompare(b.id));
+
     const dataList = $('#generic_model_fill');
     dataList.empty();
 
-    for (const model of data) {
+    const modelSelect = $('#generic_model_select');
+    modelSelect.empty();
+    modelSelect.append($('<option>', { value: '' }));
+
+    for (const model of models) {
         const option = document.createElement('option');
         option.value = model.id;
         option.text = model.id;
         dataList.append(option);
+
+        const selectOption = document.createElement('option');
+        selectOption.value = model.id;
+        selectOption.text = model.id;
+        selectOption.selected = model.id === textgen_settings.generic_model;
+        modelSelect.append(selectOption);
+    }
+
+    // Keep free-text entry for IDs that are not in the /v1/models list
+    if (textgen_settings.generic_model && !models.find(x => x.id === textgen_settings.generic_model)) {
+        modelSelect.append($('<option>', {
+            value: textgen_settings.generic_model,
+            text: textgen_settings.generic_model,
+            selected: true,
+        }));
     }
 }
 
@@ -1059,6 +1089,13 @@ function onLlamaCppModelSelect() {
     $('#api_button_textgenerationwebui').trigger('click');
 }
 
+function onGenericModelSelect() {
+    const modelId = String($('#generic_model_select').val() ?? '');
+    textgen_settings.generic_model = modelId;
+    $('#generic_model_textgenerationwebui').val(modelId);
+    $('#api_button_textgenerationwebui').trigger('click');
+}
+
 function onOpenRouterModelSelect() {
     const modelId = String($('#openrouter_model').val());
     textgen_settings.openrouter_model = modelId;
@@ -1376,6 +1413,7 @@ export function initTextGenModels() {
     $('#tabby_download_model').on('click', downloadTabbyModel);
     $('#tabby_model').on('change', onTabbyModelSelect);
     $('#llamacpp_model').on('change', onLlamaCppModelSelect);
+    $('#generic_model_select').on('change', onGenericModelSelect);
     $('#featherless_model').on('change', () => onFeatherlessModelSelect(String($('#featherless_model').val())));
 
     const providersSelect = $('.openrouter_providers');
@@ -1424,6 +1462,13 @@ export function initTextGenModels() {
         });
         $('#llamacpp_model').select2({
             placeholder: t`[Currently loaded]`,
+            searchInputPlaceholder: t`Search models...`,
+            searchInputCssClass: 'text_pole',
+            width: '100%',
+            allowClear: true,
+        });
+        $('#generic_model_select').select2({
+            placeholder: t`Select a model`,
             searchInputPlaceholder: t`Search models...`,
             searchInputCssClass: 'text_pole',
             width: '100%',
