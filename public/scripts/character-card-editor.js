@@ -11,6 +11,7 @@ import { formatLorebookContentField, parseLorebookContentField, resolveDeleteCar
 import { computeCharacterCardDiff } from './character-card-diff.js';
 import { loadCharacterDesignerPrompts, renderCharacterDesignerPrompt } from './character-designer-prompt.js';
 import { normalizeCharacterDesignerFieldLabel, resolveCharacterDesignerFieldAlias } from './character-designer-fields.js';
+import { maskCharacterCardText, normalizeCharacterCardMaskRanges, rebaseCharacterCardMaskRanges, redactCharacterCardValues, restoreCharacterCardMasks } from './character-card-mask.js';
 
 const WORKSPACE_PREFIX = 'st-character-card-editor:';
 const CHARACTER_DESIGNER_XML_SCOPE = 'character-designer';
@@ -166,6 +167,7 @@ let attachmentTargetMessageId = null;
 let uploadingAttachments = false;
 let pendingExternalCardRefresh = false;
 let referencePickerSelection = null;
+let lastCardMaskSelection = null;
 
 const $ = selector => document.querySelector(selector);
 const deepCopy = value => structuredClone(value);
@@ -181,6 +183,129 @@ const isCollection = id => fieldById.get(id)?.type === 'collection';
 const isNumberField = id => fieldById.get(id)?.type === 'number';
 const normalizeFieldStateValue = (id, value) => isNumberField(id) ? Math.max(0, Number(value) || 0) : value;
 const normalizeCardSection = value => cardSectionById.has(value) ? value : DEFAULT_CARD_SECTION;
+
+function fieldMaskKey(id, index = null) {
+    return `field:${id}:${index === null ? 'main' : Number(index)}`;
+}
+function loreMaskKey(entryId) {
+    return `lore:${String(entryId)}`;
+}
+function maskRanges(key, value = '') {
+    const source = String(value ?? '');
+    const anchored = (state?.masks?.[key] || []).flatMap(range => {
+        const hidden = typeof range?.value === 'string' ? range.value : '';
+        if (!hidden || source.slice(range.start, range.end) === hidden) return [range];
+        const first = source.indexOf(hidden);
+        return first >= 0 && first === source.lastIndexOf(hidden) ? [{ start: first, end: first + hidden.length, value: hidden }] : [];
+    });
+    return normalizeCharacterCardMaskRanges(source, anchored);
+}
+function setMaskRanges(key, value, ranges) {
+    const source = String(value ?? '');
+    const normalized = normalizeCharacterCardMaskRanges(source, ranges).map(range => ({ ...range, value: source.slice(range.start, range.end) }));
+    state.masks ||= {};
+    if (normalized.length) state.masks[key] = normalized;
+    else deleteMaskKey(key);
+}
+function deleteMaskKey(key, { forget = false } = {}) {
+    const values = (state.masks?.[key] || []).map(range => range?.value).filter(Boolean);
+    state.maskedValues ||= [];
+    if (forget) state.maskedValues = state.maskedValues.filter(value => !values.includes(value));
+    else state.maskedValues = [...new Set([...state.maskedValues, ...values])];
+    delete state.masks?.[key];
+}
+function maskFieldValue(id, value) {
+    if (!isCollection(id)) return maskCharacterCardText(value, maskRanges(fieldMaskKey(id), value));
+    return (Array.isArray(value) ? value : []).map((item, index) => maskCharacterCardText(item, maskRanges(fieldMaskKey(id, index), item)));
+}
+function modelVisibleCardValues(values) {
+    const visible = Object.fromEntries(FIELDS.map(({ id }) => {
+        const value = Object.hasOwn(values || {}, id) ? values[id] : liveValue(id);
+        return [id, maskFieldValue(id, deepCopy(value))];
+    }));
+    if (Object.hasOwn(values || {}, '__lorebook')) visible.__lorebook = modelVisibleLorebook(values.__lorebook, values.__loreEntryIds);
+    if (Object.hasOwn(values || {}, '__loreEntryIds')) visible.__loreEntryIds = deepCopy(values.__loreEntryIds);
+    return visible;
+}
+function modelVisibleLorebook(book, ids = state?.loreEntryIds) {
+    const visible = deepCopy(book);
+    for (const [index, entry] of visible?.entries?.entries() || []) {
+        const source = String(entry.content || '');
+        entry.content = maskCharacterCardText(source, maskRanges(loreMaskKey(ids?.[index]), source));
+    }
+    return visible;
+}
+function hiddenCardValues() {
+    const hidden = [...(state?.maskedValues || []), ...Object.values(state?.masks || {}).flatMap(ranges => (ranges || []).map(range => range?.value).filter(value => typeof value === 'string' && value))];
+    for (const { id } of FIELDS) {
+        const value = effectiveValue(id);
+        const items = isCollection(id) ? (Array.isArray(value) ? value : []) : [value];
+        items.forEach((item, index) => maskRanges(fieldMaskKey(id, isCollection(id) ? index : null), item)
+            .forEach(range => hidden.push(String(item).slice(range.start, range.end))));
+    }
+    for (const [index, entry] of state?.lorebook?.entries?.entries() || []) {
+        const source = String(entry.content || '');
+        maskRanges(loreMaskKey(state.loreEntryIds[index]), source).forEach(range => hidden.push(source.slice(range.start, range.end)));
+    }
+    return hidden.filter(Boolean);
+}
+function redactModelPayload(value, hidden = hiddenCardValues()) {
+    if (typeof value === 'string') return redactCharacterCardValues(value, hidden);
+    if (Array.isArray(value)) return value.map(item => redactModelPayload(item, hidden));
+    if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, redactModelPayload(item, hidden)]));
+    return value;
+}
+function rememberCardMaskSelection(input) {
+    if (!(input instanceof HTMLTextAreaElement) || !input.classList.contains('cc-field-input') || input.classList.contains('cc-pending-field')) return;
+    const loreEntryId = input.dataset.loreEntry;
+    const id = input.dataset.field;
+    const index = id && isCollection(id) ? Number(input.dataset.index) : null;
+    const key = loreEntryId ? loreMaskKey(loreEntryId) : id ? fieldMaskKey(id, index) : null;
+    if (!key) return;
+    lastCardMaskSelection = { key, input, start: input.selectionStart, end: input.selectionEnd };
+    updateCardMaskActions();
+}
+function activeMaskSource(selection = lastCardMaskSelection) {
+    if (!selection) return '';
+    if (selection.key.startsWith('lore:')) return String(loreEntry(selection.key.slice(5))?.content || '');
+    const [, id, rawIndex] = selection.key.split(':');
+    const value = effectiveValue(id);
+    return rawIndex === 'main' ? String(value ?? '') : collectionItemValue(value, Number(rawIndex));
+}
+function updateCardMaskActions() {
+    const mask = $('#cc-editor-mask-selection');
+    const clear = $('#cc-editor-clear-masks');
+    if (!mask || !clear) return;
+    const source = activeMaskSource();
+    const selected = lastCardMaskSelection && lastCardMaskSelection.end > lastCardMaskSelection.start;
+    const count = lastCardMaskSelection ? maskRanges(lastCardMaskSelection.key, source).length : 0;
+    mask.disabled = !state || !selected || activeGenerationController;
+    clear.disabled = !state || !count || activeGenerationController;
+    clear.classList.toggle('active', count > 0);
+    clear.title = count ? `Clear ${count} model mask${count === 1 ? '' : 's'} in the active field` : 'Clear model masks in the active field';
+}
+function maskSelectedCardText() {
+    const selection = lastCardMaskSelection;
+    const source = activeMaskSource(selection);
+    if (!state || activeGenerationController || !selection || selection.end <= selection.start || selection.end > source.length) return;
+    record();
+    setMaskRanges(selection.key, source, [...maskRanges(selection.key, source), { start: selection.start, end: selection.end }]);
+    selection.start = selection.end;
+    if (selection.input?.isConnected) selection.input.setSelectionRange(selection.end, selection.end);
+    persist();
+    updateCardMaskActions();
+    toastr.success('Selected text is now unavailable to the Character Designer model.', 'Character card editor');
+}
+function clearActiveCardMasks() {
+    const selection = lastCardMaskSelection;
+    const source = activeMaskSource(selection);
+    if (!state || activeGenerationController || !selection || !maskRanges(selection.key, source).length) return;
+    record();
+    deleteMaskKey(selection.key, { forget: true });
+    persist();
+    updateCardMaskActions();
+    toastr.success('Model masks cleared for this field.', 'Character card editor');
+}
 
 function libraryCharacterValue(character, path) {
     return getPath(character?.data, path) ?? getPath(character, path);
@@ -669,6 +794,8 @@ function createState(saved = null) {
     const liveFlat = flattenCardValues(liveValues, {});
     const next = saved?.version >= 2 ? saved : { pending: {}, conversations: [], activeConversation: null, checkpoints: [], draft: '', draftAttachments: [], heights: {}, cardWidth: 60 };
     next.version = 3;
+    next.masks = saved?.masks && typeof saved.masks === 'object' ? saved.masks : {};
+    next.maskedValues = Array.isArray(saved?.maskedValues) ? saved.maskedValues.map(String).filter(Boolean) : [];
     const storedLoreProposal = saved?.lorebookProposal;
     const storedProposalIsComplete = storedLoreProposal
         && Array.isArray(storedLoreProposal.beforeIds)
@@ -854,7 +981,7 @@ function persistWorkspace() {
     return workspaceSavePromise;
 }
 const persist = debounce(persistWorkspace, 500);
-function snapshot() { return deepCopy({ values: state.values, lorebook: state.lorebook, loreEntryIds: state.loreEntryIds, lorebookProposal: state.lorebookProposal, expandedLoreEntries: state.expandedLoreEntries, pending: state.pending, conversations: state.conversations, activeConversation: state.activeConversation, draft: state.draft, draftAttachments: state.draftAttachments, heights: state.heights, cardWidth: state.cardWidth }); }
+function snapshot() { return deepCopy({ values: state.values, lorebook: state.lorebook, loreEntryIds: state.loreEntryIds, lorebookProposal: state.lorebookProposal, expandedLoreEntries: state.expandedLoreEntries, pending: state.pending, masks: state.masks, maskedValues: state.maskedValues, conversations: state.conversations, activeConversation: state.activeConversation, draft: state.draft, draftAttachments: state.draftAttachments, heights: state.heights, cardWidth: state.cardWidth }); }
 function snapshotSize(value) {
     if (!value || typeof value !== 'object') return 0;
     if (!historySizeCache.has(value)) historySizeCache.set(value, serializedSize(value));
@@ -876,7 +1003,7 @@ function compactSignature(value) { return String(getStringHash(JSON.stringify(va
 // A checkpoint only ever restores card state, so it deliberately drops the conversation
 // history. Keeping it would store MAX_CHECKPOINTS copies of every message and reasoning
 // trace beside the live workspace file.
-function cardSnapshot(value) { return { values: value?.values, lorebook: value?.lorebook, loreEntryIds: value?.loreEntryIds, lorebookProposal: value?.lorebookProposal, expandedLoreEntries: value?.expandedLoreEntries, pending: value?.pending }; }
+function cardSnapshot(value) { return { values: value?.values, lorebook: value?.lorebook, loreEntryIds: value?.loreEntryIds, lorebookProposal: value?.lorebookProposal, expandedLoreEntries: value?.expandedLoreEntries, pending: value?.pending, masks: value?.masks, maskedValues: value?.maskedValues }; }
 function cardSignature(value) { return compactSignature([value.values, value.lorebook, value.loreEntryIds, value.lorebookProposal, value.pending]); }
 /** @param {{signature?: string}} [options] `signature` must come from cardSignature, not snapshotSignature. */
 function checkpoint(label, value = snapshot(), content = '', { signature = null } = {}) {
@@ -1939,6 +2066,10 @@ function bindLorebookControls(card) {
             const value = input instanceof HTMLInputElement
                 ? (input.type === 'checkbox' ? input.checked : input.value)
                 : fieldEditorValue(input);
+            if (input.dataset.loreProperty === 'content') {
+                const key = loreMaskKey(input.dataset.loreEntry);
+                setMaskRanges(key, value, rebaseCharacterCardMaskRanges(previousValue, value, maskRanges(key, previousValue)));
+            }
             setLoreProperty(entry, input.dataset.loreProperty, value);
             updateLorebookProposalAfter();
             writeLorebookToCard(); persist();
@@ -2042,6 +2173,7 @@ async function lorebookAction(button) {
         state.loreEntryIds = [];
         state.expandedLoreEntries = [];
         state.lorebookProposal = null;
+        for (const key of Object.keys(state.masks || {})) if (key.startsWith('lore:')) deleteMaskKey(key);
         writeLorebookToCard(); renderCard(); renderPendingActions(); persist(); return;
     }
     const row = button.closest('.cc-lore-entry'); const entryId = row?.dataset.entryId; const index = loreEntryIndex(entryId); if (index < 0) return;
@@ -2056,6 +2188,7 @@ async function lorebookAction(button) {
     record();
     if (action === 'delete') {
         state.lorebook.entries.splice(index, 1); state.loreEntryIds.splice(index, 1); state.expandedLoreEntries = state.expandedLoreEntries.filter(id => id !== entryId);
+        deleteMaskKey(loreMaskKey(entryId));
     }
     updateLorebookProposalAfter();
     writeLorebookToCard(); renderCard(); persist();
@@ -2259,6 +2392,8 @@ function onFieldInput(input) {
     const previousValue = isCollection(id)
         ? collectionItemValue(effectiveValue(id), input.dataset.index)
         : asText(effectiveValue(id));
+    const maskKey = fieldMaskKey(id, isCollection(id) ? Number(input.dataset.index) : null);
+    setMaskRanges(maskKey, inputValue, rebaseCharacterCardMaskRanges(previousValue, inputValue, maskRanges(maskKey, previousValue)));
     if (isCollection(id)) {
         const index = Number(input.dataset.index);
         const values = [...effectiveValue(id)];
@@ -2326,6 +2461,17 @@ async function collectionAction(button) {
     const nextValues = [...values];
     if (button.dataset.collectionAction === 'delete') nextValues.splice(index, 1);
     if (id === 'greetings' && nextValues.length === 0) nextValues.push('');
+    if (button.dataset.collectionAction === 'delete') {
+        const shifted = {};
+        for (let itemIndex = 0; itemIndex < values.length; itemIndex++) {
+            const key = fieldMaskKey(id, itemIndex);
+            if (!state.masks[key]) continue;
+            if (itemIndex === index) { deleteMaskKey(key); continue; }
+            shifted[fieldMaskKey(id, itemIndex > index ? itemIndex - 1 : itemIndex)] = state.masks[key];
+            delete state.masks[key];
+        }
+        Object.assign(state.masks, shifted);
+    }
     state.values[id] = nextValues;
     setCardValue(id, nextValues);
     if (state.pending[id]) updatePendingAfter(id, nextValues);
@@ -2458,6 +2604,10 @@ function syncToolCall(pending) {
 function applyLiveEdit(edit) {
     const value = deepCopy(edit.after);
     state.values[edit.field] = value;
+    for (const [key, ranges] of Object.entries(edit.maskUpdates || {})) {
+        const index = key.endsWith(':main') ? null : Number(key.split(':').at(-1));
+        setMaskRanges(key, index === null ? value : value[index], ranges);
+    }
     setCardValue(edit.field, value);
     saveCharacterDebounced();
 }
@@ -3240,7 +3390,7 @@ function renderNoCharacter() {
     $('#cc-editor-name').textContent = 'No character selected';
     $('#cc-editor-card').innerHTML = '<div class="cc-editor-empty">Select a character to edit its card.</div>';
     $('#cc-editor-messages').innerHTML = '';
-    for (const selector of ['#cc-editor-add-references', '#cc-editor-previous-edit', '#cc-editor-next-edit', '#cc-editor-previous-message', '#cc-editor-next-message', '#cc-editor-custom-instructions-button', '#cc-editor-accept-all', '#cc-editor-reject-all', '#cc-editor-history', '#cc-editor-new-chat', '#cc-editor-attach', '#cc-editor-send']) {
+    for (const selector of ['#cc-editor-add-references', '#cc-editor-previous-edit', '#cc-editor-next-edit', '#cc-editor-previous-message', '#cc-editor-next-message', '#cc-editor-mask-selection', '#cc-editor-clear-masks', '#cc-editor-custom-instructions-button', '#cc-editor-accept-all', '#cc-editor-reject-all', '#cc-editor-history', '#cc-editor-new-chat', '#cc-editor-attach', '#cc-editor-send']) {
         $(selector).disabled = true;
     }
     $('#cc-editor-questioning-mode').disabled = false;
@@ -3262,6 +3412,7 @@ function render() {
     renderCard(); renderChat();
     renderPendingActions();
     renderCustomInstructions();
+    updateCardMaskActions();
     const composer = $('#cc-editor-composer');
     composer.value = state.draft || '';
     composer.style.height = '';
@@ -3410,12 +3561,13 @@ async function characterDesignerMetadata(conversation) {
     return metadata;
 }
 function buildCharacterDesignerPrompt({ questioningMode = getQuestioningMode(), customInstructions = '', originalCard = {}, metadata = {} } = {}) {
+    const hidden = hiddenCardValues();
     return renderCharacterDesignerPrompt({
         questioningMode,
-        customInstructions,
-        originalCard: snapshotText(originalCard),
+        customInstructions: redactCharacterCardValues(customInstructions, hidden),
+        originalCard: redactCharacterCardValues(snapshotText(modelVisibleCardValues(originalCard)), hidden),
         toolDefinitions: ToolManager.getXmlScopePrompt(CHARACTER_DESIGNER_XML_SCOPE),
-        metadata,
+        metadata: redactModelPayload(metadata, hidden),
         promptResource: characterDesignerPromptResource,
     });
 }
@@ -3590,6 +3742,51 @@ function parseEdits(calls, sourceValues = {}) {
     }
     return { edits, failures };
 }
+function restoreMaskedCardEdit(edit, sourceValues) {
+    const id = edit.field;
+    const actualBefore = deepCopy(sourceValues[id]);
+    const visibleAfter = edit.after;
+    const maskUpdates = {};
+    if (isCollection(id)) {
+        const items = Array.isArray(visibleAfter) ? visibleAfter : [];
+        const sourceItems = Array.isArray(actualBefore) ? actualBefore : [];
+        edit.after = items.map((item, index) => {
+            const source = String(sourceItems[index] ?? '');
+            const key = fieldMaskKey(id, index);
+            const ranges = maskRanges(key, source);
+            if (!ranges.length) return item;
+            const restored = restoreCharacterCardMasks(item, source, ranges);
+            if (restored.error) throw editToolFailure(restored.code, restored.error, edit.operations?.find(operation => operation.index === index) || edit.operations?.[0]);
+            maskUpdates[key] = restored.ranges;
+            return restored.text;
+        });
+    } else {
+        const source = String(actualBefore ?? '');
+        const key = fieldMaskKey(id);
+        const ranges = maskRanges(key, source);
+        if (ranges.length) {
+            const restored = restoreCharacterCardMasks(edit.after, source, ranges);
+            if (restored.error) throw editToolFailure(restored.code, restored.error, edit.operations?.[0]);
+            edit.after = restored.text;
+            maskUpdates[key] = restored.ranges;
+        }
+    }
+    edit.before = actualBefore;
+    edit.maskUpdates = maskUpdates;
+    return edit;
+}
+function restoreMaskedCardEdits(edits, sourceValues) {
+    const restored = [];
+    const failures = [];
+    for (const edit of edits) {
+        try {
+            restored.push(restoreMaskedCardEdit(edit, sourceValues));
+        } catch (error) {
+            failures.push(error);
+        }
+    }
+    return { edits: restored, failures };
+}
 function parseLoreValue(property, raw) {
     if (property === 'constant') {
         if (typeof raw !== 'boolean') throw new Error(`${lorePropertyLabel(property)} must be a boolean.`);
@@ -3698,6 +3895,23 @@ function parseLorebookTools(calls, sourceBook, sourceIds) {
     }
     return { changes, successes, reads, failures, afterBook: workingBook, afterIds: workingIds, toolXml: blocks.map(block => block.xml).join('\n') };
 }
+function restoreMaskedLorebook(parsedLore, sourceBook, sourceIds) {
+    const maskUpdates = {};
+    for (const [afterIndex, entryId] of parsedLore.afterIds.entries()) {
+        const beforeIndex = sourceIds.map(String).indexOf(String(entryId));
+        if (beforeIndex < 0) continue;
+        const source = String(sourceBook?.entries?.[beforeIndex]?.content || '');
+        const key = loreMaskKey(entryId);
+        const ranges = maskRanges(key, source);
+        if (!ranges.length) continue;
+        const restored = restoreCharacterCardMasks(parsedLore.afterBook.entries[afterIndex].content, source, ranges);
+        if (restored.error) throw Object.assign(new Error(restored.error), { toolFailure: true, code: restored.code, tool: 'rewrite_card_field', title: 'Character Book edit not applied', detail: restored.error, retryable: true });
+        parsedLore.afterBook.entries[afterIndex].content = restored.text;
+        maskUpdates[key] = restored.ranges;
+    }
+    parsedLore.maskUpdates = maskUpdates;
+    return parsedLore;
+}
 function loreSuccessResults(parsedLore) {
     return (parsedLore.successes || []).map(success => `<result>\n<tool>${xmlText(success.tool)}</tool>\n<status>success</status>\n<field>${xmlText(success.field || 'Character Book')}</field>\n<change>${xmlText(success.change)}</change>\n</result>`).join('\n');
 }
@@ -3736,6 +3950,15 @@ function applyLorebookProposal(parsedLore, beforeBook, beforeIds) {
     diff.proposalId = state.lorebookProposal.id;
     state.lorebook = deepCopy(parsedLore.afterBook);
     state.loreEntryIds = deepCopy(parsedLore.afterIds);
+    const retainedIds = new Set(state.loreEntryIds.map(String));
+    for (const key of Object.keys(state.masks || {})) {
+        if (key.startsWith('lore:') && !retainedIds.has(key.slice(5))) deleteMaskKey(key);
+    }
+    for (const [key, ranges] of Object.entries(parsedLore.maskUpdates || {})) {
+        const entryId = key.slice(5);
+        const index = state.loreEntryIds.map(String).indexOf(entryId);
+        if (index >= 0) setMaskRanges(key, state.lorebook.entries[index]?.content, ranges);
+    }
     const beforeEntries = beforeBook?.entries || [];
     for (const [index, entryId] of state.loreEntryIds.entries()) {
         const beforeIndex = beforeIds.indexOf(entryId);
@@ -4015,7 +4238,9 @@ function serializeToolFailure(error) {
     };
 }
 function applyCardToolCalls(calls, generationValues, conversation, messageId, { additionalChanges = [], failures = [] } = {}) {
-    const parsedEdits = parseEdits(calls, generationValues);
+    const parsedModelEdits = parseEdits(calls, modelVisibleCardValues(generationValues));
+    const restoredEdits = restoreMaskedCardEdits(parsedModelEdits.edits, generationValues);
+    const parsedEdits = { edits: restoredEdits.edits, failures: [...parsedModelEdits.failures, ...restoredEdits.failures] };
     const parsedReads = parseReadRequests(calls);
     failures.push(...parsedEdits.failures, ...parsedReads.failures);
     const edits = parsedEdits.edits.filter(edit => {
@@ -4063,14 +4288,16 @@ async function generateAssistant(conversation, retriesRemaining = MAX_TOOL_RETRI
     streamMessageAutoFollow.set(pendingMessage, shouldAutoFollow);
     conversation.messages.push(pendingMessage);
     activeGenerationController = new AbortController();
+    updateCardMaskActions();
     renderChat();
     let response = '';
     let streamedReasoning = '';
     let continueGeneration = false;
     try {
-        const prompt = await promptHistory(conversation, pendingMessage.id, continuation);
+        const prompt = redactModelPayload(await promptHistory(conversation, pendingMessage.id, continuation));
         const metadata = await characterDesignerMetadata(conversation);
-        const data = await generateRawData({ prompt, systemPrompt: buildCharacterDesignerPrompt({ customInstructions: customInstructionsValue(), originalCard: conversation.baseline, metadata }), quietToLoud: true, stream: true, signal: activeGenerationController.signal, substituteMacros: false });
+        const systemPrompt = buildCharacterDesignerPrompt({ customInstructions: customInstructionsValue(), originalCard: conversation.baseline, metadata });
+        const data = await generateRawData({ prompt, systemPrompt, quietToLoud: true, stream: true, signal: activeGenerationController.signal, substituteMacros: false });
         if (typeof data === 'function') {
             for await (const chunk of data()) {
                 response = chunk.text || response;
@@ -4097,7 +4324,7 @@ async function generateAssistant(conversation, retriesRemaining = MAX_TOOL_RETRI
         const parserFailures = scopedTools.calls.filter(call => call.error).map(call => Object.assign(new Error(call.error.message), {
             toolFailure: true, code: call.error.code === 'missing_required_argument' ? 'missing-argument' : (call.error.code || 'invalid-tool-call'), tool: call.name, title: 'Tool call not applied', detail: call.error.message, rawTool: call.xml, retryable: true,
         }));
-        const parsedLore = parseLorebookTools(toolCalls, generationBook, generationLoreIds);
+        const parsedLore = parseLorebookTools(toolCalls, modelVisibleLorebook(generationBook, generationLoreIds), generationLoreIds);
         const contextToolResults = contextCalls.map(call => {
             const result = invocationResults.get(call);
             const target = call.name === 'random_keywords' ? 'Keyword selection' : 'Avatar';
@@ -4110,6 +4337,14 @@ async function generateAssistant(conversation, retriesRemaining = MAX_TOOL_RETRI
             : `<result>\n<tool>${result.tool}</tool>\n<status>success</status>\n<target>${result.target}</target>\n<output>${xmlText(result.output)}</output>\n</result>`);
         let loreChanges = parsedLore.changes;
         const initialFailures = [...parserFailures, ...parsedLore.failures];
+        if (loreChanges.length) {
+            try {
+                restoreMaskedLorebook(parsedLore, generationBook, generationLoreIds);
+            } catch (error) {
+                initialFailures.push(error);
+                loreChanges = [];
+            }
+        }
         if (JSON.stringify(liveCharacterBook()) !== JSON.stringify(generationBook) || JSON.stringify(state.loreEntryIds) !== JSON.stringify(generationLoreIds)) {
             if (loreChanges.length) initialFailures.push(Object.assign(new Error('The Character Book changed while this response was being generated.'), { toolFailure: true, code: 'stale-field', tool: 'edit_lorebook_entry', title: 'Character Book edits not applied', detail: 'The live Character Book no longer matches the snapshot used by these calls.', retryable: true }));
             loreChanges = [];
@@ -4214,6 +4449,7 @@ async function generateAssistant(conversation, retriesRemaining = MAX_TOOL_RETRI
         pendingMessage.isThinking = false;
         pendingMessage.toolStream = '';
         activeGenerationController = null;
+        updateCardMaskActions();
     }
     render(); persistWorkspace();
     if (pendingExternalCardRefresh) {
@@ -4517,7 +4753,7 @@ export async function initCharacterCardEditor() {
         }
         workspaceAvatarUrl = avatarUrl;
         collectionDrafts.clear();
-        state = createState(savedWorkspace); undo = []; redo = []; focusedEdit = null; snappedEditKey = null;
+        state = createState(savedWorkspace); undo = []; redo = []; focusedEdit = null; snappedEditKey = null; lastCardMaskSelection = null;
         if (state.lorebookProposal && JSON.stringify(state.lorebook) !== JSON.stringify(liveCharacterBook())) {
             writeLorebookToCard();
         }
@@ -4567,6 +4803,10 @@ export async function initCharacterCardEditor() {
         if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); void send(); }
     });
     $('#cc-editor-custom-instructions-button')?.addEventListener('click', () => { if (state) void toggleCustomInstructionsPopup(); });
+    $('#cc-editor-mask-selection')?.addEventListener('pointerdown', event => event.preventDefault());
+    $('#cc-editor-mask-selection')?.addEventListener('click', maskSelectedCardText);
+    $('#cc-editor-clear-masks')?.addEventListener('pointerdown', event => event.preventDefault());
+    $('#cc-editor-clear-masks')?.addEventListener('click', clearActiveCardMasks);
     $('#cc-editor-add-references')?.addEventListener('click', () => {
         if ($('#cc-editor-reference-menu').hidden) openReferencePicker();
         else closeReferencePicker({ restoreFocus: true });
@@ -4620,6 +4860,7 @@ export async function initCharacterCardEditor() {
         requestAnimationFrame(button.dataset.pane === 'card' ? refreshFieldLayoutAfterResize : positionPendingControls);
     }));
     const card = $('#cc-editor-card');
+    ['select', 'focusin', 'keyup', 'pointerup'].forEach(eventName => card?.addEventListener(eventName, event => rememberCardMaskSelection(event.target), true));
     // Scroll events do not bubble. Capture them so the floating controls also
     // follow a hunk while its capped field is the element being scrolled.
     card?.addEventListener('scroll', positionPendingControls, { passive: true, capture: true });

@@ -24,21 +24,11 @@ async function profileStartupImport(name, modulePath) {
 }
 
 try {
+    // Keep the profiled path identical to normal startup. The module graph must
+    // be imported as one unit; importing parts of it first changes module
+    // evaluation order and makes the reported timings unrepresentative.
     if (globalThis.STARTUP_TIMING_ENABLED) {
-        await profileStartupImport('image codecs and Jimp plugins', './src/jimp.js');
-        await profileStartupImport('local Transformers/ONNX runtime', './src/transformers.js');
-        await profileStartupImport('tokenizer endpoint and tokenizer runtimes', './src/endpoints/tokenizers.js');
-        await profileStartupImport('MCP tools endpoint and SDK', './src/endpoints/tools.js');
-        await profileStartupImport('user storage and middleware subsystem', './src/users.js');
-        await profileStartupImport('Webpack runtime, configuration, and Git version lookup', './src/middleware/webpack-serve.js');
-        await profileStartupImport('remaining endpoint router graph', './src/server-startup.js');
-        console.log(`[startup +${Math.round(performance.now() - globalThis.SERVER_START_TIME)}ms] Importing: remaining server modules`);
-        const remainingModulesStart = performance.now();
-        const remainingModulesCpuStart = process.cpuUsage();
-        await import('./src/server-main.js');
-        const remainingModulesCpu = process.cpuUsage(remainingModulesCpuStart);
-        const remainingModulesCpuMs = Math.round((remainingModulesCpu.user + remainingModulesCpu.system) / 1000);
-        console.log(`[startup +${Math.round(performance.now() - globalThis.SERVER_START_TIME)}ms] Imported: remaining server modules (${Math.round(performance.now() - remainingModulesStart)}ms wall, ${remainingModulesCpuMs}ms CPU); asynchronous startup is running.`);
+        await profileStartupImport('server startup module graph', './src/server-main.js');
     } else {
         await import('./src/server-main.js');
     }

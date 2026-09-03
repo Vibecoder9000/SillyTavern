@@ -6265,6 +6265,7 @@ body.big-avatars .cc-reference-option-copy { height: calc(var(--avatar-base-heig
 .cc-editor-snap-actions .menu_button { width: 27px; padding-inline: 0; }
 .cc-editor-header-actions .cc-editor-bulk-action { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
 .cc-editor-header-actions .cc-editor-custom-button.active:not(:disabled) { color: var(--SmartThemeEmColor); }
+.cc-editor-header-actions .cc-editor-mask-action.active:not(:disabled) { color: var(--SmartThemeEmColor); }
 .cc-editor-header-actions .cc-editor-accept-all:not(:disabled) { color: #35c75a; }
 .cc-editor-header-actions .cc-editor-reject-all:not(:disabled) { color: #e06c75; }
 .cc-editor-custom-instructions-popup { display: flex; flex-direction: column; gap: 10px; }

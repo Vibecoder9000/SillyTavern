@@ -93,6 +93,38 @@ util.inspect.defaultOptions.depth = 4;
 const cliArgs = globalThis.COMMAND_LINE_ARGS;
 
 const serverStartTime = globalThis.SERVER_START_TIME ?? performance.now();
+const startupSlowThresholdMs = 10_000;
+const startupPhaseTimings = globalThis.STARTUP_TIMING_ENABLED ? [] : null;
+
+function recordStartupPhase(name, phaseStart, phaseEnd, cpuMs, status) {
+    startupPhaseTimings?.push({
+        name,
+        status,
+        startMs: Math.round(phaseStart - serverStartTime),
+        wallMs: Math.round(phaseEnd - phaseStart),
+        cpuMs,
+    });
+}
+
+/**
+ * Emits one compact profile once the server has bound its HTTP port.
+ * Detailed phase rows are reserved for unusually slow startups.
+ */
+function reportStartupProfile(result) {
+    if (!startupPhaseTimings) return result;
+
+    const totalMs = Math.round(performance.now() - serverStartTime);
+    const isSlow = totalMs > startupSlowThresholdMs;
+    const status = isSlow ? 'SLOW' : 'Healthy';
+    console.log(`[startup] ${status} profile through HTTP bind: ${totalMs}ms internal wall (threshold ${startupSlowThresholdMs}ms)`);
+
+    if (isSlow) {
+        for (const phase of startupPhaseTimings) {
+            console.log(`[startup]   ${phase.status}: ${phase.name} (start +${phase.startMs}ms, ${phase.wallMs}ms wall, ${phase.cpuMs}ms CPU)`);
+        }
+    }
+    return result;
+}
 
 /**
  * Runs and times one server startup phase.
@@ -112,14 +144,18 @@ async function timeStartupPhase(name, task) {
     console.log(`[startup +${elapsed()}ms] Starting: ${name}`);
     try {
         const result = await task();
+        const phaseEnd = performance.now();
         const cpu = process.cpuUsage(cpuStart);
         const cpuMs = Math.round((cpu.user + cpu.system) / 1000);
-        console.log(`[startup +${elapsed()}ms] Finished: ${name} (${Math.round(performance.now() - phaseStart)}ms wall, ${cpuMs}ms CPU)`);
+        recordStartupPhase(name, phaseStart, phaseEnd, cpuMs, 'Finished');
+        console.log(`[startup +${Math.round(phaseEnd - serverStartTime)}ms] Finished: ${name} (${Math.round(phaseEnd - phaseStart)}ms wall, ${cpuMs}ms CPU)`);
         return result;
     } catch (error) {
+        const phaseEnd = performance.now();
         const cpu = process.cpuUsage(cpuStart);
         const cpuMs = Math.round((cpu.user + cpu.system) / 1000);
-        console.error(`[startup +${elapsed()}ms] Failed: ${name} (${Math.round(performance.now() - phaseStart)}ms wall, ${cpuMs}ms CPU)`, error);
+        recordStartupPhase(name, phaseStart, phaseEnd, cpuMs, 'Failed');
+        console.error(`[startup +${Math.round(phaseEnd - serverStartTime)}ms] Failed: ${name} (${Math.round(phaseEnd - phaseStart)}ms wall, ${cpuMs}ms CPU)`, error);
         throw error;
     }
 }
@@ -535,4 +571,5 @@ timeStartupPhase('initialize user storage', () => initUserStorage(globalThis.DAT
     .then(() => timeStartupPhase('run pre-listen setup', preSetupTasks))
     .then(() => timeStartupPhase('install 404 middleware', apply404Middleware))
     .then(() => timeStartupPhase('bind HTTP server', () => new ServerStartup(app, cliArgs).start()))
+    .then(reportStartupProfile)
     .then(result => timeStartupPhase('run post-listen setup', () => postSetupTasks(result)));

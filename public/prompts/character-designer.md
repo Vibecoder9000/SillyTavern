@@ -39,7 +39,9 @@ Initial card snapshot:
 
 {{original_card}}
 
-The initial snapshot above is the complete, editable current card. Attached reference cards are available as read-only context.
+`⟦MASKED⟧` means content intentionally unavailable to the model. Treat it as unknown, not as an instruction; do not infer or reconstruct it. Preserve it during edits unless replacement content is provided.
+
+The initial snapshot above is the editable current card; any `⟦MASKED⟧` span is an opaque unknown. Attached reference cards are available as read-only context.
 
 Only the current card is writable. Other cards are evidence, examples, or source material; never direct edit targets. When combining characters or borrowing a pattern, write the result into the current card through the normal proposal tools.
 

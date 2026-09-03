@@ -8,7 +8,9 @@ call npm install --no-save --no-audit --no-fund --loglevel=error --no-progress -
 set "NPM_EXIT_CODE=%errorlevel%"
 if /I "%STARTUP_TIMING%"=="true" echo [startup] %date% %time% Dependency check finished with exit code %NPM_EXIT_CODE%.
 if /I "%STARTUP_TIMING%"=="true" echo [startup] %date% %time% Starting Node server...
-node server.js %*
+set "NODE_SCRIPT=server.js"
+if /I "%STARTUP_TIMING%"=="true" set "NODE_SCRIPT=scripts\profile-startup.mjs"
+node %NODE_SCRIPT% %*
 set "NODE_EXIT_CODE=%errorlevel%"
 if /I "%STARTUP_TIMING%"=="true" echo [startup] %date% %time% Node server exited with exit code %NODE_EXIT_CODE%.
 pause
