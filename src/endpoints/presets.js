@@ -32,6 +32,10 @@ function getPresetSettingsByAPI(apiId, directories) {
             return { folder: directories.sysprompt, extension: '.json' };
         case 'reasoning':
             return { folder: directories.reasoning, extension: '.json' };
+        case 'reasoning_rewrite':
+            return { folder: directories.reasoningRewrite, extension: '.json' };
+        case 'reasoning_rewrite_goal':
+            return { folder: directories.reasoningRewriteGoal, extension: '.json' };
         default:
             return { folder: null, extension: null };
     }

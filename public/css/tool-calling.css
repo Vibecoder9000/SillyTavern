@@ -54,6 +54,21 @@
     opacity: 0.9;
 }
 
+.tool-result-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.tool-result-token-count {
+    flex: 0 0 auto;
+    color: var(--SmartThemeQuoteColor);
+    opacity: 0.85;
+    font-size: 0.85em;
+    white-space: nowrap;
+}
+
 .tool-call-box .tool-reasoning blockquote {
     margin: 0 0 10px 0;
     padding: 10px;

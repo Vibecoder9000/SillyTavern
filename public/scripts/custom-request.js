@@ -3,7 +3,7 @@ import { extractJsonFromData, extractMessageFromData, getGenerateUrl, getRequest
 import { getTextGenServer, createTextGenGenerationData, setting_names, textgenerationwebui_settings } from './textgen-settings.js';
 import { extractReasoningFromData } from './reasoning.js';
 import { formatInstructModeChat, formatInstructModePrompt, getInstructStoppingSequences } from './instruct-mode.js';
-import { getStreamingReply, tryParseStreamingError, createGenerationParameters, settingsToUpdate, oai_settings } from './openai.js';
+import { getStreamingReply, tryParseStreamingError, createGenerationParameters, applyModelSpecificPayloadFixes, settingsToUpdate, oai_settings } from './openai.js';
 import EventSourceStream from './sse-stream.js';
 
 // #region Type Definitions
@@ -560,6 +560,11 @@ export class ChatCompletionService {
                 console.warn('Preset manager not found, continuing with default settings');
             }
         }
+
+        // Raw payloads bypass createGenerationParameters and preset merges can re-add
+        // parameters that were stripped, so apply the model-specific fixes as a final
+        // pass. Newer models (o1/o3/o4, gpt-5, Claude 5) reject them with HTTP 400.
+        applyModelSpecificPayloadFixes(requestData, requestData.chat_completion_source, requestData.model);
 
         return await this.sendRequest(requestData, extractData, signal);
     }

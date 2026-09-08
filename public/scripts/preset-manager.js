@@ -27,6 +27,7 @@ import { getPresetApplicationPromise, oai_settings, openai_setting_names, openai
 import { POPUP_RESULT, POPUP_TYPE, Popup } from './popup.js';
 import { context_presets, getContextSettings, power_user } from './power-user.js';
 import { reasoning_templates } from './reasoning.js';
+import { reasoning_rewrite_presets, reasoning_rewrite_goal_presets } from './reasoning-rewrite.js';
 import { SlashCommand } from './slash-commands/SlashCommand.js';
 import { ARGUMENT_TYPE, SlashCommandArgument } from './slash-commands/SlashCommandArgument.js';
 import { enumIcons } from './slash-commands/SlashCommandCommonEnumsProvider.js';
@@ -580,6 +581,16 @@ class PresetManager {
                 preset_names = reasoning_templates.map(x => x.name);
                 settings = power_user.reasoning;
                 break;
+            case 'reasoning_rewrite':
+                presets = reasoning_rewrite_presets;
+                preset_names = reasoning_rewrite_presets.map(x => x.name);
+                settings = power_user.reasoning_rewrite;
+                break;
+            case 'reasoning_rewrite_goal':
+                presets = reasoning_rewrite_goal_presets;
+                preset_names = reasoning_rewrite_goal_presets.map(x => x.name);
+                settings = power_user.reasoning_rewrite;
+                break;
             default:
                 console.warn(`Unknown API ID ${api}`);
         }
@@ -598,7 +609,7 @@ class PresetManager {
      * Returns true if the API is from Advanced Formatting group.
      */
     isAdvancedFormatting() {
-        return ['context', 'instruct', 'sysprompt', 'reasoning'].includes(this.apiId);
+        return ['context', 'instruct', 'sysprompt', 'reasoning', 'reasoning_rewrite', 'reasoning_rewrite_goal'].includes(this.apiId);
     }
 
     /**
@@ -674,6 +685,16 @@ class PresetManager {
                     reasoning_preset.name = name || power_user.reasoning.preset;
                     return reasoning_preset;
                 }
+                case 'reasoning_rewrite': {
+                    const rewrite_preset = structuredClone(power_user.reasoning_rewrite);
+                    rewrite_preset.name = name || power_user.reasoning_rewrite.prompt_preset;
+                    return rewrite_preset;
+                }
+                case 'reasoning_rewrite_goal': {
+                    const goal_preset = structuredClone(power_user.reasoning_rewrite);
+                    goal_preset.name = name || power_user.reasoning_rewrite.goal_preset;
+                    return goal_preset;
+                }
                 default:
                     console.warn(`Unknown API ID ${apiId}`);
                     return {};
@@ -733,6 +754,16 @@ class PresetManager {
             'auto_expand',
             'show_hidden',
             'max_additions',
+
+            // Reasoning rewrite exclusions
+            'profile_id',
+            'context_depth',
+            'goal_preset',
+            'prompt_preset',
+            'temperature',
+            'max_tokens',
+            ...(this.apiId === 'reasoning_rewrite' ? ['goal'] : []),
+            ...(this.apiId === 'reasoning_rewrite_goal' ? ['prompt'] : []),
         ];
         /** @type {Record<string, any>} */
         const settings = Object.assign({}, getSettingsByApiId(this.apiId));

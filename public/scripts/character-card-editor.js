@@ -789,6 +789,16 @@ function flattenCardValues(value, fallback) {
         return [id, normalizeLineEndings(resolved)];
     }));
 }
+function hasMeaningfulCardValues(values) {
+    return FIELDS.some(({ id }) => {
+        // Alternate greetings can survive a partial form overwrite, so they
+        // are not enough evidence that the live card is intact.
+        if (id === 'greetings') return false;
+        const value = values?.[id];
+        if (isCollection(id)) return Array.isArray(value) && value.some(item => String(item ?? '').trim());
+        return typeof value === 'string' && value.trim().length > 0;
+    });
+}
 function serializeWorkspace() {
     const saved = deepCopy(state);
     compactPendingMap(saved.pending);
@@ -803,6 +813,10 @@ function createState(saved = null) {
     const liveValues = cardValuesFromCharacter();
     const liveBook = liveCharacterBook();
     const liveFlat = flattenCardValues(liveValues, {});
+    const savedValues = saved?.version >= 2 ? flattenCardValues(saved, liveFlat) : null;
+    const initialValues = !hasMeaningfulCardValues(liveFlat) && hasMeaningfulCardValues(savedValues)
+        ? savedValues
+        : liveFlat;
     const next = saved?.version >= 2 ? saved : { pending: {}, conversations: [], activeConversation: null, checkpoints: [], draft: '', draftAttachments: [], heights: {}, cardWidth: 60 };
     next.version = 3;
     next.masks = saved?.masks && typeof saved.masks === 'object' ? saved.masks : {};
@@ -817,7 +831,7 @@ function createState(saved = null) {
     // If a reload lands between those operations, the complete stored proposal is
     // the newer source of truth and must not be replaced by the stale server card.
     const restoredBook = storedProposalIsComplete ? deepCopy(storedLoreProposal.after) : liveBook;
-    next.values = liveValues;
+    next.values = initialValues;
     delete next.fields;
     delete next.greetings;
     delete next.examples;
@@ -4747,18 +4761,26 @@ export async function initCharacterCardEditor() {
         }
         // The shared handler opens the drawer either way, so leaving a stale card on
         // screen would invite edits that quietly go nowhere.
-        if (!currentCharacter()) { state = null; workspaceAvatarUrl = null; removeFloatingHunkControls(); renderNoCharacter(); return; }
+        const openingCharacter = selectedCharacter();
+        if (!openingCharacter) {
+            state = null; workspaceAvatarUrl = null; removeFloatingHunkControls(); renderNoCharacter(); return;
+        }
         const loadToken = ++workspaceLoadToken;
-        const avatarUrl = currentCharacter().avatar;
+        // Capture the selected owner before the shared drawer handler opens the
+        // panel. Once open, currentCharacter() intentionally resolves to the
+        // previous workspace owner while the new workspace is loading.
+        const avatarUrl = openingCharacter.avatar;
         editor.classList.add('cc-editor-preparing');
         let savedWorkspace = null;
         try {
-            savedWorkspace = await loadStoredWorkspace();
+            savedWorkspace = await loadStoredWorkspace(avatarUrl);
         } catch (error) {
             console.error('Character card editor: could not load the workspace.', error);
             toastr.error('The Character Designer workspace file could not be loaded. Starting with a fresh workspace.', 'Character card editor');
         }
-        if (loadToken !== workspaceLoadToken || currentCharacter()?.avatar !== avatarUrl || !editor.classList.contains('openDrawer')) {
+        const currentAvatar = selectedCharacter()?.avatar || null;
+        const editorOpen = editor.classList.contains('openDrawer');
+        if (loadToken !== workspaceLoadToken || currentAvatar !== avatarUrl || !editorOpen) {
             editor.classList.remove('cc-editor-preparing');
             return;
         }
@@ -4959,7 +4981,8 @@ async function refreshExternalCardState() {
 
 async function syncOpenEditorCharacter() {
     const editor = $('#character-card-editor');
-    if (!state || !editor?.classList.contains('openDrawer')) return;
+    const editorOpen = Boolean(editor?.classList.contains('openDrawer'));
+    if (!state || !editorOpen) return;
     const selected = selectedCharacter();
     const avatarUrl = selected?.avatar || null;
     if (avatarUrl === workspaceAvatarUrl) return;
@@ -4987,7 +5010,11 @@ async function syncOpenEditorCharacter() {
         console.error('Character card editor: could not switch workspaces.', error);
         toastr.error('The Character Designer workspace file could not be loaded. Starting with a fresh workspace.', 'Character card editor');
     }
-    if (loadToken !== workspaceLoadToken || selectedCharacter()?.avatar !== avatarUrl || !editor.classList.contains('openDrawer')) return;
+    const selectedAvatarAfterLoad = selectedCharacter()?.avatar || null;
+    const editorOpenAfterLoad = editor.classList.contains('openDrawer');
+    if (loadToken !== workspaceLoadToken || selectedAvatarAfterLoad !== avatarUrl || !editorOpenAfterLoad) {
+        return;
+    }
 
     workspaceAvatarUrl = avatarUrl;
     collectionDrafts.clear();

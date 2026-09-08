@@ -16,6 +16,7 @@ import { enumTypes, SlashCommandEnumValue } from './slash-commands/SlashCommandE
 import { SlashCommandParser } from './slash-commands/SlashCommandParser.js';
 import { textgen_types, textgenerationwebui_settings } from './textgen-settings.js';
 import { applyStreamFadeIn } from './util/stream-fadein.js';
+import { updateReasoningRewriteDom } from './reasoning-rewrite.js';
 import { copyText, escapeRegex, isFalseBoolean, isTrueBoolean, setDatasetProperty, stringToRange, trimSpaces } from './utils.js';
 
 /**
@@ -548,7 +549,7 @@ export class ReasoningHandler {
         if (this.state === ReasoningState.Thinking) {
             this.state = this.#isHiddenReasoningModel ? ReasoningState.Hidden : ReasoningState.Done;
             this.updateReasoning(messageId, null, { persist: true });
-            await eventSource.emit(event_types.STREAM_REASONING_DONE, this.reasoning, this.getDuration(), messageId, this.state);
+            await eventSource.emit(event_types.STREAM_REASONING_DONE, this.reasoning, this.getDuration(), messageId, this.state, this.generationOrigin);
         }
 
         this.updateDom(messageId);
@@ -605,6 +606,9 @@ export class ReasoningHandler {
 
         // Update the reasoning duration in the UI
         this.#updateReasoningTimeUI();
+
+        // Update Reasoning Rewrite split view UI
+        updateReasoningRewriteDom(messageId, this.messageDom);
     }
 
     /**

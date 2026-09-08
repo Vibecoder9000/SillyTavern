@@ -65,4 +65,7 @@ test-results/
 uploads backup/
 models/
 images/
+# Unrelated project workspaces occasionally created at the repository root.
+/artifacts/
+/blender-leafa-duo/
 AGENTS.md

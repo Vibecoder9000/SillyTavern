@@ -1,0 +1,4 @@
+{
+    "name": "Default",
+    "prompt": "You are given recent conversation context and a reasoning trace produced by another model during a chat conversation. Rewrite the reasoning according to the user's goal below.\n\nPreserve factual details, numbers, uncertainty, corrections, and causal relationships. Do not alter the final answer or invent unsupported facts. Output only the rewritten reasoning, nothing else."
+}

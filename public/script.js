@@ -282,6 +282,7 @@ import { initSettingsSearch } from './scripts/setting-search.js';
 import { initBulkEdit } from './scripts/bulk-edit.js';
 import { getContext } from './scripts/st-context.js';
 import { extractReasoningFromData, extractReasoningSignatureFromData, initReasoning, parseReasoningInSwipes, PromptReasoning, ReasoningHandler, removeReasoningFromString, updateReasoningUI } from './scripts/reasoning.js';
+import { initReasoningRewrite } from './scripts/reasoning-rewrite.js';
 import { accountStorage } from './scripts/util/AccountStorage.js';
 import { initWelcomeScreen, openPermanentAssistantChat, openPermanentAssistantCard, getPermanentAssistantAvatar } from './scripts/welcome-screen.js';
 import { initDataMaid } from './scripts/data-maid.js';
@@ -563,6 +564,22 @@ export async function flushPendingSettingsSave() {
     const saved = await saveSettings();
     if (!saved) throw new Error('Could not flush pending settings');
 }
+
+// All character-card writers must share one per-avatar queue. The editor, chat
+// workspace, and extension paths can otherwise read the same PNG and then let
+// the last stale full-card write win.
+const characterCardWriteQueues = new Map();
+export function enqueueCharacterCardWrite(avatarUrl, operation) {
+    const key = String(avatarUrl || '');
+    if (!key) return Promise.reject(new Error('Character card write has no avatar target.'));
+    const previous = characterCardWriteQueues.get(key) || Promise.resolve();
+    const current = previous.catch(() => {}).then(operation);
+    characterCardWriteQueues.set(key, current);
+    return current.finally(() => {
+        if (characterCardWriteQueues.get(key) === current) characterCardWriteQueues.delete(key);
+    });
+}
+
 let pendingCharacterSaveTarget = null;
 
 function captureCharacterSaveTarget() {
@@ -576,19 +593,46 @@ function characterSaveTargetMatches(target) {
     return current.actionType === target?.actionType && current.avatar === target?.avatar;
 }
 
+function characterEditFormIsReady(formData, expectedAvatar = null) {
+    const avatar = String(formData.get('avatar_url') || '');
+    const name = String(formData.get('ch_name') || '').trim();
+    const jsonData = String(formData.get('json_data') || '').trim();
+    if (!avatar || !name || !jsonData) return false;
+    if (expectedAvatar !== null && avatar !== expectedAvatar) return false;
+
+    try {
+        JSON.parse(jsonData);
+    } catch {
+        return false;
+    }
+
+    // The avatar filename is the card's identity anchor. The name inside json_data is
+    // deliberately not compared against characters[this_chid].name: names are
+    // DOMPurify-sanitized for display, so the sanitized copy can legitimately differ
+    // from the raw name stored in the card, which would block every save.
+    const selectedCharacter = this_chid !== undefined ? characters[this_chid] : null;
+    const selectedAvatar = String(selectedCharacter?.avatar || '');
+    return !selectedAvatar || selectedAvatar === avatar;
+}
+
 async function runPendingCharacterSave(target) {
     if (pendingCharacterSaveTarget === target) pendingCharacterSaveTarget = null;
     if (!characterSaveTargetMatches(target)) {
         console.warn('Skipped a stale character save because the editor now belongs to another card.');
         return;
     }
-    await createOrEditCharacter();
+    if (target?.actionType !== 'editcharacter' || !target.avatar) return;
+    await createOrEditCharacter(undefined, { expectedAvatar: target.avatar });
 }
 
 const saveCharacterDebounceImpl = debounce(target => void runPendingCharacterSave(target), DEFAULT_SAVE_EDIT_TIMEOUT);
 
 export function saveCharacterDebounced() {
     pendingCharacterSaveTarget = captureCharacterSaveTarget();
+    if (pendingCharacterSaveTarget.actionType !== 'editcharacter' || !pendingCharacterSaveTarget.avatar) {
+        pendingCharacterSaveTarget = null;
+        return;
+    }
     saveCharacterDebounceImpl(pendingCharacterSaveTarget);
 }
 
@@ -600,7 +644,7 @@ export async function flushPendingCharacterSave() {
     if (!characterSaveTargetMatches(target)) {
         throw new Error('The pending character save belongs to a different card.');
     }
-    await createOrEditCharacter();
+    await createOrEditCharacter(undefined, { expectedAvatar: target.avatar });
 }
 
 /**
@@ -1001,6 +1045,7 @@ async function firstLoadInit() {
     initSettingsSearch();
     initBulkEdit();
     initReasoning();
+    initReasoningRewrite();
     initWelcomeScreen();
     await initScrapers();
     initCustomSelectedSamplers();
@@ -1073,12 +1118,12 @@ function getWorkspaceChatState(extra = {}) {
 
 const workspaceSelectionWriter = createKeyedCoalescedWriter(async (_key, snapshot) => {
     if (snapshot.kind === 'character') {
-        const response = await fetch('/api/characters/edit', {
+        const response = await enqueueCharacterCardWrite(snapshot.avatarUrl, () => fetch('/api/characters/merge-attributes', {
             method: 'POST',
-            headers: getRequestHeaders({ omitContentType: true }),
-            body: snapshot.formData,
+            headers: getRequestHeaders(),
+            body: JSON.stringify({ avatar: snapshot.avatarUrl, chat: snapshot.chatId }),
             cache: 'no-cache',
-        });
+        }));
         if (!response.ok) throw new Error(`Character chat selection save failed: ${response.statusText}`);
         return;
     }
@@ -1263,41 +1308,14 @@ function captureWorkspaceCharacterSelection(identity) {
     const character = characters[characterId];
     if (!character) throw new Error(`Character selection could not be captured: ${identity.ownerId}`);
 
-    // The owner UI is intentionally refreshed after a workspace tab commits. Its
-    // form can therefore still contain the previous character here. Building this
-    // request from that form and merely replacing avatar_url retargets the entire
-    // previous card onto the newly selected one.
-    const data = character.data || character;
-    const extensions = data.extensions || {};
-    const depthPrompt = extensions.depth_prompt || {};
-    const formData = new FormData();
-    formData.set('avatar_url', character.avatar);
-    formData.set('ch_name', character.name);
-    formData.set('chat', identity.chatId);
-    formData.set('create_date', character.create_date || '');
-    formData.set('json_data', character.json_data || JSON.stringify(character));
-    formData.set('description', data.description || '');
-    formData.set('personality', data.personality || '');
-    formData.set('scenario', data.scenario || '');
-    formData.set('first_mes', data.first_mes || '');
-    formData.set('mes_example', data.mes_example || '');
-    formData.set('creator_notes', data.creator_notes || character.creatorcomment || '');
-    formData.set('system_prompt', data.system_prompt || '');
-    formData.set('post_history_instructions', data.post_history_instructions || '');
-    formData.set('tags', Array.isArray(data.tags) ? data.tags.join(', ') : (data.tags || ''));
-    formData.set('creator', data.creator || '');
-    formData.set('character_version', data.character_version || '');
-    formData.set('talkativeness', String(extensions.talkativeness ?? character.talkativeness ?? talkativeness_default));
-    formData.set('fav', String(extensions.fav ?? character.fav ?? false));
-    formData.set('world', extensions.world || '');
-    formData.set('depth_prompt_prompt', depthPrompt.prompt || '');
-    formData.set('depth_prompt_depth', String(depthPrompt.depth ?? depth_prompt_depth_default));
-    formData.set('depth_prompt_role', depthPrompt.role ?? depth_prompt_role_default);
-    for (const value of data.alternate_greetings || []) {
-        formData.append('alternate_greetings', value);
-    }
-
-    return { kind: 'character', formData };
+    // Selecting a chat only changes the card's active chat pointer. Never send
+    // the shared editor form, or a shallow character object, through the full
+    // card replacement endpoint from this path.
+    return {
+        kind: 'character',
+        avatarUrl: character.avatar,
+        chatId: identity.chatId,
+    };
 }
 
 function captureWorkspacePostCommit(identity) {
@@ -4699,7 +4717,65 @@ function getToolResultMessageHtml(message, messageId, fallbackText = '') {
         `;
     }
 
-    return `<div class="tool-result-box"><h4><i class="fa-solid fa-check-circle"></i> Tool Result</h4><pre><code>${DOMPurify.sanitize(toolResult)}</code></pre></div>`;
+    return `
+        <div class="tool-result-box">
+            <div class="tool-result-header">
+                <h4><i class="fa-solid fa-check-circle"></i> Tool Result</h4>
+                <span class="tool-result-token-count" title="Token count of the tool result text" hidden></span>
+            </div>
+            <pre><code>${DOMPurify.sanitize(toolResult)}</code></pre>
+        </div>
+    `;
+}
+
+/**
+ * Pending token count updates for rendered tool result boxes, keyed by the message text container.
+ * @type {WeakMap<HTMLElement, ReturnType<typeof setTimeout>>}
+ */
+const toolResultTokenCountTimers = new WeakMap();
+
+/**
+ * Schedules an asynchronous token count update for a rendered tool result box.
+ * Tokenization happens off the render path via the cache-backed tokenizer, and a
+ * short debounce coalesces repeated re-renders of the same container.
+ * @param {HTMLElement} root Message text container holding a tool result box
+ * @param {ChatMessage} message Message object
+ * @param {string} [fallbackText=''] Fallback text if tool_result_content is absent
+ */
+function scheduleToolResultTokenCount(root, message, fallbackText = '') {
+    if (!(root instanceof HTMLElement) || !root.querySelector('.tool-result-token-count')) {
+        return;
+    }
+
+    const pendingTimer = toolResultTokenCountTimers.get(root);
+    if (pendingTimer) {
+        clearTimeout(pendingTimer);
+    }
+
+    toolResultTokenCountTimers.set(root, setTimeout(async () => {
+        toolResultTokenCountTimers.delete(root);
+        const tokenCountElement = root.querySelector('.tool-result-token-count');
+        if (!tokenCountElement) {
+            return;
+        }
+
+        const resultText = getToolResultDisplayText(message, fallbackText);
+        if (!resultText.trim()) {
+            tokenCountElement.hidden = true;
+            return;
+        }
+
+        try {
+            const tokenCount = await getTokenCountAsync(resultText, 0);
+            if (!tokenCountElement.isConnected) {
+                return;
+            }
+            tokenCountElement.textContent = `${tokenCount} tokens`;
+            tokenCountElement.hidden = false;
+        } catch {
+            // Leave the counter hidden when the tokenizer is unavailable.
+        }
+    }, 150));
 }
 
 /**
@@ -4712,6 +4788,7 @@ function getToolResultMessageHtml(message, messageId, fallbackText = '') {
  */
 function renderToolResultText(container, message, messageId, fallbackText = '') {
     container.html(getToolResultMessageHtml(message, messageId, fallbackText));
+    scheduleToolResultTokenCount(container.get(0), message, fallbackText);
 }
 
 /**
@@ -7228,6 +7305,18 @@ class StreamingProcessor {
             messageId = chat.length - 1;
             await this.#checkDomElements(messageId, continueOnReasoning);
             this.markUIGenStarted();
+            const identity = getWorkspaceChatIdentity();
+            const identityKey = getWorkspaceIdentityCacheKey(identity);
+            const chatKey = identityKey || (selected_group ? `group:${selected_group}` : (characters[this_chid] ? `character:${characters[this_chid].avatar || this_chid}:${characters[this_chid].chat || 'default'}` : 'default'));
+            this.reasoningHandler.generationOrigin = {
+                chatKey,
+                chatIdentity: identity,
+                targetChat: chat,
+                targetMessage: chat[messageId],
+                messageId,
+                swipeId: chat[messageId]?.swipe_id ?? 0,
+                processor: this,
+            };
         }
         hideSwipeButtons({ hideCounters: true });
         scrollChatToBottom({ waitForFrame: true });
@@ -7331,6 +7420,9 @@ class StreamingProcessor {
                 const isTextToolResult = !!chat[messageId].extra?.is_tool_result;
                 if (isTextToolResult) {
                     this.messageTextDom.innerHTML = getToolResultMessageHtml(chat[messageId], messageId, processedText);
+                    if (isFinal) {
+                        scheduleToolResultTokenCount(this.messageTextDom, chat[messageId], processedText);
+                    }
                 } else if (power_user.stream_fade_in) {
                     applyStreamFadeIn(this.messageTextDom, formattedText);
                 } else {
@@ -13848,7 +13940,7 @@ function addAlternateGreeting(template, greeting, index, getArray, popup) {
  * Creates or edits a character based on the form data.
  * @param {Event} [e] Event that triggered the function call.
  */
-export async function createOrEditCharacter(e) {
+export async function createOrEditCharacter(e, { expectedAvatar = null } = {}) {
     if (!settingsReady) {
         console.warn('Settings not ready, aborting character creation/editing.');
         return;
@@ -13971,6 +14063,12 @@ export async function createOrEditCharacter(e) {
         try {
             let url = '/api/characters/edit';
 
+            const avatarUrl = String(formData.get('avatar_url') || '');
+            if (!characterEditFormIsReady(formData, expectedAvatar)) {
+                console.warn('Skipped character save because the editor form was incomplete or targeted another card.', { avatarUrl, expectedAvatar });
+                return false;
+            }
+
             if (crop_data != undefined) {
                 url += `?crop=${encodeURIComponent(JSON.stringify(crop_data))}`;
             }
@@ -13983,19 +14081,27 @@ export async function createOrEditCharacter(e) {
                 }
             }
 
-            const fetchResult = await fetch(url, {
+            const fetchResult = await enqueueCharacterCardWrite(avatarUrl, () => fetch(url, {
                 method: 'POST',
                 headers: headers,
                 body: formData,
                 cache: 'no-cache',
-            });
+            }));
 
             if (!fetchResult.ok) {
                 throw new Error('Fetch result is not ok');
             }
 
-            await getOneCharacter(formData.get('avatar_url'));
+            await getOneCharacter(avatarUrl);
             favsToHotswap(); // Update fav state
+
+            // Refresh the hidden card JSON. After a rename the stored form JSON no
+            // longer matches the card name, so every later debounced save would fail
+            // the stale-form identity check and be skipped until re-selection.
+            const editedCharacter = characters.find(c => c.avatar === avatarUrl);
+            if (editedCharacter?.json_data) {
+                $('#character_json_data').val(editedCharacter.json_data);
+            }
 
             $('#add_avatar_button').replaceWith(
                 $('#add_avatar_button').val('').clone(true),

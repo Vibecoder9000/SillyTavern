@@ -6269,6 +6269,7 @@ function getModelOptions(quiet) {
         { id: 'model_mistralai_select', api: 'openai', type: chat_completion_sources.MISTRALAI },
         { id: 'custom_model_id', api: 'openai', type: chat_completion_sources.CUSTOM },
         { id: 'openai_responses_model_id', api: 'openai', type: chat_completion_sources.OPENAI_RESPONSES },
+        { id: 'model_codex_select', api: 'openai', type: chat_completion_sources.OPENAI_CODEX },
         { id: 'model_cohere_select', api: 'openai', type: chat_completion_sources.COHERE },
         { id: 'model_perplexity_select', api: 'openai', type: chat_completion_sources.PERPLEXITY },
         { id: 'model_groq_select', api: 'openai', type: chat_completion_sources.GROQ },

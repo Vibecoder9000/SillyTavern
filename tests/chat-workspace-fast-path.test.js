@@ -61,10 +61,11 @@ describe('chat workspace activation fast path', () => {
             appScript.indexOf('function captureWorkspaceCharacterSelection'),
             appScript.indexOf('function captureWorkspacePostCommit'),
         );
-        expect(capture).toContain('const formData = new FormData();');
-        expect(capture).not.toContain('new FormData(form)');
-        expect(capture).toContain("formData.set('json_data', character.json_data");
-        expect(capture).toContain("formData.set('avatar_url', character.avatar)");
+        expect(capture).not.toContain('FormData');
+        expect(capture).toContain('avatarUrl: character.avatar');
+        expect(capture).toContain('chatId: identity.chatId');
+        expect(appScript).toContain("'/api/characters/merge-attributes'");
+        expect(appScript).toContain('enqueueCharacterCardWrite(snapshot.avatarUrl');
     });
 
     test('flushes pending character edits before changing workspace identity', () => {
@@ -83,6 +84,8 @@ describe('chat workspace activation fast path', () => {
         expect(characterCardEditorScript).toContain('return editorOpen ? characterByCardId(workspaceAvatarUrl) : selectedCharacter();');
         expect(characterCardEditorScript).toContain('if (!editorOwnsCharacterForm()) return;');
         expect(characterCardEditorScript).toContain('event_types.CHAT_CHANGED, () => void syncOpenEditorCharacter()');
+        expect(characterCardEditorScript).toContain('savedWorkspace = await loadStoredWorkspace(avatarUrl);');
+        expect(characterCardEditorScript).toContain('const currentAvatar = selectedCharacter()?.avatar || null;');
     });
 
     test('flushes the background mirror before capturing a new-chat snapshot', () => {

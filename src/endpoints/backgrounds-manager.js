@@ -316,6 +316,7 @@ export async function syncBackgroundsMetadata(userDirectories) {
 
             // Server-side console progress bar for initial thumbnail generation.
             const renderProgressBar = () => {
+                if (!process.stdout.isTTY) return;
                 process.stdout.clearLine(0);
                 process.stdout.cursorTo(0);
                 const percentage = Math.floor((processedCount / totalFiles) * 100);
@@ -420,8 +421,10 @@ export async function syncBackgroundsMetadata(userDirectories) {
                 // Print collected messages
                 if (messagesToLog.length > 0) {
                     // Clear the progress bar line before printing messages
-                    process.stdout.clearLine(0);
-                    process.stdout.cursorTo(0);
+                    if (process.stdout.isTTY) {
+                        process.stdout.clearLine(0);
+                        process.stdout.cursorTo(0);
+                    }
 
                     // Log each message
                     messagesToLog.forEach(msg => {

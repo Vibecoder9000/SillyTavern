@@ -45,6 +45,8 @@ export const USER_DIRECTORY_TEMPLATE = Object.freeze({
     backups: 'backups',
     sysprompt: 'sysprompt',
     reasoning: 'reasoning',
+    reasoningRewrite: 'reasoning-rewrite',
+    reasoningRewriteGoal: 'reasoning-rewrite-goal',
     workspaceContext: 'workspace-context',
     characterDesigner: 'character-designer',
     uploads: 'uploads',
@@ -74,6 +76,8 @@ export const CONTENT_TYPES = Object.freeze({
     QUICK_REPLIES: 'quick_replies',
     SYSPROMPT: 'sysprompt',
     REASONING: 'reasoning',
+    REASONING_REWRITE: 'reasoning_rewrite',
+    REASONING_REWRITE_GOAL: 'reasoning_rewrite_goal',
     BACKGROUNDS_METADATA: 'backgrounds_metadata',
 });
 

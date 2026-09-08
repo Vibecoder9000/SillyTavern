@@ -62,6 +62,7 @@ import { fuzzySearchCategories } from './filters.js';
 import { accountStorage } from './util/AccountStorage.js';
 import { extractDominantColor, generateThemePalette, deriveBackgroundName } from './util/ThemeGenerator.js';
 import { DEFAULT_REASONING_TEMPLATE, loadReasoningTemplates } from './reasoning.js';
+import { loadReasoningRewritePresets } from './reasoning-rewrite.js';
 import { bindModelTemplates } from './chat-templates.js';
 import { IMAGE_OVERSWIPE, MEDIA_DISPLAY } from './constants.js';
 import { t } from './i18n.js';
@@ -204,6 +205,20 @@ export function resetLayoutPlusPlusPanelWidths() {
 }
 
 export const persona_description_positions = _persona_description_positions;
+
+export const DEFAULT_REASONING_REWRITE_PROMPT = 'You are given recent conversation context and a reasoning trace produced by another model during a chat conversation. Rewrite the reasoning according to the user\'s goal below.\n\nPreserve factual details, numbers, uncertainty, corrections, and causal relationships. Do not alter the final answer or invent unsupported facts. Output only the rewritten reasoning, nothing else.';
+
+const defaultReasoningRewrite = {
+    enabled: false,
+    profile_id: '',
+    context_depth: 2,
+    goal: '',
+    goal_preset: 'Default',
+    prompt_preset: 'Default',
+    prompt: DEFAULT_REASONING_REWRITE_PROMPT,
+    temperature: 0.7,
+    max_tokens: 4096,
+};
 
 export const power_user = {
     charListGrid: false,
@@ -379,6 +394,8 @@ export const power_user = {
         separator: '\n',
         max_additions: 1,
     },
+
+    reasoning_rewrite: { ...defaultReasoningRewrite },
 
     workspace_last_chat: {
         max_chars: 8000,
@@ -1814,6 +1831,10 @@ export async function loadPowerUserSettings(settings, data) {
         Object.assign(power_user, settings.power_user);
     }
 
+    // Field-wise merge so a settings snapshot saved by an older version does not
+    // shadow defaults that were added to reasoning_rewrite since.
+    power_user.reasoning_rewrite = { ...defaultReasoningRewrite, ...power_user.reasoning_rewrite };
+
     power_user.layout_plus_plus_modes = normalizeLayoutPlusPlusModes(power_user.layout_plus_plus_modes, power_user.layout_plus_plus);
     power_user.layout_plus_plus_panel_widths = normalizeLayoutPlusPlusPanelWidths(power_user.layout_plus_plus_panel_widths);
     syncLayoutPlusPlusForViewport();
@@ -2109,6 +2130,7 @@ export async function loadPowerUserSettings(settings, data) {
     await loadContextSettings();
     await loadSystemPrompts(data);
     await loadReasoningTemplates(data);
+    await loadReasoningRewritePresets(data);
     loadMaxContextUnlocked();
     switchWaifuMode();
     switchSpoilerMode();

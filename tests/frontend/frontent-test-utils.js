@@ -1,4 +1,4 @@
-const baseURL = process.env.ST_BASE_URL || process.env.PLAYWRIGHT_BASE_URL || 'http://127.0.0.1:8000';
+const baseURL = process.env.ST_BASE_URL || process.env.PLAYWRIGHT_BASE_URL || 'http://127.0.0.1:8100';
 
 export const testSetup = {
     /**
@@ -11,7 +11,7 @@ export const testSetup = {
     },
 
     /**
-     * Waits for SillyTavern to fully load by navigating to the home page and waiting for the preloader to disappear.
+     * Waits for SillyTavern to fully load by navigating to the home page and waiting for the preloader to hide or disappear.
      * @param {Object} params
      * @param {import('@playwright/test').Page} params.page
      */
@@ -36,7 +36,11 @@ export const testSetup = {
                 throw new Error('Could not log into any account without a password.');
             }
         }
-        await page.waitForFunction('document.getElementById("preloader") === null', { timeout: 0 });
+        // This fork hides the preloader in place rather than removing it from the DOM.
+        await page.waitForFunction(() => {
+            const preloader = document.getElementById('preloader');
+            return !preloader || preloader.hidden || getComputedStyle(preloader).display === 'none';
+        }, { timeout: 120_000 });
     },
 
     /**

@@ -2856,6 +2856,86 @@ function getVerbosity(settings = null) {
     return settings.verbosity;
 }
 
+// "OpenAI-like" sources
+const gptSources = [
+    chat_completion_sources.OPENAI,
+    chat_completion_sources.OPENAI_CODEX,
+    chat_completion_sources.AZURE_OPENAI,
+    chat_completion_sources.OPENROUTER,
+];
+
+/**
+ * Applies parameter fixes required by newer models that reject legacy sampling
+ * parameters (o1/o3/o4, gpt-5, Claude 5 family). Mutates the payload in place and
+ * is safe to run again after further payload merging.
+ * @param {object} generate_data Generation payload
+ * @param {string} chatCompletionSource Chat completion source of the request
+ * @param {string} model Model identifier
+ */
+export function applyModelSpecificPayloadFixes(generate_data, chatCompletionSource, model) {
+    if (gptSources.includes(chatCompletionSource) && /^(o1|o3|o4)/.test(model)) {
+        generate_data.max_completion_tokens = generate_data.max_tokens;
+        delete generate_data.max_tokens;
+        delete generate_data.logprobs;
+        delete generate_data.top_logprobs;
+        delete generate_data.stop;
+        delete generate_data.logit_bias;
+        delete generate_data.temperature;
+        delete generate_data.top_p;
+        delete generate_data.frequency_penalty;
+        delete generate_data.presence_penalty;
+        if (model.startsWith('o1')) {
+            generate_data.messages.forEach((msg) => {
+                if (msg.role === 'system') {
+                    msg.role = 'user';
+                }
+            });
+            delete generate_data.n;
+            delete generate_data.tools;
+            delete generate_data.tool_choice;
+        }
+    }
+
+    if (gptSources.includes(chatCompletionSource) && /^gpt-5/.test(model)) {
+        generate_data.max_completion_tokens = generate_data.max_tokens;
+        delete generate_data.max_tokens;
+        delete generate_data.logprobs;
+        delete generate_data.top_logprobs;
+        if (/gpt-5-chat-latest/.test(model)) {
+            delete generate_data.tools;
+            delete generate_data.tool_choice;
+        } else if (/gpt-5\.(1|2|3|4)/.test(model) && !/chat-latest/.test(model) && !generate_data.reasoning_effort) {
+            delete generate_data.frequency_penalty;
+            delete generate_data.presence_penalty;
+            delete generate_data.logit_bias;
+            delete generate_data.stop;
+        } else {
+            delete generate_data.temperature;
+            delete generate_data.top_p;
+            delete generate_data.frequency_penalty;
+            delete generate_data.presence_penalty;
+            delete generate_data.logit_bias;
+            delete generate_data.stop;
+        }
+    }
+
+    // Claude Fable / Claude 5 models removed sampling parameters and reject them with HTTP 400,
+    // including via OpenAI-compatible proxies. Unanchored to also match prefixed ids
+    // like 'anthropic/claude-fable-5' or 'anthropic/claude-opus-5'.
+    if (/claude-(fable|opus-5|sonnet-5)/.test(model)) {
+        delete generate_data.temperature;
+        delete generate_data.top_p;
+        delete generate_data.top_k;
+        delete generate_data.frequency_penalty;
+        delete generate_data.presence_penalty;
+        // Keep reasoning_effort for the native Claude source, where the backend maps it to
+        // adaptive thinking; proxies may translate it into a thinking budget that these models reject.
+        if (chatCompletionSource !== chat_completion_sources.CLAUDE) {
+            delete generate_data.reasoning_effort;
+        }
+    }
+}
+
 /**
  * Build the generation parameter object for an OAI request.
  * @param {ChatCompletionSettings} settings Initial chat completion settings
@@ -2871,14 +2951,6 @@ export async function createGenerationParameters(settings, model, type, messages
         throw new Error('messages must be an array');
     }
     messages = messages.filter(msg => msg && typeof msg === 'object');
-
-    // "OpenAI-like" sources
-    const gptSources = [
-        chat_completion_sources.OPENAI,
-        chat_completion_sources.OPENAI_CODEX,
-        chat_completion_sources.AZURE_OPENAI,
-        chat_completion_sources.OPENROUTER,
-    ];
 
     // Sources that support the "seed" parameter
     const seedSupportedSources = [
@@ -3233,67 +3305,7 @@ export async function createGenerationParameters(settings, model, type, messages
         generate_data.seed = settings.seed;
     }
 
-    if (gptSources.includes(settings.chat_completion_source) && /^(o1|o3|o4)/.test(model)) {
-        generate_data.max_completion_tokens = generate_data.max_tokens;
-        delete generate_data.max_tokens;
-        delete generate_data.logprobs;
-        delete generate_data.top_logprobs;
-        delete generate_data.stop;
-        delete generate_data.logit_bias;
-        delete generate_data.temperature;
-        delete generate_data.top_p;
-        delete generate_data.frequency_penalty;
-        delete generate_data.presence_penalty;
-        if (model.startsWith('o1')) {
-            generate_data.messages.forEach((msg) => {
-                if (msg.role === 'system') {
-                    msg.role = 'user';
-                }
-            });
-            delete generate_data.n;
-            delete generate_data.tools;
-            delete generate_data.tool_choice;
-        }
-    }
-
-    if (gptSources.includes(settings.chat_completion_source) && /^gpt-5/.test(model)) {
-        generate_data.max_completion_tokens = generate_data.max_tokens;
-        delete generate_data.max_tokens;
-        delete generate_data.logprobs;
-        delete generate_data.top_logprobs;
-        if (/gpt-5-chat-latest/.test(model)) {
-            delete generate_data.tools;
-            delete generate_data.tool_choice;
-        } else if (/gpt-5\.(1|2|3|4)/.test(model) && !/chat-latest/.test(model) && !generate_data.reasoning_effort) {
-            delete generate_data.frequency_penalty;
-            delete generate_data.presence_penalty;
-            delete generate_data.logit_bias;
-            delete generate_data.stop;
-        } else {
-            delete generate_data.temperature;
-            delete generate_data.top_p;
-            delete generate_data.frequency_penalty;
-            delete generate_data.presence_penalty;
-            delete generate_data.logit_bias;
-            delete generate_data.stop;
-        }
-    }
-
-    // Claude Fable / Claude 5 models removed sampling parameters and reject them with HTTP 400,
-    // including via OpenAI-compatible proxies. Unanchored to also match prefixed ids
-    // like 'anthropic/claude-fable-5' or 'anthropic/claude-opus-5'.
-    if (/claude-(fable|opus-5|sonnet-5)/.test(model)) {
-        delete generate_data.temperature;
-        delete generate_data.top_p;
-        delete generate_data.top_k;
-        delete generate_data.frequency_penalty;
-        delete generate_data.presence_penalty;
-        // Keep reasoning_effort for the native Claude source, where the backend maps it to
-        // adaptive thinking; proxies may translate it into a thinking budget that these models reject.
-        if (settings.chat_completion_source !== chat_completion_sources.CLAUDE) {
-            delete generate_data.reasoning_effort;
-        }
-    }
+    applyModelSpecificPayloadFixes(generate_data, settings.chat_completion_source, model);
 
     if (oai_settings.native_tool_calling && Array.isArray(generate_data.stop)) {
         const maxStopSequences = Math.trunc(Number(power_user.tool_max_stop_sequences) || 0);

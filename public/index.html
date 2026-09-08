@@ -5743,6 +5743,56 @@
                                     <small data-i18n="Pin greeting message styles">Pin greeting message styles</small>
                                 </label>
                                 <div class="inline-drawer wide100p flexFlowColumn">
+                                    <div class="inline-drawer-toggle inline-drawer-header userSettingsInnerExpandable" title="Rewrite streamed reasoning using a second model request." data-i18n="[title]Rewrite streamed reasoning using a second model request">
+                                        <b><span data-i18n="Reasoning Rewrite">Reasoning Rewrite</span></b>
+                                        <div class="fa-solid fa-circle-chevron-down inline-drawer-icon down"></div>
+                                    </div>
+                                    <div class="inline-drawer-content">
+                                        <label class="checkbox_label" for="reasoning_rewrite_enabled" title="Enable automatic reasoning rewriting when reasoning completes." data-i18n="[title]Enable automatic reasoning rewriting when reasoning completes">
+                                            <input id="reasoning_rewrite_enabled" type="checkbox" />
+                                            <small data-i18n="Enabled">Enabled</small>
+                                        </label>
+                                        <small data-i18n="Connection Profile">Connection Profile</small>
+                                        <select id="reasoning_rewrite_profile" class="text_pole" title="Connection profile to use for the rewrite request. Must be configured in Connection Manager. When empty, the active Chat Completion source is used." data-i18n="[title]Connection profile to use for the rewrite request. Must be configured in Connection Manager. When empty, the active Chat Completion source is used.">
+                                            <option value="" data-i18n="— Select Profile —">— Select Profile —</option>
+                                        </select>
+                                        <small data-i18n="Context Messages">Context Messages</small>
+                                        <input id="reasoning_rewrite_context_depth" type="number" min="0" max="20" step="1" value="2" class="text_pole" title="Number of preceding chat messages to include as context for the rewrite." data-i18n="[title]Number of preceding chat messages to include as context for the rewrite" />
+                                        <small data-i18n="Rewrite Goal Preset">Rewrite Goal Preset</small>
+                                        <div class="flex-container">
+                                            <select id="reasoning_rewrite_goal_preset_select" data-preset-manager-for="reasoning_rewrite_goal" class="flex1 text_pole"></select>
+                                            <div class="menu_button fa-solid fa-save" data-preset-manager-update="reasoning_rewrite_goal" title="Update preset" data-i18n="[title]Update preset"></div>
+                                            <div class="menu_button fa-solid fa-plus" data-preset-manager-new="reasoning_rewrite_goal" title="Save as new preset" data-i18n="[title]Save as new preset"></div>
+                                            <div class="menu_button fa-solid fa-undo" data-preset-manager-restore="reasoning_rewrite_goal" title="Reset to default" data-i18n="[title]Reset to default"></div>
+                                            <div class="menu_button fa-solid fa-trash-can" data-preset-manager-delete="reasoning_rewrite_goal" title="Delete preset" data-i18n="[title]Delete preset"></div>
+                                            <div class="menu_button fa-solid fa-file-import" data-preset-manager-import="reasoning_rewrite_goal" title="Import preset" data-i18n="[title]Import preset"></div>
+                                            <input type="file" hidden data-preset-manager-file="reasoning_rewrite_goal" />
+                                            <div class="menu_button fa-solid fa-file-export" data-preset-manager-export="reasoning_rewrite_goal" title="Export preset" data-i18n="[title]Export preset"></div>
+                                        </div>
+                                        <small data-i18n="Rewrite Goal">Rewrite Goal</small>
+                                        <textarea id="reasoning_rewrite_goal" class="text_pole textarea_compact" rows="3" placeholder="e.g. Write as natural first-person thoughts in {{char}}'s voice." data-i18n="[placeholder]e.g. Write as natural first-person thoughts in {{char}}'s voice."></textarea>
+                                        <hr />
+                                        <small data-i18n="Rewrite Prompt Preset">Rewrite Prompt Preset</small>
+                                        <div class="flex-container">
+                                            <select id="reasoning_rewrite_preset_select" data-preset-manager-for="reasoning_rewrite" class="flex1 text_pole"></select>
+                                            <div class="menu_button fa-solid fa-save" data-preset-manager-update="reasoning_rewrite" title="Update preset" data-i18n="[title]Update preset"></div>
+                                            <div class="menu_button fa-solid fa-plus" data-preset-manager-new="reasoning_rewrite" title="Save as new preset" data-i18n="[title]Save as new preset"></div>
+                                            <div class="menu_button fa-solid fa-undo" data-preset-manager-restore="reasoning_rewrite" title="Reset to default" data-i18n="[title]Reset to default"></div>
+                                            <div class="menu_button fa-solid fa-trash-can" data-preset-manager-delete="reasoning_rewrite" title="Delete preset" data-i18n="[title]Delete preset"></div>
+                                            <div class="menu_button fa-solid fa-file-import" data-preset-manager-import="reasoning_rewrite" title="Import preset" data-i18n="[title]Import preset"></div>
+                                            <input type="file" hidden data-preset-manager-file="reasoning_rewrite" />
+                                            <div class="menu_button fa-solid fa-file-export" data-preset-manager-export="reasoning_rewrite" title="Export preset" data-i18n="[title]Export preset"></div>
+                                        </div>
+                                        <small data-i18n="Rewrite Prompt">Rewrite Prompt</small>
+                                        <textarea id="reasoning_rewrite_prompt" class="text_pole textarea_compact" rows="6" placeholder="System instruction for the rewrite model..." data-i18n="[placeholder]System instruction for the rewrite model..."></textarea>
+                                        <hr />
+                                        <small data-i18n="Temperature">Temperature</small>
+                                        <input id="reasoning_rewrite_temperature" type="number" min="0" max="2" step="0.05" value="0.7" class="text_pole" />
+                                        <small data-i18n="Max Tokens">Max Tokens</small>
+                                        <input id="reasoning_rewrite_max_tokens" type="number" min="1" max="200000" step="1" value="4096" class="text_pole" />
+                                    </div>
+                                </div>
+                                <div class="inline-drawer wide100p flexFlowColumn">
                                     <div class="inline-drawer-toggle inline-drawer-header userSettingsInnerExpandable" title="Automatically reject and re-generate AI message based on configurable criteria." data-i18n="[title]Automatically reject and re-generate AI message based on configurable criteria">
                                         <b><span data-i18n="Auto-swipe">Auto-swipe</span></b>
                                         <div class="fa-solid fa-circle-chevron-down inline-drawer-icon down"></div>
@@ -7927,7 +7977,13 @@
                                 <div class="mes_reasoning_edit mes_button fa-solid fa-pencil" title="Edit reasoning" data-i18n="[title]Edit reasoning"></div>
                             </div>
                         </summary>
-                        <div class="mes_reasoning"></div>
+                        <div class="mes_reasoning_container">
+                            <div class="mes_reasoning"></div>
+                            <div class="mes_reasoning_rewrite">
+                                <div class="mes_reasoning_rewrite_status" data-status="idle"></div>
+                                <div class="mes_reasoning_rewrite_content"></div>
+                            </div>
+                        </div>
                     </details>
                     <div class="mes_text"></div>
                     <div class="mes_media_wrapper"></div>

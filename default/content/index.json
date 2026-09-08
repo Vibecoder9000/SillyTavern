@@ -652,6 +652,14 @@
         "type": "reasoning"
     },
     {
+        "filename": "presets/reasoning-rewrite/Default.json",
+        "type": "reasoning_rewrite"
+    },
+    {
+        "filename": "presets/reasoning-rewrite-goal/Default.json",
+        "type": "reasoning_rewrite_goal"
+    },
+    {
         "filename": "presets/instruct/Gemma 4.json",
         "type": "instruct"
     },

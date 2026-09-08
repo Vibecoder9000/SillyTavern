@@ -8,7 +8,7 @@ import { serverDirectory } from './src/server-directory.js';
 import { getVersion, color } from './src/util.js';
 
 function startupTimingEnabled() {
-    return globalThis.STARTUP_TIMING_ENABLED === true;
+    return globalThis.STARTUP_TIMING_ENABLED === true && globalThis.STARTUP_TIMING_COMPLETE !== true;
 }
 
 function startupOffset() {

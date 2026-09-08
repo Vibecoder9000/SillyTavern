@@ -10,7 +10,7 @@
         "lint:fix": "eslint \"**/*.js\" ./*.js --fix"
     },
     "dependencies": {
-        "@playwright/test": "^1.56.1",
+        "@playwright/test": "1.62.1",
         "@types/jest": "^29.5.12",
         "eslint": "^8.57.0",
         "jest": "^29.7.0"

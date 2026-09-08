@@ -114,6 +114,12 @@ declare global {
         memory?: string;
         display_text?: string;
         reasoning_display_text?: string;
+        reasoning_rewrite?: string;
+        reasoning_rewrite_meta?: {
+            profile_id?: string;
+            context_depth?: number;
+            goal?: string;
+        };
         tool_invocations?: ToolInvocation[];
         title?: string;
         isSmallSys?: boolean;

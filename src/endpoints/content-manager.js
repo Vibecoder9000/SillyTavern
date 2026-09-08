@@ -53,6 +53,8 @@ export const CONTENT_TYPES = {
     QUICK_REPLIES: 'quick_replies',
     SYSPROMPT: 'sysprompt',
     REASONING: 'reasoning',
+    REASONING_REWRITE: 'reasoning_rewrite',
+    REASONING_REWRITE_GOAL: 'reasoning_rewrite_goal',
     BACKGROUNDS_METADATA: 'backgrounds_metadata',
     ERROR_PAGE: 'error_page',
     STYLESHEET: 'stylesheet',
@@ -90,7 +92,7 @@ export function getDefaultPresets(directories) {
         const presets = [];
 
         for (const contentItem of contentIndex) {
-            if (contentItem.type.endsWith('_preset') || ['instruct', 'context', 'sysprompt', 'reasoning'].includes(contentItem.type)) {
+            if (contentItem.type.endsWith('_preset') || ['instruct', 'context', 'sysprompt', 'reasoning', 'reasoning_rewrite', 'reasoning_rewrite_goal'].includes(contentItem.type)) {
                 contentItem.name = path.parse(contentItem.filename).name;
                 contentItem.folder = getUserTargetByType(contentItem.type, directories);
                 presets.push(contentItem);
@@ -362,6 +364,10 @@ export function getUserTargetByType(type, directories) {
             return directories.sysprompt;
         case CONTENT_TYPES.REASONING:
             return directories.reasoning;
+        case CONTENT_TYPES.REASONING_REWRITE:
+            return directories.reasoningRewrite;
+        case CONTENT_TYPES.REASONING_REWRITE_GOAL:
+            return directories.reasoningRewriteGoal;
         default:
             return null;
     }
