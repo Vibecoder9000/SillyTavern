@@ -2,6 +2,7 @@ import { CONNECT_API_MAP, createModelIcon, getRequestHeaders, substituteParams }
 import { extension_settings, openThirdPartyExtensionMenu } from '../extensions.js';
 import { t } from '../i18n.js';
 import { chat_completion_sources, oai_settings, proxies, ZAI_ENDPOINT, POLLINATIONS_ENDPOINT } from '../openai.js';
+import { ensureAntSeedOfferSafe } from '../antseed.js';
 import { SECRET_KEYS, secret_state } from '../secrets.js';
 import { textgen_types, textgenerationwebui_settings } from '../textgen-settings.js';
 import { getTokenCountAsync } from '../tokenizers.js';
@@ -435,6 +436,14 @@ export class ConnectionManagerRequestService {
 
                     const proxyPreset = proxies.find((p) => p.name === profile.proxy);
 
+                    if (selectedApiMap.source === chat_completion_sources.ANTSEED) {
+                        const targetModel = overridePayload?.model || profile.model;
+                        const result = await ensureAntSeedOfferSafe(targetModel);
+                        if (!result || !result.safe) {
+                            throw new Error(result?.message || t`The selected AntSeed offer is unknown or unavailable.`);
+                        }
+                    }
+
                     const messages = Array.isArray(prompt) ? prompt : [{ role: 'user', content: prompt }];
                     return await context.ChatCompletionService.processRequest({
                         stream,
@@ -450,6 +459,7 @@ export class ConnectionManagerRequestService {
                         siliconflow_endpoint: profile['api-url'],
                         minimax_endpoint: profile['api-url'],
                         pollinations_endpoint: profile['api-url'],
+                        antseed_endpoint: profile['api-url'],
                         reverse_proxy: proxyPreset?.url,
                         proxy_password: proxyPreset?.password,
                         custom_prompt_post_processing: profile['prompt-post-processing'],

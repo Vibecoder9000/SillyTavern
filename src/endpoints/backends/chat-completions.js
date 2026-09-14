@@ -104,6 +104,7 @@ const API_SILICONFLOW = 'https://api.siliconflow.com/v1';
 const API_SILICONFLOW_CN = 'https://api.siliconflow.cn/v1';
 const API_MINIMAX = 'https://api.minimax.io/v1';
 const API_MINIMAX_CN = 'https://api.minimaxi.com/v1';
+const API_ANTSEED = 'http://localhost:8377/v1';
 const API_OPENROUTER = 'https://openrouter.ai/api/v1';
 const API_WORKERS_AI = 'https://api.cloudflare.com/client/v4/accounts';
 
@@ -1795,6 +1796,9 @@ router.post('/status', async function (request, statusResponse) {
             apiKey = readSecret(request.user.directories, SECRET_KEYS.OPENROUTER, request.body.secret_id);
             // OpenRouter needs to pass the Referer and X-Title: https://openrouter.ai/docs#requests
             headers = { ...OPENROUTER_HEADERS };
+        } else if (request.body.chat_completion_source === CHAT_COMPLETION_SOURCES.ANTSEED) {
+            apiUrl = String(request.body.antseed_endpoint || API_ANTSEED).replace(/\/$/, '');
+            headers = {};
         } else if (request.body.chat_completion_source === CHAT_COMPLETION_SOURCES.MISTRALAI) {
             apiUrl = new URL(request.body.reverse_proxy || API_MISTRAL).toString();
             apiKey = request.body.reverse_proxy ? request.body.proxy_password : readSecret(request.user.directories, SECRET_KEYS.MISTRALAI, request.body.secret_id);
@@ -2073,6 +2077,7 @@ router.post('/status', async function (request, statusResponse) {
         if (!apiKey && !request.body.reverse_proxy && ![
             CHAT_COMPLETION_SOURCES.CUSTOM,
             CHAT_COMPLETION_SOURCES.OPENAI_RESPONSES,
+            CHAT_COMPLETION_SOURCES.ANTSEED,
         ].includes(request.body.chat_completion_source)) {
             console.warn('Chat Completion API key is missing.');
             return statusResponse.status(400).send({ error: true });
@@ -2085,7 +2090,7 @@ router.post('/status', async function (request, statusResponse) {
         const response = await fetch(modelsUrl, {
             method: 'GET',
             headers: {
-                ...(request.body.chat_completion_source === CHAT_COMPLETION_SOURCES.OPENAI_RESPONSES && !apiKey
+                ...([CHAT_COMPLETION_SOURCES.OPENAI_RESPONSES, CHAT_COMPLETION_SOURCES.ANTSEED].includes(request.body.chat_completion_source) && !apiKey
                     ? {}
                     : { 'Authorization': 'Bearer ' + apiKey }),
                 ...headers,
@@ -2095,6 +2100,11 @@ router.post('/status', async function (request, statusResponse) {
         if (response.ok) {
             /** @type {any} */
             let data = await response.json();
+
+            if (request.body.chat_completion_source === CHAT_COMPLETION_SOURCES.ANTSEED) {
+                const models = Array.isArray(data) ? data : data?.data || data?.models || [];
+                return statusResponse.send({ data: models });
+            }
 
             if (request.body.chat_completion_source === CHAT_COMPLETION_SOURCES.POLLINATIONS && Array.isArray(data)) {
                 data = { data: data.map(model => ({ id: model.name, ...model })) };
@@ -2418,6 +2428,10 @@ router.post('/generate', async function (request, response) {
             if (isGemini) {
                 bodyParams['safety_settings'] = GEMINI_SAFETY;
             }
+        } else if (request.body.chat_completion_source === CHAT_COMPLETION_SOURCES.ANTSEED) {
+            apiUrl = String(request.body.antseed_endpoint || API_ANTSEED).replace(/\/$/, '');
+            headers = {};
+            bodyParams = {};
         } else if (request.body.chat_completion_source === CHAT_COMPLETION_SOURCES.CUSTOM) {
             apiUrl = request.body.custom_url;
             apiKey = readSecret(request.user.directories, SECRET_KEYS.CUSTOM, request.body.secret_id);
@@ -2639,7 +2653,7 @@ router.post('/generate', async function (request, response) {
             }
         }
 
-        if (!apiKey && !request.body.reverse_proxy && request.body.chat_completion_source !== CHAT_COMPLETION_SOURCES.CUSTOM) {
+        if (!apiKey && !request.body.reverse_proxy && ![CHAT_COMPLETION_SOURCES.CUSTOM, CHAT_COMPLETION_SOURCES.ANTSEED].includes(request.body.chat_completion_source)) {
             console.warn('OpenAI API key is missing.');
             return response.status(400).send({ error: true });
         }
@@ -2704,7 +2718,7 @@ router.post('/generate', async function (request, response) {
             method: 'post',
             headers: {
                 'Content-Type': 'application/json',
-                'Authorization': 'Bearer ' + apiKey,
+                ...(apiKey ? { 'Authorization': 'Bearer ' + apiKey } : {}),
                 ...headers,
             },
             body: JSON.stringify(requestBody),

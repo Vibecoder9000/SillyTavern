@@ -53,6 +53,7 @@
     <link rel="stylesheet" type="text/css" href="css/user.css">
     <link rel="stylesheet" type="text/css" href="css/layout-plus-plus.css">
     <link rel="stylesheet" type="text/css" href="css/jspace.css">
+    <link rel="stylesheet" type="text/css" href="css/antseed.css">
     <link rel="icon" type="image/x-icon" href="favicon.ico">
     <!-- Scripts are loaded at the end of the body to improve page load speed -->
 </head>
@@ -2974,6 +2975,7 @@
                                 <option value="moonshot">Moonshot AI</option>
                                 <option value="nanogpt">NanoGPT</option>
                                 <option value="openrouter">OpenRouter</option>
+                                <option value="antseed">AntSeed</option>
                                 <option value="perplexity">Perplexity</option>
                                 <option value="pollinations">Pollinations</option>
                                 <option value="siliconflow">SiliconFlow</option>
@@ -3346,6 +3348,24 @@
                                     <option data-i18n="Floating point (32 bit)" value="fp32">Floating point (32 bit)</option>
                                     <option data-i18n="Unknown" value="unknown">Unknown</option>
                                 </select>
+                            </div>
+                        </form>
+                        <form id="antseed_form" data-source="antseed" action="javascript:void(null);" method="post">
+                            <h4 data-i18n="AntSeed Endpoint">AntSeed Endpoint</h4>
+                            <input id="antseed_endpoint" class="text_pole wide100p" type="url" value="http://localhost:8377/v1" autocomplete="off">
+                            <h4 data-i18n="AntSeed Model">AntSeed Model</h4>
+                            <input id="antseed_model" class="text_pole wide100p" type="text" value="" autocomplete="off" placeholder="peerId@serviceId" data-i18n="[placeholder]peerId@serviceId">
+                            <div class="antseed-section-label" data-i18n="Selected Offer">Selected Offer</div>
+                            <div id="antseed_selected_offer" class="antseed-selected-summary"><span class="antseed-muted" data-i18n="None">None</span></div>
+                            <div class="antseed-browser-heading">
+                                <div class="antseed-browser-title" data-i18n="AntSeed Browser">AntSeed Browser</div>
+                                <div id="antseed_browser_mode" class="antseed-mode-controls"></div>
+                                <input id="antseed_search" class="text_pole" type="search" placeholder="Search models or providers" data-i18n="[placeholder]Search models or providers">
+                                <button id="antseed_clear_search" type="button" class="menu_button menu_button_icon fa-solid fa-xmark displayNone" title="Clear AntSeed search" aria-label="Clear AntSeed search" data-i18n="[title]Clear AntSeed search;[aria-label]Clear AntSeed search"></button>
+                                <button id="antseed_refresh" type="button" class="menu_button menu_button_icon fa-solid fa-refresh" title="Refresh AntSeed offers" aria-label="Refresh AntSeed offers" data-i18n="[title]Refresh AntSeed offers;[aria-label]Refresh AntSeed offers"></button>
+                            </div>
+                            <div id="antseed_browser" class="antseed-browser">
+                                <div id="antseed_browser_table" class="antseed-browser-table-wrap"><div class="antseed-loading" data-i18n="Loading offers…">Loading offers…</div></div>
                             </div>
                         </form>
                         <form id="ai21_form" data-source="ai21" action="javascript:void(null);" method="post" enctype="multipart/form-data">

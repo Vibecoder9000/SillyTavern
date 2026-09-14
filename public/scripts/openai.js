@@ -82,6 +82,7 @@ import { ToolManager } from './tool-calling.js';
 import { accountStorage } from './util/AccountStorage.js';
 import { COMETAPI_IGNORE_PATTERNS, IGNORE_SYMBOL, MEDIA_DISPLAY, MEDIA_TYPE } from './constants.js';
 import { syncNanoGptProvidersForModel, syncOpenRouterProvidersForModel, updateNanoGptProvidersWarning, updateOpenRouterProvidersWarning } from './textgen-models.js';
+import { ANTSEED_DEFAULT_ENDPOINT, ensureAntSeedOfferSafe, initAntSeed, refreshAntSeedUI, syncAntSeedContext, updateAntSeedModels } from './antseed.js';
 
 export {
     openai_messages_count,
@@ -203,6 +204,7 @@ export const chat_completion_sources = {
     SILICONFLOW: 'siliconflow',
     WORKERS_AI: 'workers_ai',
     MINIMAX: 'minimax',
+    ANTSEED: 'antseed',
 };
 
 const character_names_behavior = {
@@ -353,6 +355,8 @@ export const settingsToUpdate = {
     siliconflow_endpoint: ['#siliconflow_endpoint', 'siliconflow_endpoint', false, true],
     minimax_model: ['#model_minimax_select', 'minimax_model', false, true],
     minimax_endpoint: ['#minimax_endpoint', 'minimax_endpoint', false, true],
+    antseed_endpoint: ['#antseed_endpoint', 'antseed_endpoint', false, true],
+    antseed_model: ['#antseed_model', 'antseed_model', false, true],
     electronhub_model: ['#model_electronhub_select', 'electronhub_model', false, true],
     nanogpt_model: ['#model_nanogpt_select', 'nanogpt_model', false, true],
     nanogpt_provider: ['#nanogpt_provider', 'nanogpt_provider', false, true],
@@ -474,6 +478,9 @@ const default_settings = {
     siliconflow_endpoint: SILICONFLOW_ENDPOINT.GLOBAL,
     minimax_model: 'MiniMax-M2.7',
     minimax_endpoint: MINIMAX_ENDPOINT.GLOBAL,
+    antseed_endpoint: ANTSEED_DEFAULT_ENDPOINT,
+    antseed_model: '',
+    antseed_acknowledged_prices: {},
     electronhub_model: 'gpt-4o-mini',
     nanogpt_model: 'gpt-4o-mini',
     nanogpt_provider: '',
@@ -1745,6 +1752,20 @@ export async function prepareOpenAIMessages({
  */
 function getChatCompletionErrorMessage(data, response) {
     const error = data?.error ?? data?.detail?.error;
+    if (oai_settings.chat_completion_source === chat_completion_sources.ANTSEED) {
+        const antseedCode = String(error?.code || error?.type || data?.code || '').toLowerCase();
+        const antseedMessages = [
+            [/peer.*(unavailable|unknown)|unknown.*peer/, t`The selected AntSeed peer is unavailable or unknown.`],
+            [/timeout|timed out/, t`The AntSeed peer timed out.`],
+            [/payment.*(auth|authorization)|authorize.*payment/, t`AntSeed payment authorization failed.`],
+            [/payment.*lock|seller.*lock/, t`The AntSeed seller payment lock timed out.`],
+            [/balance|deposit|insufficient/, t`The AntSeed buyer balance or deposit is insufficient.`],
+            [/price.*(change|changed)|pricing/, t`The AntSeed offer price changed before the request completed.`],
+        ];
+        const detail = `${antseedCode} ${typeof error === 'string' ? error : error?.message || ''}`;
+        const friendly = antseedMessages.find(([pattern]) => pattern.test(detail))?.[1];
+        if (friendly) return friendly;
+    }
     const message = typeof error === 'string' ? error : (error?.message || error?.code || error?.type);
     return String(message || (!response.ok && response.statusText) || t`Unknown error`);
 }
@@ -1864,6 +1885,8 @@ export function getChatCompletionModel(settings = null) {
             return settings.siliconflow_model;
         case chat_completion_sources.MINIMAX:
             return settings.minimax_model;
+        case chat_completion_sources.ANTSEED:
+            return settings.antseed_model;
         case chat_completion_sources.ELECTRONHUB:
             return settings.electronhub_model;
         case chat_completion_sources.CHUTES:
@@ -2175,6 +2198,11 @@ function getAimlapiModelTemplate(option) {
 }
 
 function saveModelList(data) {
+    if (oai_settings.chat_completion_source === chat_completion_sources.ANTSEED) {
+        updateAntSeedModels(data);
+        return;
+    }
+
     model_list = data.map((model) => ({ ...model }));
     model_list.sort((a, b) => a?.id && b?.id && a.id.localeCompare(b.id));
 
@@ -2730,6 +2758,7 @@ function getReasoningEffort(settings = null, model = null) {
         chat_completion_sources.COMETAPI,
         chat_completion_sources.ELECTRONHUB,
         chat_completion_sources.CHUTES,
+        chat_completion_sources.ANTSEED,
         chat_completion_sources.DEEPSEEK,
         chat_completion_sources.FIREWORKS,
     ];
@@ -3283,6 +3312,11 @@ export async function createGenerationParameters(settings, model, type, messages
         }
     }
 
+    if (settings.chat_completion_source === chat_completion_sources.ANTSEED) {
+        generate_data.antseed_endpoint = settings.antseed_endpoint || ANTSEED_DEFAULT_ENDPOINT;
+        generate_data.top_k = settings.top_k_openai > 0 ? Number(settings.top_k_openai) : undefined;
+    }
+
     if (settings.chat_completion_source === chat_completion_sources.WORKERS_AI) {
         generate_data.workers_ai_account_id = settings.workers_ai_account_id;
         generate_data.top_k = settings.top_k_openai > 0 ? Math.min(Number(settings.top_k_openai), 50) : undefined;
@@ -3338,6 +3372,13 @@ async function sendOpenAIRequest(type, messages, signal, { jsonSchema = null, fo
     // Provide default abort signal
     if (!signal) {
         signal = new AbortController().signal;
+    }
+
+    if (oai_settings.chat_completion_source === chat_completion_sources.ANTSEED) {
+        const result = await ensureAntSeedOfferSafe();
+        if (!result || !result.safe) {
+            throw new Error(result?.message || t`The selected AntSeed offer is unknown or unavailable.`);
+        }
     }
 
     const model = getChatCompletionModel(oai_settings);
@@ -3493,7 +3534,7 @@ export function getStreamingReply(data, state, { chatCompletionSource = null, ov
             }
         });
         return data.choices?.[0]?.delta?.content ?? data.choices?.[0]?.message?.content ?? data.choices?.[0]?.text ?? '';
-    } else if ([chat_completion_sources.CUSTOM, chat_completion_sources.OPENAI_RESPONSES, chat_completion_sources.POLLINATIONS, chat_completion_sources.AIMLAPI, chat_completion_sources.MOONSHOT, chat_completion_sources.COMETAPI, chat_completion_sources.ELECTRONHUB, chat_completion_sources.NANOGPT, chat_completion_sources.ZAI, chat_completion_sources.SILICONFLOW, chat_completion_sources.CHUTES, chat_completion_sources.WORKERS_AI, chat_completion_sources.FIREWORKS].includes(chat_completion_source)) {
+    } else if ([chat_completion_sources.CUSTOM, chat_completion_sources.OPENAI_RESPONSES, chat_completion_sources.POLLINATIONS, chat_completion_sources.AIMLAPI, chat_completion_sources.MOONSHOT, chat_completion_sources.COMETAPI, chat_completion_sources.ELECTRONHUB, chat_completion_sources.NANOGPT, chat_completion_sources.ZAI, chat_completion_sources.SILICONFLOW, chat_completion_sources.CHUTES, chat_completion_sources.WORKERS_AI, chat_completion_sources.FIREWORKS, chat_completion_sources.ANTSEED].includes(chat_completion_source)) {
         if (show_thoughts) {
             state.reasoning +=
                 data.choices?.filter(x => x?.delta?.reasoning_content)?.[0]?.delta?.reasoning_content ??
@@ -5049,6 +5090,10 @@ async function getStatusOpen() {
         data.minimax_endpoint = oai_settings.minimax_endpoint;
     }
 
+    if (oai_settings.chat_completion_source === chat_completion_sources.ANTSEED) {
+        data.antseed_endpoint = oai_settings.antseed_endpoint || ANTSEED_DEFAULT_ENDPOINT;
+    }
+
     if (oai_settings.chat_completion_source === chat_completion_sources.WORKERS_AI) {
         data.workers_ai_account_id = oai_settings.workers_ai_account_id;
     }
@@ -6100,6 +6145,11 @@ async function onModelChange() {
         oai_settings.minimax_model = value;
     }
 
+    if ($(this).is('#antseed_model')) {
+        oai_settings.antseed_model = value;
+        syncAntSeedContext();
+    }
+
     if ($(this).is('#model_electronhub_select')) {
         if (!value || !hasModelsLoaded) {
             console.debug('Null ElectronHub model selected. Ignoring.');
@@ -6671,6 +6721,9 @@ function toggleChatCompletionForms() {
         $('#model_siliconflow_select').trigger('change');
     } else if (oai_settings.chat_completion_source == chat_completion_sources.MINIMAX) {
         $('#model_minimax_select').trigger('change');
+    } else if (oai_settings.chat_completion_source == chat_completion_sources.ANTSEED) {
+        refreshAntSeedUI();
+        $('#antseed_model').trigger('change');
     } else if (oai_settings.chat_completion_source == chat_completion_sources.ELECTRONHUB) {
         $('#model_electronhub_select').trigger('change');
     } else if (oai_settings.chat_completion_source == chat_completion_sources.NANOGPT) {
@@ -7976,6 +8029,7 @@ export function initOpenAI() {
     $('#model_chutes_select').on('change', onModelChange);
     $('#model_siliconflow_select').on('change', onModelChange);
     $('#model_minimax_select').on('change', onModelChange);
+    $('#antseed_model').on('change', onModelChange);
     $('#model_electronhub_select').on('change', onModelChange);
     $('#model_nanogpt_select').on('change', onModelChange);
     $('#model_deepseek_select').on('change', onModelChange);
@@ -8006,4 +8060,9 @@ export function initOpenAI() {
     $('#openai_proxy_access_key_show').on('click', onProxyAccessKeyShowClick);
     $('#customize_additional_parameters').on('click', onCustomizeParametersClick);
     $('#openai_proxy_preset').on('change', onProxyPresetChange);
+    initAntSeed({
+        getSettings: () => oai_settings,
+        saveSettings: saveSettingsDebounced,
+        refresh: () => getStatusOpen(),
+    });
 }

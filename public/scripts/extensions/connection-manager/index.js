@@ -19,6 +19,8 @@ import { performFuzzySearch } from '/scripts/power-user.js';
 import { StreamingDisplay } from '/scripts/streaming-display.js';
 import { ConnectionManagerRequestService } from '../shared.js';
 import { formatReasoning } from '/scripts/reasoning.js';
+import { syncAntSeedContext } from '../../antseed.js';
+import { chat_completion_sources } from '../../openai.js';
 
 const MODULE_NAME = 'connection-manager';
 const NONE = '<None>';
@@ -433,6 +435,18 @@ async function applyConnectionProfile(profile) {
         } catch (error) {
             console.error(`Failed to execute command: ${command} ${argument}`, error);
         }
+    }
+
+    try {
+        if (typeof $ !== 'undefined' && $('.api_loading').length && $('.api_loading').is(':visible')) {
+            await waitUntilCondition(() => !$('.api_loading').is(':visible'), 5000, 100);
+        }
+    } catch {
+        // Continue even if timeout
+    }
+
+    if (profile.mode === 'cc' && (profile.api === 'antseed' || profile.api === chat_completion_sources?.ANTSEED)) {
+        syncAntSeedContext();
     }
 
     spinner.stop();

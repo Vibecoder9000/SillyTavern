@@ -10392,6 +10392,7 @@ export function extractJsonFromData(data, { mainApi = null, chatCompletionSource
                 case chat_completion_sources.CHUTES:
                 case chat_completion_sources.AZURE_OPENAI:
                 case chat_completion_sources.ZAI:
+                case chat_completion_sources.ANTSEED:
                 default:
                     result = tryParse(text);
                     if (!result && returnInvalidJson) {

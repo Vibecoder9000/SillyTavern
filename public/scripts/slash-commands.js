@@ -37,6 +37,7 @@ import {
     neutralCharacterName,
     newAssistantChat,
     online_status,
+    setOnlineStatus,
     reloadCurrentChat,
     refreshSwipeButtons,
     removeMacros,
@@ -72,6 +73,7 @@ import { getContext, saveMetadataDebounced } from './extensions.js';
 import { getRegexedString, regex_placement } from './extensions/regex/engine.js';
 import { findGroupMemberId, groups, is_group_generating, openGroupById, regenerateGroup, resetSelectedGroup, saveGroupChat, selected_group, getGroupMembers } from './group-chats.js';
 import { chat_completion_sources, MINIMAX_ENDPOINT, oai_settings, POLLINATIONS_ENDPOINT, promptManager, SILICONFLOW_ENDPOINT, ZAI_ENDPOINT } from './openai.js';
+import { ANTSEED_DEFAULT_ENDPOINT } from './antseed.js';
 import { user_avatar } from './personas.js';
 import { addEphemeralStoppingString, chat_styles, context_presets, flushEphemeralStoppingStrings, playMessageSound, power_user } from './power-user.js';
 import { SERVER_INPUTS, textgen_types, textgenerationwebui_settings } from './textgen-settings.js';
@@ -294,6 +296,7 @@ export function initDefaultSlashCommands() {
             }
 
             if (connectionRequired && apiConfig.button) {
+                setOnlineStatus('no_connection');
                 $(apiConfig.button).trigger('click');
             }
 
@@ -3150,6 +3153,7 @@ export function initDefaultSlashCommands() {
                     new SlashCommandEnumValue('siliconflow', 'SiliconFlow', enumTypes.getBasedOnIndex(UNIQUE_APIS.findIndex(x => x === 'siliconflow')), 'S'),
                     new SlashCommandEnumValue('minimax', 'MiniMax', enumTypes.getBasedOnIndex(UNIQUE_APIS.findIndex(x => x === 'minimax')), 'M'),
                     new SlashCommandEnumValue('pollinations', 'Pollinations', enumTypes.getBasedOnIndex(UNIQUE_APIS.findIndex(x => x === 'pollinations')), 'P'),
+                    new SlashCommandEnumValue('antseed', 'AntSeed', enumTypes.getBasedOnIndex(UNIQUE_APIS.findIndex(x => x === 'openai')), 'A'),
                     new SlashCommandEnumValue('kobold', 'KoboldAI Classic', enumTypes.getBasedOnIndex(UNIQUE_APIS.findIndex(x => x === 'kobold')), 'K'),
                     ...Object.values(textgen_types).filter(api => Object.keys(SERVER_INPUTS).includes(api)).map(api => new SlashCommandEnumValue(api, null, enumTypes.getBasedOnIndex(UNIQUE_APIS.findIndex(x => x === 'textgenerationwebui')), 'T')),
                 ],
@@ -6276,6 +6280,7 @@ function getModelOptions(quiet) {
         { id: 'model_chutes_select', api: 'openai', type: chat_completion_sources.CHUTES },
         { id: 'model_siliconflow_select', api: 'openai', type: chat_completion_sources.SILICONFLOW },
         { id: 'model_minimax_select', api: 'openai', type: chat_completion_sources.MINIMAX },
+        { id: 'antseed_model', api: 'openai', type: chat_completion_sources.ANTSEED },
         { id: 'model_electronhub_select', api: 'openai', type: chat_completion_sources.ELECTRONHUB },
         { id: 'model_nanogpt_select', api: 'openai', type: chat_completion_sources.NANOGPT },
         { id: 'model_deepseek_select', api: 'openai', type: chat_completion_sources.DEEPSEEK },
@@ -6365,7 +6370,7 @@ function modelCallback(args, model) {
 
     if (modelSelectControl instanceof HTMLInputElement) {
         modelSelectControl.value = model;
-        $(modelSelectControl).trigger('input');
+        $(modelSelectControl).trigger('input').trigger('change');
         !quiet && toastr.success(t`Model set to "${model}"`);
         return model;
     }
@@ -6788,6 +6793,33 @@ async function setApiUrlCallback({ api = null, connect = 'true', quiet = 'false'
         }
 
         return oai_settings.pollinations_endpoint || POLLINATIONS_ENDPOINT.AUTHENTICATED;
+    }
+
+    // Special handling for AntSeed API
+    const isCurrentlyAntSeed = main_api === 'openai' && oai_settings.chat_completion_source === chat_completion_sources.ANTSEED;
+    if (api === chat_completion_sources.ANTSEED || (!api && isCurrentlyAntSeed)) {
+        if (!url) {
+            return oai_settings.antseed_endpoint || ANTSEED_DEFAULT_ENDPOINT;
+        }
+
+        if (!isCurrentlyAntSeed && autoConnect) {
+            toastr.warning(t`AntSeed API is not the currently selected API, so we cannot do an auto-connect. Consider switching to it via /api beforehand.`);
+            return '';
+        }
+
+        $('#antseed_endpoint').val(url).trigger('input');
+
+        if (autoConnect) {
+            setOnlineStatus('no_connection');
+            $('#api_button_openai').trigger('click');
+            try {
+                await waitUntilCondition(() => online_status !== 'no_connection', 5000, 100);
+            } catch {
+                // Ignore timeout
+            }
+        }
+
+        return oai_settings.antseed_endpoint || ANTSEED_DEFAULT_ENDPOINT;
     }
 
     // Special handling for Kobold Classic API
