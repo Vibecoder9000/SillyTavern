@@ -20,12 +20,10 @@ let navigationRequestPending = false;
 let desiredSessionId = null;
 let scheduledTabDispatchFrame = null;
 let dispatchedTabTarget = null;
-let navigationTiming = null;
 let bootStage = 'starting';
 let workspaceTabsEnabled = true;
 let tabsDisableRequestSequence = 0;
 let pendingTabsDisableRequest = null;
-let navigationTimingSequence = 0;
 const TRANSIENT_ACTIVITY_DELAY = 400;
 const TABS_DISABLE_REQUEST_TIMEOUT = 10000;
 const statusLabels = {
@@ -192,89 +190,9 @@ async function runInBackground(callback, warning) {
     }
 }
 
-function getTimingNow() {
-    return globalThis.performance?.now?.() ?? Date.now();
-}
-
-function roundTiming(value) {
-    return Number(value.toFixed(1));
-}
-
-function logNavigationTiming(phase, details = {}) {
-    if (!navigationTiming) return;
-    console.info('[Chat workspace] Tab switch timing', JSON.stringify({
-        phase,
-        timingId: navigationTiming.id,
-        type: navigationTiming.type,
-        requestId: navigationTiming.requestId,
-        targetSessionId: navigationTiming.targetSessionId,
-        elapsedMs: roundTiming(getTimingNow() - navigationTiming.startedAt),
-        ...details,
-    }));
-}
-
-function logTabSelection(targetSessionId, input) {
-    console.info('[Chat workspace] Tab switch timing', JSON.stringify({
-        phase: 'tab-selection',
-        control: 'chat_workspace_tab_select',
-        input,
-        targetSessionId,
-        selectedSessionId: getSelectedSessionId(),
-        workspaceActive,
-    }));
-}
-
-function beginNavigationTiming(type, targetSessionId) {
-    navigationTiming = {
-        id: ++navigationTimingSequence,
-        type,
-        requestId: null,
-        targetSessionId,
-        startedAt: getTimingNow(),
-        handoffStartedAt: null,
-        preparedAt: null,
-        stages: {},
-    };
-}
-
 async function measureNavigationStage(name, callback) {
-    const startedAt = getTimingNow();
-    let failed = false;
-    try {
-        const result = callback();
-        return result && typeof result.then === 'function' ? await result : result;
-    } catch (error) {
-        failed = true;
-        throw error;
-    } finally {
-        if (navigationTiming) {
-            const duration = getTimingNow() - startedAt;
-            navigationTiming.stages[name] = (navigationTiming.stages[name] || 0) + duration;
-            logNavigationTiming('stage-complete', {
-                stage: name,
-                durationMs: roundTiming(duration),
-                failed,
-            });
-        }
-    }
-}
-
-function finishNavigationTiming(outcome) {
-    if (!navigationTiming) return;
-    const finishedAt = getTimingNow();
-    const stages = Object.fromEntries(Object.entries(navigationTiming.stages)
-        .map(([name, duration]) => [name, roundTiming(duration)]));
-    console.info('[Chat workspace] Tab switch timing', JSON.stringify({
-        phase: 'complete',
-        timingId: navigationTiming.id,
-        type: navigationTiming.type,
-        requestId: navigationTiming.requestId,
-        targetSessionId: navigationTiming.targetSessionId,
-        outcome,
-        stagesMs: stages,
-        totalMs: roundTiming(finishedAt - navigationTiming.startedAt),
-    }));
-    navigationTiming = null;
+    const result = callback();
+    return result && typeof result.then === 'function' ? await result : result;
 }
 
 function getSelectedSessionId(tabs = latestTabsState) {
@@ -351,8 +269,6 @@ function queueWorkspaceNavigation(type, payload, optimisticSessionId = null) {
         || navigationRequestPending
         || latestTabsState.navigationBlocked) return false;
     navigationRequestPending = true;
-    beginNavigationTiming(type, optimisticSessionId);
-    logNavigationTiming('queued', { optimistic: Boolean(optimisticSessionId) });
     measureNavigationStage('focusBlur', () => blurWorkspaceFocus());
     if (optimisticSessionId) {
         measureNavigationStage('optimisticTabRender', () => renderTabs(latestTabsState));
@@ -362,19 +278,14 @@ function queueWorkspaceNavigation(type, payload, optimisticSessionId = null) {
         await measureNavigationStage('chatFlush', () => bridgeApi.flushPendingChat());
         await measureNavigationStage('characterFlush', () => bridgeApi.flushPendingCharacter?.());
         const state = await measureNavigationStage('stateCapture', () => bridgeApi.getState());
-        if (navigationTiming) navigationTiming.handoffStartedAt = getTimingNow();
-        logNavigationTiming('handoff-start', { messageType: type });
         await measureNavigationStage('handoffPost', () => post(type, {
             ...payload,
             state,
-            timingId: navigationTiming?.id,
         }));
-        logNavigationTiming('handoff-posted', { messageType: type });
     })().catch(error => {
         navigationRequestPending = false;
         clearTabIntent({ render: true });
         void bridgeApi.resumeWorkspaceGeneration?.(assignedSessionId);
-        finishNavigationTiming('error');
         reportNavigationError(error);
     });
     return true;
@@ -469,14 +380,12 @@ function renderTabs(tabs) {
             select.addEventListener('pointerdown', event => {
                 stopWorkspaceTabPropagation(event);
                 if (!event.isPrimary || event.button !== 0) return;
-                logTabSelection(session.id, 'pointer');
                 requestTabActivation(session.id);
             });
             select.addEventListener('click', event => {
                 event.preventDefault();
                 event.stopPropagation();
                 if (event.detail !== 0) return;
-                logTabSelection(session.id, 'keyboard');
                 requestTabActivation(session.id);
             });
             select.addEventListener('keydown', event => {
@@ -495,7 +404,6 @@ function renderTabs(tabs) {
                 if (!targetSessionId || targetSessionId === currentSessionId) return;
                 event.preventDefault();
                 event.stopPropagation();
-                logTabSelection(targetSessionId, 'keyboard');
                 requestTabActivation(targetSessionId);
             });
             avatar.className = 'chat_workspace_tab_avatar';
@@ -654,17 +562,6 @@ export function notifyWorkspaceExtensionChange() {
 async function navigate(requestId, targetSessionId, identity, restore = {}, personaAvatar = null, previousSessionId = assignedSessionId, showOwnerUi = false) {
     navigationDepth++;
     try {
-        if (navigationTiming) {
-            navigationTiming.requestId = requestId;
-            navigationTiming.targetSessionId = targetSessionId;
-            logNavigationTiming('assignment-received', { previousSessionId });
-            if (navigationTiming.handoffStartedAt !== null) {
-                navigationTiming.stages.shellHandoff = getTimingNow() - navigationTiming.handoffStartedAt;
-                logNavigationTiming('shell-handoff-complete', {
-                    durationMs: roundTiming(navigationTiming.stages.shellHandoff),
-                });
-            }
-        }
         if (previousSessionId && previousSessionId !== targetSessionId) {
             await measureNavigationStage('pause', () => bridgeApi.pauseWorkspaceGeneration?.(previousSessionId));
         }
@@ -680,8 +577,6 @@ async function navigate(requestId, targetSessionId, identity, restore = {}, pers
         // must not hold the shell loader open.
         void runInBackground(() => bridgeApi.hideLoader(), 'Could not finish hiding the child loader');
         const state = await measureNavigationStage('preparedStateCapture', () => bridgeApi.getState());
-        if (navigationTiming) navigationTiming.preparedAt = getTimingNow();
-        logNavigationTiming('prepared', { stateCaptured: true });
         post('prepared', {
             requestId,
             targetSessionId,
@@ -697,7 +592,6 @@ async function navigate(requestId, targetSessionId, identity, restore = {}, pers
             targetSessionId,
             message: error instanceof Error ? error.message : String(error),
         });
-        finishNavigationTiming('error');
     } finally {
         navigationDepth--;
     }
@@ -734,11 +628,9 @@ export function initChatWorkspaceBridge(api) {
             pendingRequest.resolve(message.accepted === true);
         }
         if (message.type === 'activation-blocked') {
-            logNavigationTiming('activation-blocked', { reason: message.reason });
             navigationRequestPending = false;
             restoreCommittedTabSelection();
             void bridgeApi.resumeWorkspaceGeneration?.(assignedSessionId);
-            finishNavigationTiming('blocked');
             const text = message.reason === 'generating'
                 ? 'Wait for generation to finish before switching chats.'
                 : message.reason === 'failed'
@@ -754,11 +646,6 @@ export function initChatWorkspaceBridge(api) {
                 if (latestTabsState) {
                     latestTabsState = { ...latestTabsState, activeSessionId: assignedSessionId, pendingSessionId: null };
                 }
-                if (navigationTiming && navigationTiming.preparedAt !== null) {
-                    navigationTiming.stages.commitHandshake = getTimingNow() - navigationTiming.preparedAt;
-                }
-                logNavigationTiming('commit-acknowledged');
-                finishNavigationTiming('success');
                 void runInBackground(() => bridgeApi.onCommitted?.(assignedIdentity), 'Could not finish post-commit workspace persistence');
                 void runInBackground(() => bridgeApi.flushGlobalSettings(), 'Could not flush workspace settings after committing the tab');
                 if (desiredSessionId === assignedSessionId) desiredSessionId = null;

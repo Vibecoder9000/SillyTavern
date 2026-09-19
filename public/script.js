@@ -494,6 +494,11 @@ export let chat = [];
  */
 export let swipeState = SWIPE_STATE.NONE;
 let chatSaveTimeout;
+// Chat mutations not yet captured by a completed save. Lets the workspace
+// flush skip redundant saves during rapid tab swaps.
+let chatSaveDirty = false;
+// Tail of the serialized chat save chain; awaiting it drains pending saves.
+let chatSaveQueue = Promise.resolve();
 let importFlashTimeout;
 export let isChatSaving = false;
 let firstRun = false;
@@ -1117,28 +1122,38 @@ function getWorkspaceChatState(extra = {}) {
 }
 
 const workspaceSelectionWriter = createKeyedCoalescedWriter(async (_key, snapshot) => {
-    if (snapshot.kind === 'character') {
-        const response = await enqueueCharacterCardWrite(snapshot.avatarUrl, () => fetch('/api/characters/merge-attributes', {
+    try {
+        if (snapshot.kind === 'character') {
+            const response = await enqueueCharacterCardWrite(snapshot.avatarUrl, () => fetch('/api/characters/merge-attributes', {
+                method: 'POST',
+                headers: getRequestHeaders(),
+                body: JSON.stringify({ avatar: snapshot.avatarUrl, chat: snapshot.chatId }),
+                cache: 'no-cache',
+            }));
+            if (!response.ok) throw new Error(`Character chat selection save failed: ${response.statusText}`);
+            return;
+        }
+
+        const response = await fetch('/api/groups/edit', {
             method: 'POST',
             headers: getRequestHeaders(),
-            body: JSON.stringify({ avatar: snapshot.avatarUrl, chat: snapshot.chatId }),
-            cache: 'no-cache',
-        }));
-        if (!response.ok) throw new Error(`Character chat selection save failed: ${response.statusText}`);
-        return;
+            body: JSON.stringify(snapshot.group),
+        });
+        if (!response.ok) throw new Error(`Group chat selection save failed: ${response.statusText}`);
+    } catch (error) {
+        console.warn('Could not persist the selected workspace chat', error);
+        toastr.warning(t`The selected chat could not be saved to its character or group.`, t`Chat selection`);
     }
-
-    const response = await fetch('/api/groups/edit', {
-        method: 'POST',
-        headers: getRequestHeaders(),
-        body: JSON.stringify(snapshot.group),
-    });
-    if (!response.ok) throw new Error(`Group chat selection save failed: ${response.statusText}`);
-}, { delay: 0 });
+}, { delay: 750 });
 
 const workspaceMirrorWriter = createCoalescedWriter(async snapshot => {
-    await syncWorkspaceLastChat(snapshot.chat, snapshot.workspace);
-}, { delay: 0 });
+    try {
+        await syncWorkspaceLastChat(snapshot.chat, snapshot.workspace);
+    } catch (error) {
+        console.warn('Could not rebuild the workspace last-chat mirror after activating a tab', error);
+        toastr.warning(t`Workspace last-chat mirror could not be rebuilt.`, t`Workspace last-chat mirror`);
+    }
+}, { delay: 750 });
 
 let pendingWorkspaceOwnerUiRequest = null;
 let pendingWorkspaceChatEvents = Promise.resolve();
@@ -1378,15 +1393,11 @@ async function persistWorkspacePostCommit(identity) {
         pendingWorkspaceOwnerUiRequest = null;
     }
 
-    void workspaceMirrorWriter.flush(snapshot.mirror).catch(error => {
-        console.warn('Could not rebuild the workspace last-chat mirror after activating a tab', error);
-        toastr.warning(t`Workspace last-chat mirror could not be rebuilt.`, t`Workspace last-chat mirror`);
-    });
+    // Trailing-debounced writes: rapid tab swaps coalesce into one server
+    // write per channel instead of saturating the server mid-dispatch.
+    workspaceMirrorWriter.schedule(snapshot.mirror);
     if (snapshot.selection && snapshot.identity?.ownerId) {
-        void workspaceSelectionWriter.flush(`${snapshot.identity.kind}:${snapshot.identity.ownerId}`, snapshot.selection).catch(error => {
-            console.warn('Could not persist the selected workspace chat', error);
-            toastr.warning(t`The selected chat could not be saved to its character or group.`, t`Chat selection`);
-        });
+        workspaceSelectionWriter.schedule(`${snapshot.identity.kind}:${snapshot.identity.ownerId}`, snapshot.selection);
     }
 }
 
@@ -1501,7 +1512,7 @@ function initInAppChatWorkspace(initLoaderHandle) {
         createNewChat: () => doNewChat({ deleteCurrentChat: false, openInWorkspace: true }),
         flushPendingChat: flushWorkspacePendingChat,
         flushPendingCharacter: flushPendingCharacterSave,
-        flushGlobalSettings: flushPendingSettingsSave,
+        flushGlobalSettings: () => void saveSettingsDebounced(),
         pauseWorkspaceGeneration,
         resumeWorkspaceGeneration,
         prewarmIdentities: scheduleWorkspacePrewarm,
@@ -7078,6 +7089,7 @@ function registerWorkspaceStreamingProcessor(processor) {
     processor.workspaceSessionId = sessionId;
     processor.workspaceDetachable = true;
     workspaceStreamingProcessors.set(sessionId, processor);
+    chatSaveDirty = true;
     notifyWorkspaceState(getWorkspaceChatState({ status: 'generating', canNavigateWhileGenerating: true }));
 }
 
@@ -7111,10 +7123,15 @@ async function pauseWorkspaceGeneration(sessionId = getChatWorkspaceSessionId())
 async function flushWorkspacePendingChat() {
     await pendingWorkspaceChatEvents;
     if (workspaceStreamingProcessors.has(getChatWorkspaceSessionId())) {
-        await saveChatConditional();
+        if (chatSaveDirty) {
+            await saveChatConditional();
+        }
     } else {
         await flushPendingChatSave();
     }
+    // A queued save must not run after the next activation replaces the chat
+    // globals it would capture.
+    await chatSaveQueue;
     setWorkspaceChatSnapshot(getWorkspaceChatIdentity(), chat_metadata, chat);
 }
 
@@ -7375,6 +7392,9 @@ class StreamingProcessor {
             await this.#checkDomElements(messageId);
             this.#updateMessageBlockVisibility();
             const currentTime = new Date();
+            // Streaming ticks bypass saveChatDebounced; keep the flush dirty
+            // flag current so a tab switch persists the generated tail.
+            chatSaveDirty = true;
             chat[messageId].mes = processedText;
             chat[messageId].gen_started = this.timeStarted;
             chat[messageId].gen_finished = currentTime;
@@ -11417,6 +11437,7 @@ export function saveChatDebounced() {
     const chid = this_chid;
     const selectedGroup = selected_group;
 
+    chatSaveDirty = true;
     cancelDebouncedChatSave();
 
     chatSaveTimeout = setTimeout(async () => {
@@ -13603,35 +13624,40 @@ export async function saveMetadata() {
     return await saveChatConditional();
 }
 
-export async function saveChatConditional() {
-    try {
-        await waitUntilCondition(() => !isChatSaving, DEFAULT_SAVE_EDIT_TIMEOUT, 100);
-    } catch {
-        console.warn('Timeout waiting for chat to save');
-        return;
-    }
+function runChatSave() {
+    return (async () => {
+        try {
+            cancelDebouncedChatSave();
 
-    try {
-        cancelDebouncedChatSave();
+            isChatSaving = true;
+            notifyWorkspaceState(getWorkspaceChatState({ saving: true }));
 
-        isChatSaving = true;
-        notifyWorkspaceState(getWorkspaceChatState({ saving: true }));
+            if (selected_group) {
+                await saveGroupChat(selected_group, true);
+            } else {
+                await saveChat();
+            }
 
-        if (selected_group) {
-            await saveGroupChat(selected_group, true);
-        } else {
-            await saveChat();
+            // Save token and prompts cache to IndexedDB storage
+            saveTokenCache();
+            saveItemizedPrompts(getCurrentChatId());
+            chatSaveDirty = false;
+        } catch (error) {
+            console.error('Error saving chat', error);
+        } finally {
+            isChatSaving = false;
+            notifyWorkspaceState(getWorkspaceChatState({ saving: false }));
         }
+    })();
+}
 
-        // Save token and prompts cache to IndexedDB storage
-        saveTokenCache();
-        saveItemizedPrompts(getCurrentChatId());
-    } catch (error) {
-        console.error('Error saving chat', error);
-    } finally {
-        isChatSaving = false;
-        notifyWorkspaceState(getWorkspaceChatState({ saving: false }));
-    }
+export async function saveChatConditional() {
+    // Serialize saves on a promise chain instead of polling isChatSaving: the
+    // workspace flush awaits this during rapid tab swaps and must neither wait
+    // on a poll interval nor silently time out.
+    const task = chatSaveQueue.then(runChatSave);
+    chatSaveQueue = task.then(() => {}, () => {});
+    await task;
 }
 
 /**

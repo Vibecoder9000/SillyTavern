@@ -531,9 +531,13 @@ function onChatChanged() {
             activeSessions.delete(key);
         }
     }
-    populateConnectionProfiles();
-    // Refresh visible rewrites for the newly active chat
-    setTimeout(refreshAllVisibleReasoningRewrites, 0);
+    // Repopulating the profile select and refreshing visible rewrites are
+    // pure UI work; keep them off the chat_changed dispatch so tab switches
+    // stay fast.
+    setTimeout(() => {
+        populateConnectionProfiles();
+        refreshAllVisibleReasoningRewrites();
+    }, 0);
 }
 
 /**

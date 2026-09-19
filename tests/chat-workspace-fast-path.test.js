@@ -51,7 +51,6 @@ describe('chat workspace activation fast path', () => {
             bridgeScript.indexOf("if (message.type === 'active')"),
             bridgeScript.indexOf("if (message.type === 'persona-state')"),
         );
-        expect(activeHandler.indexOf('finishNavigationTiming')).toBeLessThan(activeHandler.indexOf('bridgeApi.onCommitted'));
         expect(activeHandler).toContain('void runInBackground(() => bridgeApi.onCommitted?.(assignedIdentity)');
         expect(activeHandler).not.toContain('await bridgeApi.onCommitted');
     });
@@ -96,18 +95,10 @@ describe('chat workspace activation fast path', () => {
         expect(prepare.indexOf('await workspaceMirrorWriter.flush()')).toBeLessThan(prepare.indexOf('await captureWorkspaceLastChat(workspace)'));
     });
 
-    test('logs content-free timing stages for successful and failed switches', () => {
-        const finishTiming = bridgeScript.slice(
-            bridgeScript.indexOf('function finishNavigationTiming'),
-            bridgeScript.indexOf('function queueWorkspaceNavigation'),
-        );
-        expect(finishTiming).toContain("console.info('[Chat workspace] Tab switch timing'");
-        expect(finishTiming).toContain('stagesMs');
-        expect(finishTiming).toContain('totalMs');
-        expect(finishTiming).not.toMatch(/message|identity|character|chatId/i);
-        expect(bridgeScript).toContain("finishNavigationTiming('success')");
-        expect(bridgeScript).toContain("finishNavigationTiming('error')");
-        expect(bridgeScript).toContain("finishNavigationTiming('blocked')");
+    test('keeps navigation dispatch free of console timing output', () => {
+        expect(bridgeScript).not.toContain('[Chat workspace] Tab switch timing');
+        expect(shellScript).not.toContain('[Chat workspace] Tab switch timing');
+        expect(bridgeScript).not.toContain('finishNavigationTiming');
     });
 
     test('breaks identity loading into fetch, parse, render, UI, and event stages', () => {
