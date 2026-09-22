@@ -196,12 +196,16 @@ function setSamplerListListeners() {
 
         await saveSettingsDebounced();
 
-        const shouldDisplay = isChecked ? targetDisplayType : 'none';
-        relatedDOMElement.css('display', shouldDisplay);
+        if (main_api === 'textgenerationwebui') {
+            relatedDOMElement.css('display', '');
+            setApiSamplersState(samplerName, isChecked);
+            showTGSamplerControls();
+        } else {
+            const shouldDisplay = isChecked ? targetDisplayType : 'none';
+            relatedDOMElement.css('display', shouldDisplay);
+        }
 
-        if (main_api === 'textgenerationwebui') setApiSamplersState(samplerName, shouldDisplay !== 'none');
-
-        console.log(samplerName, relatedDOMElement.data(SELECT_SAMPLER.DATA), shouldDisplay);
+        console.log(samplerName, relatedDOMElement.data(SELECT_SAMPLER.DATA), isChecked);
     });
 }
 
@@ -285,18 +289,22 @@ export async function validateDisabledSamplers(redraw = false) {
     for (const sampler of APISamplers) {
         const { relatedDOMElement, targetDisplayType } = getRelatedDOMElement(sampler);
 
-        if (prioritizeManualSamplerSelect) {
+        if (main_api === 'textgenerationwebui') {
+            relatedDOMElement.css('display', '');
+        } else if (prioritizeManualSamplerSelect) {
             const isManuallyActivated = samplersActivatedManually.includes(sampler);
             relatedDOMElement.css('display', isManuallyActivated ? targetDisplayType : 'none');
         } else {
             const selectSamplerData = relatedDOMElement.data(SELECT_SAMPLER.DATA);
-            relatedDOMElement.css('display', selectSamplerData === SELECT_SAMPLER.SHOWN ? targetDisplayType : 'none');
+            if (selectSamplerData) {
+                relatedDOMElement.css('display', selectSamplerData === SELECT_SAMPLER.SHOWN ? targetDisplayType : 'none');
+            }
         }
 
         relatedDOMElement.removeData(SELECT_SAMPLER.DATA);
     }
 
-    if (!prioritizeManualSamplerSelect && main_api === 'textgenerationwebui') {
+    if (main_api === 'textgenerationwebui') {
         showTGSamplerControls();
     }
 

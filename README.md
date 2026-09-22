@@ -14,7 +14,7 @@ A tab system. It allows you to have concurrent generations in separate chats.
 
 - **Keyboard cycling** - `Alt+Z` / `Alt+X` jump to the previous/next tab.
 
-<video src=".github/chat-tabs.mp4" poster=".github/chat-tabs.png" controls muted loop playsinline></video>
+![Chat Tabs demo](.github/chat-tabs.webp)
 
 ### Layout++ Panels
 

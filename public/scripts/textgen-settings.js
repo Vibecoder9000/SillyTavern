@@ -1173,6 +1173,9 @@ function showSamplerControls(apiType = null) {
             typeMode: control.dataset.tgTypeMode,
         }, state);
         control.classList.toggle('textgen-control-hidden', !visible);
+        if (visible && control.style.display === 'none') {
+            control.style.removeProperty('display');
+        }
     }
 }
 

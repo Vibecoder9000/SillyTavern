@@ -82,7 +82,7 @@ import { ToolManager } from './tool-calling.js';
 import { accountStorage } from './util/AccountStorage.js';
 import { COMETAPI_IGNORE_PATTERNS, IGNORE_SYMBOL, MEDIA_DISPLAY, MEDIA_TYPE } from './constants.js';
 import { syncNanoGptProvidersForModel, syncOpenRouterProvidersForModel, updateNanoGptProvidersWarning, updateOpenRouterProvidersWarning } from './textgen-models.js';
-import { ANTSEED_DEFAULT_ENDPOINT, ensureAntSeedOfferSafe, initAntSeed, refreshAntSeedUI, syncAntSeedContext, updateAntSeedModels } from './antseed.js';
+import { ANTSEED_DEFAULT_ENDPOINT, ensureAntSeedOfferSafe, getSelectedAntSeedOffer, initAntSeed, refreshAntSeedUI, syncAntSeedContext, updateAntSeedModels } from './antseed.js';
 
 export {
     openai_messages_count,
@@ -1059,13 +1059,21 @@ async function populateChatHistory(messages, prompts, chatCompletion, type = nul
          */
         async function inlineMediaAttachment(media) {
             if (!media || !media.url) {
+                if (oai_settings.chat_completion_source === chat_completion_sources.ANTSEED) {
+                    console.warn('[AntSeed][Images] skipped media without URL', { mediaType: media?.type || null });
+                }
                 return;
             }
             if (!media.type) {
                 media.type = MEDIA_TYPE.IMAGE;
             }
             if (imageInlining && media.type === MEDIA_TYPE.IMAGE) {
+                if (oai_settings.chat_completion_source === chat_completion_sources.ANTSEED) {
+                    console.debug('[AntSeed][Images] converting image attachment to image_url content part', { mediaType: media.type });
+                }
                 await chatMessage.addImage(media.url);
+            } else if (oai_settings.chat_completion_source === chat_completion_sources.ANTSEED && media.type === MEDIA_TYPE.IMAGE) {
+                console.warn('[AntSeed][Images] image attachment not inlined', { imageInlining });
             }
             if (videoInlining && media.type === MEDIA_TYPE.VIDEO) {
                 await chatMessage.addVideo(media.url);
@@ -1080,6 +1088,9 @@ async function populateChatHistory(messages, prompts, chatCompletion, type = nul
 
             for (const media of getInlineMediaAttachments(chatPrompt)) {
                 if ((media?.type || MEDIA_TYPE.IMAGE) === MEDIA_TYPE.IMAGE && !canInlineImagesForPrompt) {
+                    if (oai_settings.chat_completion_source === chat_completion_sources.ANTSEED) {
+                        console.warn('[AntSeed][Images] image skipped by inline-image message limit');
+                    }
                     continue;
                 }
 
@@ -3383,6 +3394,19 @@ async function sendOpenAIRequest(type, messages, signal, { jsonSchema = null, fo
 
     const model = getChatCompletionModel(oai_settings);
     const { generate_data, stream, canMultiSwipe } = await createGenerationParameters(oai_settings, model, type, messages, { jsonSchema, forceStreaming });
+    if (oai_settings.chat_completion_source === chat_completion_sources.ANTSEED) {
+        console.info('[AntSeed][Images] generate payload', {
+            model,
+            messageCount: Array.isArray(generate_data.messages) ? generate_data.messages.length : null,
+            messages: Array.isArray(generate_data.messages) ? generate_data.messages.map((message, index) => ({
+                index,
+                role: message?.role,
+                contentType: Array.isArray(message?.content) ? 'array' : typeof message?.content,
+                contentParts: Array.isArray(message?.content) ? message.content.map(part => part?.type || typeof part) : null,
+                mediaCount: Array.isArray(message?.media) ? message.media.length : 0,
+            })) : null,
+        });
+    }
     await eventSource.emit(event_types.CHAT_COMPLETION_SETTINGS_READY, generate_data);
 
     const generate_url = '/api/backends/chat-completions/generate';
@@ -6823,6 +6847,16 @@ export function isImageInliningSupported() {
         return false;
     }
 
+    if (oai_settings.chat_completion_source === chat_completion_sources.ANTSEED) {
+        const offer = getSelectedAntSeedOffer();
+        console.info('[AntSeed][Images] checking image inlining', {
+            mediaInlining: Boolean(oai_settings.media_inlining),
+            configuredOffer: oai_settings.antseed_model || '',
+            offerModelId: offer?.modelId || null,
+            offerModelName: offer?.modelName || null,
+        });
+    }
+
     if (!oai_settings.media_inlining) {
         return false;
     }
@@ -6913,6 +6947,19 @@ export function isImageInliningSupported() {
             return visionSupportedModels.some(model => oai_settings.vertexai_model.includes(model));
         case chat_completion_sources.CLAUDE:
             return visionSupportedModels.some(model => oai_settings.claude_model.includes(model));
+        case chat_completion_sources.ANTSEED: {
+            const offer = getSelectedAntSeedOffer();
+            const model = `${offer?.modelId || ''} ${offer?.modelName || ''}`;
+            const supported = visionSupportedModels.some(visionModel => model.includes(visionModel));
+            console.info('[AntSeed][Images] capability check', {
+                configuredOffer: oai_settings.antseed_model || '',
+                offerModelId: offer?.modelId || null,
+                offerModelName: offer?.modelName || null,
+                mediaInlining: Boolean(oai_settings.media_inlining),
+                supported,
+            });
+            return supported;
+        }
         case chat_completion_sources.OPENROUTER:
             return (Array.isArray(model_list) && model_list.find(m => m.id === oai_settings.openrouter_model)?.architecture?.input_modalities?.includes('image'));
         case chat_completion_sources.CUSTOM:

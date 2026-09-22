@@ -293,7 +293,7 @@ function priceChange(offer) {
     return { previous, increase, decrease };
 }
 
-function selectedOffer(rawKey = String(settings().antseed_model || '').trim()) {
+export function getSelectedAntSeedOffer(rawKey = String(settings().antseed_model || '').trim()) {
     const separator = rawKey.indexOf('@');
     if (separator < 1) return null;
     const peerId = rawKey.slice(0, separator);
@@ -303,14 +303,14 @@ function selectedOffer(rawKey = String(settings().antseed_model || '').trim()) {
 }
 
 function syncSelection() {
-    const offer = selectedOffer();
+    const offer = getSelectedAntSeedOffer();
     state.activeModelId = offer?.modelId || null;
     state.activePeerId = offer?.peerId || null;
     return offer;
 }
 
 function preserveActiveNavigation(modelId, peerId) {
-    const configured = selectedOffer();
+    const configured = getSelectedAntSeedOffer();
     state.activeModelId = (state.models.some(model => model.modelId === modelId) ? modelId : null) || configured?.modelId || null;
     state.activePeerId = (state.providers.some(provider => provider.peerId === peerId) ? peerId : null) || configured?.peerId || null;
 }
@@ -319,7 +319,7 @@ function updateSelectedSummary() {
     const element = document.getElementById('antseed_selected_offer');
     if (!element) return;
     const modelValue = String(settings().antseed_model || '').trim();
-    const offer = selectedOffer();
+    const offer = getSelectedAntSeedOffer();
     const isLoading = !state.hasLoadedModels || state.loading || (typeof $ !== 'undefined' && $('.api_loading').is(':visible'));
     if (!modelValue) {
         element.innerHTML = `<span class="antseed-muted">${t`None`}</span>`;
@@ -437,7 +437,7 @@ async function showUnavailable(offerKey, modelId, modelName, providerName) {
 async function inspectSelectedOffer({ allowPrompt = true, modelKey = null } = {}) {
     const selected = String(modelKey ?? settings().antseed_model ?? '').trim();
     if (!selected) return true;
-    const offer = selectedOffer(selected);
+    const offer = getSelectedAntSeedOffer(selected);
     if (!offer) return true;
     const change = priceChange(offer);
     if (change.decrease) {
@@ -463,7 +463,7 @@ async function inspectSelectedOffer({ allowPrompt = true, modelKey = null } = {}
     return true;
 }
 
-export function syncAntSeedContext(offer = selectedOffer()) {
+export function syncAntSeedContext(offer = getSelectedAntSeedOffer()) {
     if (!offer) return;
     const current = settings();
     const $ctx = typeof $ !== 'undefined' ? $('#openai_max_context') : null;
@@ -509,7 +509,7 @@ function selectOffer(offerKey) {
 }
 
 export function updateAntSeedModels(payload) {
-    const previousSelected = selectedOffer();
+    const previousSelected = getSelectedAntSeedOffer();
     const previousActiveModelId = state.activeModelId;
     const previousActivePeerId = state.activePeerId;
     state.offers = normalizeAntSeedModels(payload);
@@ -519,7 +519,7 @@ export function updateAntSeedModels(payload) {
     preserveActiveNavigation(previousActiveModelId, previousActivePeerId);
     renderBrowser();
     const selected = String(settings().antseed_model || '').trim();
-    const currentSelected = selectedOffer();
+    const currentSelected = getSelectedAntSeedOffer();
     if (selected && !currentSelected) {
         if (previousSelected && previousSelected.offerKey === selected) {
             const separator = selected.indexOf('@');
@@ -562,7 +562,7 @@ export async function ensureAntSeedOfferSafe(modelKey = null) {
         window.toastr?.error(t`No AntSeed offer selected. Choose an available offer before sending.`);
         return { safe: false, reason: 'unavailable', message: t`No AntSeed offer selected.` };
     }
-    if (state.hasLoadedModels && !selectedOffer(key)) {
+    if (state.hasLoadedModels && !getSelectedAntSeedOffer(key)) {
         window.toastr?.error(t`The selected AntSeed offer is unknown or unavailable. Choose an available offer before sending.`);
         return { safe: false, reason: 'unavailable', message: t`The selected AntSeed offer is unknown or unavailable.` };
     }
@@ -581,7 +581,7 @@ export function refreshAntSeedUI() {
     if (endpoint && endpoint.value !== current.antseed_endpoint) endpoint.value = current.antseed_endpoint || ANTSEED_DEFAULT_ENDPOINT;
     if (model && model.value !== current.antseed_model) model.value = current.antseed_model || '';
     state.offers = state.offers.map(offer => ({ ...offer, estimatedCost: estimate(offer) }));
-    const configured = selectedOffer();
+    const configured = getSelectedAntSeedOffer();
     if (configured) {
         state.activeModelId = configured.modelId;
         state.activePeerId = configured.peerId;
