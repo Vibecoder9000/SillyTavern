@@ -1,4 +1,4 @@
-import { characters, this_chid, saveCharacterDebounced, generateRawData, extractMessageFromData, cleanUpMessage, eventSource, event_types, messageFormatting, getRequestHeaders, main_api, getThumbnailUrl, default_avatar, unshallowCharacter } from '../script.js';
+import { characters, this_chid, saveCharacterDebounced, charUpdatePrimaryWorld, generateRawData, extractMessageFromData, cleanUpMessage, eventSource, event_types, messageFormatting, getRequestHeaders, main_api, getThumbnailUrl, default_avatar, unshallowCharacter } from '../script.js';
 import { isImageInliningSupported, Message, oai_settings } from './openai.js';
 import { POPUP_RESULT, POPUP_TYPE, Popup } from './popup.js';
 import { parseReasoningStream } from './reasoning.js';
@@ -2191,7 +2191,14 @@ async function lorebookAction(button) {
     if (action === 'delete-book') {
         const entryCount = state.lorebook?.entries?.length || 0;
         const entriesText = entryCount ? ` and ${entryCount === 1 ? 'its entry' : `all ${entryCount} entries`}` : '';
-        const confirmed = await Popup.show.confirm('Remove Character Book?', `Remove the embedded Character Book${entriesText} from this card? You can undo this with Ctrl+Z.`, { okButton: 'Remove', cancelButton: 'Cancel' });
+        const linkedWorld = editorOwnsCharacterForm() ? String($('#character_world')?.value || '') : '';
+        const linkedText = linkedWorld
+            ? ` This will also unlink the primary lorebook “${escapeHtml(linkedWorld)}” from this character; the World Info file will remain in your library.`
+            : '';
+        const undoText = linkedWorld
+            ? ' Ctrl+Z restores the card book; re-link the World Info file separately if needed.'
+            : ' You can undo this with Ctrl+Z.';
+        const confirmed = await Popup.show.confirm('Remove Character Book?', `Remove the embedded Character Book${entriesText} from this card?${linkedText}${undoText}`, { okButton: 'Remove', cancelButton: 'Cancel' });
         if (confirmed !== POPUP_RESULT.AFFIRMATIVE) return;
         record();
         state.lorebook = null;
@@ -2199,7 +2206,9 @@ async function lorebookAction(button) {
         state.expandedLoreEntries = [];
         state.lorebookProposal = null;
         for (const key of Object.keys(state.masks || {})) if (key.startsWith('lore:')) deleteMaskKey(key);
-        writeLorebookToCard(); renderCard(); renderPendingActions(); persist(); return;
+        writeLorebookToCard(); renderCard(); renderPendingActions(); persist();
+        if (linkedWorld) await charUpdatePrimaryWorld('');
+        return;
     }
     const row = button.closest('.cc-lore-entry'); const entryId = row?.dataset.entryId; const index = loreEntryIndex(entryId); if (index < 0) return;
     if (action === 'toggle') {

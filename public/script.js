@@ -359,6 +359,7 @@ export {
     getSystemMessageByType,
     event_types,
     eventSource,
+    charUpdatePrimaryWorld,
     /** @deprecated Use setCharacterSettingsOverrides instead. */
     setCharacterSettingsOverrides as setScenarioOverride,
     /** @deprecated Use appendMediaToMessage instead. */
