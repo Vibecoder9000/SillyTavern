@@ -1404,6 +1404,10 @@ export function parseTextgenLogprobs(token, logprobs) {
                     return null;
                 }
                 return { token, topLogprobs: candidates };
+            } else if (logprobs?.[0]?.top_probs) {
+                // llama.cpp post_sampling_probs format (local patch)
+                const candidates = logprobs[0].top_probs.map(x => [x.token, x.prob]);
+                return { token, topLogprobs: candidates };
             } else if (logprobs?.[0].top_logprobs) {
                 const candidates = logprobs?.[0]?.top_logprobs?.map(x => [x.token, Math.exp(x.logprob)]);
                 if (!candidates) {
@@ -1716,6 +1720,7 @@ export function createTextGenGenerationData(settings, model, finalPrompt = null,
         'mirostat': settings.mirostat_mode,
         'ignore_eos': settings.ban_eos_token,
         'n_probs': power_user.request_token_probabilities ? 10 : undefined,
+        'post_sampling_probs': power_user.request_token_probabilities ? true : undefined, // fast path; probs after samplers (local patch)
         'rep_pen_slope': settings.rep_pen_slope,
     };
     const vllmParams = {

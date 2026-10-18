@@ -8,7 +8,9 @@ import {
     getGeneratingApi,
     is_send_press,
     isStreamingEnabled,
+    main_api,
     substituteParamsExtended,
+    TempResponseLength,
 } from '../script.js';
 import { debounce, delay, getStringHash } from './utils.js';
 import { decodeTextTokens, getTokenizerBestMatch } from './tokenizers.js';
@@ -143,6 +145,7 @@ function renderAlternativeTokensView() {
     });
 
     view.append(tokenSpans);
+    widenNarrowTokens(view);
 
     // scroll past long prior context
     if (prefix) {
@@ -150,6 +153,25 @@ function renderAlternativeTokensView() {
         const scrollOffset = element.offset().top - element.parent().offset().top;
         element.parent().scrollTop(scrollOffset);
     }
+}
+
+const MIN_TOKEN_HITBOX_PX = 20;
+
+/**
+ * Makes tiny tokens (".", "l", "i"...) easier to tap: pads each one out to a minimum width. The padding takes real
+ * space, so the text rewraps around it and no hitbox overlaps a neighbour's.
+ * @param {JQuery<HTMLElement>} view - the token output container
+ */
+function widenNarrowTokens(view) {
+    const spans = view.find('.logprobs_output_token').toArray();
+    // measure first, then write, to avoid a layout pass per token
+    const widths = spans.map(span => span.getBoundingClientRect().width);
+    spans.forEach((span, i) => {
+        const extra = (MIN_TOKEN_HITBOX_PX - widths[i]) / 2;
+        if (extra > 0) {
+            span.style.padding = `0 ${extra}px`;
+        }
+    });
 }
 
 function addKeyboardProps(element) {
@@ -607,8 +629,160 @@ function convertTokenIdLogprobsToText(input) {
     });
 }
 
+const chooser = { running: false, stop: false };
+
+function chooserSetting(key, fallback) {
+    try {
+        return localStorage.getItem('logprobsChooser_' + key) ?? fallback;
+    } catch {
+        return fallback;
+    }
+}
+
+function chooserSave() {
+    try {
+        localStorage.setItem('logprobsChooser_blank', String($('#logprobsChooserBlank').val()));
+        localStorage.setItem('logprobsChooser_n', String($('#logprobsChooserN').val()));
+        localStorage.setItem('logprobsChooser_url', String($('#logprobsChooserUrl').val()));
+    } catch { /* storage unavailable */ }
+}
+
+const normalizeToken = (token) => String(token).replace(/^[▁Ġ]/g, ' ').replace(/Ċ/g, '\n');
+
+/**
+ * Walks the active message's tokens. At each one, asks the chooser server which of the top candidates is the most
+ * "blank". A pick other than the generated token continues generation from there (and the walk restarts on the new
+ * continuation); no pick moves on to the next token. Stops after n decisions.
+ */
+async function runChooser() {
+    const blank = String($('#logprobsChooserBlank').val()).trim();
+    const n = Number($('#logprobsChooserN').val()) || 1;
+    const url = String($('#logprobsChooserUrl').val()).trim().replace(/\/+$/, '') || 'http://127.0.0.1:8741';
+    const status = (text) => $('#logprobsChooserStatus').text(text);
+    const log = (text, rows = []) => {
+        const box = $('#logprobsChooserLog');
+        const entry = $('<details></details>').css({ whiteSpace: 'nowrap' });
+        entry.append($('<summary></summary>').text(text));
+        // candidates, best first, one per line; click the entry to expand
+        entry.append($('<div></div>').css({ paddingLeft: '2em' }).text(rows.join('\n')).css('white-space', 'pre'));
+        if (!rows.length) {
+            entry.find('div').remove();
+        }
+        box.append(entry);
+        box.scrollTop(box[0].scrollHeight);
+    };
+    const show = (t) => toVisibleWhitespace(String(t)) || '∅';
+    $('#logprobsChooserLog').empty();
+    if (!blank) {
+        toastr.warning('Enter what the chooser should look for (the blank).');
+        return;
+    }
+    if (!checkGenerateReady()) {
+        return;
+    }
+    chooser.running = true;
+    chooser.stop = false;
+    $('#logprobsChooserRun').text('Stop');
+    let steps = 0;
+    let pos = 0;
+    let truncated = false;
+    try {
+        while (steps < n && !chooser.stop) {
+            const data = getActiveMessageLogprobData();
+            if (!data?.messageLogprobs?.length || pos >= data.messageLogprobs.length) {
+                break;
+            }
+            const { messageLogprobs, continueFrom } = data;
+            const tokenData = messageLogprobs[pos];
+            const generated = normalizeToken(tokenData.token);
+            // a bare space/newline token reads as "blank" to the chooser and just loops, so only real tokens are offered
+            const candidates = [...new Set(tokenData.topLogprobs.map(([t]) => normalizeToken(t)))].filter(t => t.trim());
+            if (candidates.length < 2) {
+                pos++;
+                continue;
+            }
+            const prefix = (continueFrom || '') + messageLogprobs.slice(0, pos).map(x => normalizeToken(x.token)).join('');
+            steps++;
+            status(`${steps}/${n}: asking model about token ${pos}…`);
+            const response = await fetch(`${url}/choose`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ blank, context: prefix, candidates, none: true }),
+            });
+            const result = await response.json();
+            if (!response.ok) {
+                throw new Error(result.error || response.statusText);
+            }
+            const chosen = result.choice === null ? null : candidates[result.choice];
+            const pct = (p) => `${(p * 100).toFixed(0)}%`.padStart(4);
+            const rows = candidates
+                .map((c, i) => ({ c, p: result.probs[i] }))
+                .sort((a, b) => b.p - a.p)
+                .map(({ c, p }) => `${pct(p)}  ${show(c)}${c === chosen ? '  <- picked' : ''}${c === generated ? '  (generated)' : ''}`);
+            rows.push(`${pct(result.none_prob)}  none${chosen === null ? '  <- picked' : ''}`);
+            const head = `#${steps} ${show(generated)}`;
+            if (chosen === null) {
+                log(`${head}  =  none`, rows);
+                pos++;
+                continue;
+            }
+            if (chosen === generated) {
+                log(`${head}  =  kept`, rows);
+                pos++;
+                continue;
+            }
+            log(`${head}  →  ${show(chosen)}  ${pct(result.probs[result.choice]).trim()}  ↻`, rows);
+            status(`${steps}/${n}: regenerating after ${show(chosen)}…`);
+            const previous = data.created;
+            createSwipe(chat.length - 1, prefix + chosen);
+            $('.swipe_right:last').trigger('click');
+            // each remaining decision needs at most one more token, so don't let the model run on
+            const cap = Math.max(1, n - steps);
+            TempResponseLength.save(main_api, cap);
+            try {
+                await Generate('continue');
+            } finally {
+                TempResponseLength.restore(main_api);
+            }
+            for (let i = 0; i < 50 && getActiveMessageLogprobData()?.created === previous; i++) {
+                await delay(100);
+            }
+            truncated = (getActiveMessageLogprobData()?.messageLogprobs?.length ?? 0) >= cap;
+            pos = 0;
+        }
+        if (truncated && !chooser.stop) {
+            log('finishing the reply…');
+            status('finishing the reply…');
+            await Generate('continue');
+        }
+        const finished = chooser.stop ? 'stopped' : steps >= n ? 'done (reached n)' : 'done (ran out of tokens)';
+        status(finished);
+        log(finished);
+    } catch (error) {
+        console.error('Logprob chooser failed', error);
+        toastr.error(String(error.message || error), 'Logprob chooser');
+        status('error');
+        log('error: ' + String(error.message || error));
+    } finally {
+        chooser.running = false;
+        $('#logprobsChooserRun').text('Run');
+    }
+}
+
 export function initLogprobs() {
     REROLL_BUTTON.hide();
+    $('#logprobsChooserBlank').val(chooserSetting('blank', ''));
+    $('#logprobsChooserN').val(chooserSetting('n', '10'));
+    $('#logprobsChooserUrl').val(chooserSetting('url', 'http://127.0.0.1:8741'));
+    $('#logprobsChooser input').on('change', chooserSave);
+    $('#logprobsChooserRun').on('click', () => {
+        if (chooser.running) {
+            chooser.stop = true;
+        } else {
+            chooserSave();
+            void runChooser();
+        }
+    });
     const debouncedRender = debounce(renderAlternativeTokensView);
     $('#logprobsViewerClose').on('click', onToggleLogprobsPanel);
     $('#option_toggle_logprobs').on('click', onToggleLogprobsPanel);

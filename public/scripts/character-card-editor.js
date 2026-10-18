@@ -1,4 +1,4 @@
-import { characters, this_chid, saveCharacterDebounced, charUpdatePrimaryWorld, generateRawData, extractMessageFromData, cleanUpMessage, eventSource, event_types, messageFormatting, getRequestHeaders, main_api, getThumbnailUrl, default_avatar, unshallowCharacter } from '../script.js';
+import { characters, this_chid, saveCharacterDebounced, charUpdatePrimaryWorld, generateRawData, extractMessageFromData, cleanUpMessage, eventSource, event_types, messageFormatting, getRequestHeaders, main_api, getThumbnailUrl, default_avatar, unshallowCharacter, getMaxPromptTokens, getMaxContextTokens } from '../script.js';
 import { isImageInliningSupported, Message, oai_settings } from './openai.js';
 import { POPUP_RESULT, POPUP_TYPE, Popup } from './popup.js';
 import { parseReasoningStream } from './reasoning.js';
@@ -27,6 +27,7 @@ const MAX_TOOL_CONTEXT_CHANGED_LINES = 12;
 const UNCHANGED_READ_RESULT_SUFFIX = ' unchanged; use its value from original_card.';
 const MAX_CARD_CHANGE_CONTEXT_LENGTH = 4000;
 const REFERENCE_CONTEXT_TOKEN_LIMIT = 1000;
+const CONTEXT_SAFETY_TOKENS = 256;
 const REFERENCE_CONTEXT_TRUNCATION_SUFFIX = '\n[later description omitted]';
 const CARD_CHANGE_TRUNCATION_SUFFIX = '... truncated';
 const PARTIAL_RESPONSE_CONTINUATION = 'partial-response';
@@ -2827,7 +2828,7 @@ function toolResultBubbleHtml(message) {
         return `<article class="cc-message cc-message-editing cc-tool-result-message" data-tool-result-for="${escapeHtml(message.id)}"><div class="cc-message-edit-actions"><button class="cc-tool-result-edit-save menu_button" type="button" title="Confirm"><i class="fa-solid fa-check"></i></button><button class="cc-tool-result-edit-cancel menu_button" type="button" title="Cancel"><i class="fa-solid fa-xmark"></i></button></div><label class="cc-message-edit-label">Tool result<textarea class="text_pole cc-message-edit-input" rows="1" spellcheck="false">${escapeHtml(messageEdit.toolResultDraft)}</textarea></label></article>`;
     }
     if (message.toolResultOverride) {
-        return `<article class="cc-message cc-message-has-edit cc-tool-result-message" data-tool-result-for="${escapeHtml(message.id)}"><button class="cc-tool-result-edit cc-message-edit menu_button" type="button" title="Edit"><i class="fa-solid fa-pencil"></i></button><div class="cc-message-text">${formattedMessageText(message.toolResultOverride, 'system')}</div></article>`;
+        return `<article class="cc-message cc-message-has-edit cc-tool-result-message${message.outOfContext ? ' cc-out-of-context' : ''}" data-tool-result-for="${escapeHtml(message.id)}"><button class="cc-tool-result-edit cc-message-edit menu_button" type="button" title="Edit"><i class="fa-solid fa-pencil"></i></button><div class="cc-message-text">${formattedMessageText(message.toolResultOverride, 'system')}</div></article>`;
     }
     const summaryHtml = summary ? `<div class="cc-tool-result-summary">${escapeHtml(summary)}</div>` : '';
     const readoutsHtml = readouts.map(readout => `<div class="cc-tool-result-content">${escapeHtml(readout)}</div>`).join('');
@@ -2835,7 +2836,7 @@ function toolResultBubbleHtml(message) {
         ? `<div class="cc-tool-error-text">${escapeHtml(result.text)}</div>`
         : `<div class="cc-tool-result-content">${escapeHtml(result.text)}</div>`).join('');
     const errorsHtml = errors.map(failedEditHtml).join('');
-    return `<article class="cc-message cc-message-has-edit cc-tool-result-message" data-tool-result-for="${escapeHtml(message.id)}"><button class="cc-tool-result-edit cc-message-edit menu_button" type="button" title="Edit"><i class="fa-solid fa-pencil"></i></button><div class="cc-tool-result-readout">${summaryHtml}${readoutsHtml}${contextHtml}${errorsHtml}</div></article>`;
+    return `<article class="cc-message cc-message-has-edit cc-tool-result-message${message.outOfContext ? ' cc-out-of-context' : ''}" data-tool-result-for="${escapeHtml(message.id)}"><button class="cc-tool-result-edit cc-message-edit menu_button" type="button" title="Edit"><i class="fa-solid fa-pencil"></i></button><div class="cc-tool-result-readout">${summaryHtml}${readoutsHtml}${contextHtml}${errorsHtml}</div></article>`;
 }
 function toolResultPlainText(message) {
     if (message.toolResultOverride !== undefined) return String(message.toolResultOverride);
@@ -2980,7 +2981,7 @@ function messageBubbleHtml(message) {
     const actions = canEdit ? `<div class="cc-message-actions">${forkButton}${addAttachment}${editButton}</div>` : '';
     const errors = [...(message.errors || []), ...(message.error ? [message.error] : [])];
     if (!(message.streaming || displayText || message.attachments?.length || canEditAttachments || message.reasoning || message.toolStream || message.toolXml || message.diffs?.length || errors.length)) return '';
-    return `<article class="cc-message ${message.role === 'user' ? 'cc-user-message' : ''} ${canEdit ? 'cc-message-has-edit' : ''} ${canEditAttachments ? 'cc-message-has-attachment-action' : ''} ${canFork ? 'cc-message-has-fork-action' : ''}" data-message-id="${message.id}">${actions}${reasoning}<div class="cc-message-text">${messageTextContentsHtml(message)}</div>${attachments}${(message.diffs || []).map(diffHtml).join('')}</article>`;
+    return `<article class="cc-message ${message.role === 'user' ? 'cc-user-message' : ''} ${message.outOfContext ? 'cc-out-of-context' : ''} ${canEdit ? 'cc-message-has-edit' : ''} ${canEditAttachments ? 'cc-message-has-attachment-action' : ''} ${canFork ? 'cc-message-has-fork-action' : ''}" data-message-id="${message.id}">${actions}${reasoning}<div class="cc-message-text">${messageTextContentsHtml(message)}</div>${attachments}${(message.diffs || []).map(diffHtml).join('')}</article>`;
 }
 function messageHtml(message) {
     if (messageEdit.id === message.id) {
@@ -4219,16 +4220,24 @@ function isPartialResponseContinuation(continuation) {
 function conversationContinuation(conversation) {
     if (conversation?.pendingContinuation) return conversation.pendingContinuation;
     const message = conversation?.messages?.at(-1);
-    const reasoningOnly = message?.role === 'assistant'
-        && !message.streaming
+    if (message?.role !== 'assistant') return null;
+    const reasoningOnly = !message.streaming
         && Boolean(message.reasoning)
         && !message.text
         && !message.diffs?.length
         && !message.toolResultDisplay;
-    return reasoningOnly ? { kind: PARTIAL_RESPONSE_CONTINUATION, messageId: message.id } : null;
+    // Any other assistant reply is complete: it keeps its tool calls and tool result
+    // in history as usual, and only the trailing continuation turn is added.
+    return { kind: PARTIAL_RESPONSE_CONTINUATION, messageId: message.id, complete: !reasoningOnly && !message.streaming };
 }
-async function promptHistory(conversation, excludeId, continuation = null) {
+// One message per turn holding every result of that turn, so the model sees them as a single block.
+function wrapToolResults(results) {
+    const text = String(results || '').trim();
+    return /^<tool_results>[\s\S]*<\/tool_results>$/.test(text) ? text : `<tool_results>\n${text}\n</tool_results>`;
+}
+async function promptHistory(conversation, excludeId, continuation = null, tokenBudget = null) {
     const prompt = [];
+    const groups = [];
     const resultRole = ['assistant', 'user', 'system'].includes(oai_settings.tool_result_role) ? oai_settings.tool_result_role : 'system';
     const continuationMessageId = isPartialResponseContinuation(continuation) ? continuation.messageId : null;
     let includedContinuationMessage = false;
@@ -4237,7 +4246,8 @@ async function promptHistory(conversation, excludeId, continuation = null) {
         // A failed stream may contain an incomplete or merely proposed XML tool call.
         // Keep its visible prose and reasoning in normal assistant content, but never
         // present that XML as a completed assistant action for the model to recreate.
-        const continuingPartialAssistant = message.role === 'assistant' && message.id === continuationMessageId;
+        const isContinuationMessage = message.role === 'assistant' && message.id === continuationMessageId;
+        const continuingPartialAssistant = isContinuationMessage && !continuation.complete;
         const interruptedAssistant = message.role === 'assistant' && (message.historyWithoutToolCalls || continuingPartialAssistant);
         const text = message.role === 'assistant'
             ? (continuingPartialAssistant
@@ -4249,16 +4259,38 @@ async function promptHistory(conversation, excludeId, continuation = null) {
             ? content.some(part => part?.type !== 'text' || String(part.text || '').trim())
             : String(content || '').trim();
         if (message.role === 'assistant' && !hasPromptContent && !String(message.toolResultDisplay || '').trim()) continue;
-        const historyMessage = { role: message.role, content };
-        includedContinuationMessage ||= continuingPartialAssistant;
-        prompt.push(historyMessage);
-        if (message.role === 'assistant' && message.toolResultDisplay && !interruptedAssistant) prompt.push({ role: resultRole, content: message.toolResultDisplay });
+        includedContinuationMessage ||= isContinuationMessage;
+        const items = [{ role: message.role, content }];
+        if (message.role === 'assistant' && message.toolResultDisplay && !interruptedAssistant) items.push({ role: resultRole, content: wrapToolResults(message.toolResultDisplay) });
+        groups.push({ message, items });
     }
+    const keptFrom = tokenBudget === null ? 0 : await firstGroupInContext(groups, tokenBudget);
+    groups.forEach(({ message, items }, index) => {
+        message.outOfContext = index < keptFrom;
+        if (!message.outOfContext) prompt.push(...items);
+    });
     // Chat-completion providers generally expect a user turn after the partial
     // assistant message. A single space asks for continuation without inventing
     // instructions or adding a visible fake message to the saved conversation.
     if (includedContinuationMessage) prompt.push({ role: 'user', content: CONTINUATION_USER_PLACEHOLDER });
     return prompt;
+}
+// Newest messages win: walk back from the latest until the budget runs out. The latest
+// message is always kept, and a cut never leaves an assistant reply as the first turn.
+async function firstGroupInContext(groups, tokenBudget) {
+    let used = 0;
+    let first = groups.length;
+    for (let index = groups.length - 1; index >= 0; index--) {
+        const texts = groups[index].items.flatMap(item => Array.isArray(item.content)
+            ? item.content.filter(part => part?.type === 'text').map(part => part.text)
+            : [item.content]);
+        const counts = await Promise.all(texts.map(text => getTokenCountAsync(String(text || ''))));
+        used += counts.reduce((sum, count) => sum + count, 0);
+        if (used > tokenBudget && index < groups.length - 1) break;
+        first = index;
+    }
+    while (first < groups.length - 1 && groups[first].message.role !== 'user') first++;
+    return first;
 }
 function serializeToolFailure(error) {
     return {
@@ -4328,9 +4360,15 @@ async function generateAssistant(conversation, retriesRemaining = MAX_TOOL_RETRI
     let streamedReasoning = '';
     let continueGeneration = false;
     try {
-        const prompt = redactModelPayload(await promptHistory(conversation, pendingMessage.id, continuation));
         const metadata = await characterDesignerMetadata(conversation);
         const systemPrompt = buildCharacterDesignerPrompt({ customInstructions: customInstructionsValue(), originalCard: conversation.baseline, metadata });
+        const maxPromptTokens = getMaxPromptTokens();
+        const tokenBudget = maxPromptTokens > 0 ? Math.max(0, maxPromptTokens - await getTokenCountAsync(systemPrompt) - CONTEXT_SAFETY_TOKENS) : null;
+        const wasOutOfContext = conversation.messages.filter(message => message.outOfContext).length;
+        const prompt = redactModelPayload(await promptHistory(conversation, pendingMessage.id, continuation, tokenBudget));
+        const nowOutOfContext = conversation.messages.filter(message => message.outOfContext).length;
+        if (nowOutOfContext !== wasOutOfContext) renderChat();
+        if (nowOutOfContext > wasOutOfContext) toastr.warning(`${nowOutOfContext - wasOutOfContext} older message(s) no longer fit in the ${getMaxContextTokens()} token context and were left out of the request.`, 'Character Designer');
         const data = await generateRawData({ prompt, systemPrompt, quietToLoud: true, stream: true, signal: activeGenerationController.signal, substituteMacros: false });
         if (typeof data === 'function') {
             for await (const chunk of data()) {
@@ -4395,10 +4433,12 @@ async function generateAssistant(conversation, retriesRemaining = MAX_TOOL_RETRI
         const loreDiff = loreChanges.length ? applyLorebookProposal(parsedLore, generationBook, generationLoreIds) : null;
         const loreReadResults = parsedLore.reads.map(read => loreReadResult(read, generationBook, generationLoreIds));
         contextResults.push(...loreReadResults);
-        // Only a valid call that explicitly asks for the result may trigger a
-        // follow-up. Missing, malformed, or unrelated tool tags must not cause a
-        // second request after the model has already finished its response.
-        const requestedContinuation = toolCalls.some(call => call.continue === true);
+        // A valid call that explicitly asks for the result triggers a follow-up, and so
+        // does any failed call, even if the model asked not to continue, so it sees the
+        // error and can retry. Retries stay capped by retriesRemaining.
+        const requestedContinuation = toolCalls.some(call => call.continue === true)
+            || failures.length > 0
+            || contextToolResults.some(result => result.status === 'error');
         continueGeneration = requestedContinuation && retriesRemaining > 0;
         conversation.pendingContinuation = requestedContinuation && retriesRemaining === 0;
         pendingMessage.text = streamedProse(visibleResponse, scopedTools);
@@ -4513,12 +4553,11 @@ async function send() {
     const attachments = normalizeImageAttachments(state.draftAttachments);
     if (composer.disabled) return;
     const hasDraft = Boolean(text || attachments.length);
-    const conversation = hasDraft ? ensureConversation() : activeConversation();
+    const conversation = ensureConversation();
     const continuation = !hasDraft ? conversationContinuation(conversation) : null;
-    // An empty submit retries a stalled user turn or resumes a failed partial
-    // response without adding a duplicate/fake bubble to the visible transcript.
-    // Empty submits in every other state remain no-ops.
-    if (!conversation || (!hasDraft && conversation.messages.at(-1)?.role !== 'user' && !continuation)) return;
+    // An empty submit always generates: it retries a stalled user turn, resumes a
+    // partial response, or continues the last reply without adding a fake bubble.
+    if (!conversation) return;
     abortedByUser = false;
     record();
     appendCardChangeNoticeForSend(conversation);

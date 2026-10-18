@@ -6332,6 +6332,7 @@ body.big-avatars .cc-reference-option-copy { height: calc(var(--avatar-base-heig
 .cc-editor-snap-actions .menu_button { width: 27px; padding-inline: 0; }
 .cc-editor-header-actions .cc-editor-bulk-action { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
 .cc-editor-header-actions .cc-editor-custom-button.active:not(:disabled) { color: var(--SmartThemeEmColor); }
+.cc-editor-header-actions .cc-editor-custom-button.active:not(:hover):not(:disabled) { background-color: var(--SmartThemeBlurTintColor); }
 .cc-editor-header-actions .cc-editor-mask-action.active:not(:disabled) { color: var(--SmartThemeEmColor); }
 .cc-editor-header-actions .cc-editor-accept-all:not(:disabled) { color: #35c75a; }
 .cc-editor-header-actions .cc-editor-reject-all:not(:disabled) { color: #e06c75; }
@@ -6664,6 +6665,8 @@ button.cc-diff-jump:hover { background: color-mix(in srgb, var(--SmartThemeBodyC
 button.cc-diff-jump:focus-visible { outline: 2px solid var(--SmartThemeBodyColor); outline-offset: 2px; }
 .cc-diff-resolved { opacity: .52; cursor: default; }
 .cc-tool-result-message { margin-top: -4px; padding-block: 5px; opacity: .78; background: color-mix(in srgb, var(--SmartThemeBotMesBlurTintColor), transparent 25%); }
+.cc-message.cc-out-of-context { opacity: .35; filter: grayscale(.6); transition: opacity .2s; }
+.cc-message.cc-out-of-context:hover { opacity: .6; }
 .cc-tool-result-readout { line-height: 1.35; }
 .cc-tool-result-summary { font-size: calc(var(--mainFontSize) * .88); }
 .cc-tool-result-content { font-size: calc(var(--mainFontSize) * .88); }

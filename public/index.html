@@ -8617,6 +8617,23 @@
                         <span class="fa-solid fa-redo logprobs_reroll"></span>
                     </button>
                 </small>
+                <div id="logprobsChooser" class="flex-container flexFlowColumn" title="Auto-picks tokens using the local h2o-lightning-4b chooser server (D:\.system\ST2\h2o-lightning-4b\chooser_server.py).">
+                    <div class="flex-container alignItemsCenter flexNoWrap" title="The quality the chooser looks for. At each token it asks: which candidate is the most ___? Type the word that fits the blank (e.g. vivid, formal, unexpected).">
+                        <span style="flex-shrink:0">Pick the most</span>
+                        <input id="logprobsChooserBlank" class="text_pole margin0 flex1" type="text" placeholder="vivid" title="The word that fills the blank: the chooser picks the candidate token that is the most ___.">
+                    </div>
+                    <div class="flex-container alignItemsCenter flexNoWrap">
+                        <span style="flex-shrink:0" title="Maximum number of tokens the chooser will judge in one run. A token counts when it is judged, whether or not it gets replaced.">Max decisions</span>
+                        <input id="logprobsChooserN" class="text_pole margin0" type="number" min="1" max="1000" style="width:5em" title="Maximum number of tokens the chooser will judge in one run. A token counts when it is judged, whether or not it gets replaced.">
+                        <button id="logprobsChooserRun" class="menu_button margin0" style="flex-shrink:0" title="Start the chooser on the current message. While running, this button stops it.">Run</button>
+                        <small id="logprobsChooserStatus" class="flex1" title="What the chooser is doing right now."></small>
+                    </div>
+                    <div class="flex-container alignItemsCenter flexNoWrap" title="Address of the chooser server (run-chooser.bat).">
+                        <span style="flex-shrink:0">Server</span>
+                        <input id="logprobsChooserUrl" class="text_pole margin0 flex1" type="text" placeholder="http://127.0.0.1:8741" title="Address of the chooser server (run-chooser.bat).">
+                    </div>
+                </div>
+                <div id="logprobsChooserLog" title="One line per decision. Click a line to see every candidate and the chooser's confidence in each. ↻ = replaced the token and regenerated; none = nothing picked; kept = picked the token already generated." style="max-height:12em;overflow:auto;font-family:monospace;font-size:0.85em;white-space:nowrap"></div>
                 <hr>
                 <div id="logprobs_generation_output"></div>
                 <div id="logprobs_selected_top_logprobs" class="logprobs_candidate_list"></div>

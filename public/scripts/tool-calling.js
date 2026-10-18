@@ -1210,7 +1210,7 @@ function formatNativeToolDefinitionText(toolName, description, schema, displayNa
     const optional = properties.filter(propertyName => propertyName !== 'continue' && !required.has(propertyName));
     const requiredTags = [...new Set([...required, 'continue'])];
     const notes = collectNativeToolSchemaNotes(toolName, normalizedSchema);
-    notes.push('continue is required and must be exactly true or false; it controls whether the model waits for the result before replying.');
+    notes.push('continue is required and must be exactly true or false. It never ends or interrupts your current response: finish everything you want to say and every tool call in this same response either way. true = after your response ends, you receive the result of this call and get one more turn (use it when you need the result, such as a read, before you can proceed). false = no further turn; this response is final. Never write a second reply to compensate for the flag.');
 
     const sections = [
         toolName,
@@ -1243,7 +1243,7 @@ function formatNativeToolDefinitionHtml(toolName, description, schema, displayNa
     const optional = properties.filter(propertyName => propertyName !== 'continue' && !required.includes(propertyName));
     const requiredTags = [...new Set([...required, 'continue'])];
     const notes = collectNativeToolSchemaNotes(toolName, normalizedSchema);
-    notes.push('continue is required and must be exactly true or false; it controls whether the model waits for the result before replying.');
+    notes.push('continue is required and must be exactly true or false. It never ends or interrupts your current response: finish everything you want to say and every tool call in this same response either way. true = after your response ends, you receive the result of this call and get one more turn (use it when you need the result, such as a read, before you can proceed). false = no further turn; this response is final. Never write a second reply to compensate for the flag.');
 
     const metaLines = [];
     metaLines.push(`<div><small><b>Required tags:</b> ${escapeToolDisplayHtml(requiredTags.join(', '))}</small></div>`);

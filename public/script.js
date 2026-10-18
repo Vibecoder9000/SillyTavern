@@ -8003,7 +8003,7 @@ export async function generateRaw({ prompt = '', api = null, instructOverride = 
     return message;
 }
 
-class TempResponseLength {
+export class TempResponseLength {
     static #originalResponseLength = -1;
     static #lastApi = null;
 
