@@ -5019,6 +5019,14 @@ export async function initCharacterCardEditor() {
         editorLayoutObserver = new ResizeObserver(syncEditorViewportBounds);
         editorLayoutObserver.observe(navigation);
     }
+    // Software rendering makes every backdrop blur expensive, so the stylesheet drops the
+    // ones that sit behind or around the open editor. A class is cheaper to match than :has().
+    const openClassPanel = $('#character-card-editor');
+    if (openClassPanel) {
+        const syncEditorOpenClass = () => document.body.classList.toggle('cc-editor-open', openClassPanel.classList.contains('openDrawer'));
+        new MutationObserver(syncEditorOpenClass).observe(openClassPanel, { attributes: true, attributeFilter: ['class'] });
+        syncEditorOpenClass();
+    }
     $('#character-card-editor-button .drawer-toggle')?.addEventListener('click', async () => {
         const editor = $('#character-card-editor');
         syncEditorViewportBounds();
