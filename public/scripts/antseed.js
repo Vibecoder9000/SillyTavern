@@ -9,6 +9,9 @@ const state = {
     getSettings: null,
     saveSettings: null,
     refresh: null,
+    syncing: false,
+    appliedContext: null,
+    appliedMaxTokens: null,
     offers: [],
     models: [],
     providers: [],
@@ -463,30 +466,50 @@ async function inspectSelectedOffer({ allowPrompt = true, modelKey = null } = {}
     return true;
 }
 
+// The user's own choice: a value changed outside the sync (preset, slash command, slider) wins over the stored preference.
+function resolvePreferred(currentValue, appliedValue, storedValue) {
+    if (appliedValue !== null && Number(currentValue) !== appliedValue) return currentValue;
+    return Number(storedValue) > 0 ? storedValue : currentValue;
+}
+
 export function syncAntSeedContext(offer = getSelectedAntSeedOffer()) {
-    if (!offer) return;
     const current = settings();
     const $ctx = typeof $ !== 'undefined' ? $('#openai_max_context') : null;
     const $tok = typeof $ !== 'undefined' ? $('#openai_max_tokens') : null;
-    if (Number.isFinite(offer.contextLength) && offer.contextLength > 0) {
-        const maxContext = current.max_context_unlocked ? 2000000 : offer.contextLength;
+    // The slider's markup default is ~4k. When the offer is unknown or reports no context length,
+    // open the slider up fully instead of leaving it at whatever max it happened to have.
+    const knownContext = Number.isFinite(offer?.contextLength) && offer.contextLength > 0;
+    const maxContext = current.max_context_unlocked || !knownContext ? 2000000 : offer.contextLength;
+    // An offer's limit only caps the effective value; the user's own choice is kept so that
+    // switching to a larger offer restores it instead of staying clamped.
+    const preferredContext = resolvePreferred(current.openai_max_context, state.appliedContext, current.antseed_preferred_context);
+    current.antseed_preferred_context = Number(preferredContext);
+    state.syncing = true;
+    try {
         $ctx?.attr('max', maxContext);
         if (typeof $ !== 'undefined') {
             $('#openai_max_context_counter').attr('max', maxContext);
         }
         if ($ctx && $ctx.length) {
-            current.openai_max_context = Number.isFinite(Number(current.openai_max_context))
-                ? Math.min(Number($ctx.attr('max')), Number(current.openai_max_context))
+            current.openai_max_context = Number.isFinite(Number(preferredContext))
+                ? Math.min(maxContext, Number(preferredContext))
                 : maxContext;
             $ctx.val(current.openai_max_context).trigger('input');
+            state.appliedContext = Number(current.openai_max_context);
         }
-    }
-    if (Number.isFinite(offer.maxOutputTokens) && offer.maxOutputTokens > 0) {
-        $tok?.attr('max', offer.maxOutputTokens);
-        if ($tok && $tok.length && Number.isFinite(Number(current.openai_max_tokens))) {
-            current.openai_max_tokens = Math.min(Number($tok.attr('max')), Number(current.openai_max_tokens));
-            $tok.val(current.openai_max_tokens).trigger('input');
+        const maxOutput = Number.isFinite(offer?.maxOutputTokens) && offer.maxOutputTokens > 0 ? offer.maxOutputTokens : null;
+        if ($tok && $tok.length) {
+            $tok.attr('max', maxOutput ?? 128000);
+            const preferredTokens = resolvePreferred(current.openai_max_tokens, state.appliedMaxTokens, current.antseed_preferred_max_tokens);
+            current.antseed_preferred_max_tokens = Number(preferredTokens);
+            if (Number.isFinite(Number(preferredTokens))) {
+                current.openai_max_tokens = Math.min(Number($tok.attr('max')), Number(preferredTokens));
+                $tok.val(current.openai_max_tokens).trigger('input');
+                state.appliedMaxTokens = Number(current.openai_max_tokens);
+            }
         }
+    } finally {
+        state.syncing = false;
     }
 }
 
@@ -596,6 +619,10 @@ export function initAntSeed({ getSettings, saveSettings, refresh }) {
     state.saveSettings = saveSettings;
     state.refresh = refresh;
     $('#openai_max_context, #openai_max_tokens').on('input change', renderBrowser);
+    $('#openai_max_context, #openai_max_tokens').on('input', function () {
+        if (state.syncing || settings().chat_completion_source !== 'antseed') return;
+        settings()[this.id === 'openai_max_context' ? 'antseed_preferred_context' : 'antseed_preferred_max_tokens'] = Number(this.value);
+    });
     $('#antseed_endpoint').on('input change', function (event, data) {
         const nextValue = String(this.value).trim() || ANTSEED_DEFAULT_ENDPOINT;
         const changed = settings().antseed_endpoint !== nextValue;

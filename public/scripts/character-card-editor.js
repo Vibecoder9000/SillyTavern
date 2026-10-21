@@ -1000,6 +1000,7 @@ function startWorkspaceSaveLoop() {
 }
 function persistWorkspace() {
     if (!state || !workspaceAvatarUrl) return workspaceSavePromise;
+    renderCardChangeNotice();
     // Capture state and its owning avatar together. The user may switch characters
     // before an older request completes, but that must never retarget this payload.
     pendingWorkspaceSave = { avatarUrl: workspaceAvatarUrl, workspace: serializeWorkspace() };
@@ -1784,7 +1785,12 @@ function appendCardChangeNoticeForSend(conversation) {
         conversation.knownCard = deepCopy(current);
         return false;
     }
-    const sections = changedCardSections(conversation.knownCard, current);
+    const changed = changedCardSections(conversation.knownCard, current);
+    const sections = changed.filter(section => !isCardChangeSkipped(conversation, section));
+    skippedCardChanges.delete(conversation);
+    // Skipped sections are acknowledged without telling the model, so they do not
+    // come back as a notice on the next send.
+    conversation.knownCard = deepCopy(current);
     if (!sections.length) return false;
     conversation.messages.push({
         id: uuidv4(),
@@ -1793,8 +1799,45 @@ function appendCardChangeNoticeForSend(conversation) {
         text: cardChangesText(sections),
         cardChangeContext: cardChangesContext(sections),
     });
-    conversation.knownCard = deepCopy(current);
     return true;
+}
+const skippedCardChanges = new WeakMap();
+function cardChangeKey(section) {
+    return `${section.id}:${section.index ?? ''}:${getStringHash(String(section.after ?? ''))}`;
+}
+function isCardChangeSkipped(conversation, section) {
+    return Boolean(skippedCardChanges.get(conversation)?.has(cardChangeKey(section)));
+}
+function renderCardChangeNotice() {
+    const container = $('#cc-editor-card-changes');
+    if (!container) return;
+    const conversation = state ? activeConversation() : null;
+    const sections = conversation?.knownCard && conversation.messages.length
+        ? changedCardSections(conversation.knownCard, currentCardValues())
+        : [];
+    const signature = sections.map(section => `${cardChangeKey(section)}${isCardChangeSkipped(conversation, section) ? '!' : ''}`).join('|');
+    if (container.dataset.signature === signature) return;
+    container.dataset.signature = signature;
+    container.hidden = !sections.length;
+    if (!sections.length) {
+        container.innerHTML = '';
+        return;
+    }
+    const wasOpen = container.querySelector('details')?.open ?? false;
+    const included = sections.filter(section => !isCardChangeSkipped(conversation, section)).length;
+    const preview = section => {
+        const text = `${section.before || '(empty)'} → ${section.after || '(empty)'}`;
+        return text.length > 300 ? `${text.slice(0, 300)}…` : text;
+    };
+    container.innerHTML = `<details${wasOpen ? ' open' : ''}><summary><i class="fa-solid fa-code-compare"></i> Card changed outside this conversation — ${included} of ${sections.length} will be sent to the model</summary><div class="cc-card-changes-list">${sections.map((section, index) => `<label title="${escapeHtml(preview(section))}"><input type="checkbox" data-change="${index}"${isCardChangeSkipped(conversation, section) ? '' : ' checked'}> ${escapeHtml(section.label)}${section.operation ? ` (${section.operation})` : ''}</label>`).join('')}</div></details>`;
+    container.querySelectorAll('input[data-change]').forEach(input => input.addEventListener('change', () => {
+        const section = sections[Number(input.dataset.change)];
+        if (!section) return;
+        const skipped = skippedCardChanges.get(conversation) || new Set();
+        skippedCardChanges.set(conversation, skipped);
+        skipped[input.checked ? 'delete' : 'add'](cardChangeKey(section));
+        renderCardChangeNotice();
+    }));
 }
 function updateKnownCardFields(conversation, fields) {
     if (!conversation?.knownCard) return;
@@ -3247,6 +3290,7 @@ function renderChat() {
     icon.className = activeGenerationController ? 'fa-solid fa-circle-stop' : 'fa-solid fa-paper-plane';
     send.title = activeGenerationController ? 'Stop generating' : 'Send';
     renderDraftAttachments();
+    renderCardChangeNotice();
     renderReferencePicker();
 }
 function pendingHunks() {

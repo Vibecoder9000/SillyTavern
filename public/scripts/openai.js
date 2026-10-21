@@ -481,6 +481,8 @@ const default_settings = {
     antseed_endpoint: ANTSEED_DEFAULT_ENDPOINT,
     antseed_model: '',
     antseed_acknowledged_prices: {},
+    antseed_preferred_context: 0,
+    antseed_preferred_max_tokens: 0,
     electronhub_model: 'gpt-4o-mini',
     nanogpt_model: 'gpt-4o-mini',
     nanogpt_provider: '',

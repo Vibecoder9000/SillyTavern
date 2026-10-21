@@ -2431,7 +2431,14 @@ router.post('/generate', async function (request, response) {
         } else if (request.body.chat_completion_source === CHAT_COMPLETION_SOURCES.ANTSEED) {
             apiUrl = String(request.body.antseed_endpoint || API_ANTSEED).replace(/\/$/, '');
             headers = {};
-            bodyParams = {};
+            // Some peers reject sampler params outright (e.g. "top_p is deprecated for this model"), so only send non-default values.
+            const sampler = (value, defaultValue) => Number(value) === defaultValue ? undefined : value;
+            bodyParams = {
+                temperature: sampler(request.body.temperature, 1),
+                top_p: sampler(request.body.top_p, 1),
+                frequency_penalty: sampler(request.body.frequency_penalty, 0),
+                presence_penalty: sampler(request.body.presence_penalty, 0),
+            };
         } else if (request.body.chat_completion_source === CHAT_COMPLETION_SOURCES.CUSTOM) {
             apiUrl = request.body.custom_url;
             apiKey = readSecret(request.user.directories, SECRET_KEYS.CUSTOM, request.body.secret_id);

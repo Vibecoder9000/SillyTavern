@@ -6672,6 +6672,11 @@ button.cc-diff-jump:focus-visible { outline: 2px solid var(--SmartThemeBodyColor
 .cc-tool-result-content { font-size: calc(var(--mainFontSize) * .88); }
 .cc-tool-result-message .cc-failed-diff,
 .cc-tool-result-message .cc-tool-error-text { margin-top: 0; font-size: calc(var(--mainFontSize) * .88); }
+.cc-editor-card-changes { flex: 0 0 auto; padding: 4px 8px; border-top: 1px solid var(--SmartThemeBorderColor); font-size: calc(var(--mainFontSize) * .88); }
+.cc-editor-card-changes[hidden] { display: none; }
+.cc-editor-card-changes summary { cursor: pointer; opacity: .85; }
+.cc-card-changes-list { display: flex; flex-wrap: wrap; gap: 4px 12px; padding: 4px 0 2px; }
+.cc-card-changes-list label { display: flex; align-items: center; gap: 4px; cursor: pointer; }
 .cc-editor-draft-attachments { flex: 0 0 auto; padding: 5px 5px 0; border-top: 1px solid var(--SmartThemeBorderColor); }
 .cc-editor-draft-attachments[hidden] { display: none; }
 .cc-editor-draft-attachments .cc-image-attachments { margin: 0; }

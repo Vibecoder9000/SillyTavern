@@ -159,7 +159,7 @@ test('syncAntSeedContext updates companion counter max and preserves context of 
     expect(antseedScript).toMatch(/\$\('#openai_max_context_counter'\)\.attr\('max',\s*maxContext\)/);
     // Preserves 0 instead of using || maxContext
     expect(antseedScript).not.toMatch(/current\.openai_max_context\s*\|\|\s*maxContext/);
-    expect(antseedScript).toMatch(/Number\.isFinite\(Number\(current\.openai_max_context\)\)/);
+    expect(antseedScript).toMatch(/Number\.isFinite\(Number\(preferredContext\)\)/);
 });
 
 test('slash-commands includes antseed in api-url argument enumList and setApiUrlCallback', async () => {
