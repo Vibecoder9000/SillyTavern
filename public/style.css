@@ -6580,7 +6580,7 @@ body.reduced-motion #firstmessage_textarea.cc-character-text-fade-in {
 .cc-editor-history-entry strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cc-editor-history-entry small { display: block; margin-top: 2px; opacity: .65; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cc-conversation-delete { flex: 0 0 auto; margin: 0; padding: 0 9px; }
-.cc-editor-backup-entry { margin: 0; padding: 4px 1px; border-bottom: 1px solid var(--SmartThemeBorderColor); user-select: text; text-align: left; }
+.cc-editor-backup-entry { content-visibility: auto; contain-intrinsic-size: auto 40px; margin: 0; padding: 4px 1px; border-bottom: 1px solid var(--SmartThemeBorderColor); user-select: text; text-align: left; }
 .cc-backup-entry-header { display: flex; align-items: center; gap: 6px; }
 .cc-backup-toggle, .cc-backup-toggle-spacer { flex: 0 0 18px; width: 18px; }
 .cc-backup-toggle { padding: 2px 0; color: inherit; background: transparent; border: 0; cursor: pointer; opacity: .7; }
