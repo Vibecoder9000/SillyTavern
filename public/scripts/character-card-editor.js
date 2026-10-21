@@ -800,15 +800,28 @@ function hasMeaningfulCardValues(values) {
         return typeof value === 'string' && value.trim().length > 0;
     });
 }
-function serializeWorkspace() {
-    const saved = deepCopy(state);
-    compactPendingMap(saved.pending);
-    for (const checkpoint of saved.checkpoints || []) compactPendingMap(checkpoint.state?.pending);
-    saved.conversations = (saved.conversations || []).map(conversation => ({
-        ...conversation,
-        messages: normalizeConversationMessages(conversation.messages),
+function withoutPendingRecords(pendingMap) {
+    if (!pendingMap) return pendingMap;
+    return Object.fromEntries(Object.entries(pendingMap).map(([id, pending]) => {
+        if (!pending || typeof pending !== 'object') return [id, pending];
+        const { records, ...rest } = pending;
+        return [id, rest];
     }));
-    return saved;
+}
+// The result is stringified immediately, so it only needs a shallow copy of the
+// parts that differ from live state instead of a structured clone of everything.
+function serializeWorkspace() {
+    return {
+        ...state,
+        pending: withoutPendingRecords(state.pending),
+        checkpoints: (state.checkpoints || []).map(checkpoint => checkpoint.state
+            ? { ...checkpoint, state: { ...checkpoint.state, pending: withoutPendingRecords(checkpoint.state.pending) } }
+            : checkpoint),
+        conversations: (state.conversations || []).map(conversation => ({
+            ...conversation,
+            messages: normalizeConversationMessages(conversation.messages),
+        })),
+    };
 }
 function createState(saved = null) {
     const liveValues = cardValuesFromCharacter();
@@ -950,7 +963,7 @@ async function saveWorkspaceWithRetry(initialSave) {
             const response = await fetch('/api/character-designer/save', {
                 method: 'POST',
                 headers: getRequestHeaders(),
-                body: JSON.stringify({ avatar_url: save.avatarUrl, workspace: save.workspace }),
+                body: save.body,
             });
             if (!response.ok) {
                 const error = new Error(`Character Designer workspace save failed (${response.status})`);
@@ -1003,7 +1016,10 @@ function persistWorkspace() {
     renderCardChangeNotice();
     // Capture state and its owning avatar together. The user may switch characters
     // before an older request completes, but that must never retarget this payload.
-    pendingWorkspaceSave = { avatarUrl: workspaceAvatarUrl, workspace: serializeWorkspace() };
+    pendingWorkspaceSave = {
+        avatarUrl: workspaceAvatarUrl,
+        body: JSON.stringify({ avatar_url: workspaceAvatarUrl, workspace: serializeWorkspace() }),
+    };
     startWorkspaceSaveLoop();
     return workspaceSavePromise;
 }
