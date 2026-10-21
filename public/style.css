@@ -6262,12 +6262,11 @@ body:has(#character_popup.open) #top-settings-holder:has(.drawer-content.openDra
     padding: 0;
     overflow: hidden;
     --cc-card-width: 60%;
-    /* A full-screen backdrop blur is re-rendered on the GPU for every caret blink,
-       scroll and keystroke in this panel, which dominated frame time. Drop it and
-       thicken the tint so the chat behind stays unobtrusive. */
+    /* A full-screen backdrop blur is re-rendered for every caret blink, scroll and
+       keystroke in this panel, which dominated frame time. A full-screen gradient layer
+       is just as costly under software WebRender, so the tint is left as it is. */
     backdrop-filter: none;
     -webkit-backdrop-filter: none;
-    background-image: linear-gradient(var(--SmartThemeBlurTintColor), var(--SmartThemeBlurTintColor));
     /* This drawer is fully laid out before it is revealed. Its generic drawer
        height animation would otherwise expose an empty, then growing editor. */
     transition: none;
