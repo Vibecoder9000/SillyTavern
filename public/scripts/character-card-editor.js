@@ -4670,6 +4670,28 @@ function forkConversationAtMessage(messageId) {
     persist();
     return true;
 }
+function historyDayLabel(time) {
+    const date = new Date(time);
+    const startOfDay = value => new Date(value).setHours(0, 0, 0, 0);
+    const days = Math.round((startOfDay(Date.now()) - startOfDay(date)) / 86400000);
+    if (days === 0) return 'Today';
+    if (days === 1) return 'Yesterday';
+    return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: date.getFullYear() === new Date().getFullYear() ? undefined : 'numeric' });
+}
+function historyTime(time) { return new Date(time).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' }); }
+function backupLineCounts(content) {
+    const counts = { removed: 0, added: 0 };
+    for (const chunk of String(content || '').split(/\n\n(?=(?:Removed|Added):\n)/)) {
+        const match = chunk.match(/^(Removed|Added):\n([\s\S]*)$/);
+        if (match) counts[match[1] === 'Removed' ? 'removed' : 'added'] += match[2].split('\n').length;
+    }
+    return counts;
+}
+function changedCardFields(card) {
+    const names = FIELDS.filter(({ id }) => card.values && id in card.values && JSON.stringify(card.values[id]) !== JSON.stringify(state.values[id])).map(({ id }) => fieldLabel(id));
+    if (card.lorebook !== undefined && JSON.stringify(card.lorebook) !== JSON.stringify(state.lorebook)) names.push('Character Book');
+    return names;
+}
 async function restoreCheckpoint(id, label) {
     const item = state.checkpoints.find(entry => entry.id === id);
     if (!item?.state) return false;
@@ -4677,44 +4699,111 @@ async function restoreCheckpoint(id, label) {
     // a backup never rewinds the editor conversation along with the card.
     const card = Object.fromEntries(Object.entries(cardSnapshot(item.state)).filter(([, value]) => value !== undefined));
     if (!Object.keys(card).length) return false;
-    const confirmed = await Popup.show.confirm('Restore this backup?', `Every card field goes back to how it was before "${label}". This can be undone with Ctrl+Z.`);
+    const changed = changedCardFields(card);
+    if (!changed.length && JSON.stringify(card.pending || {}) === JSON.stringify(state.pending || {})) {
+        toastr.info('The card already matches this backup.', 'Character card editor');
+        return false;
+    }
+    const summary = changed.length ? `These will change: ${changed.join(', ')}.` : 'Pending AI proposals will change.';
+    const confirmed = await Popup.show.confirm('Restore this backup?', `${summary} The card goes back to how it was before "${label}". This can be undone with Ctrl+Z.`);
     if (confirmed !== POPUP_RESULT.AFFIRMATIVE) return false;
     record();
     restoreSnapshot(card);
     toastr.success('Card restored from backup.', 'Character card editor');
     return true;
 }
-function showHistory() {
-    const content = document.createElement('div'); content.className = 'cc-editor-history-popup';
-    const backups = state.checkpoints.map(item => {
-        const legacyPending = Object.values(item.state?.pending || {});
-        const legacyHunks = legacyPending.flatMap(pending => pendingDiffParts(pending).filter(part => part.type === 'hunk').map(part => ({ field: pending.field, content: hunkChangeContent(part) })));
-        const legacyContent = legacyHunks.map(part => legacyHunks.every(other => other.field === part.field) ? part.content : `${fieldLabel(part.field)}\n${part.content}`).join('\n\n');
-        const savedContent = item.content || legacyContent || Object.entries(item.state?.values || {}).map(([id, value]) => `${fieldLabel(id)}:\n${asText(value)}`).join('\n\n');
-        let label = String(item.label || 'Card snapshot').replace(/^Before\s+/i, '');
-        if (/^(accepting|rejecting) AI edit/i.test(label) && legacyPending[0]) label = `${fieldLabel(legacyPending[0].field)} AI proposal`;
-        return `<section class="cc-editor-backup-entry"><div class="cc-backup-entry-header"><strong>${escapeHtml(label)}</strong><button class="cc-backup-restore menu_button menu_button_icon" data-checkpoint="${escapeHtml(item.id)}" data-label="${escapeHtml(label)}" type="button" title="Restore the card to this point"><i class="fa-solid fa-clock-rotate-left"></i><span>Restore</span></button></div>${savedContent ? `<pre>${backupContentHtml(savedContent)}</pre>` : ''}</section>`;
-    }).join('') || '<div class="cc-editor-history-empty">No backups yet.</div>';
-    const entries = state.conversations.map(conversation => {
+function backupEntryHtml(item) {
+    const legacyPending = Object.values(item.state?.pending || {});
+    const legacyHunks = legacyPending.flatMap(pending => pendingDiffParts(pending).filter(part => part.type === 'hunk').map(part => ({ field: pending.field, content: hunkChangeContent(part) })));
+    const legacyContent = legacyHunks.map(part => legacyHunks.every(other => other.field === part.field) ? part.content : `${fieldLabel(part.field)}\n${part.content}`).join('\n\n');
+    const savedContent = item.content || legacyContent || Object.entries(item.state?.values || {}).map(([id, value]) => `${fieldLabel(id)}:\n${asText(value)}`).join('\n\n');
+    let label = String(item.label || 'Card snapshot').replace(/^Before\s+/i, '');
+    if (/^(accepting|rejecting) AI edit/i.test(label) && legacyPending[0]) label = `${fieldLabel(legacyPending[0].field)} AI proposal`;
+    const counts = backupLineCounts(savedContent);
+    const stats = `${counts.removed ? `<span class="cc-backup-remove">−${counts.removed}</span>` : ''}${counts.added ? `<span class="cc-backup-add">+${counts.added}</span>` : ''}`;
+    const toggle = savedContent ? '<button class="cc-backup-toggle" type="button" aria-expanded="false" title="Show what changed"><i class="fa-solid fa-chevron-right"></i></button>' : '<span class="cc-backup-toggle-spacer"></span>';
+    return `<section class="cc-editor-backup-entry"><div class="cc-backup-entry-header">${toggle}<div class="cc-backup-entry-title"><strong>${escapeHtml(label)}</strong><small>${escapeHtml(historyTime(item.created))}</small></div><span class="cc-backup-stats">${stats}</span><button class="cc-backup-restore menu_button menu_button_icon" data-checkpoint="${escapeHtml(item.id)}" data-label="${escapeHtml(label)}" type="button" title="Restore the card to this point"><i class="fa-solid fa-clock-rotate-left"></i><span>Restore</span></button></div>${savedContent ? `<pre hidden>${backupContentHtml(savedContent)}</pre>` : ''}</section>`;
+}
+function backupsHtml() {
+    let day = '';
+    const html = state.checkpoints.map(item => {
+        const heading = historyDayLabel(item.created);
+        const separator = heading === day ? '' : `<h5 class="cc-backup-day">${escapeHtml(heading)}</h5>`;
+        day = heading;
+        return separator + backupEntryHtml(item);
+    }).join('');
+    return html || '<div class="cc-editor-history-empty">No backups yet.</div>';
+}
+function conversationsHtml() {
+    let day = '';
+    const html = state.conversations.map(conversation => {
         const firstMessage = conversation.messages.find(message => message.role === 'user');
         const first = firstMessage?.text || (firstMessage?.attachments?.length ? `${firstMessage.attachments.length} image attachment${firstMessage.attachments.length === 1 ? '' : 's'}` : 'Empty conversation');
         const referenceCount = normalizeReferenceCardIds(conversation.referenceCards).length;
-        const detail = `${conversation.messages.length} message${conversation.messages.length === 1 ? '' : 's'}${referenceCount ? ` · ${referenceCount} reference${referenceCount === 1 ? '' : 's'}` : ''}`;
-        return `<button class="cc-editor-history-entry" data-conversation="${conversation.id}" aria-current="${conversation.id === state.activeConversation}" type="button"><strong>${escapeHtml(first)}</strong><small>${escapeHtml(detail)}</small></button>`;
-    }).join('') || '<div class="cc-editor-history-empty">No editor conversations yet.</div>';
-    content.innerHTML = `<h4>Backups</h4>${backups}<h4>Conversations</h4>${entries}`;
-    const popup = new Popup(content, POPUP_TYPE.DISPLAY, '', { wider: true, animation: 'fast' });
-    content.querySelectorAll('[data-conversation]').forEach(button => button.addEventListener('click', async () => {
-        state.activeConversation = button.dataset.conversation;
+        const detail = `${conversation.created ? `${historyTime(conversation.created)} · ` : ''}${conversation.messages.length} message${conversation.messages.length === 1 ? '' : 's'}${referenceCount ? ` · ${referenceCount} reference${referenceCount === 1 ? '' : 's'}` : ''}`;
+        const heading = conversation.created ? historyDayLabel(conversation.created) : '';
+        const separator = heading && heading !== day ? `<h5 class="cc-backup-day">${escapeHtml(heading)}</h5>` : '';
+        day = heading || day;
+        return `${separator}<div class="cc-editor-history-row"><button class="cc-editor-history-entry" data-conversation="${escapeHtml(conversation.id)}" aria-current="${conversation.id === state.activeConversation}" type="button"><strong>${escapeHtml(first)}</strong><small>${escapeHtml(detail)}</small></button><button class="cc-conversation-delete menu_button menu_button_icon" data-delete-conversation="${escapeHtml(conversation.id)}" type="button" title="Delete this conversation"><i class="fa-solid fa-trash-can"></i></button></div>`;
+    }).join('');
+    return html || '<div class="cc-editor-history-empty">No editor conversations yet.</div>';
+}
+async function deleteConversationFromHistory(id) {
+    if (!state || activeGenerationController) return false;
+    const index = state.conversations.findIndex(conversation => conversation.id === id);
+    if (index < 0) return false;
+    const confirmed = await Popup.show.confirm('Delete conversation?', 'This removes the conversation from the editor. You can undo this with Ctrl+Z.');
+    if (confirmed !== POPUP_RESULT.AFFIRMATIVE) return false;
+    record();
+    state.conversations.splice(index, 1);
+    if (state.activeConversation === id || !activeConversation()) {
+        const next = state.conversations[0] || initializeConversationCardState({ id: uuidv4(), created: Date.now(), messages: [] });
+        if (!state.conversations.length) state.conversations.push(next);
+        state.activeConversation = next.id;
+        initializeConversationCardState(next);
         render();
-        persist();
-        await popup.complete(POPUP_RESULT.CANCELLED);
-    }));
-    content.querySelectorAll('[data-checkpoint]').forEach(button => button.addEventListener('click', async () => {
-        // The confirmation is its own popup, so this one only closes once the restore
-        // actually happened. Backing out leaves the history list where it was.
-        if (await restoreCheckpoint(button.dataset.checkpoint, button.dataset.label)) await popup.complete(POPUP_RESULT.CANCELLED);
-    }));
+    }
+    persist();
+    return true;
+}
+function showHistory() {
+    const content = document.createElement('div'); content.className = 'cc-editor-history-popup';
+    let tab = 'backups';
+    const draw = () => {
+        content.innerHTML = `<div class="cc-editor-history-tabs" role="tablist"><button type="button" role="tab" data-history-tab="backups" aria-selected="${tab === 'backups'}">Backups (${state.checkpoints.length})</button><button type="button" role="tab" data-history-tab="conversations" aria-selected="${tab === 'conversations'}">Conversations (${state.conversations.length})</button></div><div class="cc-editor-history-body">${tab === 'backups' ? backupsHtml() : conversationsHtml()}</div>`;
+    };
+    draw();
+    const popup = new Popup(content, POPUP_TYPE.DISPLAY, '', { wider: true, animation: 'fast' });
+    content.addEventListener('click', async event => {
+        const target = event.target instanceof Element ? event.target : null;
+        const tabButton = target?.closest('[data-history-tab]');
+        if (tabButton) { tab = tabButton.dataset.historyTab; draw(); return; }
+        const toggle = target?.closest('.cc-backup-toggle');
+        if (toggle) {
+            const pre = toggle.closest('.cc-editor-backup-entry')?.querySelector('pre');
+            if (pre) { pre.hidden = !pre.hidden; toggle.setAttribute('aria-expanded', String(!pre.hidden)); toggle.classList.toggle('expanded', !pre.hidden); }
+            return;
+        }
+        const restore = target?.closest('[data-checkpoint]');
+        if (restore) {
+            // The confirmation is its own popup, so this one only closes once the restore
+            // actually happened. Backing out leaves the history list where it was.
+            if (await restoreCheckpoint(restore.dataset.checkpoint, restore.dataset.label)) await popup.complete(POPUP_RESULT.CANCELLED);
+            return;
+        }
+        const remove = target?.closest('[data-delete-conversation]');
+        if (remove) {
+            if (await deleteConversationFromHistory(remove.dataset.deleteConversation)) draw();
+            return;
+        }
+        const open = target?.closest('[data-conversation]');
+        if (open) {
+            state.activeConversation = open.dataset.conversation;
+            render();
+            persist();
+            await popup.complete(POPUP_RESULT.CANCELLED);
+        }
+    });
     void popup.show();
 }
 function freezeDividerContents(editor) {
