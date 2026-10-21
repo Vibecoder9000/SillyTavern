@@ -7751,3 +7751,10 @@ body:has(#character-card-editor.openDrawer) #send_form {
     backdrop-filter: none;
     -webkit-backdrop-filter: none;
 }
+
+/* The global `* { text-shadow }` makes every text run in the editor a CPU-rasterized
+   blob image that is rebuilt on each repaint (hover, scroll, typing). */
+#character-card-editor,
+#character-card-editor * {
+    text-shadow: none;
+}
