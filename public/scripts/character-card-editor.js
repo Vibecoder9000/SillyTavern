@@ -543,8 +543,27 @@ function parseStoredWorkspace(raw) {
         return null;
     }
 }
-async function loadStoredWorkspace(avatarUrl = currentCharacter()?.avatar) {
+let prefetchedWorkspace = null;
+const WORKSPACE_PREFETCH_MAX_AGE_MS = 2000;
+// Pointer-down precedes the click by about a hundred milliseconds. Starting the fetch then
+// hides most of the round trip behind the click itself.
+function prefetchStoredWorkspace(avatarUrl) {
+    if (!avatarUrl) return;
+    const promise = loadStoredWorkspace(avatarUrl, { fresh: true });
+    promise.catch(() => {});
+    prefetchedWorkspace = { avatarUrl, promise, at: performance.now() };
+}
+function takePrefetchedWorkspace(avatarUrl) {
+    const prefetched = prefetchedWorkspace;
+    prefetchedWorkspace = null;
+    return prefetched?.avatarUrl === avatarUrl && performance.now() - prefetched.at < WORKSPACE_PREFETCH_MAX_AGE_MS ? prefetched.promise : null;
+}
+async function loadStoredWorkspace(avatarUrl = currentCharacter()?.avatar, { fresh = false } = {}) {
     if (!avatarUrl) return null;
+    if (!fresh) {
+        const prefetched = takePrefetchedWorkspace(avatarUrl);
+        if (prefetched) return prefetched;
+    }
 
     const response = await fetch('/api/character-designer/load', {
         method: 'POST',
@@ -5027,6 +5046,9 @@ export async function initCharacterCardEditor() {
         new MutationObserver(syncEditorOpenClass).observe(openClassPanel, { attributes: true, attributeFilter: ['class'] });
         syncEditorOpenClass();
     }
+    $('#character-card-editor-button .drawer-toggle')?.addEventListener('pointerdown', () => {
+        if (!$('#character-card-editor').classList.contains('openDrawer')) prefetchStoredWorkspace(selectedCharacter()?.avatar);
+    }, { passive: true });
     $('#character-card-editor-button .drawer-toggle')?.addEventListener('click', async () => {
         const editor = $('#character-card-editor');
         syncEditorViewportBounds();

@@ -6281,8 +6281,22 @@ body:has(#character_popup.open) #top-settings-holder:has(.drawer-content.openDra
     flex-direction: column;
 }
 
-#character-card-editor.cc-editor-preparing {
+/* Show the panel at once with a message instead of leaving the click looking dead
+   while the workspace loads and the editor is built. Only the contents stay hidden, so
+   the half-built editor is never visible. */
+#character-card-editor.cc-editor-preparing > * {
     visibility: hidden;
+}
+
+#character-card-editor.cc-editor-preparing::after {
+    content: 'Opening character editor…';
+    position: absolute;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    color: var(--SmartThemeBodyColor);
+    opacity: .7;
+    pointer-events: none;
 }
 
 .cc-editor-header {
