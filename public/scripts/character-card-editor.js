@@ -1359,6 +1359,7 @@ function lineNumberGutter(value) {
 function fieldEditorValue(input) {
     return input instanceof HTMLTextAreaElement ? input.value : input.innerText.replaceAll('\r\n', '\n');
 }
+const wrappedLineHeightCaches = new Map();
 function measureWrappedLineHeights(input, lines) {
     if (!input.clientWidth) return null;
     const style = getComputedStyle(input);
@@ -1366,6 +1367,14 @@ function measureWrappedLineHeights(input, lines) {
     // Use the browser's textarea wrapping algorithm instead of estimating glyph
     // widths. Markdown punctuation, tabs, whitespace, and word-boundary wrapping
     // can all produce a different row count than a canvas-width approximation.
+    // Wrapped height depends only on the line text and the textarea's width and
+    // typography, so unchanged lines reuse their last measurement.
+    const signature = [input.clientWidth, style.paddingLeft, style.paddingRight, style.whiteSpace, style.overflowWrap, style.wordBreak, style.font, style.letterSpacing, style.lineHeight, style.tabSize].join('|');
+    let wrappedLineHeightCache = wrappedLineHeightCaches.get(signature);
+    if (!wrappedLineHeightCache || wrappedLineHeightCache.size > 5000) wrappedLineHeightCaches.set(signature, wrappedLineHeightCache = new Map());
+    if (wrappedLineHeightCaches.size > 12) wrappedLineHeightCaches.delete(wrappedLineHeightCaches.keys().next().value);
+    const missing = [...new Set(lines.filter(line => !wrappedLineHeightCache.has(line)))];
+    if (!missing.length) return lines.map(line => wrappedLineHeightCache.get(line));
     const measurementRoot = document.createElement('div');
     measurementRoot.setAttribute('aria-hidden', 'true');
     Object.assign(measurementRoot.style, {
@@ -1378,7 +1387,7 @@ function measureWrappedLineHeights(input, lines) {
         visibility: 'hidden',
         pointerEvents: 'none',
     });
-    const mirrors = lines.map(line => {
+    const mirrors = missing.map(line => {
         const mirror = document.createElement('textarea');
         mirror.wrap = 'soft';
         mirror.tabIndex = -1;
