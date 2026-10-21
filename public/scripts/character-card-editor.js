@@ -810,13 +810,31 @@ function withoutPendingRecords(pendingMap) {
 }
 // The result is stringified immediately, so it only needs a shallow copy of the
 // parts that differ from live state instead of a structured clone of everything.
+const CHECKPOINTS_PLACEHOLDER = '__cc_checkpoints_placeholder__';
+const checkpointJsonCache = new WeakMap();
+// Checkpoints never change after they are created, so each is stringified once and the
+// cached text is spliced into every later save instead of re-walking up to 24 snapshots.
+function checkpointJson(checkpoint) {
+    let json = checkpointJsonCache.get(checkpoint);
+    if (json === undefined) {
+        json = JSON.stringify(checkpoint.state
+            ? { ...checkpoint, state: { ...checkpoint.state, pending: withoutPendingRecords(checkpoint.state.pending) } }
+            : checkpoint);
+        checkpointJsonCache.set(checkpoint, json);
+    }
+    return json;
+}
+function workspaceSaveBody(avatarUrl) {
+    const body = JSON.stringify({ avatar_url: avatarUrl, workspace: serializeWorkspace() });
+    const token = JSON.stringify(CHECKPOINTS_PLACEHOLDER);
+    const at = body.indexOf(token);
+    return body.slice(0, at) + '[' + (state.checkpoints || []).map(checkpointJson).join(',') + ']' + body.slice(at + token.length);
+}
 function serializeWorkspace() {
     return {
         ...state,
         pending: withoutPendingRecords(state.pending),
-        checkpoints: (state.checkpoints || []).map(checkpoint => checkpoint.state
-            ? { ...checkpoint, state: { ...checkpoint.state, pending: withoutPendingRecords(checkpoint.state.pending) } }
-            : checkpoint),
+        checkpoints: CHECKPOINTS_PLACEHOLDER,
         conversations: (state.conversations || []).map(conversation => ({
             ...conversation,
             messages: normalizeConversationMessages(conversation.messages),
@@ -1018,7 +1036,7 @@ function persistWorkspace() {
     // before an older request completes, but that must never retarget this payload.
     pendingWorkspaceSave = {
         avatarUrl: workspaceAvatarUrl,
-        body: JSON.stringify({ avatar_url: workspaceAvatarUrl, workspace: serializeWorkspace() }),
+        body: workspaceSaveBody(workspaceAvatarUrl),
     };
     startWorkspaceSaveLoop();
     return workspaceSavePromise;
@@ -4746,9 +4764,13 @@ function backupSummary(item) {
 }
 function buildBackupSummary(item) {
     const legacyPending = Object.values(item.state?.pending || {});
-    const legacyHunks = legacyPending.flatMap(pending => pendingDiffParts(pending).filter(part => part.type === 'hunk').map(part => ({ field: pending.field, content: hunkChangeContent(part) })));
-    const legacyContent = legacyHunks.map(part => legacyHunks.every(other => other.field === part.field) ? part.content : `${fieldLabel(part.field)}\n${part.content}`).join('\n\n');
-    const savedContent = item.content || legacyContent || Object.entries(item.state?.values || {}).map(([id, value]) => `${fieldLabel(id)}:\n${asText(value)}`).join('\n\n');
+    // Only checkpoints without stored content need their pending diffs rebuilt, which is a
+    // full text diff per field.
+    const legacyContent = () => {
+        const legacyHunks = legacyPending.flatMap(pending => pendingDiffParts(pending).filter(part => part.type === 'hunk').map(part => ({ field: pending.field, content: hunkChangeContent(part) })));
+        return legacyHunks.map(part => legacyHunks.every(other => other.field === part.field) ? part.content : `${fieldLabel(part.field)}\n${part.content}`).join('\n\n');
+    };
+    const savedContent = item.content || legacyContent() || Object.entries(item.state?.values || {}).map(([id, value]) => `${fieldLabel(id)}:\n${asText(value)}`).join('\n\n');
     let label = String(item.label || 'Card snapshot').replace(/^Before\s+/i, '');
     if (/^(accepting|rejecting) AI edit/i.test(label) && legacyPending[0]) label = `${fieldLabel(legacyPending[0].field)} AI proposal`;
     return { label, savedContent, counts: backupLineCounts(savedContent) };
