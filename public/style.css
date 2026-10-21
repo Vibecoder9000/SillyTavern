@@ -6281,22 +6281,25 @@ body:has(#character_popup.open) #top-settings-holder:has(.drawer-content.openDra
     flex-direction: column;
 }
 
-/* Show the panel at once with a message instead of leaving the click looking dead
-   while the workspace loads and the editor is built. Only the contents stay hidden, so
-   the half-built editor is never visible. */
-#character-card-editor.cc-editor-preparing > * {
+/* The page structure (header, panes, composer) shows at once so the click never looks
+   dead. When this character's previous render is still in the DOM it stays visible and
+   is refreshed in place; otherwise only the stale or half-built content is hidden. Input
+   is blocked until the workspace load replaces the state. */
+#character-card-editor.cc-editor-preparing .cc-editor-workspace,
+#character-card-editor.cc-editor-preparing .cc-editor-header {
+    pointer-events: none;
+}
+
+#character-card-editor.cc-editor-preparing:not(.cc-editor-keep-content) #cc-editor-card > *,
+#character-card-editor.cc-editor-preparing:not(.cc-editor-keep-content) #cc-editor-messages > * {
     visibility: hidden;
 }
 
-#character-card-editor.cc-editor-preparing::after {
-    content: 'Opening character editor…';
-    position: absolute;
-    inset: 0;
-    display: grid;
-    place-items: center;
-    color: var(--SmartThemeBodyColor);
-    opacity: .7;
-    pointer-events: none;
+#character-card-editor.cc-editor-preparing:not(.cc-editor-keep-content) #cc-editor-card::before {
+    content: 'Loading card…';
+    display: block;
+    padding: 10px;
+    opacity: .6;
 }
 
 .cc-editor-header {

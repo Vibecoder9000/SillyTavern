@@ -5073,6 +5073,10 @@ export async function initCharacterCardEditor() {
         // panel. Once open, currentCharacter() intentionally resolves to the
         // previous workspace owner while the new workspace is loading.
         const avatarUrl = openingCharacter.avatar;
+        // Keep this character's last render on screen while the workspace reloads; anything
+        // else would show another card's fields.
+        editor.classList.toggle('cc-editor-keep-content', Boolean(state && workspaceAvatarUrl === avatarUrl && $('#cc-editor-card')?.childElementCount));
+        $('#cc-editor-name').textContent = openingCharacter.name || 'Character';
         editor.classList.add('cc-editor-preparing');
         let savedWorkspace = null;
         try {
