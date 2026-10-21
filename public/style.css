@@ -7775,3 +7775,10 @@ body .drawer-content {
 body #top-bar {
     box-shadow: none !important;
 }
+
+/* The blurred text glow (global `*` rule plus #chat, #send_textarea, lists) is a Gaussian
+   blur pass per text run under software rendering, across every open panel. */
+body,
+body * {
+    text-shadow: none !important;
+}
