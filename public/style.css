@@ -7743,3 +7743,11 @@ body.layout-plus-plus #groupMemberSpeakPopout {
     opacity: .7;
     font-size: .75em;
 }
+
+/* The open editor covers the chat and send form. Blurring them underneath a
+   translucent full-screen panel costs GPU time on every repaint for no visible gain. */
+body:has(#character-card-editor.openDrawer) #chat,
+body:has(#character-card-editor.openDrawer) #send_form {
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+}
