@@ -7764,7 +7764,11 @@ body.cc-editor-open .chat_workspace_tab {
    never sit over anything worth blurring. The top bar's 20px shadow is a blur too. */
 body #top-bar,
 body #top-settings-holder,
-body #send_form {
+body #send_form,
+body #sheld,
+body #chat,
+body .chat_workspace_tab,
+body .drawer-content {
     backdrop-filter: none !important;
     -webkit-backdrop-filter: none !important;
 }
