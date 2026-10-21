@@ -6563,11 +6563,14 @@ body.reduced-motion #firstmessage_textarea.cc-character-text-fade-in {
     .cc-editor-header-actions .cc-editor-bulk-action > span { font-size: 90%; }
     .cc-lore-header-fields { grid-template-columns: minmax(0, 1fr); }
 }
-.cc-editor-history-popup { box-sizing: border-box; width: min(720px, 82vw); max-width: 100%; max-height: min(78dvh, 760px); overflow-y: auto; padding-right: 5px; text-align: left; }
+.cc-editor-history-popup { box-sizing: border-box; display: flex; flex-direction: column; width: min(720px, 82vw); max-width: 100%; height: min(78dvh, 760px); text-align: left; }
+.cc-editor-history-body { flex: 1; min-height: 0; overflow-y: auto; padding-right: 5px; scrollbar-gutter: stable; }
 .cc-editor-history-popup h3 { margin: 0 0 6px; }
-.cc-editor-history-tabs { position: sticky; top: 0; z-index: 1; display: flex; gap: 4px; padding-bottom: 6px; background: var(--SmartThemeBlurTintColor); }
-.cc-editor-history-tabs button { flex: 1; padding: 5px 8px; color: inherit; background: transparent; border: 1px solid var(--SmartThemeBorderColor); border-radius: 4px; cursor: pointer; }
-.cc-editor-history-tabs button[aria-selected="true"] { background: var(--SmartThemeQuoteColor); border-color: var(--SmartThemeBodyColor); }
+.cc-editor-history-tabs { flex: 0 0 auto; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); margin-bottom: 4px; border-bottom: 1px solid var(--SmartThemeBorderColor); }
+.cc-editor-history-tabs button { min-width: 0; padding: 7px 4px; overflow: hidden; color: inherit; background: transparent; border: 0; border-bottom: 2px solid transparent; font-size: calc(var(--mainFontSize) * .9); text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
+.cc-editor-history-tabs button:hover { background: color-mix(in srgb, var(--SmartThemeBodyColor) 9%, transparent); }
+.cc-editor-history-tabs button[aria-selected="true"] { border-bottom-color: var(--SmartThemeBodyColor); font-weight: 700; }
+.cc-editor-history-tabs button:focus-visible { outline: 2px solid var(--SmartThemeBodyColor); outline-offset: -2px; }
 .cc-backup-day { margin: 10px 0 3px; font-size: calc(var(--mainFontSize) * .8); text-align: left; text-transform: uppercase; letter-spacing: .04em; opacity: .6; }
 .cc-editor-history-empty { padding: 5px 1px; opacity: .65; }
 .cc-editor-history-row { display: flex; align-items: stretch; gap: 4px; margin: 0 0 4px; }
