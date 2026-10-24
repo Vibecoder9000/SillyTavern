@@ -5085,6 +5085,9 @@ export async function initCharacterCardEditor() {
             console.error('Character card editor: could not load the workspace.', error);
             toastr.error('The Character Designer workspace file could not be loaded. Starting with a fresh workspace.', 'Character card editor');
         }
+        // A finished prefetch resolves in the microtask checkpoint right after this capture
+        // listener, before the shared drawer handler has opened the panel. Let it run first.
+        if (!editor.classList.contains('openDrawer')) await new Promise(resolve => setTimeout(resolve));
         const currentAvatar = selectedCharacter()?.avatar || null;
         const editorOpen = editor.classList.contains('openDrawer');
         if (loadToken !== workspaceLoadToken || currentAvatar !== avatarUrl || !editorOpen) {
