@@ -4,7 +4,6 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { imageSize } from 'image-size';
 import writeFileAtomic from 'write-file-atomic';
-import { Jimp } from '../jimp.js';
 import { invalidateThumbnail, generateThumbnail, SKIPPED_EXTENSIONS_FOR_JIMP, CONCURRENCY_LIMIT } from './thumbnails.js';
 import { getThumbnailResolution } from '../util.js';
 
@@ -31,11 +30,15 @@ function isAnimatedApng(buffer) {
  * Calculate average color using Jimp.
  * Resizes the image to 1x1 to efficiently get the average color.
  * @param {Buffer} buffer The image buffer.
+ * @param {(image: InstanceType<typeof import('../jimp.js').Jimp>) => void} [onDecodedImage] Receives the unmodified decoded image.
  * @returns {Promise<string>} The average color as a hex string (e.g., '#RRGGBB').
  */
-async function getAverageColorWithJimp(buffer) {
+async function getAverageColorWithJimp(buffer, onDecodedImage) {
     try {
-        const image = await Jimp.read(buffer);
+        const { Jimp } = await import('../jimp.js');
+        const decodedImage = await Jimp.read(buffer);
+        onDecodedImage?.(decodedImage);
+        const image = onDecodedImage ? decodedImage.clone() : decodedImage;
 
         // Resize to 1x1 using the correct object syntax for this project's version
         image.resize({ w: 1, h: 1 });
@@ -60,9 +63,10 @@ async function getAverageColorWithJimp(buffer) {
 /**
  * Generates all necessary metadata for a single background file.
  * @param {string} filePath - The full path to the background file.
+ * @param {(image: InstanceType<typeof import('../jimp.js').Jimp>) => void} [onDecodedImage] Receives the decoded image for thumbnail generation.
  * @returns {Promise<object>} A metadata object. Throws an error if processing fails.
  */
-export async function generateSingleFileMetadata(filePath) {
+export async function generateSingleFileMetadata(filePath, onDecodedImage) {
     try {
         const buffer = await fs.readFile(filePath);
         const hash = crypto.createHash('sha256').update(buffer).digest('hex');
@@ -96,7 +100,7 @@ export async function generateSingleFileMetadata(filePath) {
             hexColor = '#808080'; // Default grey
         } else {
             // Only process non-animated images to avoid decoding errors.
-            hexColor = await getAverageColorWithJimp(buffer);
+            hexColor = await getAverageColorWithJimp(buffer, onDecodedImage);
         }
 
         return {
@@ -335,6 +339,7 @@ export async function syncBackgroundsMetadata(userDirectories) {
                 const tasks = batchFiles.map(filename => (async () => {
                     const filePath = path.join(backgroundsFolderPath, filename);
                     let updatePayload = {};
+                    let decodedImage;
                     let currentImageMeta = metadata.images[filename]; // Get current metadata for this file
 
                     // Force re-generation of metadata if it's a new file, or if its animated status/thumbnailResolution is uncertain.
@@ -348,7 +353,7 @@ export async function syncBackgroundsMetadata(userDirectories) {
                         ((fileExtension === '.png' || fileExtension === '.webp') && currentImageMeta.thumbnailResolution === undefined);
 
                     if (forceMetadataRegen) {
-                        const newMetadata = await generateSingleFileMetadata(filePath);
+                        const newMetadata = await generateSingleFileMetadata(filePath, image => { decodedImage = image; });
                         if (newMetadata) {
                             updatePayload.newMetadata = newMetadata;
                             currentImageMeta = { ...currentImageMeta, ...newMetadata }; // Use updated meta for subsequent checks
@@ -374,7 +379,7 @@ export async function syncBackgroundsMetadata(userDirectories) {
                     // Only attempt server-side thumbnail generation if thumbnailResolution is missing
                     // and server-side generation is not skipped for this file.
                     if (currentImageMeta && currentImageMeta.thumbnailResolution === undefined && !shouldSkipServerThumbnailGeneration) {
-                        const thumbResult = await generateThumbnail(userDirectories, 'bg', filename, false, false, currentImageMeta.isAnimated);
+                        const thumbResult = await generateThumbnail(userDirectories, 'bg', filename, false, false, currentImageMeta.isAnimated, decodedImage);
                         if (thumbResult.path && thumbResult.resolution) {
                             updatePayload.thumbnailResolution = thumbResult.resolution;
                         }

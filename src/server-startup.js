@@ -15,11 +15,9 @@ import { router as themesRouter } from './endpoints/themes.js';
 import { router as openAiRouter } from './endpoints/openai.js';
 import { router as googleRouter } from './endpoints/google.js';
 import { router as anthropicRouter } from './endpoints/anthropic.js';
-import { router as tokenizersRouter } from './endpoints/tokenizers.js';
 import { router as presetsRouter } from './endpoints/presets.js';
 import { router as secretsRouter } from './endpoints/secrets.js';
 import { router as novelAiRouter } from './endpoints/novelai.js';
-import { router as extensionsRouter } from './endpoints/extensions.js';
 import { router as assetsRouter } from './endpoints/assets.js';
 import { router as filesRouter } from './endpoints/files.js';
 import { router as charactersRouter } from './endpoints/characters.js';
@@ -37,25 +35,61 @@ import { apiRouter as thumbnailApiRouter } from './endpoints/thumbnails.js';
 import { router as spritesRouter } from './endpoints/sprites.js';
 import { router as stableDiffusionRouter } from './endpoints/stable-diffusion.js';
 import { router as hordeRouter } from './endpoints/horde.js';
-import { router as vectorsRouter } from './endpoints/vectors.js';
-import { router as translateRouter } from './endpoints/translate.js';
-import { router as classifyRouter } from './endpoints/classify.js';
-import { router as captionRouter } from './endpoints/caption.js';
-import { router as searchRouter } from './endpoints/search.js';
 import { router as openRouterRouter } from './endpoints/openrouter.js';
 import { router as nanogptRouter } from './endpoints/nanogpt.js';
-import { router as chatCompletionsRouter } from './endpoints/backends/chat-completions.js';
 import { router as koboldRouter } from './endpoints/backends/kobold.js';
 import { router as textCompletionsRouter } from './endpoints/backends/text-completions.js';
-import { router as speechRouter } from './endpoints/speech.js';
 import { router as azureRouter } from './endpoints/azure.js';
 import { router as minimaxRouter } from './endpoints/minimax.js';
 import { router as dataMaidRouter } from './endpoints/data-maid.js';
-import { router as toolsRouter } from './endpoints/tools.js';
 import { router as backupsRouter } from './endpoints/backups.js';
 import { router as imageMetadataRouter } from './endpoints/image-metadata.js';
 import { router as volcengineRouter } from './endpoints/volcengine.js';
 import { router as worldSimRouter } from './endpoints/world-sim.js';
+
+const deferredRouters = [];
+
+/**
+ * Load a router on first use, or during the post-listen warmup.
+ * @param {string} modulePath Router module path relative to this module
+ * @returns {import('express').RequestHandler} Express middleware
+ */
+function deferredRouter(modulePath) {
+    let loading;
+    const load = () => {
+        if (!loading) {
+            loading = import(modulePath).then(module => module.router).catch(error => {
+                loading = undefined;
+                throw error;
+            });
+        }
+        return loading;
+    };
+    deferredRouters.push({ load, name: modulePath });
+    return (req, res, next) => { load().then(router => router(req, res, next)).catch(next); };
+}
+
+/** Begin warming optional routers after the server can accept requests. */
+export function warmDeferredRouters() {
+    const loaders = [
+        ...deferredRouters,
+        { name: 'image processing', load: () => import('./jimp.js') },
+        { name: 'archiver', load: () => import('archiver') },
+    ];
+    let index = 0;
+    const warmNext = () => {
+        if (index >= loaders.length) return;
+        const { load, name } = loaders[index++];
+        const start = performance.now();
+        load().catch(error => console.warn('Deferred module warmup failed:', error)).finally(() => {
+            if (globalThis.STARTUP_TIMING_ENABLED) {
+                console.log(`[startup:warmup] ${name}: ${Math.round(performance.now() - start)}ms wall`);
+            }
+            setImmediate(warmNext).unref();
+        });
+    };
+    setImmediate(warmNext).unref();
+}
 
 /**
  * @typedef {object} ServerStartupResult
@@ -154,12 +188,12 @@ export function setupPrivateEndpoints(app) {
     app.use('/api/openai', openAiRouter);
     app.use('/api/google', googleRouter);
     app.use('/api/anthropic', anthropicRouter);
-    app.use('/api/tokenizers', tokenizersRouter);
+    app.use('/api/tokenizers', deferredRouter('./endpoints/tokenizers.js'));
     app.use('/api/presets', presetsRouter);
     app.use('/api/secrets', secretsRouter);
     app.use('/api/novelai', novelAiRouter);
-    app.use('/api/extensions', extensionsRouter);
-    app.use('/api/extensions/tools', toolsRouter);
+    app.use('/api/extensions', deferredRouter('./endpoints/extensions.js'));
+    app.use('/api/extensions/tools', deferredRouter('./endpoints/tools.js'));
     app.use('/api/assets', assetsRouter);
     app.use('/api/files', filesRouter);
     app.use('/api/characters', charactersRouter);
@@ -177,17 +211,17 @@ export function setupPrivateEndpoints(app) {
     app.use('/api/settings', settingsRouter);
     app.use('/api/sd', stableDiffusionRouter);
     app.use('/api/horde', hordeRouter);
-    app.use('/api/vector', vectorsRouter);
-    app.use('/api/translate', translateRouter);
-    app.use('/api/extra/classify', classifyRouter);
-    app.use('/api/extra/caption', captionRouter);
-    app.use('/api/search', searchRouter);
+    app.use('/api/vector', deferredRouter('./endpoints/vectors.js'));
+    app.use('/api/translate', deferredRouter('./endpoints/translate.js'));
+    app.use('/api/extra/classify', deferredRouter('./endpoints/classify.js'));
+    app.use('/api/extra/caption', deferredRouter('./endpoints/caption.js'));
+    app.use('/api/search', deferredRouter('./endpoints/search.js'));
     app.use('/api/backends/text-completions', textCompletionsRouter);
     app.use('/api/openrouter', openRouterRouter);
     app.use('/api/nanogpt', nanogptRouter);
     app.use('/api/backends/kobold', koboldRouter);
-    app.use('/api/backends/chat-completions', chatCompletionsRouter);
-    app.use('/api/speech', speechRouter);
+    app.use('/api/backends/chat-completions', deferredRouter('./endpoints/backends/chat-completions.js'));
+    app.use('/api/speech', deferredRouter('./endpoints/speech.js'));
     app.use('/api/azure', azureRouter);
     app.use('/api/volcengine', volcengineRouter);
     app.use('/api/minimax', minimaxRouter);

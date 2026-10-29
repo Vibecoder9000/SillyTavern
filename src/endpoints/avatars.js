@@ -4,7 +4,6 @@ import fs from 'node:fs';
 import multer from 'multer';
 import express from 'express';
 import sanitize from 'sanitize-filename';
-import { Jimp } from '../jimp.js';
 import { sync as writeFileAtomicSync } from 'write-file-atomic';
 
 import { getImages, tryParse } from '../util.js';
@@ -50,6 +49,7 @@ router.post('/upload', upload.single('avatar'), getFileNameValidationFunction('o
     if (!request.file) return response.sendStatus(400);
 
     try {
+        const { Jimp } = await import('../jimp.js');
         const pathToUpload = path.join(request.file.destination, request.file.filename);
         const crop = tryParse(request.query.crop);
         const rawImg = await Jimp.read(pathToUpload);

@@ -9,7 +9,6 @@ import { sync as writeFileAtomicSync } from 'write-file-atomic';
 import yaml from 'yaml';
 import _ from 'lodash';
 import mime from 'mime-types';
-import { Jimp, JimpMime } from '../jimp.js';
 import storage from 'node-persist';
 import multer from 'multer';
 
@@ -156,8 +155,12 @@ class DiskCache {
                     validKeys.add(path.parse(cache.getDatumPath(cacheKey)).base);
                 }
             }
-            for (const key of this.hashedKeys) {
-                if (!validKeys.has(key)) {
+            const hashedKeys = new Set(this.hashedKeys);
+            for (const key of hashedKeys) {
+                // node-persist hashes its argument again in removeItem. Avoid
+                // probing the filesystem when that target is not in the cache.
+                const removalTarget = path.parse(cache.getDatumPath(key)).base;
+                if (!validKeys.has(key) && hashedKeys.has(removalTarget)) {
                     await cache.removeItem(key);
                 }
             }
@@ -298,6 +301,7 @@ async function writeCharacterData(inputFile, data, outputFile, request, crop = u
  * @returns {Promise<Buffer>} Processed image buffer
  */
 export async function applyAvatarCropResize(jimp, crop) {
+    const { Jimp, JimpMime } = await import('../jimp.js');
     if (!(jimp instanceof Jimp)) {
         throw new TypeError('Expected a Jimp instance');
     }
@@ -329,6 +333,7 @@ export async function applyAvatarCropResize(jimp, crop) {
  * @returns {Promise<Buffer>} Image buffer
  */
 async function parseImageBuffer(buffer, crop) {
+    const { Jimp } = await import('../jimp.js');
     const image = await Jimp.fromBuffer(buffer);
     return await applyAvatarCropResize(image, crop);
 }
@@ -341,6 +346,7 @@ async function parseImageBuffer(buffer, crop) {
  */
 async function tryReadImage(imgPath, crop) {
     try {
+        const { Jimp } = await import('../jimp.js');
         const rawImg = await Jimp.read(imgPath);
         return await applyAvatarCropResize(rawImg, crop);
     } catch (error) {

@@ -9,7 +9,6 @@ import crypto from 'node:crypto';
 import { imageSize } from 'image-size';
 import writeFileAtomic from 'write-file-atomic';
 import express from 'express';
-import { Jimp } from '../jimp.js';
 import { getConfigValue, isPathUnderParent, uuidv4 } from '../util.js';
 
 export const METADATA_FILE = 'image-metadata.json';
@@ -84,6 +83,7 @@ export function isAnimatedWebP(buffer) {
  */
 async function getAverageColorWithJimp(buffer) {
     try {
+        const { Jimp } = await import('../jimp.js');
         const image = await Jimp.read(buffer);
         image.resize({ w: 1, h: 1 });
 

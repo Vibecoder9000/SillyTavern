@@ -4,8 +4,7 @@ import path from 'node:path';
 import multer from 'multer';
 import express from 'express';
 import sanitize from 'sanitize-filename';
-import { Jimp, JimpMime } from '../jimp.js';
-import { sync as writeFileAtomicSync } from 'write-file-atomic';
+import writeFileAtomic, { sync as writeFileAtomicSync } from 'write-file-atomic';
 import { imageSize as sizeOf } from 'image-size';
 import { UPLOADS_DIRECTORY } from '../constants.js';
 
@@ -139,9 +138,10 @@ export function invalidateThumbnail(directories, type, file) {
  * @param {boolean} [forceGenerate=false] - Whether to force generation even if a thumbnail exists.
  * @param {boolean} [checkOnly=false] - Whether to only check for existence without generating.
  * @param {boolean|null} [isKnownAnimated=null] - If true, skips generation. If false, assumes static. If null, checks.
+ * @param {InstanceType<typeof import('../jimp.js').Jimp>} [decodedImage] - An already decoded original image.
  * @returns {Promise<{path: string|null, aspectRatio: number|null, resolution: number|null}>} Path to thumbnail, its aspect ratio, and resolution.
  */
-export async function generateThumbnail(directories, type, file, forceGenerate = false, checkOnly = false, isKnownAnimated = null) {
+export async function generateThumbnail(directories, type, file, forceGenerate = false, checkOnly = false, isKnownAnimated = null, decodedImage) {
     // If the caller has already determined the file is animated, skip processing.
     if (isKnownAnimated) {
         return { path: null, aspectRatio: null, resolution: null };
@@ -222,7 +222,7 @@ export async function generateThumbnail(directories, type, file, forceGenerate =
         }
 
         // Process the image to generate thumbnail
-        const result = await processSingleImage(file, originalFolder, thumbnailFolder, type);
+        const result = await processSingleImage(file, originalFolder, thumbnailFolder, type, decodedImage);
         if (result.success) {
             return { path: pathToCachedFile, aspectRatio: result.aspectRatio ?? null, resolution: result.resolution ?? null };
         } else {
@@ -241,15 +241,16 @@ export async function generateThumbnail(directories, type, file, forceGenerate =
  * @param {string} originalFolder - Path to the original image folder.
  * @param {string} thumbnailFolder - Path to the thumbnail output folder.
  * @param {ThumbnailType} type - The type of thumbnail to generate.
+ * @param {InstanceType<typeof import('../jimp.js').Jimp>} [decodedImage] - An already decoded original image.
  * @returns {Promise<{success: boolean, filename?: string, error?: string, aspectRatio?: number, resolution?: number}>} Result of the processing.
  */
-async function processSingleImage(file, originalFolder, thumbnailFolder, type) {
+async function processSingleImage(file, originalFolder, thumbnailFolder, type, decodedImage) {
     const pathToOriginalFile = path.join(originalFolder, file);
     const pathToCachedFile = path.join(thumbnailFolder, file);
 
     try {
-        const fileBuffer = fs.readFileSync(pathToOriginalFile);
-        const image = await Jimp.read(fileBuffer);
+        const { Jimp, JimpMime } = await import('../jimp.js');
+        const image = decodedImage ?? await Jimp.read(await fs.promises.readFile(pathToOriginalFile));
 
         // Calculate aspect ratio from original image dimensions
         const originalWidth = image.bitmap.width;
@@ -282,7 +283,7 @@ async function processSingleImage(file, originalFolder, thumbnailFolder, type) {
             ? await thumbImage.getBuffer(JimpMime.png)
             : await thumbImage.getBuffer(JimpMime.jpeg, { quality: quality, jpegColorSpace: 'ycbcr' });
 
-        writeFileAtomicSync(pathToCachedFile, buffer);
+        await writeFileAtomic(pathToCachedFile, buffer);
 
         return { success: true, aspectRatio, resolution: thumbnailResolution };
     } catch (error) {

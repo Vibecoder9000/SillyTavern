@@ -3,6 +3,7 @@ import webpack from 'webpack';
 import getPublicLibConfig from '../../webpack.config.js';
 
 export default function getWebpackServeMiddleware() {
+    let compilerClosePromise = Promise.resolve();
     /**
      * A very spartan recreation of webpack-dev-middleware.
      * @param {import('express').Request} req Request object.
@@ -10,17 +11,21 @@ export default function getWebpackServeMiddleware() {
      * @param {import('express').NextFunction} next Next function.
      * @type {import('express').RequestHandler}
      */
-    function devMiddleware(req, res, next) {
-        const publicLibConfig = getPublicLibConfig();
-        const outputPath = publicLibConfig.output?.path;
-        const outputFile = publicLibConfig.output?.filename;
-        const parsedPath = path.parse(req.path);
+    async function devMiddleware(req, res, next) {
+        try {
+            const publicLibConfig = await getPublicLibConfig();
+            const outputPath = publicLibConfig.output?.path;
+            const outputFile = publicLibConfig.output?.filename;
+            const parsedPath = path.parse(req.path);
 
-        if (req.method === 'GET' && parsedPath.dir === '/' && parsedPath.base === outputFile) {
-            return res.sendFile(outputFile, { root: outputPath });
+            if (req.method === 'GET' && parsedPath.dir === '/' && parsedPath.base === outputFile) {
+                return res.sendFile(outputFile, { root: outputPath });
+            }
+
+            next();
+        } catch (error) {
+            next(error);
         }
-
-        next();
     }
 
     /**
@@ -30,14 +35,14 @@ export default function getWebpackServeMiddleware() {
      * @param {boolean} [param.pruneCache=false] Whether to prune old cache directories before compiling.
      * @returns {Promise<void>}
      */
-    devMiddleware.runWebpackCompiler = ({ forceDist = false, pruneCache = false } = {}) => {
+    devMiddleware.runWebpackCompiler = async ({ forceDist = false, pruneCache = false } = {}) => {
         console.log();
         console.log('Compiling frontend libraries...');
 
         const startupTimingEnabled = globalThis.STARTUP_TIMING_ENABLED === true;
         const setupStart = performance.now();
         const setupCpuStart = process.cpuUsage();
-        const publicLibConfig = getPublicLibConfig({ forceDist, pruneCache });
+        const publicLibConfig = await getPublicLibConfig({ forceDist, pruneCache });
         const compilerStart = startupTimingEnabled ? performance.now() : null;
         const compilerCpuStart = startupTimingEnabled ? process.cpuUsage() : null;
         const compiler = webpack(publicLibConfig);
@@ -63,21 +68,36 @@ export default function getWebpackServeMiddleware() {
                     console.log(output);
                     console.log();
                 }
-                const closeStart = performance.now();
-                const closeCpuStart = process.cpuUsage();
-                if (startupTimingEnabled) {
-                    console.log('[startup:webpack] Closing compiler and persisting filesystem cache...');
-                }
-                compiler.close(() => {
-                    const closeCpu = process.cpuUsage(closeCpuStart);
-                    if (startupTimingEnabled) {
-                        console.log(`[startup:webpack] compiler.close completed in ${Math.round(performance.now() - closeStart)}ms wall, ${Math.round((closeCpu.user + closeCpu.system) / 1000)}ms CPU.`);
-                    }
-                    resolve();
+                // The output is ready after compiler.run. Persist the cache in
+                // the background and let graceful shutdown wait for it.
+                compilerClosePromise = new Promise(closeResolve => {
+                    setImmediate(() => {
+                        const closeStart = performance.now();
+                        const closeCpuStart = process.cpuUsage();
+                        if (startupTimingEnabled) {
+                            console.log('[startup:webpack] Closing compiler and persisting filesystem cache...');
+                        }
+                        const finishClose = error => {
+                            if (error) console.error('Failed to close the Webpack compiler:', error);
+                            const closeCpu = process.cpuUsage(closeCpuStart);
+                            if (startupTimingEnabled) {
+                                console.log(`[startup:webpack] compiler.close completed in ${Math.round(performance.now() - closeStart)}ms wall, ${Math.round((closeCpu.user + closeCpu.system) / 1000)}ms CPU.`);
+                            }
+                            closeResolve();
+                        };
+                        try {
+                            compiler.close(finishClose);
+                        } catch (error) {
+                            finishClose(error);
+                        }
+                    });
                 });
+                resolve();
             });
         });
     };
+
+    devMiddleware.waitForWebpackClose = () => compilerClosePromise;
 
     return devMiddleware;
 }

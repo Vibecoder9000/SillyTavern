@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { CommandLineParser } from './src/command-line.js';
 import { serverDirectory } from './src/server-directory.js';
-import { getConfigValue } from './src/util.js';
+import { getConfigValue, startVersionLookup } from './src/util.js';
 
 console.log(`Node version: ${process.version}. Running in ${process.env.NODE_ENV} environment. Server directory: ${serverDirectory}`);
 
@@ -12,6 +12,10 @@ globalThis.COMMAND_LINE_ARGS = cliArgs;
 globalThis.STARTUP_TIMING_ENABLED = getConfigValue('enableStartupTiming', false, 'boolean');
 globalThis.SERVER_START_TIME = performance.now();
 process.chdir(serverDirectory);
+// Begin the Git-dependent cache version lookup while the server modules load.
+const startupVersion = startVersionLookup();
+globalThis.STARTUP_CACHE_VERSION_PROMISE = startupVersion.cacheVersion;
+globalThis.STARTUP_VERSION_PROMISE = startupVersion.version;
 
 async function profileStartupImport(name, modulePath) {
     const start = performance.now();

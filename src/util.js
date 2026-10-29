@@ -11,7 +11,6 @@ import crypto from 'node:crypto';
 import readline from 'node:readline';
 
 import yaml from 'yaml';
-import { sync as commandExistsSync } from 'command-exists';
 import _ from 'lodash';
 import yauzl from 'yauzl';
 import mime from 'mime-types';
@@ -186,61 +185,50 @@ function timeGitOperation(purpose, operation) {
     })();
 }
 
-function timeGitAvailabilityCheck() {
-    if (!startupTimingEnabled()) {
-        return commandExistsSync('git');
-    }
-
-    const start = performance.now();
-    const cpuStart = process.cpuUsage();
-    console.log(`[startup:git] Starting: locate Git executable (where git) at ${startupOffset()}`);
-    try {
-        const result = commandExistsSync('git');
-        const cpu = process.cpuUsage(cpuStart);
-        console.log(`[startup:git] Finished: locate Git executable (where git) at ${startupOffset()} (${Math.round(performance.now() - start)}ms wall, ${processCpuMilliseconds(cpu)}ms parent CPU, exit ${result ? 0 : 1})`);
-        return result;
-    } catch (error) {
-        const cpu = process.cpuUsage(cpuStart);
-        console.error(`[startup:git] Failed: locate Git executable (where git) at ${startupOffset()} (${Math.round(performance.now() - start)}ms wall, ${processCpuMilliseconds(cpu)}ms parent CPU, exit ${getGitExitCode(error)}, timeout not-configured, error ${error?.name ?? 'unknown'})`);
-        throw error;
-    }
-}
-
 /**
- * Returns the version of the running instance. Get the version from the package.json file and the git revision.
- * Also returns the agent string for the Horde API.
- * @returns {Promise<{agent: string, pkgVersion: string, gitRevision: string | null, gitBranch: string | null, commitDate: string | null, isLatest: boolean}>} Version info object
+ * Starts one version lookup, exposing the revision separately so Webpack does
+ * not have to wait for branch and tracking information.
  */
-export async function getVersion() {
+export function startVersionLookup() {
     let pkgVersion = 'UNKNOWN';
-    let gitRevision = null;
-    let gitBranch = null;
-    let commitDate = null;
-    let isLatest = true;
-
     try {
         const require = createRequire(import.meta.url);
         const pkgJson = require(path.join(serverDirectory, './package.json'));
         pkgVersion = pkgJson.version;
-        if (timeGitAvailabilityCheck()) {
-            const git = simpleGit({ baseDir: serverDirectory });
-            gitRevision = await timeGitOperation('git rev-parse (current revision)', () => git.revparse(['--short', 'HEAD']));
-            gitBranch = await timeGitOperation('git rev-parse (current branch)', () => git.revparse(['--abbrev-ref', 'HEAD']));
-            commitDate = await timeGitOperation('git show (commit date)', () => git.show(['-s', '--format=%ci', gitRevision]));
-
-            const trackingBranch = await timeGitOperation('git rev-parse (tracking branch)', () => git.revparse(['--abbrev-ref', '@{u}']));
-
-            // Might fail, but exception is caught. Just don't run anything relevant after in this block...
-            const localLatest = await timeGitOperation('git rev-parse (local HEAD)', () => git.revparse(['HEAD']));
-            const remoteLatest = await timeGitOperation('git rev-parse (tracking reference)', () => git.revparse([trackingBranch]));
-            isLatest = localLatest === remoteLatest;
-        }
     } catch {
-        // suppress exception
+        // Keep the existing fallback when package metadata is unavailable.
     }
-
     const agent = `SillyTavern:${pkgVersion}:Cohee#1207`;
-    return { agent, pkgVersion, gitRevision, gitBranch, commitDate: commitDate?.trim() ?? null, isLatest };
+    const fallback = { agent, pkgVersion, gitRevision: null, gitBranch: null, commitDate: null, isLatest: true };
+    // Separate instances let simple-git run these independent commands in parallel.
+    const git = () => simpleGit({ baseDir: serverDirectory });
+    const commit = timeGitOperation('git show (revision and commit date)', () => git().show(['-s', '--format=%h%x00%ci', 'HEAD']))
+        .then(output => {
+            const [gitRevision, commitDate] = output.trim().split('\0');
+            return { gitRevision: gitRevision || null, commitDate: commitDate?.trim() || null };
+        })
+        .catch(() => ({ gitRevision: null, commitDate: null }));
+    const branch = timeGitOperation('git rev-parse (current branch)', () => git().revparse(['--abbrev-ref', 'HEAD']))
+        .then(value => value.trim() || null).catch(() => null);
+    const tracking = timeGitOperation('git rev-parse (local and tracking revisions)', () => git().revparse(['HEAD', '@{u}']))
+        .then(value => {
+            const revisions = value.trim().split(/\r?\n/);
+            return revisions.length === 2 ? revisions[0] === revisions[1] : true;
+        }).catch(() => true);
+
+    const cacheVersion = commit.then(({ gitRevision }) => ({ ...fallback, gitRevision }));
+    const version = Promise.all([commit, branch, tracking]).then(([commitInfo, gitBranch, isLatest]) => ({
+        ...fallback, ...commitInfo, gitBranch, isLatest,
+    }));
+    return { cacheVersion, version };
+}
+
+/**
+ * Returns current application and Git version information.
+ * @returns {Promise<{agent: string, pkgVersion: string, gitRevision: string | null, gitBranch: string | null, commitDate: string | null, isLatest: boolean}>} Version info object
+ */
+export function getVersion() {
+    return startVersionLookup().version;
 }
 
 /**

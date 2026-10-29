@@ -31,9 +31,9 @@ function reportWebpackTiming(name, start, cpuStart, extra = '') {
  * Generate a cache version string based on the application version, Git revision, and Webpack version.
  * @returns {string} The cache version string.
  */
-function getWebpackCacheVersion() {
+function getWebpackCacheVersion(appVersion) {
     return crypto.createHash('shake256', { outputLength: 8 })
-        .update(JSON.stringify([appVersion.pkgVersion, appVersion.gitRevision, webpack.version]))
+        .update(JSON.stringify([appVersion.pkgVersion, appVersion.gitRevision, webpack.version, 'unminified-uncompressed-cache']))
         .digest('hex');
 }
 
@@ -76,7 +76,7 @@ function pruneWebpackCache(webpackRoot, currentCacheVersion) {
     }
 }
 
-const appVersion = await getVersion();
+const appVersionPromise = globalThis.STARTUP_CACHE_VERSION_PROMISE ?? getVersion();
 
 /**
  * Get the Webpack configuration for the public/lib.js file.
@@ -85,10 +85,10 @@ const appVersion = await getVersion();
  * @param {object} options Configuration options.
  * @param {boolean} [options.forceDist=false] Whether to force the use the /dist folder.
  * @param {boolean} [options.pruneCache=false] Whether to prune old cache directories.
- * @returns {import('webpack').Configuration}
+ * @returns {Promise<import('webpack').Configuration>}
  * @throws {Error} If the DATA_ROOT variable is not set.
  * */
-export default function getPublicLibConfig({ forceDist = false, pruneCache = false } = {}) {
+export default async function getPublicLibConfig({ forceDist = false, pruneCache = false } = {}) {
     const preparationStart = startupTimingEnabled() ? performance.now() : null;
     const preparationCpuStart = startupTimingEnabled() ? process.cpuUsage() : null;
     function getWebpackRoot() {
@@ -112,7 +112,7 @@ export default function getPublicLibConfig({ forceDist = false, pruneCache = fal
     }
 
     const webpackRoot = getWebpackRoot();
-    const cacheVersion = getWebpackCacheVersion();
+    const cacheVersion = getWebpackCacheVersion(await appVersionPromise);
     const cacheDirectory = getCacheDirectory();
     const outputDirectory = getOutputDirectory();
     reportWebpackTiming('Configuration/cache-key preparation', preparationStart, preparationCpuStart, `, cache ${cacheVersion}`);
@@ -123,12 +123,15 @@ export default function getPublicLibConfig({ forceDist = false, pruneCache = fal
 
     return {
         mode: 'production',
+        // Minification dominates a cold build. HTTP compression still reduces
+        // transfer size without delaying the first server start.
+        optimization: { minimize: false },
         entry: path.join(serverDirectory, 'public/lib.js'),
         cache: {
             type: 'filesystem',
             cacheDirectory: cacheDirectory,
             store: 'pack',
-            compression: 'gzip',
+            compression: false,
         },
         devtool: false,
         watch: false,

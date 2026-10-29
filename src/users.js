@@ -10,7 +10,6 @@ import { Buffer } from 'node:buffer';
 import storage from 'node-persist';
 import express from 'express';
 import mime from 'mime-types';
-import archiver from 'archiver';
 import _ from 'lodash';
 import { sync as writeFileAtomicSync } from 'write-file-atomic';
 import sanitize from 'sanitize-filename';
@@ -1149,6 +1148,7 @@ export function requireAdminMiddleware(request, response, next) {
  * @returns {Promise<void>} Promise that resolves when the archive is created
  */
 export async function createBackupArchive(handle, response) {
+    const { default: archiver } = await import('archiver');
     const directories = getUserDirectories(handle);
 
     console.info('Backup requested for', handle);

@@ -11,7 +11,6 @@ import { sync as writeFileAtomicSync } from 'write-file-atomic';
 import { getConfigValue, color, setPermissionsSync, isValidUrl } from '../util.js';
 import { write } from '../character-card-parser.js';
 import { serverDirectory } from '../server-directory.js';
-import { Jimp, JimpMime } from '../jimp.js';
 import { DEFAULT_AVATAR_PATH } from '../constants.js';
 
 const contentDirectory = path.join(serverDirectory, 'default/content');
@@ -906,6 +905,7 @@ async function fetchPerchanceAvatar(avatarUrl, isAvatarBase64) {
         } else {
             // use jimp to convert the base64 to PNG if it's not PNG
             console.debug('Perchance character avatar is not PNG, converting to PNG...');
+            const { Jimp, JimpMime } = await import('../jimp.js');
             return await Jimp.read(buffer).then(image => image.getBuffer(JimpMime.png));
         }
     }
@@ -924,6 +924,7 @@ async function fetchPerchanceAvatar(avatarUrl, isAvatarBase64) {
             console.debug(`Perchance character avatar is not PNG: ${avatarContentType}. Converting to PNG...`);
 
             // use jimp to convert the image to PNG if it's not PNG
+            const { Jimp, JimpMime } = await import('../jimp.js');
             return await Jimp.read(avatarBuffer)
                 .then(image => image.getBuffer(JimpMime.png));
         }

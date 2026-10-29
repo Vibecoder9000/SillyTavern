@@ -4,11 +4,20 @@ import url from 'node:url';
 
 import express from 'express';
 import { default as git, CheckRepoActions } from 'simple-git';
-import { sync as commandExistsSync } from 'command-exists';
 import { getConfigValue, color } from './util.js';
 
 const enableServerPlugins = !!getConfigValue('enableServerPlugins', false, 'boolean');
 const enableServerPluginsAutoUpdate = !!getConfigValue('enableServerPluginsAutoUpdate', true, 'boolean');
+
+async function timePluginStep(name, operation) {
+    if (!globalThis.STARTUP_TIMING_ENABLED) return await operation();
+    const start = performance.now();
+    try {
+        return await operation();
+    } finally {
+        console.log(`[startup:plugins] ${name}: ${Math.round(performance.now() - start)}ms wall`);
+    }
+}
 
 /**
  * Map of loaded plugins.
@@ -213,7 +222,7 @@ async function initPlugin(app, plugin, exitHooks) {
     // Allow the plugin to register API routes under /api/plugins/[plugin ID] via a router
     const router = express.Router();
 
-    await init(router);
+    await timePluginStep('initialize plugin', () => init(router));
 
     loadedPlugins.set(id, plugin);
 
@@ -249,11 +258,6 @@ async function updatePlugins(pluginsPath) {
 
     console.log(color.blue('Auto-updating server plugins... Set'), color.yellow('enableServerPluginsAutoUpdate: false'), color.blue('in config.yaml to disable this feature.'));
 
-    if (!commandExistsSync('git')) {
-        console.error(color.red('Git is not installed. Please install Git to enable auto-updating of server plugins.'));
-        return;
-    }
-
     let pluginsToUpdate = 0;
 
     for (const directory of directories) {
@@ -261,18 +265,18 @@ async function updatePlugins(pluginsPath) {
             const pluginPath = path.join(pluginsPath, directory);
             const pluginRepo = git(pluginPath);
 
-            const isRepo = await pluginRepo.checkIsRepo(CheckRepoActions.IS_REPO_ROOT);
+            const isRepo = await timePluginStep('check repository', () => pluginRepo.checkIsRepo(CheckRepoActions.IS_REPO_ROOT));
             if (!isRepo) {
                 continue;
             }
 
-            await pluginRepo.fetch();
-            const commitHash = await pluginRepo.revparse(['HEAD']);
-            const trackingBranch = await pluginRepo.revparse(['--abbrev-ref', '@{u}']);
-            const log = await pluginRepo.log({
+            await timePluginStep('fetch', () => pluginRepo.fetch());
+            const commitHash = await timePluginStep('read local revision', () => pluginRepo.revparse(['HEAD']));
+            const trackingBranch = await timePluginStep('read tracking branch', () => pluginRepo.revparse(['--abbrev-ref', '@{u}']));
+            const log = await timePluginStep('check updates', () => pluginRepo.log({
                 from: commitHash,
                 to: trackingBranch,
-            });
+            }));
 
             if (log.total === 0) {
                 continue;
@@ -283,6 +287,10 @@ async function updatePlugins(pluginsPath) {
             const latestCommit = await pluginRepo.revparse(['HEAD']);
             console.log(`Plugin ${color.green(directory)} updated to commit ${color.cyan(latestCommit)}`);
         } catch (error) {
+            if (/\bspawn git ENOENT\b/.test(String(error?.message ?? ''))) {
+                console.error(color.red('Git is not installed. Please install Git to enable auto-updating of server plugins.'));
+                return;
+            }
             console.error(color.red(`Failed to update plugin ${directory}: ${error.message}`));
         }
     }

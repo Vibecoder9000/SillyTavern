@@ -43,7 +43,6 @@ import {
 
 import getWebpackServeMiddleware from './middleware/webpack-serve.js';
 import basicAuthMiddleware from './middleware/basicAuth.js';
-import getWhitelistMiddleware from './middleware/whitelist.js';
 import accessLoggerMiddleware, { getAccessLogPath, migrateAccessLog } from './middleware/accessLogWriter.js';
 import multerMonkeyPatch from './middleware/multerMonkeyPatch.js';
 import initRequestProxy from './request-proxy.js';
@@ -70,7 +69,7 @@ import { init as statsInit, onExit as statsOnExit } from './endpoints/stats.js';
 import { checkForNewContent } from './endpoints/content-manager.js';
 import { init as settingsInit } from './endpoints/settings.js';
 import { syncBackgroundsMetadata } from './endpoints/backgrounds-manager.js';
-import { redirectDeprecatedEndpoints, ServerStartup, setupPrivateEndpoints } from './server-startup.js';
+import { redirectDeprecatedEndpoints, ServerStartup, setupPrivateEndpoints, warmDeferredRouters } from './server-startup.js';
 import { getChatWorkspaceRootDocument } from './endpoints/chat-workspace.js';
 import { diskCache } from './endpoints/characters.js';
 import { migrateFlatSecrets } from './endpoints/secrets.js';
@@ -213,7 +212,10 @@ if (cliArgs.listen && cliArgs.basicAuthMode) {
 }
 
 if (cliArgs.whitelistMode) {
-    const whitelistMiddleware = await timeStartupPhase('initialize host whitelist middleware', getWhitelistMiddleware);
+    const whitelistMiddleware = await timeStartupPhase('initialize host whitelist middleware', async () => {
+        const { default: getWhitelistMiddleware } = await import('./middleware/whitelist.js');
+        return getWhitelistMiddleware();
+    });
     app.use(whitelistMiddleware);
 }
 
@@ -359,7 +361,13 @@ setupPrivateEndpoints(app);
  * @returns {Promise<void>}
  */
 async function preSetupTasks() {
-    const version = await timeStartupPhase('read application version', getVersion);
+    // Compilation only depends on the application files and data root. Start it
+    // while the remaining pre-listen work runs, but finish it before binding.
+    const webpackCompilation = timeStartupPhase('compile frontend libraries', () => webpackMiddleware.runWebpackCompiler({ pruneCache: true }));
+    // Attach a handler immediately in case compilation fails before it is awaited.
+    webpackCompilation.catch(() => {});
+
+    const version = await timeStartupPhase('read application version', () => globalThis.STARTUP_VERSION_PROMISE ?? getVersion());
 
     // Print formatted header
     console.log();
@@ -404,6 +412,7 @@ async function preSetupTasks() {
         if (isExiting) return;
         isExiting = true;
         await statsOnExit();
+        await webpackMiddleware.waitForWebpackClose();
         if (typeof cleanupPlugins === 'function') {
             await cleanupPlugins();
         }
@@ -437,7 +446,7 @@ async function preSetupTasks() {
     initRequestProxy({ enabled: cliArgs.requestProxyEnabled, url: cliArgs.requestProxyUrl, bypass: cliArgs.requestProxyBypass, enableKeepAlive: cliArgs.enableKeepAlive, privateRequestFilterEnabled: requestFilterOptions.enabled });
 
     // Wait for frontend libs to compile
-    await timeStartupPhase('compile frontend libraries', () => webpackMiddleware.runWebpackCompiler({ pruneCache: true }));
+    await webpackCompilation;
 }
 
 /**
@@ -573,5 +582,8 @@ timeStartupPhase('initialize user storage', () => initUserStorage(globalThis.DAT
     .then(() => timeStartupPhase('run pre-listen setup', preSetupTasks))
     .then(() => timeStartupPhase('install 404 middleware', apply404Middleware))
     .then(() => timeStartupPhase('bind HTTP server', () => new ServerStartup(app, cliArgs).start()))
-    .then(reportStartupProfile)
+    .then(result => {
+        warmDeferredRouters();
+        return reportStartupProfile(result);
+    })
     .then(result => timeStartupPhase('run post-listen setup', () => postSetupTasks(result)));
