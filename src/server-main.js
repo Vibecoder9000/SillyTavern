@@ -387,21 +387,24 @@ async function preSetupTasks() {
     await timeStartupPhase('migrate group chat metadata', () => migrateGroupChatsMetadataFormat(directories));
     await timeStartupPhase('check bundled content', () => checkForNewContent(directories));
 
-    for (const userDirectories of directories) {
-        try {
-            await timeStartupPhase(`sync background metadata (${userDirectories.root})`, () => syncBackgroundsMetadata(userDirectories));
-        } catch (error) {
-            console.error(`Failed to sync background metadata for user at ${userDirectories.root}:`, error);
-        }
-    }
-
-    await timeStartupPhase('verify character disk cache', () => diskCache.verify(directories));
     await timeStartupPhase('migrate secrets', () => migrateFlatSecrets(directories));
     await timeStartupPhase('clean temporary uploads', cleanUploads);
     await timeStartupPhase('migrate access log', migrateAccessLog);
 
-    await timeStartupPhase('initialize settings', settingsInit);
-    await timeStartupPhase('initialize statistics', statsInit);
+    // These tasks touch separate files. Overlap their I/O, but finish all of
+    // them before plugins load or requests can reach the server.
+    await Promise.all([
+        ...directories.map(async userDirectories => {
+            try {
+                await timeStartupPhase(`sync background metadata (${userDirectories.root})`, () => syncBackgroundsMetadata(userDirectories));
+            } catch (error) {
+                console.error(`Failed to sync background metadata for user at ${userDirectories.root}:`, error);
+            }
+        }),
+        timeStartupPhase('verify character disk cache', () => diskCache.verify(directories)),
+        timeStartupPhase('initialize settings', settingsInit),
+        timeStartupPhase('initialize statistics', statsInit),
+    ]);
 
     const pluginsDirectory = path.join(serverDirectory, 'plugins');
     const cleanupPlugins = await timeStartupPhase('update and load server plugins', () => loadPlugins(app, pluginsDirectory));
@@ -451,7 +454,7 @@ async function preSetupTasks() {
 
 /**
  * Tasks that need to be run after the server starts listening.
- * @param {import('./server-startup.js').ServerStartupResult} result The result of the server startup
+ * @param {import('./server-listen.js').ServerStartupResult} result The result of the server startup
  * @returns {Promise<void>}
  */
 async function postSetupTasks(result) {
@@ -583,6 +586,7 @@ timeStartupPhase('initialize user storage', () => initUserStorage(globalThis.DAT
     .then(() => timeStartupPhase('install 404 middleware', apply404Middleware))
     .then(() => timeStartupPhase('bind HTTP server', () => new ServerStartup(app, cliArgs).start()))
     .then(result => {
+        process.send?.({ type: 'sillytavern:ready' });
         warmDeferredRouters();
         return reportStartupProfile(result);
     })

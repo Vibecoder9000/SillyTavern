@@ -8,6 +8,7 @@ var langs;
 // Don't change to let/const! It will break module loading.
 // eslint-disable-next-line prefer-const
 var localeData;
+var hasLocaleData;
 
 /** @type {Set<string>|null} Array of translations keys if they should be tracked - if not tracked then null */
 let trackMissingDynamicTranslate = null;
@@ -36,6 +37,7 @@ export function addLocaleData(localeId, data) {
             localeData[key] = value;
         }
     }
+    hasLocaleData = Object.keys(localeData).length > 0;
 }
 
 /**
@@ -43,6 +45,9 @@ export function addLocaleData(localeId, data) {
  * @type {MutationObserver}
  */
 const observer = new MutationObserver(mutations => {
+    // English has no translation data. Avoid scanning every inserted settings
+    // panel; extension-provided translations can still activate this observer.
+    if (!hasLocaleData) return;
     mutations.forEach(mutation => {
         mutation.addedNodes.forEach(node => {
             if (node.nodeType === Node.ELEMENT_NODE && node instanceof Element) {
@@ -244,7 +249,7 @@ async function getMissingTranslations() {
  * @returns {Document|string} Translated root, in the same format as the input (Document or HTML string)
  */
 export function applyLocale(root = document) {
-    if (!localeData || Object.keys(localeData).length === 0) {
+    if (!hasLocaleData) {
         return root;
     }
 
@@ -278,6 +283,7 @@ function addLanguagesToDropdown() {
 export async function initLocales() {
     langs = await fetch('/locales/lang.json').then(response => response.json());
     localeData = await getLocaleData(localeFile);
+    hasLocaleData = Object.keys(localeData).length > 0;
     document.documentElement.lang = localeFile;
     applyLocale();
     addLanguagesToDropdown();

@@ -11,6 +11,7 @@ import { ButtonUi } from './src/ui/ButtonUi.js';
 import { SettingsUi } from './src/ui/SettingsUi.js';
 import { debounceAsync } from '../../utils.js';
 import { selected_group } from '../../group-chats.js';
+import { getWorkspaceCachedValue, WORKSPACE_CACHE_KEYS } from '../../chat-workspace-cache.js';
 export { debounceAsync };
 
 
@@ -53,14 +54,18 @@ export let quickReplyApi;
 
 
 const loadSets = async () => {
-    const response = await fetch('/api/settings/get', {
-        method: 'POST',
-        headers: getRequestHeaders(),
-        body: JSON.stringify({}),
+    const data = await getWorkspaceCachedValue(WORKSPACE_CACHE_KEYS.SETTINGS, async () => {
+        const response = await fetch('/api/settings/get', {
+            method: 'POST',
+            headers: getRequestHeaders(),
+            body: JSON.stringify({}),
+        });
+        if (!response.ok) throw new Error(`Could not load quick reply presets: HTTP ${response.status}`);
+        return response.json();
     });
 
-    if (response.ok) {
-        const setList = (await response.json()).quickReplyPresets ?? [];
+    if (data) {
+        const setList = data.quickReplyPresets ?? [];
         for (const set of setList) {
             if (set.version !== 2) {
                 // migrate old QR set

@@ -595,7 +595,7 @@ async function activateExtensions() {
     const clientVersion = CLIENT_VERSION.split(':')[1];
     const extensions = Object.entries(manifests).sort((a, b) => sortManifestsByOrder(a[1], b[1]));
     const extensionNames = extensions.map(x => x[0]);
-    const promises = [];
+    const activationQueue = [];
 
     for (let entry of extensions) {
         const name = entry[0];
@@ -651,24 +651,7 @@ async function activateExtensions() {
         const isDisabled = extension_settings.disabledExtensions.includes(name);
 
         if (meetsModuleRequirements && meetsExtensionDeps && meetsClientMinimumVersion && !isDisabled) {
-            try {
-                console.debug('Activating extension', name);
-                const promise = addExtensionLocale(name, manifest).finally(() =>
-                    Promise.all([addExtensionScript(name, manifest), addExtensionStyle(name, manifest)]),
-                );
-                await promise
-                    .then(() => {
-                        activeExtensions.add(name);
-                        return callExtensionHook(name, 'activate');
-                    })
-                    .catch(err => {
-                        console.log('Could not activate extension', name, err);
-                        extensionLoadErrors.add(t`Extension "${displayName}" failed to load: ${err}`);
-                    });
-                promises.push(promise);
-            } catch (error) {
-                console.error('Could not activate extension', name, error);
-            }
+            activationQueue.push({ name, manifest, displayName });
         } else if (!meetsModuleRequirements && !isDisabled) {
             console.warn(t`Extension "${name}" did not load. Missing required Extras module(s): "${missingModules.join(', ')}"`);
             extensionLoadErrors.add(t`Extension "${displayName}" did not load. Missing required Extras module(s): "${missingModules.join(', ')}"`);
@@ -686,7 +669,32 @@ async function activateExtensions() {
         }
     }
 
-    await Promise.allSettled(promises);
+    // Fetch eligible modules ahead of their turn without evaluating them. Keep
+    // initialization and activation hooks in manifest order for dependencies.
+    const preloads = activationQueue.filter(({ manifest }) => manifest.js).map(({ name, manifest }) => {
+        const link = document.createElement('link');
+        link.rel = 'modulepreload';
+        link.href = `/scripts/extensions/${name}/${manifest.js}`;
+        document.head.appendChild(link);
+        return link;
+    });
+    try {
+        for (const { name, manifest, displayName } of activationQueue) {
+            try {
+                console.debug('Activating extension', name);
+                await addExtensionLocale(name, manifest).finally(() =>
+                    Promise.all([addExtensionScript(name, manifest), addExtensionStyle(name, manifest)]),
+                );
+                activeExtensions.add(name);
+                await callExtensionHook(name, 'activate');
+            } catch (error) {
+                console.log('Could not activate extension', name, error);
+                extensionLoadErrors.add(t`Extension "${displayName}" failed to load: ${error}`);
+            }
+        }
+    } finally {
+        preloads.forEach(link => link.remove());
+    }
     $('#extensions_details').toggleClass('warning', extensionLoadErrors.size > 0);
 }
 

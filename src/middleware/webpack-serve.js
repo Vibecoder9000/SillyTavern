@@ -1,5 +1,6 @@
 import path from 'node:path';
 import webpack from 'webpack';
+import { hasCurrentWebpackOutput, saveWebpackOutputSnapshot } from '../webpack-output-cache.js';
 import getPublicLibConfig from '../../webpack.config.js';
 
 export default function getWebpackServeMiddleware() {
@@ -43,6 +44,10 @@ export default function getWebpackServeMiddleware() {
         const setupStart = performance.now();
         const setupCpuStart = process.cpuUsage();
         const publicLibConfig = await getPublicLibConfig({ forceDist, pruneCache });
+        if (hasCurrentWebpackOutput(publicLibConfig)) {
+            console.log('Frontend libraries unchanged; reusing compiled bundle.');
+            return;
+        }
         const compilerStart = startupTimingEnabled ? performance.now() : null;
         const compilerCpuStart = startupTimingEnabled ? process.cpuUsage() : null;
         const compiler = webpack(publicLibConfig);
@@ -63,6 +68,7 @@ export default function getWebpackServeMiddleware() {
                 if (startupTimingEnabled) {
                     console.log(`[startup:webpack] compiler.run completed in ${Math.round(performance.now() - compileStart)}ms wall, ${Math.round((compileCpu.user + compileCpu.system) / 1000)}ms CPU.`);
                 }
+                if (!_error) saveWebpackOutputSnapshot(publicLibConfig, stats);
                 const output = stats?.toString(publicLibConfig.stats);
                 if (output) {
                     console.log(output);

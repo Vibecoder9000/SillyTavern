@@ -993,6 +993,11 @@ async function firstLoadInit() {
         overlayContent: initLoaderOverlay,
     });
 
+    // The security token is ready. Fetch the settings snapshot while core
+    // modules initialize, but keep applying settings at its established point.
+    const settingsResponse = fetchSettingsResponse();
+    settingsResponse.catch(() => {}); // getSettings below reports a failed load.
+
     reportWorkspaceBootProgress('initializing core modules');
     registerPromptManagerMigration();
     initDomHandlers();
@@ -1021,7 +1026,7 @@ async function firstLoadInit() {
     await initPresetManager();
     await initSystemMessages();
     reportWorkspaceBootProgress('loading settings and extensions');
-    await getSettings(initLoaderHandle);
+    await getSettings(initLoaderHandle, settingsResponse);
     initWorkspaceLastChatUi();
     await checkOpenRouterAuth();
     initKeyboard();
@@ -12171,8 +12176,8 @@ async function applySettingsResponse(data, { initial = false, initLoaderHandle =
     }
 }
 
-export async function getSettings(initLoaderHandle = null) {
-    const data = await getWorkspaceCachedValue(WORKSPACE_CACHE_KEYS.SETTINGS, async () => {
+function fetchSettingsResponse() {
+    return getWorkspaceCachedValue(WORKSPACE_CACHE_KEYS.SETTINGS, async () => {
         const response = await fetch('/api/settings/get', {
             method: 'POST',
             headers: getRequestHeaders(),
@@ -12190,6 +12195,10 @@ export async function getSettings(initLoaderHandle = null) {
 
         return await response.json();
     });
+}
+
+export async function getSettings(initLoaderHandle = null, settingsResponse = null) {
+    const data = await (settingsResponse ?? fetchSettingsResponse());
     workspaceSettingsResponse = data;
     await applySettingsResponse(data, { initial: true, initLoaderHandle });
     await validateDisabledSamplers();

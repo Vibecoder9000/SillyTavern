@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { CommandLineParser } from './src/command-line.js';
+import { ServerStartup } from './src/server-listen.js';
 import { serverDirectory } from './src/server-directory.js';
 import { getConfigValue, startVersionLookup } from './src/util.js';
 
@@ -12,6 +13,9 @@ globalThis.COMMAND_LINE_ARGS = cliArgs;
 globalThis.STARTUP_TIMING_ENABLED = getConfigValue('enableStartupTiming', false, 'boolean');
 globalThis.SERVER_START_TIME = performance.now();
 process.chdir(serverDirectory);
+// Fail before loading routers, running migrations, compiling, or updating plugins.
+// The real bind still checks again in case another process takes the port later.
+await new ServerStartup(undefined, cliArgs).start({ checkOnly: true });
 // Begin the Git-dependent cache version lookup while the server modules load.
 const startupVersion = startVersionLookup();
 globalThis.STARTUP_CACHE_VERSION_PROMISE = startupVersion.cacheVersion;
@@ -38,4 +42,5 @@ try {
     }
 } catch (error) {
     console.error('A critical error has occurred while starting the server:', error);
+    process.exitCode = 1;
 }

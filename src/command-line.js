@@ -37,7 +37,7 @@ import { initConfig } from './config-init.js';
  * @property {string[]} requestProxyBypass Request proxy bypass list
  * @property {function(): URL} getIPv4ListenUrl Get IPv4 listen URL
  * @property {function(): URL} getIPv6ListenUrl Get IPv6 listen URL
- * @property {function(import('./server-startup.js').ServerStartupResult): Promise<string>} getBrowserLaunchHostname Get browser launch hostname
+ * @property {function(import('./server-listen.js').ServerStartupResult): Promise<string>} getBrowserLaunchHostname Get browser launch hostname
  * @property {function(string): URL} getBrowserLaunchUrl Get browser launch URL
  */
 
