@@ -65,6 +65,7 @@ import { DEFAULT_REASONING_TEMPLATE, loadReasoningTemplates } from './reasoning.
 import { loadReasoningRewritePresets } from './reasoning-rewrite.js';
 import { bindModelTemplates } from './chat-templates.js';
 import { IMAGE_OVERSWIPE, MEDIA_DISPLAY } from './constants.js';
+import { DEFAULT_NARRATIVE_SEED_SETTINGS } from './narrative-seed-core.js';
 import { t } from './i18n.js';
 import { getBackgroundPath, isCustomBackgroundUrl } from './backgrounds.js';
 import { persona_description_positions as _persona_description_positions } from './personas.js';
@@ -382,6 +383,8 @@ export const power_user = {
         content: 'Write {{char}}\'s next reply in a fictional chat between {{char}} and {{user}}.',
         post_history: '',
     },
+
+    narrative_seed: { ...DEFAULT_NARRATIVE_SEED_SETTINGS },
 
     reasoning: {
         name: DEFAULT_REASONING_TEMPLATE,
@@ -1834,6 +1837,7 @@ export async function loadPowerUserSettings(settings, data) {
     // Field-wise merge so a settings snapshot saved by an older version does not
     // shadow defaults that were added to reasoning_rewrite since.
     power_user.reasoning_rewrite = { ...defaultReasoningRewrite, ...power_user.reasoning_rewrite };
+    power_user.narrative_seed = { ...DEFAULT_NARRATIVE_SEED_SETTINGS, ...power_user.narrative_seed };
 
     power_user.layout_plus_plus_modes = normalizeLayoutPlusPlusModes(power_user.layout_plus_plus_modes, power_user.layout_plus_plus);
     power_user.layout_plus_plus_panel_widths = normalizeLayoutPlusPlusPanelWidths(power_user.layout_plus_plus_panel_widths);

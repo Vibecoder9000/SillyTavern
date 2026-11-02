@@ -281,6 +281,7 @@ import { initServerHistory } from './scripts/server-history.js';
 import { initSettingsSearch } from './scripts/setting-search.js';
 import { initBulkEdit } from './scripts/bulk-edit.js';
 import { getContext } from './scripts/st-context.js';
+import { applyNarrativeSeedToExtra, clearNarrativeSeedPrompt, initNarrativeSeed, prepareNarrativeSeed, updateNarrativeSeedUI } from './scripts/narrative-seed.js';
 import { extractReasoningFromData, extractReasoningSignatureFromData, initReasoning, parseReasoningInSwipes, PromptReasoning, ReasoningHandler, removeReasoningFromString, updateReasoningUI } from './scripts/reasoning.js';
 import { initReasoningRewrite } from './scripts/reasoning-rewrite.js';
 import { accountStorage } from './scripts/util/AccountStorage.js';
@@ -1056,6 +1057,7 @@ async function firstLoadInit() {
     initSettingsSearch();
     initBulkEdit();
     initReasoning();
+    initNarrativeSeed();
     initReasoningRewrite();
     initWelcomeScreen();
     await initScrapers();
@@ -3371,6 +3373,7 @@ export function updateMessageBlock(messageId, message, { rerenderMessage = true 
     }
 
     updateReasoningUI(messageElement);
+    updateNarrativeSeedUI(messageElement, message);
 
     addCopyToCodeBlocks(messageElement);
     appendMediaToMessage(message, messageElement);
@@ -6155,6 +6158,7 @@ export function updateMessageElement(mes, { messageId = chat.length - 1, message
     }
 
     updateReasoningUI(messageElement);
+    updateNarrativeSeedUI(messageElement, mes);
 
     if (power_user.timestamp_model_icon && mes.extra?.api) {
         insertSVGIcon(messageElement, mes.extra);
@@ -8267,6 +8271,8 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
     }
 
     const lastMessage = chat[chat.length - 1];
+    // Regenerate deletes the message below, so its seed has to be read first.
+    const regenerateSeed = type === 'regenerate' ? (lastMessage?.extra?.narrative_seed ?? null) : null;
 
     let textareaText;
     if (shouldConsumeComposerText) {
@@ -8455,6 +8461,21 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
     let this_max_context = getMaxPromptTokens();
 
     if (!dryRun) {
+        const seedStopped = await prepareNarrativeSeed({
+            type,
+            depth,
+            coreChat,
+            signal: abortController.signal,
+            regenerateSeed,
+            onDrawStart: showStopButton,
+        });
+
+        if (seedStopped) {
+            console.debug('Generation stopped while drawing the seed');
+            unblockGeneration(type);
+            return Promise.resolve();
+        }
+
         console.debug('Running extension interceptors');
         const aborted = await runGenerationInterceptors(coreChat, this_max_context, type);
 
@@ -9231,6 +9252,9 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
     if (dryRun) {
         return Promise.resolve();
     }
+
+    // The prompt is built; the seed must not reach any later generation.
+    clearNarrativeSeedPrompt();
 
     /**
      * Saves itemized prompt bits and calls streaming or non-streaming generation API.
@@ -10749,6 +10773,7 @@ export async function saveReply({ type, getMessage, fromStreaming = false, title
             lastMessage.extra.api = getGeneratingApi();
             lastMessage.extra.model = getGeneratingModel();
             lastMessage.extra.reasoning = reasoning;
+            applyNarrativeSeedToExtra(lastMessage.extra);
             lastMessage.extra.reasoning_duration = null;
             lastMessage.extra.reasoning_signature = reasoningSignature;
             lastMessage.extra.message_cost = messageCost;
@@ -10824,6 +10849,7 @@ export async function saveReply({ type, getMessage, fromStreaming = false, title
         newMessage.extra.api = getGeneratingApi();
         newMessage.extra.model = getGeneratingModel();
         newMessage.extra.reasoning = reasoning;
+        applyNarrativeSeedToExtra(newMessage.extra);
         newMessage.extra.reasoning_duration = null;
         newMessage.extra.reasoning_signature = reasoningSignature;
         newMessage.extra.message_cost = messageCost;
@@ -14530,6 +14556,7 @@ export async function swipe(event, direction, { source, repeated, message = chat
             thisMesDiv.find('.tokenCounterDisplay').text('');
             thisMesDiv.find('.messageCostDisplay').text('');
             updateReasoningUI(thisMesDiv, { reset: true });
+            updateNarrativeSeedUI(thisMesDiv, chat[mesId], { reset: true });
         } else {
             //console.log('showing previously generated swipe candidate, or "..."');
             //console.log('onclick right swipe calling addOneMessage');

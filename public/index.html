@@ -5815,6 +5815,40 @@
                                         <input id="reasoning_rewrite_max_tokens" type="number" min="1" max="200000" step="1" value="4096" class="text_pole" />
                                     </div>
                                 </div>
+                                <div id="narrative_seed_drawer" class="inline-drawer wide100p flexFlowColumn">
+                                    <div class="inline-drawer-toggle inline-drawer-header userSettingsInnerExpandable" title="Write three short drafts with a second model, splice them together, and make the main model narrate around the result." data-i18n="[title]narrative_seed_enabled">
+                                        <b><span data-i18n="Seed">Seed</span></b>
+                                        <div class="fa-solid fa-circle-chevron-down inline-drawer-icon down"></div>
+                                    </div>
+                                    <div class="inline-drawer-content">
+                                        <label class="checkbox_label" for="narrative_seed_enabled">
+                                            <input id="narrative_seed_enabled" type="checkbox" />
+                                            <small data-i18n="Enabled">Enabled</small>
+                                        </label>
+                                        <label class="checkbox_label" for="narrative_seed_pause" title="Show the picker before main generation starts." data-i18n="[title]narrative_seed_pause">
+                                            <input id="narrative_seed_pause" type="checkbox" />
+                                            <small data-i18n="Pause to pick">Pause to pick</small>
+                                        </label>
+                                        <small data-i18n="Seed source">Seed source</small>
+                                        <select id="narrative_seed_source" class="text_pole"></select>
+                                        <small data-i18n="Temperature">Temperature</small>
+                                        <input id="narrative_seed_temperature" class="text_pole" type="number" min="0" max="5" step="0.05" />
+                                        <small data-i18n="Max Tokens">Max Tokens</small>
+                                        <input id="narrative_seed_max_tokens" class="text_pole" type="number" min="1" max="8192" step="1" />
+                                        <small data-i18n="Chunks per draft">Chunks per draft</small>
+                                        <input id="narrative_seed_chunks" class="text_pole" type="number" min="1" max="10" step="1" />
+                                        <small data-i18n="Context Messages">Context Messages</small>
+                                        <input id="narrative_seed_context" class="text_pole" type="number" min="1" max="100" step="1" />
+                                        <small data-i18n="Timeout (seconds)">Timeout (seconds)</small>
+                                        <input id="narrative_seed_timeout" class="text_pole" type="number" min="1" max="600" step="1" />
+                                        <hr />
+                                        <div class="flex-container alignItemsBaseline justifySpaceBetween">
+                                            <small data-i18n="Seed instruction template">Seed instruction template</small>
+                                            <i id="narrative_seed_template_restore" class="menu_button fa-solid fa-recycle" title="Restore default template" data-i18n="[title]Restore default template"></i>
+                                        </div>
+                                        <textarea id="narrative_seed_template" class="text_pole textarea_compact" rows="8"></textarea>
+                                    </div>
+                                </div>
                                 <div class="inline-drawer wide100p flexFlowColumn">
                                     <div class="inline-drawer-toggle inline-drawer-header userSettingsInnerExpandable" title="Automatically reject and re-generate AI message based on configurable criteria." data-i18n="[title]Automatically reject and re-generate AI message based on configurable criteria">
                                         <b><span data-i18n="Auto-swipe">Auto-swipe</span></b>
@@ -7984,6 +8018,15 @@
                             <div class="mes_edit_cancel menu_button  fa-solid fa-xmark" title="Cancel" data-i18n="[title]Cancel"></div>
                         </div>
                     </div>
+                    <details class="mes_seed_details" hidden>
+                        <summary class="mes_seed_summary">
+                            <span class="mes_seed_header">
+                                <span data-i18n="Seed">Seed</span>
+                                <span class="mes_seed_arrow fa-solid fa-chevron-up"></span>
+                            </span>
+                        </summary>
+                        <div class="mes_seed_body"></div>
+                    </details>
                     <details class="mes_reasoning_details">
                         <summary class="mes_reasoning_summary flex-container">
                             <div class="mes_reasoning_header_block flex-container">
