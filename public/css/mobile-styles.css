@@ -600,6 +600,7 @@
         padding-left: 5px;
     }
     .selection-mode-item#bg_select_all_button,
+    .selection-mode-item#bg_download_button,
     .selection-mode-item#bg_select_cancel_button {
         order: 2;
     }
