@@ -16,6 +16,8 @@ process.env.SILLYTAVERN_BACKUPS_CHAT_CHECKINTEGRITY = 'true';
 let chats;
 
 beforeAll(async () => {
+    // chats.js builds its multer upload path from this global at module load.
+    globalThis.DATA_ROOT ??= os.tmpdir();
     chats = await import('../src/endpoints/chats.js');
 });
 
@@ -156,6 +158,20 @@ describe('trySaveChat integrity check', () => {
         const newChat = makeChat(OTHER_SLUG);
         await save(newChat, { force: true });
         expect(fs.readFileSync(chatFile, 'utf8')).toBe(toJsonl(newChat));
+    });
+
+    test('rotates the slug on every write so a stale holder of the old slug is rejected', async () => {
+        fs.writeFileSync(chatFile, toJsonl(makeChat(SLUG)));
+        const newSlug = await save(makeChat(SLUG));
+        expect(newSlug).toEqual(expect.any(String));
+        expect(newSlug).not.toBe(SLUG);
+        expect(JSON.parse(fs.readFileSync(chatFile, 'utf8').split('\n')[0]).chat_metadata.integrity).toBe(newSlug);
+
+        const afterWrite = fs.readFileSync(chatFile, 'utf8');
+        await expect(save(makeChat(SLUG))).rejects.toThrow(/integrity check failed/i);
+        expect(fs.readFileSync(chatFile, 'utf8')).toBe(afterWrite);
+
+        await expect(save(makeChat(newSlug))).resolves.toEqual(expect.any(String));
     });
 
     test('skips the check when the incoming chat has no integrity slug (existing behavior)', async () => {

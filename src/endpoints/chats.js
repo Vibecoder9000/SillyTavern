@@ -538,16 +538,24 @@ class IntegrityMismatchError extends Error {
  * @param {string} backupDirectory Passed to backupChat.
  */
 export async function trySaveChat(chatData, filePath, skipIntegrityCheck = false, handle, cardName, backupDirectory) {
-    const jsonlData = chatData?.map(m => JSON.stringify(m)).join('\n');
-
     const doIntegrityCheck = (checkIntegrity && !skipIntegrityCheck);
     const chatIntegritySlug = doIntegrityCheck ? chatData?.[0]?.chat_metadata?.integrity : undefined;
 
     if (chatIntegritySlug && !await checkChatIntegrity(filePath, chatIntegritySlug)) {
         throw new IntegrityMismatchError(`Chat integrity check failed for "${filePath}". The expected integrity slug was "${chatIntegritySlug}".`);
     }
+
+    // Rotate the slug on every write so a client that missed this write is rejected on its next save.
+    let newSlug;
+    if (checkIntegrity && chatData?.[0]?.chat_metadata) {
+        newSlug = crypto.randomUUID();
+        chatData[0].chat_metadata.integrity = newSlug;
+    }
+
+    const jsonlData = chatData?.map(m => JSON.stringify(m)).join('\n');
     tryWriteFileSync(filePath, jsonlData);
     getBackupFunction(handle, cardName)(backupDirectory, cardName, jsonlData);
+    return newSlug;
 }
 
 router.post('/save', validateAvatarUrlMiddleware, async function (request, response) {
@@ -562,7 +570,7 @@ router.post('/save', validateAvatarUrlMiddleware, async function (request, respo
         }
 
         if (Array.isArray(chatData)) {
-            await trySaveChat(chatData, chatFilePath, request.body.force, handle, cardName, request.user.directories.backups);
+            const integrity = await trySaveChat(chatData, chatFilePath, request.body.force, handle, cardName, request.user.directories.backups);
             let workspaceContextError;
             if (request.body.sync_workspace_context === true) {
                 try {
@@ -576,7 +584,7 @@ router.post('/save', validateAvatarUrlMiddleware, async function (request, respo
                     workspaceContextError = 'Workspace last-chat mirror could not be updated.';
                 }
             }
-            return response.send({ ok: true, workspace_context_error: workspaceContextError });
+            return response.send({ ok: true, integrity, workspace_context_error: workspaceContextError });
         } else {
             return response.status(400).send({ error: 'The request\'s body.chat is not an array.' });
         }
@@ -952,7 +960,7 @@ router.post('/group/save', async function (request, response) {
         const chatData = request.body.chat;
 
         if (Array.isArray(chatData)) {
-            await trySaveChat(chatData, chatFilePath, request.body.force, handle, String(id), request.user.directories.backups);
+            const integrity = await trySaveChat(chatData, chatFilePath, request.body.force, handle, String(id), request.user.directories.backups);
             let workspaceContextError;
             if (request.body.sync_workspace_context === true) {
                 try {
@@ -966,7 +974,7 @@ router.post('/group/save', async function (request, response) {
                     workspaceContextError = 'Workspace last-chat mirror could not be updated.';
                 }
             }
-            return response.send({ ok: true, workspace_context_error: workspaceContextError });
+            return response.send({ ok: true, integrity, workspace_context_error: workspaceContextError });
         } else {
             return response.status(400).send({ error: 'The request\'s body.chat is not an array.' });
         }

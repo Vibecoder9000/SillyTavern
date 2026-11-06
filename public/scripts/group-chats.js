@@ -96,7 +96,7 @@ import { accountStorage } from './util/AccountStorage.js';
 import { compressRequest } from './request-compression.js';
 import { shouldHideXmlToolExchanges } from './group-tool-visibility.js';
 import { isChatWorkspaceChild, requestWorkspaceOpen } from './chat-workspace-bridge.js';
-import { getWorkspaceChatSnapshot, setWorkspaceChatSnapshot } from './chat-workspace-cache.js';
+import { clearWorkspaceChatSnapshots, getWorkspaceChatSnapshot, setWorkspaceChatSnapshot } from './chat-workspace-cache.js';
 
 export {
     selected_group,
@@ -708,6 +708,10 @@ async function saveGroupChat(groupId, shouldSaveGroup, force = false) {
         if (resultData.workspace_context_error) {
             toastr.warning(resultData.workspace_context_error, t`Workspace last-chat mirror`);
         }
+        // Adopt the rotated slug so this device's next save is not mistaken for a stale one.
+        if (resultData.integrity) {
+            chat_metadata.integrity = resultData.integrity;
+        }
     }
 
     if (!response.ok) {
@@ -719,23 +723,23 @@ async function saveGroupChat(groupId, shouldSaveGroup, force = false) {
             return;
         }
 
-        const popupResult = await Popup.show.input(
-            t`ERROR: Chat integrity check failed while saving the file.`,
-            t`<p>After you click OK, the page will be reloaded to prevent data corruption.</p>
-              <p>To confirm an overwrite (and potentially <b>LOSE YOUR DATA</b>), enter <code>OVERWRITE</code> (in all caps) in the box below before clicking OK.</p>`,
-            '',
-            { okButton: 'OK', cancelButton: false },
+        console.warn('Chat integrity check failed: the chat was changed elsewhere. Nothing was saved.');
+        toastr.error(
+            t`This chat was changed elsewhere. Your latest changes were not saved. Click here to reload the up-to-date chat.`,
+            t`Chat out of date`,
+            {
+                timeOut: 0,
+                extendedTimeOut: 0,
+                tapToDismiss: false,
+                closeButton: false,
+                preventDuplicates: true,
+                onclick: () => {
+                    clearWorkspaceChatSnapshots();
+                    window.location.reload();
+                },
+            },
         );
-
-        const forceSaveConfirmed = popupResult === 'OVERWRITE';
-
-        if (!forceSaveConfirmed) {
-            console.warn('Chat integrity check failed, and user did not confirm the overwrite. Reloading the page.');
-            window.location.reload();
-            return;
-        }
-
-        await saveGroupChat(groupId, shouldSaveGroup, true);
+        return;
     }
 
     if (shouldSaveGroup) {

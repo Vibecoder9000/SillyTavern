@@ -49,6 +49,11 @@ export function getWorkspaceChatSnapshot(identity) {
     return cloneValue(snapshot);
 }
 
+/** Drops every cached chat snapshot so the next load fetches from the server. */
+export function clearWorkspaceChatSnapshots() {
+    getWorkspaceCacheStore()?.chats.clear();
+}
+
 export function hasWorkspaceChatSnapshot(identity) {
     const store = getWorkspaceCacheStore();
     const key = getChatCacheKey(identity);

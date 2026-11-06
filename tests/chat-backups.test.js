@@ -19,6 +19,8 @@ let chats;
 let workDir;
 
 beforeAll(async () => {
+    // chats.js builds its multer upload path from this global at module load.
+    globalThis.DATA_ROOT ??= (await import('node:os')).tmpdir();
     chats = await import('../src/endpoints/chats.js');
     workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'st-backups-'));
 });

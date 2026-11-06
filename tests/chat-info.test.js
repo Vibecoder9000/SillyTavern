@@ -14,6 +14,8 @@ process.env.SILLYTAVERN_BACKUPS_CHAT_CHECKINTEGRITY = 'true';
 let chats;
 
 beforeAll(async () => {
+    // chats.js builds its multer upload path from this global at module load.
+    globalThis.DATA_ROOT ??= (await import('node:os')).tmpdir();
     chats = await import('../src/endpoints/chats.js');
 });
 
