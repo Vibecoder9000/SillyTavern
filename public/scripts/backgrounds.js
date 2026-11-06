@@ -3606,6 +3606,52 @@ export async function initBackgrounds() {
         }
     };
 
+    /**
+     * Downloads the selected backgrounds. Fetches each file as a blob and saves it through an
+     * attached anchor, since long-press "open in new tab" downloads fail on mobile.
+     */
+    const handleBulkDownload = async () => {
+        if (selectedBackgrounds.size === 0) {
+            toastr.warning(translate('Please select at least one background.'));
+            return;
+        }
+        const $button = $('#bg_download_button');
+        if ($button.hasClass('disabled')) return;
+        $button.addClass('disabled');
+        const filenames = Array.from(selectedBackgrounds);
+        let failed = 0;
+        try {
+            for (const filename of filenames) {
+                try {
+                    const response = await fetch(getBackgroundPath(filename), { cache: 'no-cache' });
+                    if (!response.ok) throw new Error(`Server error: ${response.status}`);
+                    const blobUrl = URL.createObjectURL(await response.blob());
+                    const a = document.createElement('a');
+                    a.href = blobUrl;
+                    a.download = filename;
+                    a.style.display = 'none';
+                    document.body.appendChild(a);
+                    a.click();
+                    a.remove();
+                    setTimeout(() => URL.revokeObjectURL(blobUrl), 60000);
+                } catch (error) {
+                    failed++;
+                    console.error('Failed to download background:', filename, error);
+                }
+                // Spacing lets mobile browsers register each download separately
+                if (filenames.length > 1) await new Promise(resolve => setTimeout(resolve, 400));
+            }
+        } finally {
+            $button.removeClass('disabled');
+        }
+        if (failed) {
+            toastr.error(stringFormat(translate('{0} downloads failed.'), [failed]));
+        } else {
+            toastr.success(stringFormat(translate('{0} backgrounds downloaded.'), [filenames.length]));
+            exitSelectionMode();
+        }
+    };
+
     if (backgroundSelector) backgroundSelector.destroy();
     backgroundSelector = new BackgroundSelector('bg_menu_content');
 
@@ -3768,6 +3814,7 @@ export async function initBackgrounds() {
 
     $('#bg_select_button').off('click').on('click', enterSelectionMode);
     $('#bg_select_cancel_button').off('click').on('click', exitSelectionMode);
+    $('#bg_download_button').off('click').on('click', handleBulkDownload);
     $('#bg_select_all_button').off('click').on('click', () => {
         const visibleFilenames = backgroundSelector.filteredImages.map(img => img.filename);
         const allVisibleSelected = visibleFilenames.length > 0 && visibleFilenames.every(file => selectedBackgrounds.has(file));

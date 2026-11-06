@@ -257,6 +257,30 @@ div#add-folder-button.folder-button .thumbnail-placeholder,
 }
 
 
+#bg_download_button.disabled {
+    opacity: 0.5;
+    pointer-events: none;
+}
+
+/* Keep the selection toolbar (count, select all, download, cancel) usable on phones */
+@media screen and (max-width: 600px) {
+    #Backgrounds.selection-mode-active #bg-header-fixed > .flex-container {
+        flex-wrap: wrap;
+        gap: 5px;
+    }
+
+    #Backgrounds.selection-mode-active #bg-header-fixed .menu_button.selection-mode-item {
+        min-width: 44px;
+        min-height: 44px;
+        justify-content: center;
+        box-sizing: border-box;
+    }
+
+    #Backgrounds.selection-mode-active #bg-header-fixed .menu_button.selection-mode-item span {
+        display: none;
+    }
+}
+
 /* Bulk Selection Mode */
 
 #bg_menu_content.selection-active .thumbnail {
