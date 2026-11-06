@@ -334,9 +334,7 @@ export async function syncBackgroundsMetadata(userDirectories) {
 
             renderProgressBar();
 
-            for (let i = 0; i < totalFiles; i += CONCURRENCY_LIMIT) {
-                const batchFiles = filesToProcess.slice(i, i + CONCURRENCY_LIMIT);
-                const tasks = batchFiles.map(filename => (async () => {
+            const processFile = async (filename) => {
                     const filePath = path.join(backgroundsFolderPath, filename);
                     let updatePayload = {};
                     let decodedImage;
@@ -389,15 +387,11 @@ export async function syncBackgroundsMetadata(userDirectories) {
                     }
                     // Return the warning message along with other data.
                     return { filename, ...updatePayload, warningMessage };
-                })());
+                };
 
-
-                const batchResults = await Promise.allSettled(tasks);
-
-                // Collect all messages before printing
+            const handleResult = (result) => {
                 const messagesToLog = [];
 
-                batchResults.forEach(result => {
                     if (result.status === 'fulfilled' && result.value) {
                         const { filename, newMetadata, addedTimestamp, thumbnailResolution, warningMessage } = result.value;
 
@@ -421,29 +415,28 @@ export async function syncBackgroundsMetadata(userDirectories) {
                         // Also collect errors to prevent them from messing up the progress bar
                         messagesToLog.push({ type: 'error', text: `[Background Sync] A task failed during batch processing: ${result.reason}` });
                     }
-                });
-
-                // Print collected messages
+                
                 if (messagesToLog.length > 0) {
-                    // Clear the progress bar line before printing messages
                     if (process.stdout.isTTY) {
                         process.stdout.clearLine(0);
                         process.stdout.cursorTo(0);
                     }
-
-                    // Log each message
-                    messagesToLog.forEach(msg => {
-                        if (msg.type === 'warn') {
-                            console.warn(msg.text);
-                        } else {
-                            console.error(msg.text);
-                        }
-                    });
+                    messagesToLog.forEach(msg => (msg.type === 'warn' ? console.warn : console.error)(msg.text));
                 }
-
-                processedCount += batchFiles.length;
+                processedCount++;
                 renderProgressBar();
-            }
+            };
+
+            // Sliding-window pool: no per-batch barrier waiting on the slowest file.
+            let nextIndex = 0;
+            const worker = async () => {
+                while (nextIndex < totalFiles) {
+                    const filename = filesToProcess[nextIndex++];
+                    const [result] = await Promise.allSettled([processFile(filename)]);
+                    handleResult(result);
+                }
+            };
+            await Promise.all(Array.from({ length: Math.min(CONCURRENCY_LIMIT, totalFiles) }, worker));
             process.stdout.write('\n');
         }
 
