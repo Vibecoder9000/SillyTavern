@@ -1,11 +1,16 @@
 import { performance } from 'node:perf_hooks';
 import * as fs from 'node:fs/promises';
 import path from 'node:path';
+import os from 'node:os';
+import { Worker } from 'node:worker_threads';
 import crypto from 'node:crypto';
 import { imageSize } from 'image-size';
 import writeFileAtomic from 'write-file-atomic';
 import { invalidateThumbnail, generateThumbnail, SKIPPED_EXTENSIONS_FOR_JIMP, CONCURRENCY_LIMIT } from './thumbnails.js';
-import { getThumbnailResolution } from '../util.js';
+import { getThumbnailResolution, getConfigFilePath } from '../util.js';
+
+const WORKER_MIN_FILES = 8;
+const MAX_WORKERS = 8;
 
 /**
  * We create a promise that acts as a "lock".
@@ -122,6 +127,68 @@ export async function generateSingleFileMetadata(filePath, onDecodedImage) {
         throw error;
     }
 }
+
+/**
+ * Processes one background file: metadata + server-side thumbnail. Safe to run inside a worker thread.
+ * @param {string} filename
+ * @param {string} backgroundsFolderPath
+ * @param {object} userDirectories
+ * @param {object|undefined} existingMeta
+ */
+export async function processBackgroundFile(filename, backgroundsFolderPath, userDirectories, existingMeta) {
+            const filePath = path.join(backgroundsFolderPath, filename);
+            let updatePayload = {};
+            let decodedImage;
+            let currentImageMeta = existingMeta;
+
+            // Force re-generation of metadata if it's a new file, or if its animated status/thumbnailResolution is uncertain.
+            const fileExtension = path.extname(filename).toLowerCase();
+            const forceMetadataRegen =
+                !currentImageMeta ||
+                currentImageMeta.addedTimestamp === undefined ||
+                currentImageMeta.isAnimated === undefined ||
+                // Force metadata regen for PNG/WebP if thumbnailResolution is missing.
+                // This ensures 'isAnimated' is re-evaluated from the file itself.
+                ((fileExtension === '.png' || fileExtension === '.webp') && currentImageMeta.thumbnailResolution === undefined);
+
+            if (forceMetadataRegen) {
+                const newMetadata = await generateSingleFileMetadata(filePath, image => { decodedImage = image; });
+                if (newMetadata) {
+                    updatePayload.newMetadata = newMetadata;
+                    currentImageMeta = { ...currentImageMeta, ...newMetadata }; // Use updated meta for subsequent checks
+                }
+            } else if (currentImageMeta.addedTimestamp === undefined) { // Fallback for addedTimestamp if not covered above
+                try {
+                    const stats = await fs.stat(filePath);
+                    updatePayload.addedTimestamp = Math.floor(stats.birthtimeMs || stats.mtimeMs);
+                } catch {
+                    updatePayload.addedTimestamp = Date.now();
+                }
+            }
+
+            // Determine if server-side thumbnail generation should be skipped for this file.
+            // This includes formats explicitly skipped by Jimp (e.g., .gif, .mp4, .apng)
+            // OR any file that is identified as animated (e.g., APNG, animated WebP).
+            const shouldSkipServerThumbnailGeneration =
+                SKIPPED_EXTENSIONS_FOR_JIMP.includes(fileExtension) ||
+                (currentImageMeta && currentImageMeta.isAnimated);
+
+            let warningMessage = null;
+
+            // Only attempt server-side thumbnail generation if thumbnailResolution is missing
+            // and server-side generation is not skipped for this file.
+            if (currentImageMeta && currentImageMeta.thumbnailResolution === undefined && !shouldSkipServerThumbnailGeneration) {
+                const thumbResult = await generateThumbnail(userDirectories, 'bg', filename, false, false, currentImageMeta.isAnimated, decodedImage);
+                if (thumbResult.path && thumbResult.resolution) {
+                    updatePayload.thumbnailResolution = thumbResult.resolution;
+                }
+            } else if (currentImageMeta && currentImageMeta.thumbnailResolution === undefined && shouldSkipServerThumbnailGeneration) {
+                // If the thumbnail was expected to be skipped by the server, create the warning message.
+                warningMessage = `[Background Sync] Server cannot process "${filename}". It will be client generated.`;
+            }
+            // Return the warning message along with other data.
+            return { filename, ...updatePayload, warningMessage };
+        }
 
 /**
  * A utility function to purge the entire thumbnail cache directory.
@@ -334,60 +401,50 @@ export async function syncBackgroundsMetadata(userDirectories) {
 
             renderProgressBar();
 
-            const processFile = async (filename) => {
-                    const filePath = path.join(backgroundsFolderPath, filename);
-                    let updatePayload = {};
-                    let decodedImage;
-                    let currentImageMeta = metadata.images[filename]; // Get current metadata for this file
-
-                    // Force re-generation of metadata if it's a new file, or if its animated status/thumbnailResolution is uncertain.
-                    const fileExtension = path.extname(filename).toLowerCase();
-                    const forceMetadataRegen =
-                        !currentImageMeta ||
-                        currentImageMeta.addedTimestamp === undefined ||
-                        currentImageMeta.isAnimated === undefined ||
-                        // Force metadata regen for PNG/WebP if thumbnailResolution is missing.
-                        // This ensures 'isAnimated' is re-evaluated from the file itself.
-                        ((fileExtension === '.png' || fileExtension === '.webp') && currentImageMeta.thumbnailResolution === undefined);
-
-                    if (forceMetadataRegen) {
-                        const newMetadata = await generateSingleFileMetadata(filePath, image => { decodedImage = image; });
-                        if (newMetadata) {
-                            updatePayload.newMetadata = newMetadata;
-                            currentImageMeta = { ...currentImageMeta, ...newMetadata }; // Use updated meta for subsequent checks
-                        }
-                    } else if (currentImageMeta.addedTimestamp === undefined) { // Fallback for addedTimestamp if not covered above
-                        try {
-                            const stats = await fs.stat(filePath);
-                            updatePayload.addedTimestamp = Math.floor(stats.birthtimeMs || stats.mtimeMs);
-                        } catch {
-                            updatePayload.addedTimestamp = Date.now();
-                        }
+            const useWorkers = totalFiles >= WORKER_MIN_FILES;
+            const workerCount = useWorkers ? Math.max(1, Math.min(os.availableParallelism() - 1, MAX_WORKERS, totalFiles)) : 0;
+            const workers = [];
+            if (useWorkers) {
+                for (let w = 0; w < workerCount; w++) {
+                    try {
+                        const worker = new Worker(new URL('./backgrounds-worker.js', import.meta.url), { workerData: { configPath: getConfigFilePath() } });
+                        worker.pending = new Map();
+                        worker.on('message', ({ id, result, error }) => {
+                            const p = worker.pending.get(id);
+                            worker.pending.delete(id);
+                            if (p) error ? p.reject(new Error(error)) : p.resolve(result);
+                        });
+                        const failAll = (err) => {
+                            for (const p of worker.pending.values()) p.reject(err);
+                            worker.pending.clear();
+                            worker.dead = true;
+                        };
+                        worker.on('error', failAll);
+                        worker.on('exit', () => failAll(new Error('worker exited')));
+                        workers.push(worker);
+                    } catch (e) {
+                        console.warn('[Background Sync] Could not start worker thread:', e.message);
                     }
-
-                    // Determine if server-side thumbnail generation should be skipped for this file.
-                    // This includes formats explicitly skipped by Jimp (e.g., .gif, .mp4, .apng)
-                    // OR any file that is identified as animated (e.g., APNG, animated WebP).
-                    const shouldSkipServerThumbnailGeneration =
-                        SKIPPED_EXTENSIONS_FOR_JIMP.includes(fileExtension) ||
-                        (currentImageMeta && currentImageMeta.isAnimated);
-
-                    let warningMessage = null;
-
-                    // Only attempt server-side thumbnail generation if thumbnailResolution is missing
-                    // and server-side generation is not skipped for this file.
-                    if (currentImageMeta && currentImageMeta.thumbnailResolution === undefined && !shouldSkipServerThumbnailGeneration) {
-                        const thumbResult = await generateThumbnail(userDirectories, 'bg', filename, false, false, currentImageMeta.isAnimated, decodedImage);
-                        if (thumbResult.path && thumbResult.resolution) {
-                            updatePayload.thumbnailResolution = thumbResult.resolution;
-                        }
-                    } else if (currentImageMeta && currentImageMeta.thumbnailResolution === undefined && shouldSkipServerThumbnailGeneration) {
-                        // If the thumbnail was expected to be skipped by the server, create the warning message.
-                        warningMessage = `[Background Sync] Server cannot process "${filename}". It will be client generated.`;
+                }
+            }
+            let msgId = 0;
+            const runInWorker = (worker, args) => new Promise((resolve, reject) => {
+                const id = ++msgId;
+                worker.pending.set(id, { resolve, reject });
+                worker.postMessage({ id, args });
+            });
+            const processFile = async (filename, worker) => {
+                const args = [filename, backgroundsFolderPath, userDirectories, metadata.images[filename]];
+                if (worker && !worker.dead) {
+                    try {
+                        return await runInWorker(worker, args);
+                    } catch (e) {
+                        if (!worker.dead) throw e;
+                        // Worker crashed: fall through to in-thread processing.
                     }
-                    // Return the warning message along with other data.
-                    return { filename, ...updatePayload, warningMessage };
-                };
+                }
+                return processBackgroundFile(...args);
+            };
 
             const handleResult = (result) => {
                 const messagesToLog = [];
@@ -429,14 +486,20 @@ export async function syncBackgroundsMetadata(userDirectories) {
 
             // Sliding-window pool: no per-batch barrier waiting on the slowest file.
             let nextIndex = 0;
-            const worker = async () => {
+            const loop = async (worker) => {
                 while (nextIndex < totalFiles) {
                     const filename = filesToProcess[nextIndex++];
-                    const [result] = await Promise.allSettled([processFile(filename)]);
+                    const [result] = await Promise.allSettled([processFile(filename, worker)]);
                     handleResult(result);
                 }
             };
-            await Promise.all(Array.from({ length: Math.min(CONCURRENCY_LIMIT, totalFiles) }, worker));
+            // One in-flight task per worker thread (CPU-bound); in-thread fallback uses the old concurrency.
+            const slots = workers.length > 0 ? workers : Array.from({ length: Math.min(CONCURRENCY_LIMIT, totalFiles) }, () => null);
+            try {
+                await Promise.all(slots.map(loop));
+            } finally {
+                await Promise.all(workers.map(w => w.terminate()));
+            }
             process.stdout.write('\n');
         }
 
