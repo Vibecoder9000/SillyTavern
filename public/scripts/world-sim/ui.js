@@ -181,16 +181,20 @@ function bindEvents() {
         }
         if (summaryBatchActive || manualRunActive) return;
 
+        if (!getCastMembers().length) {
+            toastr.info('Add characters to the cast first.', 'World Sim');
+            return;
+        }
         const targets = getBulkInitializeTargets();
         if (!targets.length) {
-            toastr.info('Everyone is already initialized.', 'World Sim');
+            toastr.info('Everyone in the cast is already initialized.', 'World Sim');
             return;
         }
 
         const confirmed = await confirmWorldSimAction({
-            title: `Initialize ${targets.length} character${targets.length === 1 ? '' : 's'}?`,
-            message: 'World Sim will prepare each character and include them in the simulation.',
-            detail: 'This can take a while. You can pause the queue after the current character finishes.',
+            title: `Initialize ${targets.length} cast member${targets.length === 1 ? '' : 's'}?`,
+            message: 'World Sim will prepare each cast member in turn.',
+            detail: `This can take a while. You can pause the queue after the current character finishes.${toolApprovalNote()}`,
             confirmLabel: 'Initialize',
             icon: 'fa-wand-magic-sparkles',
         });
@@ -305,7 +309,20 @@ function bindEvents() {
             return;
         }
         if (manualRunActive || bulkInitActive) return;
-        await summarizeAllCharacters();
+        const targets = getCastMembers();
+        if (!targets.length) {
+            toastr.info('Add characters to the cast first.', 'World Sim');
+            return;
+        }
+        const confirmed = await confirmWorldSimAction({
+            title: `Summarize ${targets.length} cast member${targets.length === 1 ? '' : 's'}?`,
+            message: "World Sim will write a short context summary from each cast member's card.",
+            detail: `You can pause after the current character finishes.${toolApprovalNote()}`,
+            confirmLabel: 'Summarize',
+            icon: 'fa-file-lines',
+        });
+        if (!confirmed) return;
+        await summarizeAllCharacters(targets);
     });
 
     // --- Detail field edits ---
@@ -1133,26 +1150,29 @@ function updateStatusBar() {
 
 }
 
+function toolApprovalNote() {
+    return power_user.tool_click_to_execute ? " You will approve each character's tool call in chat." : '';
+}
+
 function getBulkInitializeTargets() {
     const targets = [];
 
-    for (const char of characters.filter(c => c?.avatar && c.avatar !== WORLD_CHARACTER_AVATAR)) {
-        const entry = ensureRosterEntry(char.avatar);
-        if (!entry || entry.initialized) continue;
+    for (const entry of getCastMembers()) {
+        if (entry.initialized) continue;
         targets.push(entry);
     }
 
     return targets;
 }
 
-async function summarizeAllCharacters() {
-    const targets = [];
-    for (const character of characters.filter(item => item?.avatar && item.avatar !== WORLD_CHARACTER_AVATAR)) {
-        const entry = ensureRosterEntry(character.avatar);
-        if (entry) targets.push(entry);
-    }
+/** Included characters (the cast), in roster order. */
+function getCastMembers() {
+    return Object.values(getRoster().characters || {}).filter(entry => entry.included);
+}
+
+async function summarizeAllCharacters(targets = getCastMembers()) {
     if (!targets.length) {
-        toastr.info('No character cards are available to summarize.', 'World Sim');
+        toastr.info('Add characters to the cast first.', 'World Sim');
         return;
     }
 
@@ -1211,23 +1231,25 @@ function renderSetupControls() {
         .prop('disabled', setupBusy)
         .html(`<span>${areAllCharactersIncluded() ? 'Disclude All' : 'Include All'}</span>`);
 
+    const noCast = getCastMembers().length === 0;
+    const noCastTip = 'Add characters to the cast first.';
     $('#world-sim-init-all')
-        .prop('disabled', bulkInitStopRequested || summaryBatchActive || manualRunActive)
-        .attr('title', bulkInitActive ? 'Stop initialization after the current character finishes' : 'Initialize every character that has not been initialized yet')
+        .prop('disabled', bulkInitStopRequested || summaryBatchActive || manualRunActive || (noCast && !bulkInitActive))
+        .attr('title', bulkInitActive ? 'Stop initialization after the current character finishes' : noCast ? noCastTip : 'Initialize every cast member that has not been initialized yet')
         .html(bulkInitActive
             ? (bulkInitStopRequested
                 ? '<span>Pausing After Current…</span>'
                 : '<span>Pause Initialization</span>')
-            : '<span>Initialize All</span>');
+            : '<span>Initialize cast</span>');
 
     $('#world-sim-summary-all')
-        .prop('disabled', summaryBatchStopRequested || bulkInitActive || manualRunActive)
-        .attr('title', summaryBatchActive ? 'Stop summarization after the current character finishes' : 'Prepare World Sim context for every character')
+        .prop('disabled', summaryBatchStopRequested || bulkInitActive || manualRunActive || (noCast && !summaryBatchActive))
+        .attr('title', summaryBatchActive ? 'Stop summarization after the current character finishes' : noCast ? noCastTip : 'Prepare World Sim context for every cast member')
         .html(summaryBatchActive
             ? (summaryBatchStopRequested
                 ? '<span>Pausing After Current…</span>'
                 : '<span>Pause Summarization</span>')
-            : '<span>Summarize All</span>');
+            : '<span>Summarize cast</span>');
 
     $('#world-sim-reset-all').prop('disabled', setupBusy);
 }
@@ -1302,7 +1324,6 @@ async function continueBulkInitializeQueue() {
         return;
     }
 
-    target.included = true;
     bulkInitQueue.currentCharacterId = id;
     await saveWorldSimState();
     updateSetupProgress(bulkInitQueue.currentIndex, bulkInitQueue.total, bulkInitQueue.unattended ? 'Initializing' : 'Waiting');
