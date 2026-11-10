@@ -1423,25 +1423,15 @@ body.rounded-avatars .world-sim-diff-charhead img {
 /* ---- Actions / Settings ---- */
 
 .world-sim-fast-forward {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) auto;
+    display: flex;
+    flex-wrap: wrap;
     gap: 8px;
     align-items: center;
 }
 
-.world-sim-run-guided {
-    grid-column: 1 / -1;
-    grid-row: 2;
-    justify-content: center;
-    width: 100%;
-    min-width: 0;
-    margin: 0;
-    white-space: nowrap;
-}
-
+.world-sim-run-guided,
 .world-sim-run-now {
-    grid-column: 1;
-    grid-row: 1;
+    flex: 1 1 auto;
     justify-content: center;
     min-width: 0;
     margin: 0;
@@ -1450,10 +1440,15 @@ body.rounded-avatars .world-sim-diff-charhead img {
 
 .world-sim-run-count {
     display: flex;
-    grid-column: 2;
-    grid-row: 1;
+    flex: 0 0 auto;
+    gap: 6px;
     align-items: center;
     margin: 0;
+}
+
+.world-sim-run-count-label {
+    font-size: 0.85em;
+    opacity: 0.8;
 }
 
 .world-sim-run-count input {
@@ -1775,6 +1770,20 @@ body.rounded-avatars .world-sim-diff-charhead img {
         display: block;
     }
 
+    /* Locations list sits under the map on narrow screens. */
+    .world-sim-map-layout {
+        flex-direction: column;
+    }
+
+    .world-sim-map-layout .world-sim-map {
+        flex: 1 1 60%;
+    }
+
+    .world-sim-locations-panel {
+        flex: 0 0 auto;
+        width: auto;
+    }
+
     .world-sim-app[data-mtab="map"] #world-sim-map-tab,
     .world-sim-app[data-mtab="history"] #world-sim-history-tab {
         display: block;
@@ -1972,3 +1981,224 @@ body.rounded-avatars .world-sim-diff-charhead img {
 @keyframes world-sim-pulse {
     50% { box-shadow: 0 0 0 8px color-mix(in srgb, var(--SmartThemeQuoteColor) 35%, transparent); }
 }
+
+/* ---- Experimental badge, Cast / All cards switch, readiness chips ---- */
+
+.world-sim-experimental-badge {
+    align-self: center;
+    margin-left: auto;
+    padding: 1px 8px;
+    font-size: 0.75em;
+    letter-spacing: 0.4px;
+    text-transform: uppercase;
+    opacity: 0.75;
+    border: 1px solid var(--SmartThemeBorderColor);
+    border-radius: 999px;
+}
+
+.world-sim-segmented {
+    display: inline-flex;
+    flex: 0 0 auto;
+    overflow: hidden;
+    border: 1px solid var(--SmartThemeBorderColor);
+    border-radius: 8px;
+}
+
+.world-sim-seg {
+    padding: 4px 10px;
+    font: inherit;
+    font-size: 0.85em;
+    color: inherit;
+    cursor: pointer;
+    background: none;
+    border: 0;
+    opacity: 0.7;
+}
+
+.world-sim-seg + .world-sim-seg {
+    border-left: 1px solid var(--SmartThemeBorderColor);
+}
+
+.world-sim-seg[aria-pressed="true"] {
+    opacity: 1;
+    background: color-mix(in srgb, var(--SmartThemeQuoteColor) 25%, transparent);
+}
+
+.world-sim-ready-chip {
+    flex: 0 0 auto;
+    padding: 1px 7px;
+    font-size: 0.72em;
+    white-space: nowrap;
+    border: 1px solid var(--SmartThemeBorderColor);
+    border-radius: 999px;
+    opacity: 0.8;
+}
+
+.world-sim-ready-chip[data-ready="ready"] {
+    color: #50d278;
+    border-color: color-mix(in srgb, #50d278 60%, transparent);
+    opacity: 1;
+}
+
+.world-sim-ready-chip[data-ready="needs-summary"],
+.world-sim-ready-chip[data-ready="needs-init"] {
+    color: #e0b04a;
+    border-color: color-mix(in srgb, #e0b04a 60%, transparent);
+    opacity: 1;
+}
+
+/* ---- Run stepper ---- */
+
+.world-sim-stepper {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 10px;
+    background-color: var(--black30a);
+    border: 1px solid var(--SmartThemeBorderColor);
+    border-radius: 8px;
+}
+
+.world-sim-stepper[hidden] { display: none; }
+
+.world-sim-stepper-steps {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 10px;
+    padding: 0;
+    margin: 0;
+    font-size: 0.82em;
+    list-style: none;
+}
+
+.world-sim-stepper-steps li { opacity: 0.5; }
+.world-sim-stepper-steps li::before { content: "\25CB\00a0"; }
+.world-sim-stepper-steps li.is-done { opacity: 0.85; }
+.world-sim-stepper-steps li.is-done::before { content: "\2713\00a0"; color: #50d278; }
+.world-sim-stepper-steps li.is-active { font-weight: 700; opacity: 1; }
+.world-sim-stepper-steps li.is-active::before { content: "\25CF\00a0"; color: var(--SmartThemeQuoteColor); }
+.world-sim-stepper-steps li.is-trouble { color: #e0b04a; }
+.world-sim-stepper-steps li.is-trouble::before { content: "!\00a0"; color: #e0b04a; }
+
+.world-sim-stepper-detail {
+    margin: 0;
+    font-size: 0.9em;
+    overflow-wrap: anywhere;
+}
+
+.world-sim-stepper-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+.world-sim-chip {
+    display: inline-flex;
+    gap: 5px;
+    align-items: center;
+    padding: 2px 8px 2px 3px;
+    font-size: 0.85em;
+    border: 1px solid var(--SmartThemeBorderColor);
+    border-radius: 999px;
+}
+
+.world-sim-chip img {
+    width: 20px;
+    height: 20px;
+    object-fit: cover;
+    border-radius: 50%;
+}
+
+.world-sim-chip-remove {
+    padding: 0 2px;
+    color: inherit;
+    cursor: pointer;
+    background: none;
+    border: 0;
+    opacity: 0.7;
+}
+
+.world-sim-chip-remove:hover,
+.world-sim-chip-remove:focus-visible { opacity: 1; }
+
+.world-sim-stepper-add select { width: 100%; }
+
+.world-sim-stepper-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+.world-sim-stepper-actions .menu_button {
+    flex: 1 1 auto;
+    justify-content: center;
+    margin: 0;
+}
+
+/* ---- Map tab with collapsible locations list ---- */
+
+.world-sim-map-layout {
+    display: flex;
+    gap: 8px;
+    height: 100%;
+    min-height: 0;
+}
+
+.world-sim-map-layout .world-sim-map {
+    flex: 1 1 auto;
+    width: auto;
+    min-width: 0;
+}
+
+.world-sim-locations-panel {
+    display: flex;
+    flex: 0 0 240px;
+    flex-direction: column;
+    min-height: 0;
+    width: 240px;
+}
+
+.world-sim-locations-panel > summary {
+    padding: 4px 6px;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.world-sim-locations-panel:not([open]) { flex-basis: auto; width: auto; }
+.world-sim-locations-panel .world-sim-locations-list { max-height: none; }
+
+#world-sim-status-action { margin: 0 0 0 8px; padding: 2px 10px; }
+#world-sim-status-action[hidden] { display: none; }
+
+.world-sim-input-dialog.is-large {
+    width: min(900px, calc(100dvw - 2em));
+    max-width: calc(100dvw - 2em);
+}
+
+.world-sim-input-dialog.is-large .popup-input {
+    min-height: 50dvh;
+    font-family: var(--monoFontFamily, monospace);
+    font-size: 0.85em;
+}
+
+.menu_button.world-sim-primary {
+    color: var(--SmartThemeBodyColor);
+    background-color: color-mix(in srgb, var(--SmartThemeQuoteColor) 35%, transparent);
+    border-color: var(--SmartThemeQuoteColor);
+}
+
+.world-sim-map-empty {
+    position: absolute;
+    inset: 0;
+    z-index: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+    text-align: center;
+    background-color: color-mix(in srgb, var(--black50a) 70%, transparent);
+}
+
+.world-sim-map-empty[hidden] { display: none; }
+.world-sim-map-empty .world-sim-empty { display: flex; flex-direction: column; gap: 10px; align-items: center; }
+.world-sim-empty p { margin: 0 0 8px; }

@@ -113,10 +113,13 @@ export function initWorldSimMap(container) {
     labelsLayer = el('g');
     svg.append(defsLayer, gridLayer, locationsLayer, pinsLayer, labelsLayer);
     container.prepend(svg);
-    perfEl = document.createElement('div');
-    perfEl.className = 'world-sim-map-perf';
-    container.appendChild(perfEl);
-    updatePerfHud();
+    // The FPS HUD is a developer aid: only shown when localStorage.worldSimDebug is set.
+    if (isWorldSimDebugEnabled()) {
+        perfEl = document.createElement('div');
+        perfEl.className = 'world-sim-map-perf';
+        container.appendChild(perfEl);
+        updatePerfHud();
+    }
     startPerfHudLoop();
 
     svg.addEventListener('pointerdown', onPointerDown);
@@ -1445,6 +1448,14 @@ function publishFrameProfile(profile) {
     queuePerfLog(profile);
 
     updatePerfHud();
+}
+
+function isWorldSimDebugEnabled() {
+    try {
+        return !!localStorage.getItem('worldSimDebug');
+    } catch {
+        return false;
+    }
 }
 
 function updatePerfHud() {

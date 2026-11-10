@@ -42,7 +42,15 @@ const SELECTOR_HISTORY_PLAN_ENTRIES = 3;
  * @param {string} prompt
  * @returns {Promise<void>}
  */
-async function fireWorldSimGeneration(prompt, { disableAutoContinue = false } = {}) {
+async function fireWorldSimGeneration(prompt, { disableAutoContinue = false, label = 'World Sim' } = {}) {
+    // Optional user review: the built prompt is shown (editable) before it is sent.
+    if (getConfig().reviewPrompts && promptReviewer) {
+        const reviewed = await promptReviewer(prompt, label);
+        if (reviewed === null || reviewed === undefined) {
+            throw Object.assign(new Error('Prompt review cancelled.'), { name: 'AbortError' });
+        }
+        prompt = reviewed;
+    }
     // Fresh chat per generation so each selector/updater/initialize step is self-contained
     // and the model isn't paying to re-read the previous step's prompt + tool exchange.
     await doNewChat({ openInWorkspace: false });
@@ -75,21 +83,35 @@ async function fireWorldSimGeneration(prompt, { disableAutoContinue = false } = 
     });
 }
 
-/** Fires the selector step: the model picks focus characters via `select_characters`. */
-export async function fireSelector({ snapshot = null, guidance = '', selection = null } = {}) {
-    await fireWorldSimGeneration(buildSelectorPrompt(snapshot, guidance, selection));
+let promptReviewer = null;
+
+/**
+ * Registers the UI that lets the user read/edit a prompt before it is sent
+ * (used when the `reviewPrompts` setting is on). Resolve null to abort.
+ * @param {(prompt: string, label: string) => Promise<string|null>} reviewer
+ */
+export function setPromptReviewer(reviewer) {
+    promptReviewer = reviewer;
+}
+
+/**
+ * Fires the selector step: the model picks focus characters via `select_characters`.
+ * `promptOverride` replaces the built prompt (default prompt construction is unchanged).
+ */
+export async function fireSelector({ snapshot = null, guidance = '', selection = null, promptOverride = null } = {}) {
+    await fireWorldSimGeneration(promptOverride ?? buildSelectorPrompt(snapshot, guidance, selection), { label: 'selector' });
 }
 
 /**
  * Fires the updater step for the given characters via `world_update`.
  * @param {string[]} characterIds
  */
-export async function fireUpdater(characterIds, { snapshot = null, guidance = '' } = {}) {
+export async function fireUpdater(characterIds, { snapshot = null, guidance = '', promptOverride = null } = {}) {
     const config = getConfig();
     const dice = {};
     for (const id of characterIds) dice[id] = Math.floor(Math.random() * config.diceSides) + 1;
     updateRun({ dice });
-    await fireWorldSimGeneration(buildUpdaterPrompt(characterIds, dice, snapshot, guidance));
+    await fireWorldSimGeneration(promptOverride ?? buildUpdaterPrompt(characterIds, dice, snapshot, guidance), { label: 'updater' });
 }
 
 function getWorldView(snapshot = null) {
@@ -110,9 +132,10 @@ function getWorldView(snapshot = null) {
  * Fires the initialize step for a single character via `world_initialize`.
  * @param {string} avatar
  */
-export async function fireInitialize(avatar, extraInstructions = '') {
-    await fireWorldSimGeneration(buildInitialCharacterPrompt(avatar, extraInstructions), {
+export async function fireInitialize(avatar, extraInstructions = '', { promptOverride = null } = {}) {
+    await fireWorldSimGeneration(promptOverride ?? buildInitialCharacterPrompt(avatar, extraInstructions), {
         disableAutoContinue: true,
+        label: 'initialize',
     });
 }
 
@@ -122,8 +145,8 @@ export async function fireInitialize(avatar, extraInstructions = '') {
  * @param {string} chatMessages
  * @param {{snapshot?: object|null}} [context]
  */
-export async function fireCommit(characterIds, chatMessages, { snapshot = null } = {}) {
-    await fireWorldSimGeneration(buildCommitPrompt(characterIds, chatMessages, snapshot));
+export async function fireCommit(characterIds, chatMessages, { snapshot = null, promptOverride = null } = {}) {
+    await fireWorldSimGeneration(promptOverride ?? buildCommitPrompt(characterIds, chatMessages, snapshot), { label: 'scene commit' });
 }
 
 /**

@@ -96,6 +96,8 @@ export async function confirmWorldSimAction({
  * @param {number} [options.rows=1]
  * @param {number|null} [options.maxLength=null]
  * @param {boolean} [options.required=false]
+ * @param {boolean} [options.large=false]
+ * @param {string} [options.cancelLabel='Cancel']
  * @returns {Promise<string|null>}
  */
 export async function promptWorldSimText({
@@ -108,6 +110,8 @@ export async function promptWorldSimText({
     rows = 1,
     maxLength = null,
     required = false,
+    large = false,
+    cancelLabel = 'Cancel',
 }) {
     const sequence = ++dialogSequence;
     const titleId = `world-sim-input-title-${sequence}`;
@@ -115,8 +119,11 @@ export async function promptWorldSimText({
     const content = buildActionContent({ title, message, icon, titleId, descriptionId });
     const popup = new Popup(content, POPUP_TYPE.INPUT, value, {
         okButton: confirmLabel,
-        cancelButton: 'Cancel',
+        cancelButton: cancelLabel,
         defaultResult: POPUP_RESULT.AFFIRMATIVE,
+        wide: large,
+        wider: large,
+        large,
         placeholder,
         rows,
         maxLength,
@@ -129,6 +136,7 @@ export async function promptWorldSimText({
         },
     });
     popup.dlg.classList.add('world-sim-dialog', 'world-sim-input-dialog');
+    popup.dlg.classList.toggle('is-large', large);
     popup.dlg.setAttribute('aria-labelledby', titleId);
     popup.dlg.setAttribute('aria-describedby', descriptionId);
     popup.mainInput.setAttribute('aria-labelledby', titleId);

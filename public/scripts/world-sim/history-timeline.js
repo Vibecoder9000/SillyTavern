@@ -67,10 +67,14 @@ class HistoryTimeline {
         this.container.replaceChildren();
         const events = Object.values(this.history?.events || {});
         if (!events.length) {
-            const empty = document.createElement('div');
-            empty.className = 'world-sim-empty';
-            empty.textContent = 'Character events will appear here.';
-            this.container.append(empty);
+            if (typeof this.options.renderEmpty === 'function') {
+                this.options.renderEmpty(this.container);
+            } else {
+                const empty = document.createElement('div');
+                empty.className = 'world-sim-empty';
+                empty.textContent = 'Character events will appear here.';
+                this.container.append(empty);
+            }
             return;
         }
 
@@ -443,6 +447,12 @@ class HistoryTimeline {
         add('fa-crosshairs', 'Fit all', () => this.recenter(true));
         add('fa-forward-step', 'Jump to latest', () => this.jumpToLatest());
         this.container.append(toolbar);
+    }
+
+    /** Pans to (and pulses) the event created by a revision. */
+    focusRevision(revisionId) {
+        const event = Object.values(this.history.events).find(item => item.revisionId === revisionId);
+        if (event) this.focusEvent(event.id, { pulse: true, force: true });
     }
 
     /** Pans to the newest event by sequence and pulses it. */

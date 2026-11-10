@@ -5017,28 +5017,32 @@
                     <aside class="world-sim-pane world-sim-roster-pane">
                         <div class="world-sim-pane-head">
                             <h3 class="margin0">Characters <span id="world-sim-roster-count" class="world-sim-count">(0)</span></h3>
-                            <button id="world-sim-include-all" type="button" class="menu_button" title="Toggle every character between included and discluded for World Sim"><span>Include All</span></button>
+                            <button id="world-sim-include-all" type="button" class="menu_button" title="Add every character card to the cast, or clear the cast"><span>Add all to cast</span></button>
                         </div>
                         <div class="world-sim-search-row">
                             <div class="world-sim-search">
                                 <i class="fa-solid fa-magnifying-glass"></i>
                                 <input id="world-sim-search" type="search" class="text_pole" placeholder="Search characters...">
                             </div>
-                            <button id="world-sim-filter-included" type="button" class="menu_button menu_button_icon" title="Show included only"><i class="fa-solid fa-filter"></i></button>
+                            <div class="world-sim-segmented" role="group" aria-label="Which characters to list">
+                                <button id="world-sim-scope-cast" type="button" class="world-sim-seg" data-scope="cast" aria-pressed="false" title="Show only characters in the cast">Cast</button>
+                                <button id="world-sim-scope-all" type="button" class="world-sim-seg" data-scope="all" aria-pressed="true" title="Show every character card">All cards</button>
+                            </div>
                         </div>
                         <div id="world-sim-roster" class="world-sim-roster"></div>
                     </aside>
 
                     <section class="world-sim-pane world-sim-center-pane">
-                        <div class="world-sim-dev-header">Under Development</div>
                         <div class="world-sim-tabs" role="tablist">
                             <button class="world-sim-tab active" data-tab="map" type="button">Map</button>
                             <button class="world-sim-tab" data-tab="history" type="button">History</button>
                             <button class="world-sim-tab" data-tab="conversations" type="button">Conversations</button>
                             <button class="world-sim-tab" data-tab="settings" type="button">Settings</button>
+                            <span class="world-sim-experimental-badge" title="World Sim is still under development">experimental</span>
                         </div>
                         <div class="world-sim-tab-body">
                             <div id="world-sim-map-tab" class="world-sim-tabpane active">
+                                <div class="world-sim-map-layout">
                                 <div id="world-sim-map" class="world-sim-map">
                                     <div class="world-sim-map-toolbar world-sim-map-toolbar-tl">
                                         <button type="button" class="menu_button" data-map="add-location" title="Add location region"><i class="fa-solid fa-plus"></i><span>Location</span></button>
@@ -5048,6 +5052,11 @@
                                         <button type="button" class="menu_button menu_button_icon" data-map="zoom-out" title="Zoom out"><i class="fa-solid fa-minus"></i></button>
                                         <button type="button" class="menu_button menu_button_icon" data-map="recenter" title="Recenter"><i class="fa-solid fa-crosshairs"></i></button>
                                     </div>
+                                </div>
+                                <details class="world-sim-locations-panel" open>
+                                    <summary>Locations</summary>
+                                    <div id="world-sim-locations-list" class="world-sim-locations-list"></div>
+                                </details>
                                 </div>
                             </div>
                             <div id="world-sim-history-tab" class="world-sim-tabpane">
@@ -5065,6 +5074,18 @@
                                         </div>
                                         <input id="world-sim-history-entries" type="number" min="1" step="1" class="text_pole">
                                     </div>
+                                    <label class="world-sim-setting-row checkbox_label">
+                                        <span class="world-sim-setting-label">Review selection before updating
+                                            <i class="margin5 fa-solid fa-circle-info opacity50p" title="After the model chooses who takes part, pause so you can add or remove characters before the world is updated."></i>
+                                        </span>
+                                        <input id="world-sim-review-selection" type="checkbox">
+                                    </label>
+                                    <label class="world-sim-setting-row checkbox_label">
+                                        <span class="world-sim-setting-label">Review prompt before sending
+                                            <i class="margin5 fa-solid fa-circle-info opacity50p" title="Show each World Sim prompt in an editable window before it is sent to the model."></i>
+                                        </span>
+                                        <input id="world-sim-review-prompts" type="checkbox">
+                                    </label>
                                     <div class="world-sim-setting-row">
                                         <span>Delete All Data</span>
                                         <button id="world-sim-reset-all" type="button" class="menu_button menu_button_icon redWarningBG margin0" title="Delete all World Sim data, locations, history, scenes, and initialization progress" aria-label="Delete all World Sim data"><i class="fa-solid fa-trash-can"></i></button>
@@ -5075,14 +5096,15 @@
                     </section>
 
                     <aside class="world-sim-pane world-sim-actions-pane">
-                        <div class="world-sim-fast-forward">
-                            <button id="world-sim-run-now" type="button" class="menu_button world-sim-run-now"><span>Continue</span></button>
-                            <button id="world-sim-run-guided" type="button" class="menu_button world-sim-run-guided" title="Guide the next event"><span>Run with guidance…</span></button>
+                        <div class="world-sim-fast-forward" role="group" aria-label="Run controls">
+                            <button id="world-sim-run-now" type="button" class="menu_button world-sim-run-now" title="Run the number of events set on the right"><span>Advance</span></button>
                             <label class="world-sim-run-count">
-                                <input id="world-sim-run-count" type="number" inputmode="numeric" min="1" max="100" value="1" class="text_pole" aria-label="Events to advance">
+                                <span class="world-sim-run-count-label">Events</span>
+                                <input id="world-sim-run-count" type="number" inputmode="numeric" min="1" max="100" value="1" class="text_pole" aria-label="Number of events to advance" title="How many events to run in a row. With Review selection on, every event pauses so you can check who takes part.">
                             </label>
+                            <button id="world-sim-run-guided" type="button" class="menu_button world-sim-run-guided" title="Advance one event with your own direction"><span>Guide…</span></button>
                         </div>
-                        <div id="world-sim-locations-list" class="world-sim-locations-list"></div>
+                        <div id="world-sim-run-stepper" class="world-sim-stepper" hidden aria-live="polite"></div>
                         <div class="world-sim-setup-actions" aria-label="World Sim setup actions">
                             <button id="world-sim-init-all" type="button" class="menu_button" title="Initialize every cast member that has not been initialized yet"><span>Initialize cast</span></button>
                             <button id="world-sim-summary-all" type="button" class="menu_button" title="Prepare World Sim context for every cast member"><span>Summarize cast</span></button>
@@ -5093,6 +5115,7 @@
                         <div class="world-sim-status-item world-sim-status-run">
                             <span id="world-sim-status-dot" class="world-sim-dot"></span>
                             <span id="world-sim-status" class="world-sim-status-text">Paused</span>
+                            <button id="world-sim-status-action" type="button" class="menu_button" hidden></button>
                         </div>
                     </footer>
                 </div>

@@ -14,136 +14,41 @@ import {
     getHeadRevisionId,
     loadRevisionSnapshot,
 } from './state.js';
-import { characters, eventSource, event_types, getRequestHeaders, hiddenGroupIds, printCharacters, setActiveGroup } from '../../script.js';
+import { characters, getRequestHeaders, hiddenGroupIds, printCharacters, setActiveGroup } from '../../script.js';
 import { humanizedDateTime } from '../RossAscends-mods.js';
-import { fireSelector, fireUpdater, fireInitialize, fireCommit, seedSceneOpening } from './llm.js';
-import { activateWorldSimToolScope, clearWorldSimToolScope, SELECT_CHARACTERS, WORLD_INITIALIZE, WORLD_UPDATE } from './tools.js';
+import { seedSceneOpening } from './llm.js';
+import { clearWorldSimToolScope } from './tools.js';
 import { isGenerationInProgress, openWorldCharacterChat } from './world-character.js';
-import { beginRun, getRun, updateRun, pauseRun, endRun, generateCycleId } from './run-context.js';
+import { beginRun, getRun, endRun, generateCycleId, setRunStage } from './run-context.js';
 import { ensureCharacterCardContext } from './card-summary.js';
-
-/**
- * World Sim should keep the scoped tool available when the generation was merely stopped
- * before the tool executed. That lets the user retry/correct the same request.
- * @param {unknown} error
- * @returns {boolean}
- */
-function wasGenerationStopped(error) {
-    const message = String(error?.message || error || '');
-    return error?.name === 'AbortError' || /\babort(?:ed|ing)?\b|\bstopp?(?:ed|ing)?\b/i.test(message);
-}
-
-/**
- * World Sim runs end only when the expected scoped tool executes. If the model answers
- * without calling that tool (or hallucinates some unrelated tool tag), the run would
- * otherwise stay active and make bulk initialize appear stalled.
- * @param {string} cycleId
- * @param {string} expectedToolName
- * @param {string} failureMessage
- * @returns {boolean} Whether the run was still active and had to be cleaned up.
- */
-function failIfRunStillActive(cycleId, expectedToolName) {
-    const run = getRun();
-    if (!run || run.cycleId !== cycleId) {
-        return false;
-    }
-
-    // Don't clear the scope or end the run — the user may reroll or correct this generation,
-    // and the tool must remain visible for the retry. Cleanup happens when:
-    //   - the retry succeeds (tool action fires → clears scope and ends run), or
-    //   - a new run starts (activateWorldSimToolScope supersedes this one), or
-    //   - the catch block fires on a hard error.
-    console.warn(`World Sim run ${cycleId} completed without calling ${expectedToolName}.`);
-    return true;
-}
-
-/** Waits for a tool result, or for another action to supersede this run. */
-function waitForWorldSimTool(cycleId, toolName, completion, completesRun = false) {
-    return new Promise(resolve => {
-        let settled = false;
-        const finish = result => {
-            if (settled) return;
-            settled = true;
-            eventSource.removeListener(event_types.TOOL_CALLS_RENDERED, onToolsRendered);
-            resolve(result);
-        };
-        const onToolsRendered = invocations => {
-            if (invocations?.some(invocation => invocation.name === toolName) && (completesRun || getRun()?.cycleId === cycleId)) {
-                finish(true);
-            }
-        };
-
-        eventSource.on(event_types.TOOL_CALLS_RENDERED, onToolsRendered);
-        completion.then(outcome => {
-            if (!completesRun || outcome?.status !== 'complete') finish(false);
-        });
-    });
-}
+import { driveCommit, driveEvent, driveInitialize, rememberReturnTarget, setRetriedRunHandler } from './run-driver.js';
 
 /**
  * Starts a continuation: opens the World Sim host chat and fires the selector. The run then
- * advances itself event-driven — the rendered `select_characters` call chains to the
- * updater, whose `world_update` call applies state and ends the run (see run-actions.js).
- * @returns {Promise<void>}
+ * advances itself event-driven (see run-driver.js): the rendered `select_characters` call
+ * chains to the updater, whose `world_update` call applies state and ends the run
+ * (see run-actions.js).
+ * @returns {Promise<object>}
  */
 export async function runCycle({ onSummaryProgress = null } = {}) {
     // A stale run is superseded rather than blocking; real concurrency is guarded by
     // openWorldCharacterChat() bailing while a generation is actually in flight.
-    const state = getState();
     const roster = getRoster();
 
     const eligible = Object.values(roster.characters).filter(c => c.included && c.initialized);
     if (!eligible.length) return { status: 'blocked', reason: 'No eligible characters.' };
 
+    await rememberReturnTarget();
     if (!await openWorldCharacterChat()) return { status: 'blocked', reason: 'A generation is already in progress.' };
 
     const snapshot = captureCurrentWorldSnapshot();
     const baseRevisionId = getHeadRevisionId();
     const cycleId = generateCycleId();
-    const completion = beginRun({ mode: 'continue', cycleId, characterIds: [], snapshot, baseSnapshot: snapshot, baseRevisionId, expectedHeadId: baseRevisionId, selectorResult: null });
-    activateWorldSimToolScope([SELECT_CHARACTERS]);
-
-    try {
-        const selectorFinished = waitForWorldSimTool(cycleId, SELECT_CHARACTERS, completion);
-        // Selector runs in its own chat. Its select_characters tool records the chosen ids
-        // (run-actions.js) but does NOT chain the updater itself — doing so would create the
-        // updater's fresh chat while ST is still executing the selector tool on this chat.
-        await fireSelector({ snapshot });
-        if (!await selectorFinished) return await completion;
-
-        const run = getRun();
-        if (!run || run.cycleId !== cycleId) return await completion;
-        if (!run.characterIds.length) {
-            if (failIfRunStillActive(cycleId, SELECT_CHARACTERS)) {
-                pauseRun({ reason: `The model did not call ${SELECT_CHARACTERS}.` });
-            }
-            return await completion;
-        }
-
-        for (const id of run.characterIds) {
-            await ensureCharacterCardContext(id, { onProgress: onSummaryProgress });
-        }
-
-        updateRun({ updaterStarted: true });
-        activateWorldSimToolScope([WORLD_UPDATE]);
-        const updaterFinished = waitForWorldSimTool(cycleId, WORLD_UPDATE, completion, true);
-        await fireUpdater(run.characterIds, { snapshot });
-        if (!await updaterFinished) return await completion;
-        if (failIfRunStillActive(cycleId, WORLD_UPDATE)) {
-            pauseRun({ reason: `The model did not call ${WORLD_UPDATE}.` });
-        }
-        return await completion;
-    } catch (error) {
-        if (wasGenerationStopped(error)) {
-            console.warn(`World Sim cycle ${cycleId} interrupted; keeping tool scope active for retry.`, error);
-            pauseRun({ status: 'cancelled', reason: 'Generation stopped.' });
-            return await completion;
-        }
-        console.error('World Sim cycle failed:', error);
-        clearWorldSimToolScope();
-        endRun({ status: 'failed', reason: error?.message || String(error), error });
-        return await completion;
-    }
+    const completion = beginRun({
+        mode: 'continue', cycleId, characterIds: [], snapshot, baseSnapshot: snapshot, baseRevisionId,
+        expectedHeadId: baseRevisionId, selectorResult: null, driver: { snapshot, onSummaryProgress },
+    });
+    return await driveEvent(cycleId, completion, 'select');
 }
 
 /**
@@ -201,36 +106,31 @@ export async function initializeCharacter(id) {
     const char = getRosterCharacter(id);
     if (!char) return;
 
+    await rememberReturnTarget();
     if (!await openWorldCharacterChat()) {
         toastr.error('Cannot initialize while a generation is in progress.', 'World Sim');
         return;
     }
 
+    const cycleId = generateCycleId();
+    const baseRevisionId = getHeadRevisionId();
+    const snapshot = captureCurrentWorldSnapshot();
+    const completion = beginRun({
+        mode: 'initialize', cycleId, characterIds: [id], snapshot, baseSnapshot: snapshot, baseRevisionId,
+        expectedHeadId: baseRevisionId, selectorResult: null, driver: { avatar: char.avatar },
+    });
+
     try {
+        setRunStage('preparing-context');
         await ensureCharacterCardContext(id);
     } catch (error) {
+        clearWorldSimToolScope();
+        endRun({ status: 'failed', reason: error?.message || String(error), error });
         toastr.error(error?.message || String(error), 'World Sim Summary');
         return;
     }
 
-    const cycleId = generateCycleId();
-    const baseRevisionId = getHeadRevisionId();
-    beginRun({ mode: 'initialize', cycleId, characterIds: [id], snapshot: captureCurrentWorldSnapshot(), baseSnapshot: captureCurrentWorldSnapshot(), baseRevisionId, expectedHeadId: baseRevisionId, selectorResult: null });
-    activateWorldSimToolScope([WORLD_INITIALIZE]);
-
-    try {
-        await fireInitialize(char.avatar);
-        failIfRunStillActive(cycleId, WORLD_INITIALIZE);
-    } catch (error) {
-        if (wasGenerationStopped(error)) {
-            console.warn(`World Sim initialize ${cycleId} interrupted; keeping tool scope active for retry.`, error);
-            return;
-        }
-        console.error('World Sim initialize failed:', error);
-        clearWorldSimToolScope();
-        endRun();
-        toastr.error('Failed to initialize character.', 'World Sim');
-    }
+    await driveInitialize(cycleId, completion);
 }
 
 /**
@@ -386,6 +286,7 @@ export async function deleteScene(sceneId) {
  * @returns {Promise<object|false>} The completed run outcome, or false when it did not commit.
  */
 export async function commitRoleplayToWorldState(characterIds, chatMessages, { cycleId = null, baseRevisionId = null } = {}) {
+    await rememberReturnTarget();
     if (!await openWorldCharacterChat()) {
         toastr.error('Cannot commit while a generation is in progress.', 'World Sim');
         return false;
@@ -398,29 +299,30 @@ export async function commitRoleplayToWorldState(characterIds, chatMessages, { c
     const baseSnapshot = resolvedBaseRevisionId === expectedHeadId
         ? captureCurrentWorldSnapshot()
         : await loadRevisionSnapshot(resolvedBaseRevisionId);
-    const completion = beginRun({ mode: 'commit', cycleId: resolvedCycleId, characterIds, snapshot: baseSnapshot, baseSnapshot, baseRevisionId: resolvedBaseRevisionId, expectedHeadId, selectorResult: null });
-    activateWorldSimToolScope([WORLD_UPDATE]);
+    const completion = beginRun({
+        mode: 'commit', cycleId: resolvedCycleId, characterIds, snapshot: baseSnapshot, baseSnapshot,
+        baseRevisionId: resolvedBaseRevisionId, expectedHeadId, selectorResult: null,
+        driver: { chatMessages, snapshot: baseSnapshot },
+    });
+    return await driveCommit(resolvedCycleId, completion);
+}
 
-    try {
-        const updateFinished = waitForWorldSimTool(resolvedCycleId, WORLD_UPDATE, completion, true);
-        await fireCommit(characterIds, chatMessages, { snapshot: baseSnapshot });
-        if (!await updateFinished) return false;
-        if (failIfRunStillActive(resolvedCycleId, WORLD_UPDATE)) {
-            return false;
-        }
-        const outcome = await completion;
-        return outcome?.status === 'complete' ? outcome : false;
-    } catch (error) {
-        if (wasGenerationStopped(error)) {
-            console.warn(`World Sim commit ${resolvedCycleId} interrupted; keeping tool scope active for retry.`, error);
-            return false;
-        }
-        console.error('World Sim commit failed:', error);
-        clearWorldSimToolScope();
-        endRun();
-        toastr.error('Failed to commit roleplay to world state.', 'World Sim');
-        return false;
-    }
+// A scene commit that was retried from the stepper completes outside commitScene().
+setRetriedRunHandler(async (run, outcome) => {
+    if (run.mode !== 'commit') return;
+    const scene = getSceneByCycle(run.cycleId);
+    if (scene) await markSceneCommitted(scene.sceneId, scene, outcome);
+});
+
+async function markSceneCommitted(sceneId, scene, outcome) {
+    const committedCharacterIds = [...new Set([...(scene.characterIds || []), ...(outcome.characterIds || [])])];
+    const committedNames = committedCharacterIds.map(id => getRosterCharacter(id)?.name).filter(Boolean).join(', ');
+    updateScene(sceneId, {
+        committed: true,
+        characterIds: committedCharacterIds,
+        title: committedNames || scene.title,
+    });
+    await saveWorldSimState();
 }
 
 /**
@@ -450,16 +352,7 @@ export async function commitScene(sceneId) {
         cycleId: scene.cycleId,
         baseRevisionId: scene.baseRevisionId,
     });
-    if (outcome) {
-        const committedCharacterIds = [...new Set([...(scene.characterIds || []), ...(outcome.characterIds || [])])];
-        const committedNames = committedCharacterIds.map(id => getRosterCharacter(id)?.name).filter(Boolean).join(', ');
-        updateScene(sceneId, {
-            committed: true,
-            characterIds: committedCharacterIds,
-            title: committedNames || scene.title,
-        });
-        await saveWorldSimState();
-    }
+    if (outcome) await markSceneCommitted(sceneId, scene, outcome);
 }
 
 /**
@@ -514,6 +407,7 @@ export async function runGuidedCycle(request = {}) {
     if (exactCharacterSelection && !includedCharacterIds.length) {
         return { status: 'blocked', reason: 'Choose at least one required character for an exact guided run.' };
     }
+    await rememberReturnTarget();
     if (!await openWorldCharacterChat()) return { status: 'blocked', reason: 'A generation is already in progress.' };
 
     const cycleId = generateCycleId();
@@ -530,43 +424,13 @@ export async function runGuidedCycle(request = {}) {
         includedCharacterIds,
         excludedCharacterIds,
         exactCharacterSelection,
+        driver: {
+            snapshot: baseSnapshot,
+            guidance: direction,
+            selection: { includedCharacterIds, excludedCharacterIds },
+        },
     });
-    try {
-        if (!exactCharacterSelection) {
-            activateWorldSimToolScope([SELECT_CHARACTERS]);
-            const selectorFinished = waitForWorldSimTool(cycleId, SELECT_CHARACTERS, completion);
-            await fireSelector({
-                snapshot: baseSnapshot,
-                guidance: direction,
-                selection: { includedCharacterIds, excludedCharacterIds },
-            });
-            if (!await selectorFinished) return await completion;
-        }
-
-        let run = getRun();
-        if (!run || run.cycleId !== cycleId) return await completion;
-        if (!run.characterIds.length) {
-            if (failIfRunStillActive(cycleId, SELECT_CHARACTERS)) pauseRun({ reason: `The model did not call ${SELECT_CHARACTERS}.` });
-            return await completion;
-        }
-        for (const id of run.characterIds) await ensureCharacterCardContext(id);
-        updateRun({ updaterStarted: true });
-        activateWorldSimToolScope([WORLD_UPDATE]);
-        const updaterFinished = waitForWorldSimTool(cycleId, WORLD_UPDATE, completion, true);
-        await fireUpdater(run.characterIds, { snapshot: baseSnapshot, guidance: direction });
-        if (!await updaterFinished) return await completion;
-        if (failIfRunStillActive(cycleId, WORLD_UPDATE)) pauseRun({ reason: `The model did not call ${WORLD_UPDATE}.` });
-        return await completion;
-    } catch (error) {
-        if (wasGenerationStopped(error)) {
-            pauseRun({ status: 'cancelled', reason: 'Generation stopped.' });
-            return await completion;
-        }
-        console.error('World Sim guided run failed:', error);
-        clearWorldSimToolScope();
-        endRun({ status: 'failed', reason: error?.message || String(error), error });
-        return await completion;
-    }
+    return await driveEvent(cycleId, completion, exactCharacterSelection ? 'prepare' : 'select');
 }
 
 export async function branchFromRevision(revisionId, guidance, selection = {}) {

@@ -15,8 +15,9 @@ import {
     hydrateCurrentWorldSnapshot,
     commitWorldRevision,
     findRosterIdByName,
+    getHeadRevisionId,
 } from './state.js';
-import { getRun, updateRun, endRun } from './run-context.js';
+import { getRun, updateRun, endRun, resumeDetachedRun } from './run-context.js';
 import { applyWorldUpdate } from './llm.js';
 import { renderAll } from './ui.js';
 import * as worldSimMap from './map.js';
@@ -44,9 +45,12 @@ export async function onSelectCharacters(args) {
 
     if (!ids.length) {
         clearWorldSimToolScope();
-        endRun();
+        endRun({ status: 'blocked', reason: 'No characters were selected; nothing to update.' });
         return 'No characters selected; nothing to update.';
     }
+
+    // A manual retry in chat after the driver already paused: pick the run back up.
+    if (run?.detached) queueMicrotask(resumeDetachedRun);
 
     return `Selected: ${ids.join(', ')}`;
 }
@@ -104,7 +108,7 @@ export async function onWorldInitialize(args) {
     await renderAll();
     if (charId) worldSimMap.selectCharacterOnMap(charId, { focus: false });
     clearWorldSimToolScope();
-    endRun({ status: 'complete', mode: 'initialize', characterIds: charId ? [charId] : [] });
+    endRun({ status: 'complete', mode: 'initialize', characterIds: charId ? [charId] : [], summary: `Initialized ${characterName}`, revisionId: getHeadRevisionId() });
 
     return 'Initialized 1 character.';
 }
@@ -168,7 +172,7 @@ export async function onWorldUpdate(args) {
     }
     await renderAll();
     clearWorldSimToolScope();
-    endRun({ status: 'complete', mode, characterIds: updates.map(update => update.characterId).filter(Boolean) });
+    endRun({ status: 'complete', mode, characterIds: updates.map(update => update.characterId).filter(Boolean), summary, revisionId: getHeadRevisionId() });
 
     return `Updated ${updates.length} character(s).`;
 }
