@@ -5,13 +5,13 @@ import {
     HISTORY_SHARED_NODE_HEIGHT,
     calculateOrbitPositions,
     createDisplayEventHistory,
-    editEventSummary,
+    HISTORY_LANE_STEP,
     getEventAncestors,
-    getEventHistory,
     getEventSummaryText,
     layoutEventHistory,
 } from './event-history.js';
-import { promptWorldSimText } from './popups.js';
+import { getThumbnailUrl } from '../../script.js';
+import { createEventCard } from './history-card.js';
 const SVG_NS = 'http://www.w3.org/2000/svg';
 const SCENE_PADDING_X = HISTORY_ORBIT_RADIUS + 90;
 const SCENE_PADDING_Y = HISTORY_ORBIT_RADIUS + 90;
@@ -22,8 +22,11 @@ const PINCH_ZOOM_SENSITIVITY = 0.01;
 const controllers = new WeakMap();
 
 export function renderHistoryTimeline(container, eventHistory, roster, options = {}) {
-    controllers.get(container)?.destroy();
+    const previous = controllers.get(container);
+    const restore = previous?.captureView() || null;
+    previous?.destroy();
     const controller = new HistoryTimeline(container, createDisplayEventHistory(eventHistory), roster, options);
+    controller.restore = restore;
     controllers.set(container, controller);
     controller.render();
     return controller;
@@ -45,12 +48,53 @@ class HistoryTimeline {
         this.drag = null;
         this.pinned = false;
         this.orbitPinned = false;
+        this.restore = null;
+        this.fitPending = false;
+        this.nowIds = new Set();
+        this.laneHeads = new Map();
+        this.laneLabels = new Map();
+        this.selectedCharacterId = null;
+        this.card = null;
         this.pointers = new Map();
         this.pinch = null;
         this.tap = null;
         this.panLockUntil = 0;
         this.closeTimer = null;
         this.abort = new AbortController();
+    }
+
+    /** Snapshot of pan/zoom/orbit state so a re-render keeps the user's view (null if never laid out). */
+    captureView() {
+        if (!this.layout || this.fitPending) return null;
+        return {
+            transform: { ...this.transform },
+            knownIds: new Set(Object.keys(this.history.events)),
+            trail: this.trail.map(level => ({ parentId: level.parentId, rotation: level.rotation })),
+            orbitPinned: this.orbitPinned,
+            selectedCharacterId: this.selectedCharacterId,
+        };
+    }
+
+    restoreView(restore) {
+        this.transform = { ...restore.transform };
+        this.selectedCharacterId = restore.selectedCharacterId;
+        const trail = [];
+        for (const level of restore.trail) {
+            if (!this.history.events[level.parentId]) break;
+            const childIds = (this.children.get(level.parentId) || []).map(event => event.id);
+            if (!childIds.length) break;
+            trail.push({ parentId: level.parentId, childIds, rotation: Math.min(level.rotation, childIds.length - 1) });
+        }
+        this.trail = trail;
+        this.orbitPinned = restore.orbitPinned && trail.length > 0;
+        if (trail.length) this.renderTrail();
+        this.applyTransform();
+        this.applyLaneSelection();
+        const added = Object.values(this.history.events)
+            .filter(event => !restore.knownIds.has(event.id))
+            .sort((a, b) => Number(b.sequence) - Number(a.sequence));
+        // A new event: pan only if it is off-screen, and pulse it once.
+        if (added.length) this.focusEvent(added[0].id, { pulse: true });
     }
 
     isPinned() {
@@ -84,6 +128,7 @@ class HistoryTimeline {
             .map(character => character.id);
         this.layout = layoutEventHistory(this.history, characterIds);
         this.children = this.layout.children;
+        this.computeLaneHeads();
 
         this.viewport = document.createElement('div');
         this.viewport.className = 'world-sim-history-viewport';
@@ -107,10 +152,102 @@ class HistoryTimeline {
         this.scene.append(this.orbitLayer);
         this.viewport.append(this.scene);
         this.container.append(this.viewport);
+        this.renderLaneLabels();
         this.renderToolbar();
         this.bind();
         this.applyTransform();
-        requestAnimationFrame(() => this.recenter(false));
+        if (this.restore) this.restoreView(this.restore);
+        else requestAnimationFrame(() => this.recenter(false));
+    }
+
+    /**
+     * Finds each lane's head: the newest event on the path to the current head revision.
+     * Those nodes get the Now marker.
+     */
+    computeLaneHeads() {
+        this.nowIds = new Set();
+        this.laneHeads = new Map();
+        const index = this.options.revisionIndex;
+        const headId = index?.headId;
+        if (!headId) return;
+        const byRevision = new Map();
+        const logicalParent = new Map();
+        const byLogicalAndCharacter = new Map();
+        for (const event of Object.values(this.history.events)) {
+            if (event.revisionId) byRevision.set(event.revisionId, event.logicalEventId);
+            logicalParent.set(event.logicalEventId, event.logicalParentId);
+            byLogicalAndCharacter.set(`${event.logicalEventId}\u0000${event.characterId}`, event.id);
+        }
+        let revisionId = headId;
+        const seen = new Set();
+        while (revisionId && !byRevision.has(revisionId) && !seen.has(revisionId)) {
+            seen.add(revisionId);
+            revisionId = index.revisions?.[revisionId]?.parentId || null;
+        }
+        const startLogical = byRevision.get(revisionId);
+        if (!startLogical) return;
+        for (const characterId of this.layout.laneIds) {
+            let logical = startLogical;
+            const visited = new Set();
+            while (logical && !visited.has(logical)) {
+                visited.add(logical);
+                const id = byLogicalAndCharacter.get(`${logical}\u0000${characterId}`);
+                if (id) {
+                    this.nowIds.add(id);
+                    this.laneHeads.set(characterId, id);
+                    break;
+                }
+                logical = logicalParent.get(logical) || null;
+            }
+        }
+    }
+
+    /** Lane labels live in the viewport (not the scene) so they stay at the left edge while panning. */
+    renderLaneLabels() {
+        this.laneLabels = new Map();
+        this.layout.laneIds.forEach((characterId, laneIndex) => {
+            const character = this.roster.characters?.[characterId];
+            const label = document.createElement('div');
+            label.className = 'world-sim-history-lane-label';
+            label.dataset.characterId = characterId;
+            label.dataset.lane = String(laneIndex);
+            if (character?.avatar) {
+                const avatar = document.createElement('img');
+                avatar.alt = '';
+                avatar.src = getThumbnailUrl('avatar', character.avatar);
+                label.append(avatar);
+            }
+            const name = document.createElement('span');
+            name.textContent = character?.name || characterId;
+            label.append(name);
+            this.viewport.append(label);
+            this.laneLabels.set(characterId, label);
+        });
+    }
+
+    positionLaneLabels() {
+        const height = this.viewport.clientHeight;
+        for (const label of this.laneLabels.values()) {
+            const lane = Number(label.dataset.lane);
+            const y = this.transform.y + (SCENE_PADDING_Y + lane * HISTORY_LANE_STEP + HISTORY_NODE_HEIGHT / 2) * this.transform.scale;
+            label.style.transform = `translateY(${Math.round(y)}px) translateY(-50%)`;
+            label.style.visibility = y < -20 || (height && y > height + 20) ? 'hidden' : 'visible';
+        }
+    }
+
+    applyLaneSelection() {
+        for (const [characterId, label] of this.laneLabels) label.classList.toggle('is-selected', characterId === this.selectedCharacterId);
+        this.scene?.querySelectorAll('[data-event-id]').forEach(node => node.classList.toggle('is-lane-selected', !!this.selectedCharacterId && node.dataset.characterId === this.selectedCharacterId));
+    }
+
+    /** Highlights a character's lane and (optionally) pans to their latest event. */
+    highlightCharacter(characterId, { pan = false } = {}) {
+        this.selectedCharacterId = characterId || null;
+        this.applyLaneSelection();
+        if (!pan || !characterId) return;
+        const latest = this.laneHeads.get(characterId)
+            || Object.values(this.history.events).filter(event => event.characterId === characterId).sort((a, b) => Number(b.sequence) - Number(a.sequence))[0]?.id;
+        if (latest) this.focusEvent(latest, { pulse: true, force: true });
     }
 
     renderBaseNode(node) {
@@ -163,6 +300,9 @@ class HistoryTimeline {
         node.classList.toggle('is-initialize', event.kind === 'initialize');
         node.classList.toggle('is-guided', !!event.generation?.guidance);
         node.dataset.eventId = event.id;
+        node.dataset.characterId = event.characterId;
+        node.classList.toggle('is-now', this.nowIds.has(event.id));
+        node.classList.toggle('is-lane-selected', !!this.selectedCharacterId && event.characterId === this.selectedCharacterId);
         node.tabIndex = 0;
         node.setAttribute('role', 'button');
         const summary = document.createElement('div');
@@ -174,6 +314,13 @@ class HistoryTimeline {
             ? this.roster.characters?.[event.characterId]?.name || event.characterId
             : getEventSummaryText(event);
         node.append(summary);
+        if (this.nowIds.has(event.id)) {
+            const now = document.createElement('span');
+            now.className = 'world-sim-history-now-badge';
+            now.textContent = 'Now';
+            now.title = 'The current state of the world follows this event';
+            node.append(now);
+        }
         if (event.revisionId && this.options.getScene?.(event)) {
             const sceneIcon = document.createElement('i');
             sceneIcon.className = 'world-sim-history-scene-marker fa-solid fa-comments';
@@ -290,7 +437,7 @@ class HistoryTimeline {
             }
         }, options);
         document.addEventListener('pointerdown', event => {
-            if (!this.dropdown || event.target.closest('.world-sim-history-dropdown') || event.target.closest('[data-event-id]')) return;
+            if (!this.card || event.target.closest('.world-sim-history-dropdown') || event.target.closest('[data-event-id]')) return;
             this.closeDropdown();
         }, { capture: true, signal: this.abort.signal });
         document.addEventListener('keydown', event => {
@@ -344,6 +491,8 @@ class HistoryTimeline {
         if (!node) return;
         event.stopPropagation();
         this.openDropdown(node.dataset.eventId, node);
+        this.selectedCharacterId = node.dataset.characterId || null;
+        this.applyLaneSelection();
     }
 
     onPointerDown(event) {
@@ -463,6 +612,7 @@ class HistoryTimeline {
 
     /** Pans so the event node is visible (only if off-screen unless `force`). */
     focusEvent(eventId, { pulse = false, force = false } = {}) {
+        if (!this.viewport.clientWidth) return;
         if (!this.baseNodeElements.has(eventId)) this.revealEvent(eventId);
         requestAnimationFrame(() => {
             const target = this.scene.querySelector(`[data-event-id="${CSS.escape(eventId)}"]`);
@@ -569,6 +719,7 @@ class HistoryTimeline {
             if (events.length > 6) this.renderOrbitArrows(level, levelIndex, center);
         });
         this.scene.classList.toggle('is-exploring', this.trail.length > 0);
+        this.applyLaneSelection();
         this.scene.querySelectorAll('[data-event-id]').forEach(node => node.classList.toggle('is-related', activeIds.has(node.dataset.eventId)));
         this.fitAllParticipantLinks();
     }
@@ -663,121 +814,45 @@ class HistoryTimeline {
 
     openDropdown(eventId, node) {
         this.closeDropdown();
-        const position = this.getEventPosition(eventId);
-        if (!position) return;
+        const event = this.history.events[eventId];
+        if (!event) return;
         this.pinned = true;
-        const menu = document.createElement('div');
-        menu.className = 'world-sim-history-dropdown';
-        menu.dataset.eventMenu = eventId;
-        menu.style.left = `${position.x}px`;
-        menu.style.top = `${position.y + this.nodeHeight(this.history.events[eventId]) + 6}px`;
-        menu.style.width = `${HISTORY_NODE_WIDTH}px`;
-        const selectedEvent = this.history.events[eventId];
-        if (selectedEvent?.kind !== 'initialize') {
-            const edit = document.createElement('button');
-            edit.className = 'menu_button';
-            edit.type = 'button';
-            edit.textContent = 'Edit event';
-            edit.addEventListener('click', async () => {
-                const event = this.history.events[eventId];
-                if (!event) return;
-                const summary = await promptWorldSimText({
-                    title: 'Edit event summary',
-                    message: 'Change the short description shown on the World Sim timeline.',
-                    value: event.summary || '',
-                    confirmLabel: 'Save summary',
-                    icon: 'fa-pen-to-square',
-                    placeholder: 'What happened in this event?',
-                    rows: 3,
-                    maxLength: 500,
-                });
-                if (summary === null || summary === event.summary) return;
-                edit.disabled = true;
-                try {
-                    await editEventSummary(event.logicalEventId, event.characterId, summary);
-                    renderHistoryTimeline(this.container, getEventHistory(), this.roster, this.options);
-                } catch (error) {
-                    console.error(error);
-                    toastr.error(error.message, 'World Sim');
-                    edit.disabled = false;
-                }
-            });
-            menu.append(edit);
-        }
-        if (selectedEvent?.generation?.guidance) {
-            const guidance = document.createElement('div');
-            guidance.className = 'world-sim-history-event-guidance';
-            const label = document.createElement('strong');
-            label.textContent = 'Guidance';
-            const text = document.createElement('div');
-            text.textContent = selectedEvent.generation.guidance;
-            guidance.append(label, text);
-            menu.append(guidance);
-        }
-        if (selectedEvent?.revisionId && typeof this.options.onOpenScene === 'function') {
-            const existing = this.options.getScene?.(selectedEvent);
-            const openScene = document.createElement('button');
-            openScene.className = 'menu_button';
-            openScene.type = 'button';
-            openScene.textContent = existing ? 'Reopen scene' : 'Open scene';
-            openScene.addEventListener('click', async () => {
-                openScene.disabled = true;
-                try {
-                    await this.options.onOpenScene(this.history.events[eventId]);
-                } catch (error) {
-                    console.error(error);
-                    toastr.error(error.message, 'World Sim');
-                } finally {
-                    if (openScene.isConnected) openScene.disabled = false;
-                }
-            });
-            menu.append(openScene);
-            if (existing && !existing.committed && typeof this.options.onCommitScene === 'function') {
-                const commit = document.createElement('button');
-                commit.className = 'menu_button';
-                commit.type = 'button';
-                commit.textContent = 'Commit scene to world';
-                commit.addEventListener('click', async () => {
-                    commit.disabled = true;
-                    try {
-                        await this.options.onCommitScene(this.history.events[eventId], existing);
-                    } catch (error) {
-                        console.error(error);
-                        toastr.error(error.message, 'World Sim');
-                    } finally {
-                        if (commit.isConnected) commit.disabled = false;
-                    }
-                });
-                menu.append(commit);
-            }
-        }
-        const createOption = document.createElement('button');
-        createOption.className = 'menu_button';
-        createOption.type = 'button';
-        createOption.textContent = 'Create next option';
-        createOption.disabled = !this.history.events[eventId]?.revisionId || typeof this.options.onCreateOption !== 'function';
-        createOption.addEventListener('click', async () => {
-            const event = this.history.events[eventId];
-            if (!event?.revisionId) return;
-            createOption.disabled = true;
-            try {
-                await this.options.onCreateOption?.(event);
-            } catch (error) {
-                console.error(error);
-                toastr.error(error.message, 'World Sim');
-            } finally {
-                if (createOption.isConnected) createOption.disabled = false;
-            }
+        this.card = createEventCard({
+            event,
+            history: this.history,
+            roster: this.roster,
+            options: this.options,
+            rerender: eventHistory => renderHistoryTimeline(this.container, eventHistory, this.roster, this.options),
         });
-        menu.append(createOption);
-        this.orbitLayer.append(menu);
-        this.dropdown = menu;
+        this.card.addEventListener('wheel', wheel => wheel.stopPropagation(), { passive: true });
+        this.cardEventId = eventId;
+        this.viewport.append(this.card);
         node.classList.add('is-menu-open');
+        this.positionCard();
+        this.options.onSelectCharacter?.(event.characterId);
+    }
+
+    /** Keeps the card inside the viewport, next to its node, at any zoom. */
+    positionCard() {
+        if (!this.card) return;
+        const node = this.scene.querySelector(`[data-event-id="${CSS.escape(this.cardEventId)}"]`);
+        const view = this.viewport.getBoundingClientRect();
+        if (!node || !view.width) return;
+        const rect = node.getBoundingClientRect();
+        const width = Math.min(360, view.width - 16);
+        this.card.style.width = `${width}px`;
+        this.card.style.maxHeight = `${Math.max(120, view.height - 16)}px`;
+        const height = this.card.offsetHeight;
+        let top = rect.bottom - view.top + 6;
+        if (top + height > view.height - 8) top = rect.top - view.top - height - 6;
+        const left = Math.max(8, Math.min(view.width - width - 8, rect.left - view.left));
+        this.card.style.left = `${left}px`;
+        this.card.style.top = `${Math.max(8, Math.min(view.height - height - 8, top))}px`;
     }
 
     closeDropdown() {
-        this.dropdown?.remove();
-        this.dropdown = null;
+        this.card?.remove();
+        this.card = null;
         this.scene?.querySelectorAll('.is-menu-open').forEach(node => node.classList.remove('is-menu-open'));
         this.pinned = false;
     }
@@ -845,6 +920,9 @@ class HistoryTimeline {
 
     recenter(animate) {
         if (!this.viewport || !this.layout?.nodes.length) return;
+        // Rendered while hidden (inactive tab): measure again when the tab is shown.
+        this.fitPending = !this.viewport.clientWidth;
+        if (this.fitPending) return;
         const boundsWidth = Math.max(...this.layout.nodes.map(node => node.x), 0) + HISTORY_NODE_WIDTH;
         const boundsHeight = Math.max(...this.layout.nodes.map(node => node.y), 0) + HISTORY_SHARED_NODE_HEIGHT;
         const scale = Math.max(MIN_SCALE, Math.min(1, (this.viewport.clientWidth - 72) / boundsWidth, (this.viewport.clientHeight - 72) / boundsHeight));
@@ -858,5 +936,7 @@ class HistoryTimeline {
 
     applyTransform() {
         this.scene.style.transform = `translate(${this.transform.x}px, ${this.transform.y}px) scale(${this.transform.scale})`;
+        this.positionLaneLabels();
+        this.positionCard();
     }
 }

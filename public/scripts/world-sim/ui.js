@@ -300,6 +300,7 @@ function bindEvents() {
         const id = String($card.data('id') || '');
         selectedCharacterId = id || null;
         const isOpening = !expandedChars.has(avatar);
+        if (id) historyController?.highlightCharacter(id, { pan: true });
         if (id && isOpening) {
             const highlighted = selectCharacterOnMap(id);
             if (highlighted) {
@@ -955,6 +956,15 @@ function renderSettings() {
     renderSetupControls();
 }
 
+/** Clicking an event selects its character in the roster and on the map, without switching tabs. */
+function selectCharacterFromGraph(characterId) {
+    if (!characterId) return;
+    selectedCharacterId = characterId;
+    selectCharacterOnMap(characterId, { focus: false });
+    renderRoster();
+    document.querySelector(`.world-sim-char[data-id="${CSS.escape(characterId)}"]`)?.scrollIntoView({ block: 'nearest' });
+}
+
 /** Stable scene key per logical event; never null so two events cannot share a scene. */
 function sceneKeyForEvent(event) {
     return `event:${event.logicalEventId}`;
@@ -965,6 +975,14 @@ async function renderHistory() {
     if (timelineContainer) {
         historyController = renderHistoryTimeline(timelineContainer, getEventHistory(), getRoster(), {
             renderEmpty: container => renderEmptyState(container, 'Events appear here as a graph, one lane per character.'),
+            revisionIndex: getRevisionIndex(),
+            getRevision: revisionId => getRevisionIndex().revisions?.[revisionId] || null,
+            onShowOnMap: event => {
+                selectedCharacterId = event.characterId;
+                if (selectCharacterOnMap(event.characterId)) activateMapView();
+            },
+            onDetails: event => openRevisionDetails(event.revisionId),
+            onSelectCharacter: characterId => selectCharacterFromGraph(characterId),
             getScene: event => getSceneByCycle(sceneKeyForEvent(event)),
             onOpenScene: async event => {
                 await startRoleplayChat(event.characterIds, {

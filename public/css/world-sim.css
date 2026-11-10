@@ -2202,3 +2202,136 @@ body.rounded-avatars .world-sim-diff-charhead img {
 .world-sim-map-empty[hidden] { display: none; }
 .world-sim-map-empty .world-sim-empty { display: flex; flex-direction: column; gap: 10px; align-items: center; }
 .world-sim-empty p { margin: 0 0 8px; }
+
+/* ---- History: Now marker, lane labels, event card ---- */
+
+.world-sim-history-lane-label {
+    position: absolute;
+    top: 0;
+    left: 6px;
+    z-index: 4;
+    display: flex;
+    gap: 5px;
+    align-items: center;
+    max-width: 140px;
+    padding: 2px 8px 2px 3px;
+    font-size: 0.8em;
+    pointer-events: none;
+    background: color-mix(in srgb, var(--SmartThemeBlurTintColor) 88%, transparent);
+    border: 1px solid var(--SmartThemeBorderColor);
+    border-radius: 999px;
+    will-change: transform;
+}
+
+.world-sim-history-lane-label img {
+    width: 20px;
+    height: 20px;
+    object-fit: cover;
+    border-radius: 50%;
+}
+
+.world-sim-history-lane-label span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.world-sim-history-lane-label.is-selected {
+    border-color: var(--SmartThemeQuoteColor);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--SmartThemeQuoteColor) 30%, transparent);
+}
+
+.world-sim-history-node.is-now {
+    border-color: #50d278;
+    box-shadow: 0 0 0 2px color-mix(in srgb, #50d278 30%, transparent);
+}
+
+.world-sim-history-now-badge {
+    position: absolute;
+    top: -9px;
+    right: 8px;
+    padding: 0 8px;
+    font-size: 0.7em;
+    font-weight: 700;
+    letter-spacing: 0.4px;
+    text-transform: uppercase;
+    color: #0b2a14;
+    background: #50d278;
+    border-radius: 999px;
+}
+
+.world-sim-history-node.is-lane-selected:not(.is-now) {
+    border-color: color-mix(in srgb, var(--SmartThemeQuoteColor) 70%, transparent);
+}
+
+.world-sim-history-card {
+    z-index: 6;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 10px;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    cursor: default;
+}
+
+.world-sim-history-card-head {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+}
+
+.world-sim-history-card-head img {
+    width: 32px;
+    height: 32px;
+    object-fit: cover;
+    border-radius: 50%;
+}
+
+.world-sim-history-card-head > div {
+    display: flex;
+    flex-direction: column;
+}
+
+.world-sim-history-card-section {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    font-size: 0.9em;
+    overflow-wrap: anywhere;
+}
+
+.world-sim-history-card-section > strong {
+    font-size: 0.8em;
+    opacity: 0.7;
+}
+
+.world-sim-history-card-changes {
+    max-height: 120px;
+    margin: 0;
+    overflow: auto;
+    font-size: 0.85em;
+    white-space: pre-wrap;
+}
+
+.world-sim-history-card-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+.world-sim-history-card-actions .menu_button {
+    display: inline-flex;
+    flex: 1 1 140px;
+    gap: 6px;
+    align-items: center;
+    justify-content: center;
+    width: auto;
+    margin: 0;
+    white-space: normal;
+}
+
+@media (max-width: 720px) {
+    .world-sim-history-lane-label { max-width: 96px; }
+    .world-sim-history-card-actions .menu_button { flex-basis: 100%; }
+}

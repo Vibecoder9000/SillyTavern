@@ -94,6 +94,7 @@ export function createDisplayEventHistory(eventHistory) {
             events[id] = {
                 id,
                 logicalEventId: logicalEvent.id,
+                logicalParentId: logicalEvent.parentId || null,
                 revisionId: logicalEvent.revisionId,
                 parentId: parent ? projectionId(parent.id, characterId) : null,
                 characterId,
