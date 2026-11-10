@@ -1745,6 +1745,7 @@ body.rounded-avatars .world-sim-diff-charhead img {
 
     .world-sim-app[data-mtab="map"] .world-sim-center-pane,
     .world-sim-app[data-mtab="history"] .world-sim-center-pane,
+    .world-sim-app[data-mtab="conversations"] .world-sim-center-pane,
     .world-sim-app[data-mtab="settings"] .world-sim-center-pane {
         display: flex;
         flex: 1 1 auto;
@@ -1764,8 +1765,14 @@ body.rounded-avatars .world-sim-diff-charhead img {
     }
 
     .world-sim-app[data-mtab="map"] #world-sim-history-tab,
-    .world-sim-app[data-mtab="history"] #world-sim-map-tab {
+    .world-sim-app[data-mtab="history"] #world-sim-map-tab,
+    .world-sim-app[data-mtab="conversations"] #world-sim-map-tab,
+    .world-sim-app[data-mtab="conversations"] #world-sim-history-tab {
         display: none;
+    }
+
+    .world-sim-app[data-mtab="conversations"] #world-sim-conversations-tab {
+        display: block;
     }
 
     .world-sim-app[data-mtab="map"] #world-sim-map-tab,
