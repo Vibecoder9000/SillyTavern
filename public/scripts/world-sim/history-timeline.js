@@ -44,9 +44,17 @@ class HistoryTimeline {
         this.transform = { x: 36, y: 36, scale: 1 };
         this.drag = null;
         this.pinned = false;
+        this.orbitPinned = false;
+        this.pointers = new Map();
+        this.pinch = null;
+        this.tap = null;
         this.panLockUntil = 0;
         this.closeTimer = null;
         this.abort = new AbortController();
+    }
+
+    isPinned() {
+        return this.pinned || this.orbitPinned;
     }
 
     destroy() {
@@ -95,6 +103,7 @@ class HistoryTimeline {
         this.scene.append(this.orbitLayer);
         this.viewport.append(this.scene);
         this.container.append(this.viewport);
+        this.renderToolbar();
         this.bind();
         this.applyTransform();
         requestAnimationFrame(() => this.recenter(false));
@@ -109,7 +118,8 @@ class HistoryTimeline {
             element.dataset.aggregateParent = node.parentId;
             element.tabIndex = 0;
             element.setAttribute('role', 'button');
-            element.setAttribute('aria-label', `${node.count} child events`);
+            element.setAttribute('aria-label', `${node.count} child events. Press Enter to open.`);
+            element.setAttribute('aria-expanded', 'false');
             element.textContent = String(node.count);
             this.positionElement(element, x, y, HISTORY_NODE_HEIGHT);
             this.scene.append(element);
@@ -239,15 +249,22 @@ class HistoryTimeline {
         const options = { signal: this.abort.signal };
         this.scene.addEventListener('pointerover', event => {
             const aggregate = event.target.closest('[data-aggregate-parent]');
-            if (aggregate && !this.pinned) this.openAggregate(aggregate.dataset.aggregateParent);
+            if (aggregate && !this.isPinned()) this.openAggregate(aggregate.dataset.aggregateParent);
         }, options);
         this.scene.addEventListener('pointerover', event => {
             const bridge = event.target.closest('[data-history-bridge]');
-            if (bridge && !this.pinned) this.openDescendants(bridge.dataset.historyBridge, Number(bridge.dataset.level));
+            if (bridge && !this.isPinned()) this.openDescendants(bridge.dataset.historyBridge, Number(bridge.dataset.level));
         }, options);
         this.scene.addEventListener('click', event => this.onSceneClick(event), options);
         this.scene.addEventListener('keydown', event => {
             if (!['Enter', ' '].includes(event.key)) return;
+            const aggregate = event.target.closest('[data-aggregate-parent]');
+            if (aggregate) {
+                event.preventDefault();
+                this.pinAggregate(aggregate.dataset.aggregateParent);
+                return;
+            }
+            if (event.target.closest('button')) return;
             const node = event.target.closest('[data-event-id]');
             if (!node) return;
             event.preventDefault();
@@ -255,12 +272,13 @@ class HistoryTimeline {
         }, options);
         this.viewport.addEventListener('pointerdown', event => this.onPointerDown(event), options);
         window.addEventListener('pointermove', event => this.onPointerMove(event), options);
-        window.addEventListener('pointerup', () => { this.drag = null; }, options);
+        window.addEventListener('pointerup', event => this.onPointerUp(event), options);
+        window.addEventListener('pointercancel', event => this.onPointerUp(event), options);
         this.viewport.addEventListener('wheel', event => this.onWheel(event), { passive: false, signal: this.abort.signal });
         this.viewport.addEventListener('pointerleave', () => this.scheduleClose(), options);
         this.viewport.addEventListener('pointerenter', () => clearTimeout(this.closeTimer), options);
         this.scene.addEventListener('pointermove', event => {
-            if (!this.trail.length || this.pinned) return;
+            if (!this.trail.length || this.isPinned()) return;
             if (event.target.closest('.world-sim-history-node, .world-sim-history-hover-bridge, .world-sim-history-dropdown')) {
                 clearTimeout(this.closeTimer);
             } else {
@@ -272,11 +290,45 @@ class HistoryTimeline {
             this.closeDropdown();
         }, { capture: true, signal: this.abort.signal });
         document.addEventListener('keydown', event => {
-            if (event.key === 'Escape') this.closeDropdown();
+            if (event.key !== 'Escape') return;
+            this.closeDropdown();
+            this.unpinOrbit();
         }, options);
     }
 
+    pinAggregate(parentId) {
+        this.closeDropdown();
+        this.openAggregate(parentId);
+        this.orbitPinned = true;
+    }
+
+    unpinOrbit() {
+        if (!this.orbitPinned && !this.trail.length) return;
+        this.orbitPinned = false;
+        this.closeTrail();
+    }
+
     onSceneClick(event) {
+        const aggregate = event.target.closest('[data-aggregate-parent]');
+        if (aggregate) {
+            event.stopPropagation();
+            this.pinAggregate(aggregate.dataset.aggregateParent);
+            return;
+        }
+        const rotate = event.target.closest('[data-orbit-rotate]');
+        if (rotate) {
+            event.stopPropagation();
+            this.rotateLevel(Number(rotate.dataset.level), Number(rotate.dataset.orbitRotate));
+            return;
+        }
+        const badge = event.target.closest('[data-child-badge]');
+        if (badge) {
+            event.stopPropagation();
+            this.closeDropdown();
+            this.openDescendants(badge.dataset.childBadge, Number(badge.dataset.level));
+            this.orbitPinned = true;
+            return;
+        }
         const participant = event.target.closest('[data-target-event]');
         if (participant) {
             event.preventDefault();
@@ -291,13 +343,42 @@ class HistoryTimeline {
     }
 
     onPointerDown(event) {
-        if (event.button !== 0 || event.target.closest('.world-sim-history-node, .world-sim-history-dropdown, button')) return;
+        this.pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+        if (this.pointers.size === 2) {
+            const [a, b] = [...this.pointers.values()];
+            this.pinch = { distance: Math.hypot(a.x - b.x, a.y - b.y) || 1, scale: this.transform.scale };
+            this.drag = null;
+            this.tap = null;
+            return;
+        }
+        if (event.button !== 0 || event.target.closest('.world-sim-history-node, .world-sim-history-dropdown, .world-sim-history-toolbar, button')) return;
         event.preventDefault();
         this.drag = { clientX: event.clientX, clientY: event.clientY, x: this.transform.x, y: this.transform.y };
+        this.tap = { clientX: event.clientX, clientY: event.clientY };
         this.viewport.setPointerCapture?.(event.pointerId);
     }
 
+    onPointerUp(event) {
+        this.pointers.delete(event.pointerId);
+        if (this.pointers.size < 2) this.pinch = null;
+        const tap = this.tap;
+        this.tap = null;
+        this.drag = null;
+        if (tap && event.type === 'pointerup' && Math.hypot(event.clientX - tap.clientX, event.clientY - tap.clientY) < 5) {
+            // Tapping empty canvas closes a pinned orbit or an open event card.
+            this.closeDropdown();
+            this.unpinOrbit();
+        }
+    }
+
     onPointerMove(event) {
+        if (this.pointers.has(event.pointerId)) this.pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+        if (this.pinch && this.pointers.size >= 2) {
+            const [a, b] = [...this.pointers.values()];
+            const distance = Math.hypot(a.x - b.x, a.y - b.y) || 1;
+            this.zoomAt((a.x + b.x) / 2, (a.y + b.y) / 2, this.pinch.scale * distance / this.pinch.distance);
+            return;
+        }
         if (!this.drag) return;
         this.transform.x = this.drag.x + event.clientX - this.drag.clientX;
         this.transform.y = this.drag.y + event.clientY - this.drag.clientY;
@@ -320,18 +401,84 @@ class HistoryTimeline {
             return;
         }
         event.preventDefault();
-        const rect = this.viewport.getBoundingClientRect();
-        const px = event.clientX - rect.left;
-        const py = event.clientY - rect.top;
-        const previous = this.transform.scale;
         const sensitivity = isPinch ? PINCH_ZOOM_SENSITIVITY : WHEEL_ZOOM_SENSITIVITY;
-        const next = Math.max(MIN_SCALE, Math.min(MAX_SCALE, previous * Math.exp(-event.deltaY * sensitivity)));
+        this.zoomAt(event.clientX, event.clientY, this.transform.scale * Math.exp(-event.deltaY * sensitivity));
+    }
+
+    /** Zooms to `scale` keeping the point under (clientX, clientY) fixed. */
+    zoomAt(clientX, clientY, scale) {
+        const rect = this.viewport.getBoundingClientRect();
+        const px = clientX - rect.left;
+        const py = clientY - rect.top;
+        const previous = this.transform.scale;
+        const next = Math.max(MIN_SCALE, Math.min(MAX_SCALE, scale));
         const worldX = (px - this.transform.x) / previous;
         const worldY = (py - this.transform.y) / previous;
         this.transform.scale = next;
         this.transform.x = px - worldX * next;
         this.transform.y = py - worldY * next;
         this.applyTransform();
+    }
+
+    zoomBy(factor) {
+        const rect = this.viewport.getBoundingClientRect();
+        this.zoomAt(rect.left + rect.width / 2, rect.top + rect.height / 2, this.transform.scale * factor);
+    }
+
+    renderToolbar() {
+        const toolbar = document.createElement('div');
+        toolbar.className = 'world-sim-history-toolbar';
+        const add = (icon, title, handler) => {
+            const button = document.createElement('button');
+            button.type = 'button';
+            button.className = 'menu_button menu_button_icon';
+            button.title = title;
+            button.setAttribute('aria-label', title);
+            button.innerHTML = `<i class="fa-solid ${icon}" aria-hidden="true"></i>`;
+            button.addEventListener('click', event => { event.stopPropagation(); handler(); });
+            toolbar.append(button);
+        };
+        add('fa-plus', 'Zoom in', () => this.zoomBy(1.25));
+        add('fa-minus', 'Zoom out', () => this.zoomBy(0.8));
+        add('fa-crosshairs', 'Fit all', () => this.recenter(true));
+        add('fa-forward-step', 'Jump to latest', () => this.jumpToLatest());
+        this.container.append(toolbar);
+    }
+
+    /** Pans to the newest event by sequence and pulses it. */
+    jumpToLatest() {
+        const latest = Object.values(this.history.events).sort((a, b) => Number(b.sequence) - Number(a.sequence))[0];
+        if (latest) this.focusEvent(latest.id, { pulse: true, force: true });
+    }
+
+    /** Pans so the event node is visible (only if off-screen unless `force`). */
+    focusEvent(eventId, { pulse = false, force = false } = {}) {
+        if (!this.baseNodeElements.has(eventId)) this.revealEvent(eventId);
+        requestAnimationFrame(() => {
+            const target = this.scene.querySelector(`[data-event-id="${CSS.escape(eventId)}"]`);
+            if (!target) return;
+            const view = this.viewport.getBoundingClientRect();
+            const rect = target.getBoundingClientRect();
+            const inside = rect.left >= view.left + 12 && rect.right <= view.right - 12 && rect.top >= view.top + 12 && rect.bottom <= view.bottom - 12;
+            if (!inside || force) {
+                this.transform.x += view.left + view.width / 2 - (rect.left + rect.width / 2);
+                this.transform.y += view.top + view.height / 2 - (rect.top + rect.height / 2);
+                this.scene.classList.add('is-auto-panning');
+                this.applyTransform();
+                setTimeout(() => this.scene?.classList.remove('is-auto-panning'), 360);
+            }
+            if (pulse) {
+                target.classList.add('is-jump-target');
+                setTimeout(() => target.classList.remove('is-jump-target'), 1200);
+            }
+        });
+    }
+
+    rotateLevel(levelIndex, direction) {
+        const level = this.trail[levelIndex];
+        if (!level) return;
+        level.rotation = Math.max(0, Math.min(level.childIds.length - 1, level.rotation + direction));
+        this.renderTrail();
     }
 
     circleLevelAt(clientX, clientY) {
@@ -368,7 +515,11 @@ class HistoryTimeline {
     renderTrail() {
         this.orbitLayer.replaceChildren();
         this.orbitPositions.clear();
-        this.aggregateElements.forEach((element, parentId) => element.classList.toggle('is-expanded', this.trail.some(level => level.parentId === parentId)));
+        this.aggregateElements.forEach((element, parentId) => {
+            const expanded = this.trail.some(level => level.parentId === parentId);
+            element.classList.toggle('is-expanded', expanded);
+            element.setAttribute('aria-expanded', String(expanded));
+        });
         const activeIds = new Set();
         this.trail.forEach((level, levelIndex) => {
             activeIds.add(level.parentId);
@@ -388,12 +539,57 @@ class HistoryTimeline {
                 this.orbitLayer.append(node);
                 this.orbitPositions.set(item.event.id, { x, y });
                 this.ensureSceneSize(x + HISTORY_NODE_WIDTH + HISTORY_ORBIT_RADIUS, y + height + HISTORY_ORBIT_RADIUS);
-                if ((this.children.get(item.event.id) || []).length) this.renderHoverBridge(item.event, levelIndex, x, y, height);
+                const childCount = (this.children.get(item.event.id) || []).length;
+                if (childCount) {
+                    this.renderHoverBridge(item.event, levelIndex, x, y, height);
+                    const badge = document.createElement('button');
+                    badge.type = 'button';
+                    badge.className = 'world-sim-history-child-badge';
+                    badge.dataset.childBadge = item.event.id;
+                    badge.dataset.level = String(levelIndex);
+                    badge.textContent = `${childCount} \u203a`;
+                    badge.title = `Show ${childCount} following event${childCount === 1 ? '' : 's'}`;
+                    badge.setAttribute('aria-label', badge.title);
+                    badge.style.left = `${x + HISTORY_NODE_WIDTH - 44}px`;
+                    badge.style.top = `${y + height - 22}px`;
+                    badge.style.zIndex = '1100';
+                    this.orbitLayer.append(badge);
+                }
             });
+            if (events.length > 6) this.renderOrbitArrows(level, levelIndex, center);
         });
         this.scene.classList.toggle('is-exploring', this.trail.length > 0);
         this.scene.querySelectorAll('[data-event-id]').forEach(node => node.classList.toggle('is-related', activeIds.has(node.dataset.eventId)));
         this.fitAllParticipantLinks();
+    }
+
+    renderOrbitArrows(level, levelIndex, center) {
+        const controls = document.createElement('div');
+        controls.className = 'world-sim-history-orbit-controls';
+        controls.style.left = `${center.x}px`;
+        controls.style.top = `${center.y + this.nodeHeight(this.history.events[level.parentId]) + 6}px`;
+        controls.style.width = `${HISTORY_NODE_WIDTH}px`;
+        controls.style.zIndex = '1200';
+        const make = (label, text, direction, disabled) => {
+            const button = document.createElement('button');
+            button.type = 'button';
+            button.className = 'menu_button menu_button_icon';
+            button.dataset.orbitRotate = String(direction);
+            button.dataset.level = String(levelIndex);
+            button.textContent = text;
+            button.title = label;
+            button.setAttribute('aria-label', label);
+            button.disabled = disabled;
+            return button;
+        };
+        const position = document.createElement('span');
+        position.textContent = `${level.rotation + 1} / ${level.childIds.length}`;
+        controls.append(
+            make('Previous events', '\u2039', -1, level.rotation <= 0),
+            position,
+            make('Next events', '\u203a', 1, level.rotation >= level.childIds.length - 1),
+        );
+        this.orbitLayer.append(controls);
     }
 
     renderHoverBridge(event, levelIndex, x, y, height) {
@@ -437,7 +633,7 @@ class HistoryTimeline {
     }
 
     closeTrail() {
-        if (this.pinned) return;
+        if (this.isPinned()) return;
         this.trail = [];
         this.renderTrail();
     }
@@ -445,7 +641,7 @@ class HistoryTimeline {
     scheduleClose() {
         clearTimeout(this.closeTimer);
         this.closeTimer = setTimeout(() => {
-            if (this.pinned) return;
+            if (this.isPinned()) return;
             const remainingLock = this.panLockUntil - performance.now();
             if (remainingLock > 0) {
                 this.closeTimer = setTimeout(() => this.closeTrail(), remainingLock + 24);

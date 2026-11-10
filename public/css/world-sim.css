@@ -1898,3 +1898,70 @@ body.rounded-avatars .world-sim-diff-charhead img {
     opacity: 0.7;
     pointer-events: none;
 }
+
+/* History view controls, child badges, orbit arrows */
+.world-sim-history { position: relative; }
+
+.world-sim-history-toolbar {
+    position: absolute;
+    right: 8px;
+    bottom: 8px;
+    z-index: 5;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.world-sim-history-toolbar .menu_button.menu_button_icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 40px;
+    min-width: 40px;
+    min-height: 40px;
+    margin: 0;
+    padding: 0;
+}
+
+.world-sim-history-child-badge,
+.world-sim-history-orbit-controls {
+    position: absolute;
+    pointer-events: auto;
+}
+
+.world-sim-history-child-badge {
+    padding: 1px 8px;
+    font: inherit;
+    font-size: 0.8em;
+    color: var(--SmartThemeBodyColor);
+    cursor: pointer;
+    background: var(--SmartThemeBlurTintColor);
+    border: 1px solid var(--SmartThemeQuoteColor);
+    border-radius: 999px;
+}
+
+.world-sim-history-child-badge:hover,
+.world-sim-history-child-badge:focus-visible {
+    background: color-mix(in srgb, var(--SmartThemeQuoteColor) 30%, var(--SmartThemeBlurTintColor));
+}
+
+.world-sim-history-orbit-controls {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+}
+
+.world-sim-history-orbit-controls .menu_button {
+    width: 32px;
+    min-width: 32px;
+    min-height: 28px;
+    margin: 0;
+    padding: 0;
+}
+
+.world-sim-history-node.is-jump-target { animation: world-sim-pulse 0.6s ease-in-out 2; }
+
+@keyframes world-sim-pulse {
+    50% { box-shadow: 0 0 0 8px color-mix(in srgb, var(--SmartThemeQuoteColor) 35%, transparent); }
+}
