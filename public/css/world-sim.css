@@ -1889,3 +1889,12 @@ body.rounded-avatars .world-sim-diff-charhead img {
         width: 100%;
     }
 }
+
+.world-sim-history-scene-marker {
+    position: absolute;
+    right: 6px;
+    bottom: 6px;
+    font-size: 0.8em;
+    opacity: 0.7;
+    pointer-events: none;
+}

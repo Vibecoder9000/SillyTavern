@@ -97,6 +97,7 @@ export function createDisplayEventHistory(eventHistory) {
                 revisionId: logicalEvent.revisionId,
                 parentId: parent ? projectionId(parent.id, characterId) : null,
                 characterId,
+                characterIds: [...(logicalEvent.characterIds || [])],
                 sequence: logicalEvent.sequence,
                 kind: logicalEvent.kind,
                 summary: logicalEvent.summaries?.[characterId] || null,

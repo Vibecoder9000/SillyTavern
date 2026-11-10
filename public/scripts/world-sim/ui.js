@@ -12,6 +12,7 @@ import {
     setCharacterStrings,
     updateConfig,
     getScenes,
+    getSceneByCycle,
     commitWorldRevision,
     getEventHistory,
     getRevisionIndex,
@@ -404,16 +405,6 @@ function bindEvents() {
         if (tab === 'conversations') renderConversations();
     });
 
-
-    $(document).on('click', '.world-sim-open-scene', async function (e) {
-        e.stopPropagation();
-        const ids = String($(this).data('ids') || '').split(',').filter(Boolean);
-        if (!ids.length) return;
-        const cycleId = String($(this).data('cycle') || '') || null;
-        const baseRevisionId = String($(this).data('revision') || '') || null;
-        await startRoleplayChat(ids, { cycleId, baseRevisionId });
-        renderConversations();
-    });
 
     // --- Conversation rows ---
     $(document).on('click', '.world-sim-scene-open', async function (e) {
@@ -842,10 +833,29 @@ function renderSettings() {
     renderSetupControls();
 }
 
+/** Stable scene key per logical event; never null so two events cannot share a scene. */
+function sceneKeyForEvent(event) {
+    return `event:${event.logicalEventId}`;
+}
+
 async function renderHistory() {
     const timelineContainer = document.getElementById('world-sim-history');
     if (timelineContainer) {
         renderHistoryTimeline(timelineContainer, getEventHistory(), getRoster(), {
+            getScene: event => getSceneByCycle(sceneKeyForEvent(event)),
+            onOpenScene: async event => {
+                await startRoleplayChat(event.characterIds, {
+                    cycleId: sceneKeyForEvent(event),
+                    baseRevisionId: event.revisionId,
+                });
+                renderConversations();
+                await renderHistory();
+            },
+            onCommitScene: async (event, scene) => {
+                await commitScene(scene.sceneId);
+                renderConversations();
+                await renderHistory();
+            },
             onCreateOption: event => openGuidedRunPanel({
                 baseRevisionId: event.revisionId,
                 parentSummary: event.summary,
@@ -1052,7 +1062,7 @@ function renderConversations() {
     const $container = $('#world-sim-conversations').empty();
 
     if (!scenes.length) {
-        $container.append('<div class="world-sim-empty">No conversations yet. Use “Open Scene” on an event in History to zoom in.</div>');
+        $container.append('<div class="world-sim-empty">No conversations yet. Open an event in History and choose “Open scene” to zoom in.</div>');
         return;
     }
 

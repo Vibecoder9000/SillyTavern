@@ -160,6 +160,13 @@ class HistoryTimeline {
             ? this.roster.characters?.[event.characterId]?.name || event.characterId
             : getEventSummaryText(event);
         node.append(summary);
+        if (event.revisionId && this.options.getScene?.(event)) {
+            const sceneIcon = document.createElement('i');
+            sceneIcon.className = 'world-sim-history-scene-marker fa-solid fa-comments';
+            sceneIcon.title = 'A scene is open for this event';
+            sceneIcon.setAttribute('aria-label', 'Scene exists for this event');
+            node.append(sceneIcon);
+        }
         if (event.generation?.guidance) {
             const marker = document.createElement('i');
             marker.className = 'world-sim-history-guided-marker fa-solid fa-wand-magic-sparkles';
@@ -500,6 +507,43 @@ class HistoryTimeline {
             text.textContent = selectedEvent.generation.guidance;
             guidance.append(label, text);
             menu.append(guidance);
+        }
+        if (selectedEvent?.revisionId && typeof this.options.onOpenScene === 'function') {
+            const existing = this.options.getScene?.(selectedEvent);
+            const openScene = document.createElement('button');
+            openScene.className = 'menu_button';
+            openScene.type = 'button';
+            openScene.textContent = existing ? 'Reopen scene' : 'Open scene';
+            openScene.addEventListener('click', async () => {
+                openScene.disabled = true;
+                try {
+                    await this.options.onOpenScene(this.history.events[eventId]);
+                } catch (error) {
+                    console.error(error);
+                    toastr.error(error.message, 'World Sim');
+                } finally {
+                    if (openScene.isConnected) openScene.disabled = false;
+                }
+            });
+            menu.append(openScene);
+            if (existing && !existing.committed && typeof this.options.onCommitScene === 'function') {
+                const commit = document.createElement('button');
+                commit.className = 'menu_button';
+                commit.type = 'button';
+                commit.textContent = 'Commit scene to world';
+                commit.addEventListener('click', async () => {
+                    commit.disabled = true;
+                    try {
+                        await this.options.onCommitScene(this.history.events[eventId], existing);
+                    } catch (error) {
+                        console.error(error);
+                        toastr.error(error.message, 'World Sim');
+                    } finally {
+                        if (commit.isConnected) commit.disabled = false;
+                    }
+                });
+                menu.append(commit);
+            }
         }
         const createOption = document.createElement('button');
         createOption.className = 'menu_button';
