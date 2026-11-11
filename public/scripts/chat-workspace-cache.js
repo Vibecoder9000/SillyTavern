@@ -54,6 +54,32 @@ export function clearWorkspaceChatSnapshots() {
     getWorkspaceCacheStore()?.chats.clear();
 }
 
+/**
+ * Records the integrity slug the server rotated on a successful save, so a later
+ * load from this snapshot does not send an outdated slug and fail the check.
+ * @param {{kind: string, ownerId: string, chatId: string}} identity Chat identity
+ * @param {string} integrity New integrity slug
+ */
+export function setWorkspaceChatSnapshotIntegrity(identity, integrity) {
+    const store = getWorkspaceCacheStore();
+    const key = getChatCacheKey(identity);
+    const snapshot = store && key ? store.chats.get(key) : null;
+    if (!snapshot || !integrity) return;
+    snapshot.metadata = { ...snapshot.metadata, integrity };
+}
+
+/**
+ * Reloads after an integrity conflict. Inside the workspace the whole shell is
+ * reloaded: the snapshot cache lives on the shell window, and reloading only the
+ * chat frame can leave the shell waiting on a boot handshake.
+ */
+export function reloadOutdatedChat() {
+    clearWorkspaceChatSnapshots();
+    const store = getWorkspaceCacheStore();
+    const target = store ? window.parent : window;
+    target.location.reload();
+}
+
 export function hasWorkspaceChatSnapshot(identity) {
     const store = getWorkspaceCacheStore();
     const key = getChatCacheKey(identity);
@@ -71,8 +97,11 @@ export function setWorkspaceChatSnapshot(identity, metadata, messages) {
     const key = getChatCacheKey(identity);
     if (!store || !key || !Array.isArray(messages)) return;
 
+    // A messages-only update keeps the cached metadata: dropping it would also drop
+    // the integrity slug and make the next save from this snapshot look stale.
+    const nextMetadata = metadata ?? store.chats.get(key)?.metadata ?? {};
     store.chats.delete(key);
-    store.chats.set(key, cloneValue({ metadata: metadata || {}, messages }));
+    store.chats.set(key, cloneValue({ metadata: nextMetadata, messages }));
     while (store.chats.size > MAX_CACHED_CHATS) {
         store.chats.delete(store.chats.keys().next().value);
     }

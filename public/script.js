@@ -318,7 +318,7 @@ import {
     reportWorkspaceBootProgress,
     requestWorkspaceOpen,
 } from './scripts/chat-workspace-bridge.js';
-import { clearWorkspaceChatSnapshots, getWorkspaceCachedValue, getWorkspaceChatSnapshot, hasWorkspaceChatSnapshot, setWorkspaceCachedValue, setWorkspaceChatSnapshot, WORKSPACE_CACHE_KEYS } from './scripts/chat-workspace-cache.js';
+import { getWorkspaceCachedValue, getWorkspaceChatSnapshot, hasWorkspaceChatSnapshot, reloadOutdatedChat, setWorkspaceCachedValue, setWorkspaceChatSnapshot, setWorkspaceChatSnapshotIntegrity, WORKSPACE_CACHE_KEYS } from './scripts/chat-workspace-cache.js';
 import { createCoalescedWriter, createKeyedCoalescedWriter } from './scripts/chat-workspace-persistence.js';
 
 export { isCharacterDesignerGenerating };
@@ -1249,6 +1249,8 @@ function prewarmWorkspaceIdentity(identity) {
             if (!response.ok) return;
             const data = await response.json();
             const header = Array.isArray(data) && data.length > 0 ? data.shift() : null;
+            // A tab may have cached a newer copy (with a rotated integrity slug) while this fetch ran.
+            if (hasWorkspaceChatSnapshot(identity)) return;
             setWorkspaceChatSnapshot(identity, header?.chat_metadata || {}, Array.isArray(data) ? data : []);
             return;
         }
@@ -1262,6 +1264,7 @@ function prewarmWorkspaceIdentity(identity) {
             if (!response.ok) return;
             const data = await response.json();
             if (!Array.isArray(data)) return;
+            if (hasWorkspaceChatSnapshot(identity)) return;
             const hasHeader = data.length > 0 && Object.hasOwn(data[0], 'chat_metadata');
             setWorkspaceChatSnapshot(identity, hasHeader ? data[0].chat_metadata : {}, hasHeader ? data.slice(1) : data);
         }
@@ -11579,6 +11582,7 @@ export async function saveChat({ chatName, withMetadata, mesId, force = false, c
             // Adopt the rotated slug so this device's next save is not mistaken for a stale one.
             if (resultData.integrity && (chatName === undefined || chatName === fileName)) {
                 chat_metadata.integrity = resultData.integrity;
+                setWorkspaceChatSnapshotIntegrity(getWorkspaceChatIdentity(), resultData.integrity);
             }
             return;
         }
@@ -11599,10 +11603,7 @@ export async function saveChat({ chatName, withMetadata, mesId, force = false, c
                 tapToDismiss: false,
                 closeButton: false,
                 preventDuplicates: true,
-                onclick: () => {
-                    clearWorkspaceChatSnapshots();
-                    window.location.reload();
-                },
+                onclick: () => reloadOutdatedChat(),
             },
         );
     } catch (error) {

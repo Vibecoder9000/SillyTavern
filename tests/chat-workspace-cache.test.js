@@ -7,6 +7,7 @@ import {
     runOncePerWorkspace,
     setWorkspaceCachedValue,
     setWorkspaceChatSnapshot,
+    setWorkspaceChatSnapshotIntegrity,
     WORKSPACE_CACHE_KEYS,
 } from '../public/scripts/chat-workspace-cache.js';
 
@@ -154,5 +155,19 @@ describe('chat workspace cache', () => {
         await runOncePerWorkspace('standalone-once', loader);
 
         expect(loader).toHaveBeenCalledTimes(4);
+    });
+    test('keeps chat snapshot integrity in step with server-rotated slugs', () => {
+        useWorkspaceWindow();
+        const identity = { kind: 'character', ownerId: 'a.png', chatId: 'chat-1' };
+        setWorkspaceChatSnapshot(identity, { integrity: 'old', note: 'kept' }, [{ mes: 'hi' }]);
+
+        setWorkspaceChatSnapshotIntegrity(identity, 'rotated');
+        expect(getWorkspaceChatSnapshot(identity).metadata).toEqual({ integrity: 'rotated', note: 'kept' });
+
+        // A messages-only update must not drop the cached metadata (and its slug).
+        setWorkspaceChatSnapshot(identity, null, [{ mes: 'hi' }, { mes: 'there' }]);
+        const snapshot = getWorkspaceChatSnapshot(identity);
+        expect(snapshot.metadata.integrity).toBe('rotated');
+        expect(snapshot.messages).toHaveLength(2);
     });
 });

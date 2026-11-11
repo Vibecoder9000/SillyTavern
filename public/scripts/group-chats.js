@@ -96,7 +96,7 @@ import { accountStorage } from './util/AccountStorage.js';
 import { compressRequest } from './request-compression.js';
 import { shouldHideXmlToolExchanges } from './group-tool-visibility.js';
 import { isChatWorkspaceChild, requestWorkspaceOpen } from './chat-workspace-bridge.js';
-import { clearWorkspaceChatSnapshots, getWorkspaceChatSnapshot, setWorkspaceChatSnapshot } from './chat-workspace-cache.js';
+import { getWorkspaceChatSnapshot, reloadOutdatedChat, setWorkspaceChatSnapshot, setWorkspaceChatSnapshotIntegrity } from './chat-workspace-cache.js';
 
 export {
     selected_group,
@@ -711,6 +711,9 @@ async function saveGroupChat(groupId, shouldSaveGroup, force = false) {
         // Adopt the rotated slug so this device's next save is not mistaken for a stale one.
         if (resultData.integrity) {
             chat_metadata.integrity = resultData.integrity;
+            if (chatId) {
+                setWorkspaceChatSnapshotIntegrity({ kind: 'group', ownerId: String(groupId), chatId: String(chatId) }, resultData.integrity);
+            }
         }
     }
 
@@ -733,10 +736,7 @@ async function saveGroupChat(groupId, shouldSaveGroup, force = false) {
                 tapToDismiss: false,
                 closeButton: false,
                 preventDuplicates: true,
-                onclick: () => {
-                    clearWorkspaceChatSnapshots();
-                    window.location.reload();
-                },
+                onclick: () => reloadOutdatedChat(),
             },
         );
         return;
