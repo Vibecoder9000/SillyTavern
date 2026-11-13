@@ -318,7 +318,7 @@ import {
     reportWorkspaceBootProgress,
     requestWorkspaceOpen,
 } from './scripts/chat-workspace-bridge.js';
-import { getWorkspaceCachedValue, getWorkspaceChatSnapshot, hasWorkspaceChatSnapshot, reloadOutdatedChat, setWorkspaceCachedValue, setWorkspaceChatSnapshot, setWorkspaceChatSnapshotIntegrity, WORKSPACE_CACHE_KEYS } from './scripts/chat-workspace-cache.js';
+import { deleteWorkspaceChatSnapshot, getWorkspaceCachedValue, getWorkspaceChatSnapshot, hasWorkspaceChatSnapshot, reloadOutdatedChat, setWorkspaceCachedValue, setWorkspaceChatSnapshot, setWorkspaceChatSnapshotIntegrity, WORKSPACE_CACHE_KEYS } from './scripts/chat-workspace-cache.js';
 import { createCoalescedWriter, createKeyedCoalescedWriter } from './scripts/chat-workspace-persistence.js';
 
 export { isCharacterDesignerGenerating };
@@ -3003,6 +3003,12 @@ export const reloadCurrentChat = reloadChatMutex.update.bind(reloadChatMutex);
  */
 export async function reloadCurrentChatUnsafe() {
     preserveNeutralChat();
+    // Persist pending edits first: clearChat cancels the debounced save.
+    await flushPendingChatSave();
+    await chatSaveQueue;
+    // The workspace snapshot only holds the chat as it was when the tab was
+    // entered. A reload must read the server copy, not rewind to that snapshot.
+    deleteWorkspaceChatSnapshot(getWorkspaceChatIdentity());
     await clearChat({ clearData: true });
 
     if (selected_group) {

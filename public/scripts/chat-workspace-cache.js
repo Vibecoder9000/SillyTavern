@@ -55,6 +55,15 @@ export function clearWorkspaceChatSnapshots() {
 }
 
 /**
+ * Drops one chat's cached snapshot so the next load of it fetches from the server.
+ * @param {{kind: string, ownerId: string, chatId: string}|null} identity Chat identity
+ */
+export function deleteWorkspaceChatSnapshot(identity) {
+    const key = getChatCacheKey(identity);
+    if (key) getWorkspaceCacheStore()?.chats.delete(key);
+}
+
+/**
  * Records the integrity slug the server rotated on a successful save, so a later
  * load from this snapshot does not send an outdated slug and fail the check.
  * @param {{kind: string, ownerId: string, chatId: string}} identity Chat identity
